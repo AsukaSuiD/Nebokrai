@@ -7160,7 +7160,7 @@ impl CGame {
             .players
             .remove(&player_id)
             .ok_or(AuctionListingTransferBlock::MissingSourceGoods)?;
-        let mut result = self.move_player_goods_to_auction_listing_inner(
+        let result = self.move_player_goods_to_auction_listing_inner(
             &mut player,
             source_extend_id,
             source_position,
@@ -7170,10 +7170,10 @@ impl CGame {
             context,
         );
         self.players.insert(player_id, player);
-        if let Ok(report) = &mut result
+        if let Ok(report) = &result
             && let Some((price, name)) = depot_audit
         {
-            report.audit_deliveries =
+            let _ =
                 self.send_ground_goods_move_log(player_id, 8, report.goods, price, &name, amount);
         }
         result
@@ -7495,7 +7495,6 @@ impl CGame {
             destination,
             listing_slot_zero_was_empty: slot_zero_was_empty,
             previous_last_operated,
-            audit_deliveries: Vec::new(),
         })
     }
 
@@ -7541,7 +7540,7 @@ impl CGame {
             .players
             .remove(&player_id)
             .ok_or(AuctionListingWithdrawalBlock::MissingSourceGoods)?;
-        let mut result = self.withdraw_player_auction_listing_goods_inner(
+        let result = self.withdraw_player_auction_listing_goods_inner(
             &mut player,
             source_position,
             goods_id,
@@ -7551,14 +7550,14 @@ impl CGame {
             context,
         );
         self.players.insert(player_id, player);
-        if let Ok(report) = &mut result
+        if let Ok(report) = &result
             && matches!(
                 report.outcome,
                 AuctionListingWithdrawalOutcome::Moved { .. }
             )
             && let Some((price, name)) = depot_audit
         {
-            report.audit_deliveries =
+            let _ =
                 self.send_ground_goods_move_log(player_id, 7, report.goods, price, &name, amount);
         }
         result
@@ -7665,7 +7664,6 @@ impl CGame {
             removal,
             outcome,
             previous_last_operated,
-            audit_deliveries: Vec::new(),
         })
     }
 
@@ -14808,7 +14806,7 @@ impl CGame {
             .ok_or(PlayerTradeOfferBlock::MissingSourceGoods)
     }
 
-    pub(crate) fn reset_player_trade_ready(&mut self, session_id: i32) -> Vec<i32> {
+    pub(crate) fn reset_player_trade_ready(&mut self, session_id: i32) {
         let plug_ids = self
             .session_factory
             .trade_session_plug_ids(session_id)
@@ -14818,7 +14816,6 @@ impl CGame {
                 trader.set_trade_state(false);
             }
         }
-        let mut deliveries = Vec::new();
         for source_plug_id in &plug_ids {
             for target_plug_id in &plug_ids {
                 if source_plug_id == target_plug_id {
@@ -14830,10 +14827,16 @@ impl CGame {
                 let mut state = CMessage::new(0x000b_f716);
                 state.add_long(*source_plug_id);
                 state.add_byte(0);
-                deliveries.push(state.send_to_player(self.net_server(), target.owner_id()));
+                let delivery = state.send_to_player(self.net_server(), target.owner_id());
+                tracing::trace!(
+                    source_plug_id,
+                    target_plug_id,
+                    target_player_id = target.owner_id(),
+                    delivery,
+                    "готовность участника обмена сброшена"
+                );
             }
         }
-        deliveries
     }
 
     pub(crate) fn player_trade_owner_ids(&self, session_id: i32) -> Vec<i32> {

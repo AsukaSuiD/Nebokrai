@@ -1,103 +1,17 @@
-//! Входной container dispatcher исторического GameServer.
+//! Диспетчер сообщений о переносе объектов между игровыми контейнерами.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
-//! `server/gameserver/appserver/message/containermessage.cpp`. Материализованы
-//! полные player packet/equipment ↔ enhancement-shadow и equipment-session
-//! upgrade/DaKong/compose, personal-shop seller и входной auction-listing
-//! проходы `0x90301`:
-//! одиннадцать wire-полей, outer changing/region/progress/death guards,
-//! Receive-нормализация owner ID, точный source position/GUID/amount,
-//! запрет stackable goods, однослотовый AddShadow, last-operated state и обе
-//! адресные `0xC0101` публикации. Вторая self-move публикация нормализуется в
-//! `OT_ROLL_BACK`, сохраняя исходный goods в его source slot. Shadow не
-//! забирает ownership исходного goods; исходный select remove→re-add свёрнут
-//! в атомарную metadata-запись, поскольку предмет и owner не меняются.
-//! Обратный same-original-slot путь удаляет только shadow. Перенос в другой
-//! packet/equipment slot выполняет полный ownership pass: source remove,
-//! player/equipment callbacks, `OT_DELETE_OBJECT`, destination add, rollback
-//! в исходный slot и `GPM019` перед garbage collection при двойном отказе.
-//! Equipment-session wire сохраняет настоящий session ID и кодирует plug в
-//! старших 24 битах extend ID; selection/clear публикуют Add/DeleteShadow и
-//! self-move rollback, transfer использует тот же ownership/effects контракт.
-//! Player trade использует тот же session-owned wire: три trader container-а,
-//! source metadata без раннего ownership transfer, Add/DeleteShadow обоим
-//! участникам и сброс обеих ready-state при каждом изменении предложения.
-//! Auction-listing принимает полный предмет из packet/equipment/depot/auction-return,
-//! а обратный маршрут возвращает его в packet/equipment/depot после exact carried
-//! burden gate; оба сохраняют equipment callbacks, depot lock/anchor/audit,
-//! destination rollback и client move;
-//! полный persisted-player snapshot `0x6080E` остаётся у недоступного owner-а.
-//! Packet/equipment/hand/depot/ordinary-fairy↔ground ветвь того же `0x90301` теперь достигает
-//! concrete region goods owner-а: Receive нормализует region/position/amount,
-//! сохраняет exact pickup/progress/burden guards, protection notice,
-//! equipment property/around effects, one-slot hand split/stack, depot
-//! lock/anchor, fairy hatch/lock и независимые ground/depot audits, проводит remove/add с rollback и
-//! возвращает container listeners вместе с self/around `0xC0101`.
-//! Currency-ветвь сохраняет отдельную `Move`-нормализацию: ground
-//! gold/YuanBao при non-packet/equipment destination попадают в
-//! wallet/YuanBao extend `4/5`, а source currency containers сохраняют
-//! свой balance/object ownership и partial split. JiFen extend `6`
-//! отсутствует в точном `GetGoods` switch этого `0x90301` owner-а и остаётся
-//! вне данного runtime-маршрута. Wallet↔bank gold transfer достигает тех же
-//! positional split/stack owner-ов только после реального password unlock;
-//! locked destination выполняет полный rollback в source balance, а success
-//! до client move публикует World bank audit с reason `9/10`.
-//! Packet/equipment↔depot direct move и compatible stack проходят через тот
-//! же dispatcher после password unlock: burden rollback, extension-anchor
-//! guards, equipment effects, GoodsAI, audit `7/8` и self wire достигают live
-//! owners. Direct packet↔equipment использует тот же ownership pass без depot
-//! audit: partial progress guards, exact post-remove burden, equipment effects,
-//! occupied-slot rollback и self wire остаются наблюдаемыми.
-//! Depot↔ordinary-fairy/battle-fairy/CiQing-compose использует те же lock и
-//! extension-anchor owners, World audit `7/8`, special-container effects и
-//! rollback; burden добавляется только при возврате в carried containers.
-//! Hand↔packet/equipment и depot→hand обычный Put сохраняют positional
-//! split, equipment callbacks, one-slot stack, depot lock/anchor/audit и
-//! двусторонний rollback. Для
-//! source-hand→packet/equipment/depot `OT_SWITCH_OBJECT` выполняется после
-//! отказа Put: occupied destination меняется с предметом руки, displaced
-//! возвращается в hand (либо exact garbage collection), а switch wire доходит
-//! до runtime.
-//! Packet/equipment/hand↔ordinary-fairy (`11`) использует тот же ownership owner:
-//! fairy positional filters и hatch-lock, packet split, equipment callbacks,
-//! burden после fairy remove, rollback и self `0xC0101` наблюдаемы целиком.
-//! Packet/equipment/hand↔battle-fairy (`12`) дополнительно сохраняет ранние
-//! `BFPropertyAdd`, partial material/gem remove, property/goods-update
-//! deliveries и их повторный rollback add до итогового move/rollback wire.
-//! Ordinary-fairy↔battle-fairy (`11↔12`) связывает те же hatch/lock и BF
-//! property/equipment owners без промежуточного carried burden.
-//! Packet/equipment/hand↔CiQing compose (`17`) достигает persisted трёхслотового
-//! owner-а: positional/automatic stack, partial remove, burden, equipment
-//! callbacks, rollback и self wire связаны целиком. Сохранён exact quirk
-//! `PutGoods`: source slot `2` запрещает помещение в compose уже после
-//! source remove, поэтому наблюдаемы remove/add rollback effects.
-//! Ordinary-fairy↔CiQing compose (`11↔17`) связывает тот же quirk и compose
-//! stacking с fairy hatch/lock owner-ом без carried burden.
-//! Battle-fairy↔CiQing compose (`12↔17`) дополнительно сохраняет cell
-//! validation, BF property/equipment effects и deliveries на remove/add/rollback.
-//! Auction-return storage (`14`) имеет только исходящий generic route:
-//! packet destination заново выбирает `FindPositionForGoods`, очищает bind
-//! value-id `2`, hand сохраняет one-slot add/stack, equipment — positional add,
-//! depot — lock/anchor/audit,
-//! а fairy/battle-fairy/CiQing — hatch/property/compose effects. Для compose
-//! сохранён source-slot-2 remove→rollback quirk; burden, partial guards,
-//! callbacks, rollback и self wire доходят до live owner-ов.
-//! Auction wallet (`15`) аналогично имеет только исходящий путь в wallet `4`:
-//! exact capacity gate выполняется и в Receive по полному auction balance, и
-//! повторно после source removal; partial currency ownership, rollback,
-//! last-operated state, `GPM015/GPM019` и self wire сохраняют исходный порядок.
-//! Hand↔auction listing (`3↔13`) проходит отдельным direct owner-путём:
-//! partial one-slot removal, slot-0 `AuctionLimit`, burden обратного переноса,
-//! positional stack, rollback и `0xC0101` больше не выпадают в RAW handler.
-//! Ordinary-fairy↔auction listing (`11↔13`) добавляет к тому же AuctionLimit
-//! hatch/lock remove/add, listing rollback и фактическую destination position.
-//! Battle-fairy↔auction listing (`12↔13`) сохраняет BF cell validation,
-//! property/equipment effects и deliveries до listing move и при rollback add.
-//! CiQing compose↔auction listing (`17↔13`) связывает persisted compose
-//! remove/add и positional result с AuctionLimit и listing rollback.
+//! Источник: `gameserver.exe`, `GameServer.pdb` и исходный владелец
+//! `server/gameserver/appserver/message/containermessage.cpp`. Диспетчер сохраняет
+//! точную нормализацию полей `0x90301`, проверки владельца и состояния игрока,
+//! порядок удаления, добавления, отката и клиентских, World- и Billing-отправок.
+//! Частичный успех и необратимое удаление остаются в специализированных
+//! результатах владельцев только там, где вызывающая сторона выбирает дальнейшее
+//! действие. Сведения об уже выполненных операциях публикуются через `tracing` и
+//! не возвращаются накопительными отчётами. Отложенных эффектов в этом владельце
+//! нет, поэтому `GameEffectJournal` здесь намеренно не используется.
 //!
-//! Остальные container paths owner-а остаются RAW ниже и после восстановления
-//! cursor продолжают проходить через прежнюю общую handler-границу.
+//! Неизвестным остаётся полный снимок игрока `0x6080E`: его исходный владелец пока
+//! недоступен, поэтому диспетчер не имитирует эту отправку.
 
 use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
@@ -109,33 +23,25 @@ use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
 };
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
-use crate::gameserver::appserver::message::containermessage::EnhancementMoveReceiveBlock::{
-    InvalidExtendId, InvalidObjectType, SameContainer, ZeroAmount,
-};
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
-    BattleFairyEquipmentMutationReport, CPlayer, EnhancementDeselectionBlock,
-    EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
+    BattleFairyEquipmentMutationReport, CPlayer, EnhancementSelectionReport,
     PlayerEquipmentAddReport, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerProgress,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
-    EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, EquipmentSessionShadowRemoved,
-    PersonalShopShadowAddBlock, PersonalShopShadowAdded, PersonalShopShadowRemoved,
+    EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, PersonalShopShadowAddBlock,
+    PersonalShopShadowAdded,
 };
-use crate::gameserver::appserver::session::ctrader::{TraderOfferAdded, TraderOfferRemoved};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{
-    AuctionGoodsInventoryBlock, AuctionGoodsInventoryReport, AuctionGoodsInventoryRollback,
-    BankCurrencyTransferBlock, BankCurrencyTransferReport, BattleFairyStorageRemoval,
-    BattleFairyTransferAddition, BattleFairyTransferBlock, BattleFairyTransferReport, CGame,
+    AuctionGoodsInventoryBlock, AuctionGoodsInventoryRollback, BankCurrencyTransferBlock,
+    BattleFairyStorageRemoval, BattleFairyTransferAddition, BattleFairyTransferBlock, CGame,
     CiQingComposeStorageRemoval, CiQingComposeTransferAddition, CiQingComposeTransferBlock,
-    CiQingComposeTransferReport, DepotStorageRemoval, DepotStorageTransferAddition,
-    DepotStorageTransferBlock, DepotStorageTransferReport, FairyStorageRemoval,
-    FairyStorageTransferAddition, FairyStorageTransferBlock, FairyStorageTransferReport,
-    GameContainerMessageRuntime, GroundGoodsMoveBlock, GroundGoodsMoveReport,
-    HandAuctionListingBlock, HandAuctionListingReport, HandContainerMoveBlock,
-    HandContainerMoveReport, PlayerHandMoveBlock, PlayerHandMoveReport,
+    DepotStorageRemoval, DepotStorageTransferAddition, DepotStorageTransferBlock,
+    FairyStorageRemoval, FairyStorageTransferAddition, FairyStorageTransferBlock,
+    GameContainerMessageRuntime, GroundGoodsMoveBlock, HandAuctionListingBlock,
+    HandContainerMoveBlock, PlayerHandMoveBlock,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -173,191 +79,6 @@ pub(crate) enum EnhancementMoveReceiveBlock {
     InvalidExtendId,
     SameContainer,
     ForbiddenRoute,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameContainerMessageOutcome {
-    MissingPlayer,
-    MissingRegion,
-    ChangingServer,
-    ChangingRegion,
-    Synthesis {
-        notification_delivery: i32,
-    },
-    Died {
-        notification_delivery: i32,
-    },
-    ReceiveRejected(EnhancementMoveReceiveBlock),
-    RolledBack {
-        reason: EnhancementSelectionBlock,
-        delivery: i32,
-    },
-    EnhancementSelected {
-        selection: EnhancementSelectionReport,
-        old_client_payload: Vec<u8>,
-        add_shadow_delivery: i32,
-        move_delivery: i32,
-    },
-    ClearRolledBack {
-        reason: EnhancementDeselectionBlock,
-        delivery: i32,
-    },
-    EnhancementCleared {
-        deselection: EnhancementDeselectionReport,
-        delete_shadow_delivery: i32,
-        move_delivery: i32,
-    },
-    TransferRolledBack {
-        reason: EnhancementTransferBlock,
-        delivery: i32,
-    },
-    EnhancementTransferred {
-        transfer: EnhancementTransferReport,
-        move_delivery: i32,
-    },
-    EquipmentSessionSelectRolledBack {
-        reason: EquipmentSessionSelectionBlock,
-        delivery: i32,
-    },
-    EquipmentSessionSelected {
-        selection: EquipmentSessionSelectionReport,
-        old_client_payload: Vec<u8>,
-        add_shadow_delivery: i32,
-        move_delivery: i32,
-    },
-    EquipmentSessionClearRolledBack {
-        reason: EquipmentSessionClearBlock,
-        delivery: i32,
-    },
-    EquipmentSessionCleared {
-        removed: EquipmentSessionShadowRemoved,
-        delete_shadow_delivery: i32,
-        move_delivery: i32,
-    },
-    EquipmentSessionTransferred {
-        transfer: EnhancementTransferReport,
-        move_delivery: i32,
-    },
-    PersonalShopSelected {
-        selection: PersonalShopSelectionReport,
-        old_client_payload: Vec<u8>,
-        add_shadow_delivery: i32,
-        move_delivery: i32,
-    },
-    PersonalShopSelectRolledBack {
-        reason: PersonalShopSelectionBlock,
-        delivery: i32,
-    },
-    PersonalShopCleared {
-        removed: PersonalShopShadowRemoved,
-        delete_shadow_delivery: i32,
-        move_delivery: i32,
-    },
-    PersonalShopClearRolledBack {
-        reason: PersonalShopClearBlock,
-        delivery: i32,
-    },
-    AuctionListingMoved {
-        transfer: AuctionListingTransferReport,
-        move_delivery: i32,
-        snapshot_refresh_required: bool,
-    },
-    AuctionListingRolledBack {
-        reason: AuctionListingTransferBlock,
-        delivery: i32,
-    },
-    AuctionListingWithdrawn {
-        withdrawal: AuctionListingWithdrawalReport,
-        move_delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    AuctionListingWithdrawalRolledBack {
-        reason: AuctionListingWithdrawalBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    TradeOfferAdded {
-        added: TraderOfferAdded,
-        add_shadow_deliveries: Vec<i32>,
-        replaced_shadow_deliveries: Vec<i32>,
-        ready_deliveries: Vec<i32>,
-        move_delivery: i32,
-    },
-    TradeOfferRemoved {
-        removed: TraderOfferRemoved,
-        delete_shadow_deliveries: Vec<i32>,
-        ready_deliveries: Vec<i32>,
-        move_delivery: i32,
-    },
-    TradeOfferRolledBack {
-        reason: crate::gameserver::gameserver::game::PlayerTradeOfferBlock,
-        delivery: i32,
-    },
-    GroundGoodsMoved(GroundGoodsMoveReport),
-    GroundGoodsRolledBack {
-        reason: GroundGoodsMoveBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    BankCurrencyMoved(BankCurrencyTransferReport),
-    BankCurrencyRolledBack {
-        reason: BankCurrencyTransferBlock,
-        delivery: i32,
-    },
-    DepotStorageMoved(DepotStorageTransferReport),
-    DepotStorageRolledBack {
-        reason: DepotStorageTransferBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    HandContainerMoved(HandContainerMoveReport),
-    HandContainerRolledBack {
-        reason: HandContainerMoveBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    PlayerHandMoved(PlayerHandMoveReport),
-    PlayerHandRolledBack {
-        reason: PlayerHandMoveBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    FairyStorageMoved(FairyStorageTransferReport),
-    FairyStorageRolledBack {
-        reason: FairyStorageTransferBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    BattleFairyMoved(BattleFairyTransferReport),
-    BattleFairyRolledBack {
-        reason: BattleFairyTransferBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    CiQingComposeMoved(CiQingComposeTransferReport),
-    CiQingComposeRolledBack {
-        reason: CiQingComposeTransferBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
-    AuctionGoodsInventoryMoved(AuctionGoodsInventoryReport),
-    AuctionGoodsInventoryRolledBack {
-        reason: AuctionGoodsInventoryBlock,
-        delivery: i32,
-        notification_deliveries: Vec<i32>,
-    },
-    AuctionMoneyReturned(BankCurrencyTransferReport),
-    AuctionMoneyReturnRejected {
-        reason: BankCurrencyTransferBlock,
-        delivery: Option<i32>,
-        notification_deliveries: Vec<i32>,
-    },
-    HandAuctionListingMoved(HandAuctionListingReport),
-    HandAuctionListingRolledBack {
-        reason: HandAuctionListingBlock,
-        delivery: i32,
-        notification_delivery: Option<i32>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -422,7 +143,6 @@ pub(crate) struct AuctionListingTransferReport {
     pub(crate) destination: VolumeGoodsAddOutcome,
     pub(crate) listing_slot_zero_was_empty: bool,
     pub(crate) previous_last_operated: (u32, u32),
-    pub(crate) audit_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -479,7 +199,6 @@ pub(crate) struct AuctionListingWithdrawalReport {
     pub(crate) removal: AuctionListingWithdrawalRemoval,
     pub(crate) outcome: AuctionListingWithdrawalOutcome,
     pub(crate) previous_last_operated: Option<(u32, u32)>,
-    pub(crate) audit_deliveries: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -489,17 +208,6 @@ pub(crate) enum AuctionListingWithdrawalBlock {
     BurdenExceeded,
     InvalidBattleFairyCell { position: u32 },
     RemovalFailed,
-}
-
-#[must_use = "container report сохраняет request, mutation и ordered client effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameContainerMessageReport {
-    pub(crate) message_type: u32,
-    pub(crate) socket_id: i32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) request: Option<ContainerObjectMoveRequest>,
-    pub(crate) outcome: GameContainerMessageOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -614,25 +322,18 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
-) -> Option<Result<GameContainerMessageReport, GameContainerMessageError>> {
+) -> Option<Result<(), GameContainerMessageError>> {
     let message_type = message.message_type() as u32;
     if message_type != CONTAINER_OBJECT_MOVE {
         return None;
     }
 
     message.resolve_player_context(game);
-    let socket_id = message.socket_id();
     let player_id = message.player_id();
     let region_id = message.region_id();
     let Some(player_id) = player_id else {
-        return Some(Ok(GameContainerMessageReport {
-            message_type,
-            socket_id,
-            player_id: None,
-            region_id,
-            request: None,
-            outcome: GameContainerMessageOutcome::MissingPlayer,
-        }));
+        tracing::trace!(message_type, region_id, "у перемещения контейнера нет игрока");
+        return Some(Ok(()));
     };
 
     let start_cursor = message.base_mut().cursor();
@@ -945,32 +646,30 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         Err(error) => return Some(Err(error)),
     };
 
-    let report = |outcome| GameContainerMessageReport {
-        message_type,
-        socket_id,
-        player_id: Some(player_id),
-        region_id,
-        request: Some(request),
-        outcome,
+    let trace = |outcome: &'static str| {
+        tracing::trace!(message_type, player_id, region_id, ?request, outcome, "перемещение контейнера обработано");
     };
     let Some(player) = game.find_player(player_id) else {
-        return Some(Ok(report(GameContainerMessageOutcome::MissingPlayer)));
+        trace("игрок не найден");
+        return Some(Ok(()));
     };
     if player.in_changing_server() {
-        return Some(Ok(report(GameContainerMessageOutcome::ChangingServer)));
+        trace("игрок меняет сервер");
+        return Some(Ok(()));
     }
     if player.in_changing_region() {
-        return Some(Ok(report(GameContainerMessageOutcome::ChangingRegion)));
+        trace("игрок меняет регион");
+        return Some(Ok(()));
     }
     if region_id.is_none() {
-        return Some(Ok(report(GameContainerMessageOutcome::MissingRegion)));
+        trace("регион не найден");
+        return Some(Ok(()));
     }
     if player.current_progress() == PlayerProgress::Synthesis {
         let text = game.get_string_by_id(b"GS1013").to_vec();
         let delivery = send_notify(game, player_id, &text, 0xffff_0000, 0);
-        return Some(Ok(report(GameContainerMessageOutcome::Synthesis {
-            notification_delivery: delivery,
-        })));
+        tracing::trace!(message_type, player_id, delivery, "перемещение запрещено во время синтеза");
+        return Some(Ok(()));
     }
     if CMoveShape::is_died(player.health()) {
         let delivery = send_notify(
@@ -980,45 +679,39 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             0xffff_ffff,
             0,
         );
-        return Some(Ok(report(GameContainerMessageOutcome::Died {
-            notification_delivery: delivery,
-        })));
+        tracing::trace!(message_type, player_id, delivery, "перемещение запрещено после смерти");
+        return Some(Ok(()));
     }
     if request.object_type != GOODS_OBJECT_TYPE {
-        return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
-            InvalidObjectType,
-        ))));
+        trace("неверный тип объекта");
+        return Some(Ok(()));
     }
     if request.amount == 0 {
-        return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
-            ZeroAmount,
-        ))));
+        trace("нулевое количество");
+        return Some(Ok(()));
     }
     if (request.source_container_type == PLAYER_CONTAINER_TYPE
         && !(0..=17).contains(&request.source_container_extend_id))
         || (request.destination_container_type == PLAYER_CONTAINER_TYPE
             && !(0..=17).contains(&request.destination_container_extend_id))
     {
-        return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
-            InvalidExtendId,
-        ))));
+        trace("неверный идентификатор расширения");
+        return Some(Ok(()));
     }
     if request.source_container_type == request.destination_container_type
         && request.source_container_id == request.destination_container_id
         && request.source_container_extend_id == request.destination_container_extend_id
     {
-        return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
-            SameContainer,
-        ))));
+        trace("источник и назначение совпадают");
+        return Some(Ok(()));
     }
     if route == EnhancementMessageRoute::EnhancementSelect
         && (request.source_container_extend_id == 4
             || request.source_container_extend_id == 5
             || matches!(request.source_container_extend_id, 8 | 15))
     {
-        return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
-            EnhancementMoveReceiveBlock::ForbiddenRoute,
-        ))));
+        trace("маршрут перемещения запрещён");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::AuctionMoneyReturn {
@@ -1031,48 +724,48 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_container_extend_id,
             request.destination_position,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::AuctionMoneyReturned(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "AuctionMoneyReturned", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let receive_rejected = matches!(
                     &reason,
                     BankCurrencyTransferBlock::AuctionCapacityRejectedBeforeRemoval { .. }
                 );
-                let mut notification_deliveries = Vec::new();
+                let mut notification_count = 0usize;
                 if matches!(
                     &reason,
                     BankCurrencyTransferBlock::AuctionCapacityRejectedBeforeRemoval { .. }
                         | BankCurrencyTransferBlock::AuctionCapacityRejectedAfterRemoval { .. }
                         | BankCurrencyTransferBlock::AuctionCapacityRollbackFailed { .. }
                 ) {
-                    notification_deliveries.push(send_notify(
+                    let _ = send_notify(
                         game,
                         player_id,
                         game.get_string_by_id(b"GPM015"),
                         0xffff_ffff,
                         0,
-                    ));
+                    );
+                    notification_count += 1;
                 }
                 if matches!(
                     &reason,
                     BankCurrencyTransferBlock::AuctionCapacityRollbackFailed { .. }
                         | BankCurrencyTransferBlock::RollbackFailed { .. }
                 ) {
-                    notification_deliveries.push(send_notify(
+                    let _ = send_notify(
                         game,
                         player_id,
                         game.get_string_by_id(b"GPM019"),
                         0xffff_ffff,
                         0,
-                    ));
+                    );
+                    notification_count += 1;
                 }
-                GameContainerMessageOutcome::AuctionMoneyReturnRejected {
-                    reason,
-                    delivery: (!receive_rejected).then(|| send_rollback(game, player_id)),
-                    notification_deliveries,
-                }
+                let delivery = (!receive_rejected).then(|| send_rollback(game, player_id));
+                tracing::trace!(?reason, delivery, notifications = notification_count, "возврат аукционных денег отклонён");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::BankCurrencyTransfer {
@@ -1085,13 +778,14 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_container_extend_id,
             request.destination_position,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::BankCurrencyMoved(transfer),
-            Err(reason) => GameContainerMessageOutcome::BankCurrencyRolledBack {
-                reason,
-                delivery: send_rollback(game, player_id),
-            },
-        })));
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "BankCurrencyMoved", "перемещение контейнера выполнено"),
+            Err(reason) => {
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, "перевод валюты банка отменён");
+            }
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::CiQingComposeTransfer {
@@ -1105,8 +799,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
             context,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::CiQingComposeMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "CiQingComposeMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     CiQingComposeTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1139,13 +833,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::CiQingComposeRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение состава CiQing отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::BattleFairyTransfer {
@@ -1159,8 +851,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
             context,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::BattleFairyMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "BattleFairyMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     BattleFairyTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1192,13 +884,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::BattleFairyRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение боевой феи отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::FairyStorageTransfer {
@@ -1212,8 +902,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
             context,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::FairyStorageMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "FairyStorageMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     FairyStorageTransferBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1245,13 +935,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::FairyStorageRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение феи отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::PlayerHandMove {
@@ -1263,8 +951,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.amount,
             context,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::PlayerHandMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "PlayerHandMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     PlayerHandMoveBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1288,13 +976,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::PlayerHandRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение в руку отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::HandAuctionListingTransfer {
@@ -1307,8 +993,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_container_extend_id,
             request.destination_position,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::HandAuctionListingMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "HandAuctionListingMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     HandAuctionListingBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1333,13 +1019,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::HandAuctionListingRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение руки и лота отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::HandContainerMove {
@@ -1351,8 +1035,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
             context,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::HandContainerMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "HandContainerMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let rejected = match &reason {
                     HandContainerMoveBlock::SwapBusy { rejected, .. }
@@ -1401,13 +1085,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::HandContainerRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение из руки отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::AuctionGoodsInventoryReturn {
@@ -1420,10 +1102,10 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
             context,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::AuctionGoodsInventoryMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "AuctionGoodsInventoryMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
-                let mut notification_deliveries = Vec::new();
+                let mut notification_count = 0usize;
                 let progress_notice: Option<&[u8]> = match &reason {
                     AuctionGoodsInventoryBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
                         Some(b"GS0113")
@@ -1437,34 +1119,37 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     _ => None,
                 };
                 if let Some(notice_id) = progress_notice {
-                    notification_deliveries.push(send_notify(
+                    let _ = send_notify(
                         game,
                         player_id,
                         game.get_string_by_id(notice_id),
                         0xffff_ffff,
                         0,
-                    ));
+                    );
+                    notification_count += 1;
                 }
                 if matches!(&reason, AuctionGoodsInventoryBlock::BurdenExceeded { .. }) {
-                    notification_deliveries.push(send_notify(
+                    let _ = send_notify(
                         game,
                         player_id,
                         game.get_string_by_id(b"GS0259"),
                         0xffff_ffff,
                         0,
-                    ));
+                    );
+                    notification_count += 1;
                 }
                 if let AuctionGoodsInventoryBlock::RolledBack { rejected, .. } = &reason
                     && let CiQingComposeTransferAddition::Player(rejected) = rejected
                     && let Some(notice_id) = depot_add_rejection_notice(rejected)
                 {
-                    notification_deliveries.push(send_notify(
+                    let _ = send_notify(
                         game,
                         player_id,
                         game.get_string_by_id(notice_id),
                         0xffff_ffff,
                         0,
-                    ));
+                    );
+                    notification_count += 1;
                 }
                 let rollback = match &reason {
                     AuctionGoodsInventoryBlock::BurdenExceeded { rollback, .. }
@@ -1476,21 +1161,20 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     _ => None,
                 };
                 if matches!(rollback, Some(AuctionGoodsInventoryRollback::Failed { .. })) {
-                    notification_deliveries.push(send_notify(
+                    let _ = send_notify(
                         game,
                         player_id,
                         game.get_string_by_id(b"GPM019"),
                         0xffff_ffff,
                         0,
-                    ));
+                    );
+                    notification_count += 1;
                 }
-                GameContainerMessageOutcome::AuctionGoodsInventoryRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_deliveries,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notifications = notification_count, "возврат аукционного предмета отменён");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::DepotStorageTransfer {
@@ -1504,8 +1188,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
             context,
         );
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::DepotStorageMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "DepotStorageMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let rejected = match &reason {
                     DepotStorageTransferBlock::RolledBack { rejected, .. }
@@ -1558,13 +1242,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::DepotStorageRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение хранилища отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if matches!(
@@ -1575,9 +1257,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             && (!(0..=11).contains(&request.destination_container_extend_id)
                 || request.destination_container_extend_id == 5)
         {
-            return Some(Ok(report(GameContainerMessageOutcome::ReceiveRejected(
-                InvalidExtendId,
-            ))));
+            trace("неверный контейнер назначения для наземного предмета");
+            return Some(Ok(()));
         }
         let region_id = region_id.expect("ground route проверен после current region resolve");
         if route == EnhancementMessageRoute::GroundPickup {
@@ -1600,13 +1281,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                     0,
                 ));
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::GroundGoodsRolledBack {
-                        reason: GroundGoodsMoveBlock::PickupBusy,
-                        delivery,
-                        notification_delivery,
-                    },
-                )));
+                tracing::trace!(reason = ?GroundGoodsMoveBlock::PickupBusy, delivery, notification_delivery, "подбор предмета запрещён текущим состоянием");
+                return Some(Ok(()));
             }
         }
         let transfer = if route == EnhancementMessageRoute::GroundDrop {
@@ -1630,8 +1306,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 context,
             )
         };
-        return Some(Ok(report(match transfer {
-            Ok(transfer) => GameContainerMessageOutcome::GroundGoodsMoved(transfer),
+        match transfer {
+            Ok(transfer) => tracing::trace!(?transfer, outcome = "GroundGoodsMoved", "перемещение контейнера выполнено"),
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     GroundGoodsMoveBlock::PickupProtected => Some(b"GS0112"),
@@ -1653,13 +1329,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         0,
                     )
                 });
-                GameContainerMessageOutcome::GroundGoodsRolledBack {
-                    reason,
-                    delivery: send_rollback(game, player_id),
-                    notification_delivery,
-                }
+                let delivery = send_rollback(game, player_id);
+                tracing::trace!(?reason, delivery, notification_delivery, "перемещение наземного предмета отменено");
             }
-        })));
+        }
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::AuctionListingMove {
@@ -1676,21 +1350,15 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(transfer) => transfer,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::AuctionListingRolledBack { reason, delivery },
-                )));
+                tracing::trace!(?reason, delivery, "перемещение лота отменено");
+                return Some(Ok(()));
             }
         };
         let move_delivery = send_auction_listing_move_moved(game, player_id, request, &transfer);
         let snapshot_refresh_required =
             transfer.listing_slot_zero_was_empty && request.destination_position == 0;
-        return Some(Ok(report(
-            GameContainerMessageOutcome::AuctionListingMoved {
-                transfer,
-                move_delivery,
-                snapshot_refresh_required,
-            },
-        )));
+        tracing::trace!(?transfer, move_delivery, snapshot_refresh_required, "лот перемещён");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::AuctionListingWithdrawal {
@@ -1717,13 +1385,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                         )
                     });
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::AuctionListingWithdrawalRolledBack {
-                        reason,
-                        delivery,
-                        notification_delivery,
-                    },
-                )));
+                tracing::trace!(?reason, delivery, notification_delivery, "снятие лота отменено");
+                return Some(Ok(()));
             }
         };
         let move_delivery = match &withdrawal.outcome {
@@ -1756,13 +1419,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             }
             AuctionListingWithdrawalOutcome::Moved { .. } => None,
         };
-        return Some(Ok(report(
-            GameContainerMessageOutcome::AuctionListingWithdrawn {
-                withdrawal,
-                move_delivery,
-                notification_delivery,
-            },
-        )));
+        tracing::trace!(?withdrawal, move_delivery, notification_delivery, "лот снят");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::TradeOfferAdd {
@@ -1790,9 +1448,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(added) => added,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::TradeOfferRolledBack { reason, delivery },
-                )));
+                tracing::trace!(?reason, delivery, "добавление предложения обмена отменено");
+                return Some(Ok(()));
             }
         };
         let identity = source_goods
@@ -1808,27 +1465,18 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             .map(|goods| context.encode_goods_for_old_client(goods))
             .unwrap_or_default();
         let owners = game.player_trade_owner_ids(request.destination_container_id);
-        let replaced_shadow_deliveries = added.replaced.as_ref().map_or_else(Vec::new, |removed| {
-            owners
-                .iter()
-                .map(|owner_id| send_enhancement_shadow_deleted(game, *owner_id, identity, removed))
-                .collect()
-        });
-        let add_shadow_deliveries = owners
-            .iter()
-            .map(|owner_id| {
-                send_shadow_presence(game, *owner_id, identity, &added.presence, &payload)
-            })
-            .collect();
-        let ready_deliveries = game.reset_player_trade_ready(request.destination_container_id);
+        if let Some(removed) = &added.replaced {
+            for owner_id in &owners {
+                let _ = send_enhancement_shadow_deleted(game, *owner_id, identity, removed);
+            }
+        }
+        for owner_id in &owners {
+            let _ = send_shadow_presence(game, *owner_id, identity, &added.presence, &payload);
+        }
+        game.reset_player_trade_ready(request.destination_container_id);
         let move_delivery = send_rollback(game, player_id);
-        return Some(Ok(report(GameContainerMessageOutcome::TradeOfferAdded {
-            added,
-            add_shadow_deliveries,
-            replaced_shadow_deliveries,
-            ready_deliveries,
-            move_delivery,
-        })));
+        tracing::trace!(?added, owners = owners.len(), move_delivery, "предложение обмена добавлено");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::TradeOfferRemove {
@@ -1845,9 +1493,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(removed) => removed,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::TradeOfferRolledBack { reason, delivery },
-                )));
+                tracing::trace!(?reason, delivery, "удаление предложения обмена отменено");
+                return Some(Ok(()));
             }
         };
         let identity = game
@@ -1866,20 +1513,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 ex_id: request.object_id,
             });
         let owners = game.player_trade_owner_ids(request.source_container_id);
-        let delete_shadow_deliveries = owners
-            .iter()
-            .map(|owner_id| {
-                send_enhancement_shadow_deleted(game, *owner_id, identity, &removed.removed)
-            })
-            .collect();
-        let ready_deliveries = game.reset_player_trade_ready(request.source_container_id);
+        for owner_id in &owners {
+            let _ = send_enhancement_shadow_deleted(game, *owner_id, identity, &removed.removed);
+        }
+        game.reset_player_trade_ready(request.source_container_id);
         let move_delivery = send_rollback(game, player_id);
-        return Some(Ok(report(GameContainerMessageOutcome::TradeOfferRemoved {
-            removed,
-            delete_shadow_deliveries,
-            ready_deliveries,
-            move_delivery,
-        })));
+        tracing::trace!(?removed, owners = owners.len(), move_delivery, "предложение обмена удалено");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::EquipmentSessionClear {
@@ -1901,12 +1541,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(removed) => removed,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::EquipmentSessionClearRolledBack {
-                        reason,
-                        delivery,
-                    },
-                )));
+                tracing::trace!(?reason, delivery, "очистка сессии снаряжения отменена");
+                return Some(Ok(()));
             }
         };
         let delete_shadow_delivery = send_enhancement_shadow_deleted(
@@ -1916,13 +1552,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &removed.removed,
         );
         let move_delivery = send_rollback(game, player_id);
-        return Some(Ok(report(
-            GameContainerMessageOutcome::EquipmentSessionCleared {
-                removed,
-                delete_shadow_delivery,
-                move_delivery,
-            },
-        )));
+        tracing::trace!(?removed, delete_shadow_delivery, move_delivery, "сессия снаряжения очищена");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::PersonalShopClear {
@@ -1944,9 +1575,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(removed) => removed,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::PersonalShopClearRolledBack { reason, delivery },
-                )));
+                tracing::trace!(?reason, delivery, "очистка выбора личной лавки отменена");
+                return Some(Ok(()));
             }
         };
         let delete_shadow_delivery = send_enhancement_shadow_deleted(
@@ -1956,13 +1586,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &removed.removed,
         );
         let move_delivery = send_rollback(game, player_id);
-        return Some(Ok(report(
-            GameContainerMessageOutcome::PersonalShopCleared {
-                removed,
-                delete_shadow_delivery,
-                move_delivery,
-            },
-        )));
+        tracing::trace!(?removed, delete_shadow_delivery, move_delivery, "выбор личной лавки очищен");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::EquipmentSessionTransfer {
@@ -1981,9 +1606,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(transfer) => transfer,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::TransferRolledBack { reason, delivery },
-                )));
+                tracing::trace!(?reason, delivery, "перемещение сессии снаряжения отменено");
+                return Some(Ok(()));
             }
         };
         let move_delivery = match &transfer.outcome {
@@ -1993,12 +1617,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             EnhancementTransferOutcome::RolledBack { .. }
             | EnhancementTransferOutcome::GoodsCollected { .. } => send_rollback(game, player_id),
         };
-        return Some(Ok(report(
-            GameContainerMessageOutcome::EquipmentSessionTransferred {
-                transfer,
-                move_delivery,
-            },
-        )));
+        tracing::trace!(?transfer, move_delivery, "предмет сессии снаряжения перемещён");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::EnhancementClear {
@@ -2012,10 +1632,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(deselection) => deselection,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(GameContainerMessageOutcome::ClearRolledBack {
-                    reason,
-                    delivery,
-                })));
+                tracing::trace!(?reason, delivery, "очистка усиления отменена");
+                return Some(Ok(()));
             }
         };
         let delete_shadow_delivery = send_enhancement_shadow_deleted(
@@ -2025,13 +1643,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &deselection.removed,
         );
         let move_delivery = send_rollback(game, player_id);
-        return Some(Ok(report(
-            GameContainerMessageOutcome::EnhancementCleared {
-                deselection,
-                delete_shadow_delivery,
-                move_delivery,
-            },
-        )));
+        tracing::trace!(?deselection, delete_shadow_delivery, move_delivery, "выбор усиления очищен");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::EnhancementTransfer {
@@ -2048,9 +1661,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(transfer) => transfer,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::TransferRolledBack { reason, delivery },
-                )));
+                tracing::trace!(?reason, delivery, "перемещение усиления отменено");
+                return Some(Ok(()));
             }
         };
         let move_delivery = match &transfer.outcome {
@@ -2060,12 +1672,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             EnhancementTransferOutcome::RolledBack { .. }
             | EnhancementTransferOutcome::GoodsCollected { .. } => send_rollback(game, player_id),
         };
-        return Some(Ok(report(
-            GameContainerMessageOutcome::EnhancementTransferred {
-                transfer,
-                move_delivery,
-            },
-        )));
+        tracing::trace!(?transfer, move_delivery, "предмет усиления перемещён");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::EquipmentSessionSelect {
@@ -2083,12 +1691,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(selection) => selection,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::EquipmentSessionSelectRolledBack {
-                        reason,
-                        delivery,
-                    },
-                )));
+                tracing::trace!(?reason, delivery, "выбор предмета сессии снаряжения отменён");
+                return Some(Ok(()));
             }
         };
         let goods = game
@@ -2104,14 +1708,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &old_client_payload,
         );
         let move_delivery = send_rollback(game, player_id);
-        return Some(Ok(report(
-            GameContainerMessageOutcome::EquipmentSessionSelected {
-                selection,
-                old_client_payload,
-                add_shadow_delivery,
-                move_delivery,
-            },
-        )));
+        tracing::trace!(?selection, payload_bytes = old_client_payload.len(), add_shadow_delivery, move_delivery, "предмет сессии снаряжения выбран");
+        return Some(Ok(()));
     }
 
     if route == EnhancementMessageRoute::PersonalShopSelect {
@@ -2129,9 +1727,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             Ok(selection) => selection,
             Err(reason) => {
                 let delivery = send_rollback(game, player_id);
-                return Some(Ok(report(
-                    GameContainerMessageOutcome::PersonalShopSelectRolledBack { reason, delivery },
-                )));
+                tracing::trace!(?reason, delivery, "выбор предмета личной лавки отменён");
+                return Some(Ok(()));
             }
         };
         let goods = game
@@ -2147,14 +1744,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             &old_client_payload,
         );
         let move_delivery = send_rollback(game, player_id);
-        return Some(Ok(report(
-            GameContainerMessageOutcome::PersonalShopSelected {
-                selection,
-                old_client_payload,
-                add_shadow_delivery,
-                move_delivery,
-            },
-        )));
+        tracing::trace!(?selection, payload_bytes = old_client_payload.len(), add_shadow_delivery, move_delivery, "предмет личной лавки выбран");
+        return Some(Ok(()));
     }
 
     let selection = game.select_player_enhancement_goods(
@@ -2168,10 +1759,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         Ok(selection) => selection,
         Err(reason) => {
             let delivery = send_rollback(game, player_id);
-            return Some(Ok(report(GameContainerMessageOutcome::RolledBack {
-                reason,
-                delivery,
-            })));
+            tracing::trace!(?reason, delivery, "выбор усиления отменён");
+            return Some(Ok(()));
         }
     };
 
@@ -2182,14 +1771,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     let old_client_payload = context.encode_goods_for_old_client(goods);
     let add_shadow_delivery = send_add_shadow(game, player_id, &selection, &old_client_payload);
     let move_delivery = send_move_result(game, player_id, request, &selection);
-    Some(Ok(report(
-        GameContainerMessageOutcome::EnhancementSelected {
-            selection,
-            old_client_payload,
-            add_shadow_delivery,
-            move_delivery,
-        },
-    )))
+    tracing::trace!(?selection, payload_bytes = old_client_payload.len(), add_shadow_delivery, move_delivery, "предмет усиления выбран");
+    Some(Ok(()))
 }
 
 fn decode_container_object_move(
