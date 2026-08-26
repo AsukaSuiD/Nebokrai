@@ -39,8 +39,7 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.h
 
 use crate::setup::godsbattleconf::{
-    CGodsBattleConf, GodsBattleDecodeError, GodsBattleDecodeReport, GodsBattleFactionXydUpdate,
-    GodsBattleSzlCalculation,
+    CGodsBattleConf, GodsBattleDecodeError, GodsBattleFactionXydUpdate, GodsBattleSzlCalculation,
 };
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -269,7 +268,7 @@ impl CGodsBattleMgr {
         cursor: &mut usize,
         add_log_text: &mut AddLogText,
         put_string_to_file: &mut PutStringToFile,
-    ) -> Result<GodsBattleDecodeReport, GodsBattleDecodeError>
+    ) -> Result<(), GodsBattleDecodeError>
     where
         AddLogText: FnMut(&[u8]),
         PutStringToFile: FnMut(&str, &[u8]),

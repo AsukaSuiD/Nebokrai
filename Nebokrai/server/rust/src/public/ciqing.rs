@@ -288,7 +288,7 @@ impl CCiQingSetup {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<CiQingDecodeReport, CiQingDecodeError> {
+    ) -> Result<(), CiQingDecodeError> {
         self.clear();
 
         let make_count = read_wire_i32(source, cursor, "make count")?;
@@ -344,11 +344,8 @@ impl CCiQingSetup {
             });
         }
 
-        Ok(CiQingDecodeReport {
-            make: self.make.len(),
-            compose: self.compose.len(),
-            improve: self.improve.len(),
-        })
+        tracing::trace!(make = self.make.len(), compose = self.compose.len(), improve = self.improve.len(), "настройки CiQing декодированы");
+        Ok(())
     }
 }
 
@@ -377,13 +374,6 @@ impl fmt::Display for CiQingSerializationBlock {
 }
 
 impl Error for CiQingSerializationBlock {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CiQingDecodeReport {
-    pub(crate) make: usize,
-    pub(crate) compose: usize,
-    pub(crate) improve: usize,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CiQingDecodeError {

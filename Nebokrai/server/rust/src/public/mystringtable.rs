@@ -55,7 +55,7 @@ impl MyStringTable {
     pub(crate) fn from_byte_array(
         &mut self,
         source: &[u8],
-    ) -> Result<MyStringTableDecodeReport, MyStringTableDecodeError> {
+    ) -> Result<MyStringTableDecodeOutcome, MyStringTableDecodeError> {
         let mut cursor = 0usize;
         let count_bytes = take_bytes(source, &mut cursor, 4, "entry count", None)?;
         let declared_entries = i32::from_le_bytes(
@@ -75,22 +75,18 @@ impl MyStringTable {
             decoded_entries += 1;
         }
 
-        Ok(MyStringTableDecodeReport {
-            declared_entries,
-            decoded_entries,
-            replaced_entries,
-            unique_entries: self.table.entries().len(),
+        let unique_entries = self.table.entries().len();
+        tracing::trace!(declared_entries, decoded_entries, replaced_entries, unique_entries, consumed = cursor, "таблица строк декодирована");
+        Ok(MyStringTableDecodeOutcome {
+            empty: unique_entries == 0,
             consumed: cursor,
         })
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MyStringTableDecodeReport {
-    pub(crate) declared_entries: i32,
-    pub(crate) decoded_entries: usize,
-    pub(crate) replaced_entries: usize,
-    pub(crate) unique_entries: usize,
+pub(crate) struct MyStringTableDecodeOutcome {
+    pub(crate) empty: bool,
     pub(crate) consumed: usize,
 }
 

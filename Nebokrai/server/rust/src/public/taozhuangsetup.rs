@@ -329,7 +329,7 @@ impl CTaoZhuangSetup {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<TaoZhuangDecodeReport, TaoZhuangDecodeError> {
+    ) -> Result<(), TaoZhuangDecodeError> {
         self.clear();
 
         let skill_count = read_wire_i32(source, cursor, "skill count")?;
@@ -398,10 +398,8 @@ impl CTaoZhuangSetup {
             });
         }
 
-        Ok(TaoZhuangDecodeReport {
-            skill_ids: self.skill_ids.len(),
-            items: self.items.len(),
-        })
+        tracing::trace!(skill_ids = self.skill_ids.len(), items = self.items.len(), "настройки TaoZhuang декодированы");
+        Ok(())
     }
 }
 
@@ -454,12 +452,6 @@ impl fmt::Display for TaoZhuangSerializationBlock {
 }
 
 impl Error for TaoZhuangSerializationBlock {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TaoZhuangDecodeReport {
-    pub(crate) skill_ids: usize,
-    pub(crate) items: usize,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TaoZhuangDecodeError {

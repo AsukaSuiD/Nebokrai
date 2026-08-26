@@ -1782,17 +1782,17 @@ fn decode_world_event_startup(
             { tracing::trace!(entries, "настройки мировых объектов загружены"); Some(Ok(())) }
         }
         GODS_BATTLE_SELECTOR => {
-            let report = match game.gods_battle_mgr_mut().decord_from_byte_array(
+            match game.gods_battle_mgr_mut().decord_from_byte_array(
                 source,
                 cursor,
                 &mut add_log_text,
                 &mut put_string_to_file,
             ) {
-                Ok(report) => report,
+                Ok(()) => {}
                 Err(error) => return Some(Err(GameWorldEventStartupError::GodsBattle(error))),
-            };
+            }
             add_log_text(b"Initial SI_GODSBATTLE_SETUP...OK!");
-            { tracing::trace!(?report, "настройки битвы богов загружены"); Some(Ok(())) }
+            { tracing::trace!("настройки битвы богов загружены"); Some(Ok(())) }
         }
         _ => None,
     }
@@ -1807,14 +1807,14 @@ fn decode_equipment_enhancement_startup(
 ) -> Option<Result<(), GameEquipmentEnhancementStartupError>> {
     match selector {
         TAO_ZHUANG_SELECTOR => {
-            let decoded = match game.tao_zhuang_setup_mut().decode_from_byte(source, cursor) {
-                Ok(decoded) => decoded,
+            match game.tao_zhuang_setup_mut().decode_from_byte(source, cursor) {
+                Ok(()) => {}
                 Err(error) => {
                     return Some(Err(GameEquipmentEnhancementStartupError::TaoZhuangDecode(
                         error,
                     )));
                 }
-            };
+            }
             add_log_text(b"Add TaoZhuangSetup....OK");
             let mut payload = Vec::new();
             if let Err(error) = game.tao_zhuang_setup().add_byte_to_array(&mut payload) {
@@ -1825,29 +1825,29 @@ fn decode_equipment_enhancement_startup(
             let mut notice = CMessage::new(0x000B_F81A);
             notice.base_mut().add(&payload);
             let broadcast = notice.send_all(game.current_net_server());
-            tracing::trace!(skill_ids = decoded.skill_ids, items = decoded.items, ?broadcast, "настройки TaoZhuang загружены");
+            tracing::trace!(?broadcast, "настройки TaoZhuang загружены");
             Some(Ok(()))
         }
         CI_QING_LING_BAO_SELECTOR => {
-            let ci_qing = match game.ci_qing_setup_mut().de_byte_from_array(source, cursor) {
-                Ok(report) => report,
+            match game.ci_qing_setup_mut().de_byte_from_array(source, cursor) {
+                Ok(()) => {}
                 Err(error) => {
                     return Some(Err(GameEquipmentEnhancementStartupError::CiQingDecode(
                         error,
                     )));
                 }
-            };
-            let ling_bao = match game
+            }
+            match game
                 .ling_bao_setup_mut()
                 .decode_from_array_ling_bao(source, cursor)
             {
-                Ok(report) => report,
+                Ok(()) => {}
                 Err(error) => {
                     return Some(Err(GameEquipmentEnhancementStartupError::LingBaoDecode(
                         error,
                     )));
                 }
-            };
+            }
             let mut payload = Vec::new();
             if let Err(error) = game.ci_qing_setup().add_byte_to_array(&mut payload) {
                 return Some(Err(GameEquipmentEnhancementStartupError::CiQingSerialize(
@@ -1858,7 +1858,7 @@ fn decode_equipment_enhancement_startup(
             notice.base_mut().add(&payload);
             let broadcast = notice.send_all(game.current_net_server());
             add_log_text(b"Add CiQingSetup...ok!");
-            tracing::trace!(?ci_qing, ?ling_bao, ?broadcast, "настройки CiQing и LingBao загружены");
+            tracing::trace!(?broadcast, "настройки CiQing и LingBao загружены");
             Some(Ok(()))
         }
         _ => None,
@@ -2390,12 +2390,12 @@ fn dispatch_string_table_message<RegionRuntimeError>(
     game: &mut CGame,
     source: GameStringTableSource,
 ) -> Result<(), GameServerMessageError<RegionRuntimeError>> {
-    let decoded = {
+    {
         let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
         game.create_string_table(wire, cursor, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
             .map_err(GameServerMessageError::StringTable)?
-    };
-    tracing::trace!(?source, ?decoded, "таблица строк GameServer применена");
+    }
+    tracing::trace!(?source, "таблица строк GameServer применена");
     Ok(())
 }
 

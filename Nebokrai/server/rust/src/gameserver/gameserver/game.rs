@@ -773,9 +773,7 @@ use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
 use crate::public::guid::CGuid;
-use crate::public::mystringtable::{
-    MyStringTable, MyStringTableDecodeError, MyStringTableDecodeReport,
-};
+use crate::public::mystringtable::{MyStringTable, MyStringTableDecodeError};
 use crate::public::netsessionmanager::{
     CNetSessionManager, NetSessionCallbackOutcome, NetSessionManagerVariant,
 };
@@ -16917,20 +16915,20 @@ impl CGame {
         source: &[u8],
         cursor: &mut usize,
         mut add_log_text: impl FnMut(&[u8]),
-    ) -> Result<MyStringTableDecodeReport, MyStringTableDecodeError> {
+    ) -> Result<(), MyStringTableDecodeError> {
         let start = *cursor;
         self.string_table.table_mut().free();
         let payload = source.get(start..).unwrap_or_default();
-        let report = self.string_table.from_byte_array(payload)?;
-        if report.unique_entries == 0 {
+        let outcome = self.string_table.from_byte_array(payload)?;
+        if outcome.empty {
             add_log_text(b"WARNING : Received a NULL language packet from WorldServer!");
         } else {
             add_log_text(b"Received Language packet from WorldServer OK!");
         }
         *cursor = start
-            .checked_add(report.consumed)
+            .checked_add(outcome.consumed)
             .expect("MyStringTable consumed length помещается в message cursor");
-        Ok(report)
+        Ok(())
     }
 
     /// Exact `GetStringByID` fallback: отсутствующий key возвращает пустую строку.

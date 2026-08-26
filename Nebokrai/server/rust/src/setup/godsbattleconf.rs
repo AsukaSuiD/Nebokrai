@@ -328,16 +328,6 @@ impl fmt::Display for GodsBattleDecodeError {
 
 impl Error for GodsBattleDecodeError {}
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GodsBattleDecodeReport {
-    pub(crate) npc_names: usize,
-    pub(crate) base_money: usize,
-    pub(crate) revise_money: usize,
-    pub(crate) szl_levels: usize,
-    pub(crate) faction_rules: usize,
-    pub(crate) die_back_positions: usize,
-}
-
 impl CGodsBattleConf {
     /// Воспроизводит `CGodsBattleMgr::DecordFromByteArray` GameServer RVA
     /// `0x000AB260`. Callbacks остаются внутри decoder-а, потому что warning
@@ -349,7 +339,7 @@ impl CGodsBattleConf {
         cursor: &mut usize,
         mut revise_money_mismatch: ReviseMismatch,
         mut missing_die_back_positions: MissingDieBack,
-    ) -> Result<GodsBattleDecodeReport, GodsBattleDecodeError>
+    ) -> Result<(), GodsBattleDecodeError>
     where
         ReviseMismatch: FnMut(),
         MissingDieBack: FnMut(),
@@ -566,14 +556,8 @@ impl CGodsBattleConf {
             missing_die_back_positions();
         }
 
-        Ok(GodsBattleDecodeReport {
-            npc_names: self.npc_names.len(),
-            base_money: self.base_money.len(),
-            revise_money: self.revise_money.len(),
-            szl_levels: self.szl_levels.len(),
-            faction_rules: self.faction_rules.len(),
-            die_back_positions: self.die_back_positions.len(),
-        })
+        tracing::trace!(npc_names = self.npc_names.len(), base_money = self.base_money.len(), revise_money = self.revise_money.len(), szl_levels = self.szl_levels.len(), faction_rules = self.faction_rules.len(), die_back_positions = self.die_back_positions.len(), "настройки битвы богов декодированы");
+        Ok(())
     }
 
     /// Повторяет `LoadFile`, извлекая resource-байты только при достижении

@@ -231,7 +231,7 @@ impl CLingBaoSetup {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<LingBaoDecodeReport, LingBaoDecodeError> {
+    ) -> Result<(), LingBaoDecodeError> {
         self.clear();
         let count = read_wire_i32(source, cursor, "entry count")?;
         let mut entries = 0;
@@ -287,7 +287,8 @@ impl CLingBaoSetup {
             );
             entries += 1;
         }
-        Ok(LingBaoDecodeReport { entries })
+        tracing::trace!(entries, "настройки LingBao декодированы");
+        Ok(())
     }
 }
 
@@ -455,11 +456,6 @@ impl fmt::Display for LingBaoSerializationBlock {
 }
 
 impl Error for LingBaoSerializationBlock {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LingBaoDecodeReport {
-    pub(crate) entries: usize,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LingBaoDecodeError {
