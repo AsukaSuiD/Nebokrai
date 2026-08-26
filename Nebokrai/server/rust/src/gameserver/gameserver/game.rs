@@ -5881,9 +5881,10 @@ impl CGame {
         price: u32,
         name: &[u8],
         amount: u32,
-    ) -> Vec<i32> {
+    ) {
         let Some(player) = self.find_player(player_id) else {
-            return Vec::new();
+            tracing::trace!(player_id, reason, "игрок для журнала перемещения предмета не найден");
+            return;
         };
         let mut audit = CMessage::new(0x0006_0202);
         audit.add_byte(reason);
@@ -5899,7 +5900,8 @@ impl CGame {
         audit.add_ulong(player.shape().get_tile_x().unwrap_or_default() as u32);
         audit.add_ulong(player.shape().get_tile_y().unwrap_or_default() as u32);
         audit.add_ulong(player.client_ip());
-        audit.send(self, false).into_iter().collect()
+        let delivery = audit.send(self, false);
+        tracing::trace!(player_id, reason, ?delivery, "журнал перемещения предмета отправлен");
     }
 
     pub(crate) fn transfer_player_bank_currency(
@@ -6082,7 +6084,7 @@ impl CGame {
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
 
-        let audit_deliveries = if (destination_extend_id == 8
+        if (destination_extend_id == 8
             && self.log_system.goods_bank_set_log_enabled())
             || (source_extend_id == 8 && self.log_system.goods_bank_get_log_enabled())
         {
@@ -6093,10 +6095,8 @@ impl CGame {
                 amount,
                 &audit_name,
                 amount,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
 
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
@@ -6117,7 +6117,6 @@ impl CGame {
             ?removal,
             ?addition,
             ?previous_last_operated,
-            ?audit_deliveries,
             delivery,
             "перевод валюты банка выполнен"
         );
@@ -6426,7 +6425,7 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
-        let audit_deliveries = if destination_extend_id == 9
+        if destination_extend_id == 9
             && self.log_system.goods_depot_set_log_enabled()
             || source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled()
         {
@@ -6437,10 +6436,8 @@ impl CGame {
                 audit_price,
                 &audit_name,
                 amount,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -6462,7 +6459,6 @@ impl CGame {
             ?removal,
             ?addition,
             ?previous_last_operated,
-            ?audit_deliveries,
             delivery,
             "перемещение между хранилищами выполнено"
         );
@@ -6666,8 +6662,7 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
-        let audit_deliveries =
-            if source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled() {
+        if source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled() {
                 self.send_ground_goods_move_log(
                     player_id,
                     8,
@@ -6675,10 +6670,8 @@ impl CGame {
                     audit_price,
                     &audit_name,
                     amount,
-                )
-            } else {
-                Vec::new()
-            };
+                );
+        }
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -6698,7 +6691,6 @@ impl CGame {
             ?removal,
             ?addition,
             ?previous_last_operated,
-            ?audit_deliveries,
             delivery,
             "предмет перемещён в руку"
         );
@@ -7004,7 +6996,7 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
-        let audit_deliveries = if destination_extend_id == 9
+        if destination_extend_id == 9
             && self.log_system.goods_depot_set_log_enabled()
             || source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled()
         {
@@ -7015,10 +7007,8 @@ impl CGame {
                 audit_price,
                 &audit_name,
                 amount,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -7040,7 +7030,6 @@ impl CGame {
             ?removal,
             ?addition,
             ?previous_last_operated,
-            ?audit_deliveries,
             delivery,
             "перемещение феи выполнено"
         );
@@ -7538,7 +7527,7 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
-        let audit_deliveries = if destination_extend_id == 9
+        if destination_extend_id == 9
             && self.log_system.goods_depot_set_log_enabled()
             || source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled()
         {
@@ -7549,10 +7538,8 @@ impl CGame {
                 audit_price,
                 &audit_name,
                 amount,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -7574,7 +7561,6 @@ impl CGame {
             ?removal,
             ?addition,
             ?previous_last_operated,
-            ?audit_deliveries,
             delivery,
             "перемещение боевой феи выполнено"
         );
@@ -8165,7 +8151,7 @@ impl CGame {
         let previous_last_operated =
             player.record_last_operated_goods(source_extend_id, source_position);
         self.players.insert(player_id, player);
-        let audit_deliveries = if destination_extend_id == 9
+        if destination_extend_id == 9
             && self.log_system.goods_depot_set_log_enabled()
             || source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled()
         {
@@ -8176,10 +8162,8 @@ impl CGame {
                 audit_price,
                 &audit_name,
                 amount,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -8201,7 +8185,6 @@ impl CGame {
             ?removal,
             ?addition,
             ?previous_last_operated,
-            ?audit_deliveries,
             delivery,
             "перемещение состава CiQing выполнено"
         );
@@ -8529,8 +8512,7 @@ impl CGame {
             );
         let previous_last_operated = player.record_last_operated_goods(14, source_position);
         self.players.insert(player_id, player);
-        let audit_deliveries =
-            if destination_extend_id == 9 && self.log_system.goods_depot_set_log_enabled() {
+        if destination_extend_id == 9 && self.log_system.goods_depot_set_log_enabled() {
                 self.send_ground_goods_move_log(
                     player_id,
                     7,
@@ -8538,10 +8520,8 @@ impl CGame {
                     audit_price,
                     &audit_name,
                     amount,
-                )
-            } else {
-                Vec::new()
-            };
+                );
+        }
         let mut moved = CS2CContainerObjectMove::default();
         moved.set_operation(ContainerObjectMoveOperation::MoveObject);
         moved.set_source_container(PLAYER_TYPE, player_id, source_position);
@@ -8563,7 +8543,6 @@ impl CGame {
             bind_cleared,
             ?addition,
             ?previous_last_operated,
-            ?audit_deliveries,
             delivery,
             "аукционный предмет возвращён в инвентарь"
         );
@@ -8999,8 +8978,7 @@ impl CGame {
                 Self::depot_transfer_destination(&player, destination_position, &addition);
             let previous_last_operated = player.record_last_operated_goods(3, 0);
             self.players.insert(player_id, player);
-            let audit_deliveries =
-                if destination_extend_id == 9 && self.log_system.goods_depot_set_log_enabled() {
+            if destination_extend_id == 9 && self.log_system.goods_depot_set_log_enabled() {
                     self.send_ground_goods_move_log(
                         player_id,
                         7,
@@ -9008,10 +8986,8 @@ impl CGame {
                         audit_price,
                         &audit_name,
                         amount,
-                    )
-                } else {
-                    Vec::new()
-                };
+                    );
+            }
             let mut moved = CS2CContainerObjectMove::default();
             moved.set_operation(ContainerObjectMoveOperation::MoveObject);
             moved.set_source_container(PLAYER_TYPE, player_id, 0);
@@ -9031,7 +9007,6 @@ impl CGame {
                 ?removal,
                 ?addition,
                 ?previous_last_operated,
-                ?audit_deliveries,
                 delivery,
                 "предмет из руки перемещён в контейнер"
             );
@@ -9957,7 +9932,7 @@ impl CGame {
         self.players.insert(player_id, player);
         self.restore_region_owner(owner);
 
-        let mut audit_deliveries = if self.log_system.goods_drop_to_region_log_enabled() {
+        if self.log_system.goods_drop_to_region_log_enabled() {
             self.send_ground_goods_move_log(
                 player_id,
                 3,
@@ -9969,19 +9944,17 @@ impl CGame {
                 },
                 source.name(),
                 amount,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
         if source_extend_id == 9 && self.log_system.goods_depot_get_log_enabled() {
-            audit_deliveries.extend(self.send_ground_goods_move_log(
+            self.send_ground_goods_move_log(
                 player_id,
                 8,
                 goods,
                 source.price(),
                 source.name(),
                 amount,
-            ));
+            );
         }
 
         let mut moved = CS2CContainerObjectMove::default();
@@ -10015,7 +9988,6 @@ impl CGame {
             ?source_depot_mutation,
             ?source_fairy_mutation,
             ?previous_last_operated,
-            ?audit_deliveries,
             player_delivery,
             ?around_delivery,
             "предмет выброшен в регион"
@@ -10399,7 +10371,7 @@ impl CGame {
         self.players.insert(player_id, player);
         self.restore_region_owner(owner);
 
-        let mut audit_deliveries = if self.log_system.goods_get_from_region_log_enabled()
+        if self.log_system.goods_get_from_region_log_enabled()
             && self.log_system.is_log_item(audit_base_index as i32)
         {
             self.send_ground_goods_move_log(
@@ -10421,12 +10393,10 @@ impl CGame {
                 },
                 &audit_name,
                 amount,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
         if destination_extend_id == 9 && self.log_system.goods_depot_set_log_enabled() {
-            audit_deliveries.extend(self.send_ground_goods_move_log(
+            self.send_ground_goods_move_log(
                 player_id,
                 7,
                 ShapeIdentity {
@@ -10437,7 +10407,7 @@ impl CGame {
                 audit_price,
                 &audit_name,
                 amount,
-            ));
+            );
         }
 
         let mut moved = CS2CContainerObjectMove::default();
@@ -10456,7 +10426,7 @@ impl CGame {
         disappeared.set_source_object(GOODS_TYPE, goods_id, amount);
         let around_message = disappeared.message();
         let around_delivery = self.send_player_shape_around(player_id, None, &around_message);
-        tracing::trace!(player_id, region_id, goods_id = ?goods_id, amount, source_position, destination_position = actual_destination_position, ?destination_goods, destination_amount, ?destination_mutation, ?destination_hand_mutation, ?destination_currency_mutation, ?destination_depot_mutation, ?destination_fairy_mutation, ?audit_deliveries, player_delivery, ?around_delivery, "предмет подобран из региона");
+        tracing::trace!(player_id, region_id, goods_id = ?goods_id, amount, source_position, destination_position = actual_destination_position, ?destination_goods, destination_amount, ?destination_mutation, ?destination_hand_mutation, ?destination_currency_mutation, ?destination_depot_mutation, ?destination_fairy_mutation, player_delivery, ?around_delivery, "предмет подобран из региона");
         Ok(())
     }
 
@@ -10928,7 +10898,7 @@ impl CGame {
                         &mut encode,
                     )
                 };
-                if let Some((report, skills)) = initialized {
+                if let Some((goods_update, skills)) = initialized {
                     for skill in skills {
                         if let Some(message) = player_skill_learned_message(
                             skill.message_type,
@@ -10942,7 +10912,7 @@ impl CGame {
                             let _ = message.send_to_player(self.net_server(), skill.player_id);
                         }
                     }
-                    let _ = self.send_battle_fairy_goods_update(&report.goods_update);
+                    let _ = self.send_battle_fairy_goods_update(&goods_update);
                 }
             }
 
@@ -19951,14 +19921,15 @@ impl CGame {
         true
     }
 
-    fn send_ci_qing_log(&self, log: &CiQingLog) -> Vec<i32> {
+    fn send_ci_qing_log(&self, log: &CiQingLog) {
         let mut message = CMessage::new(0x0006_0218);
         message.add_long(log.player_id);
         message.add_long(log.delta);
         message.add_ulong(log.operation);
         message.add_ulong(log.base_index);
         message.add_ulong(log.amount);
-        message.send(self, false).into_iter().collect()
+        let delivery = message.send(self, false);
+        tracing::trace!(player_id = log.player_id, ?delivery, "журнал CiQing отправлен");
     }
 
     fn send_ci_qing_container_consumption(
@@ -21131,12 +21102,11 @@ impl CGame {
                 base_index: source_base_index,
                 amount: required,
             };
-            let audit_deliveries = self.send_ci_qing_log(&log);
+            self.send_ci_qing_log(&log);
             tracing::trace!(
                 player_id,
                 source_base_index,
                 required,
-                ?audit_deliveries,
                 "аудит расхода материала CiQing отправлен"
             );
             let consumptions = self
@@ -21199,14 +21169,13 @@ impl CGame {
             base_index: recipe.destination_base_index,
             amount: rejected.len() as u32,
         };
-        let audit_deliveries = self.send_ci_qing_log(&log);
+        self.send_ci_qing_log(&log);
         let delivery = self.finish_ci_qing_make(player_id, recipe.destination_base_index);
         tracing::debug!(
             player_id,
             base_index,
             amount,
             rejected_count = rejected.len(),
-            ?audit_deliveries,
             delivery,
             "создание узла CiQing завершено"
         );
@@ -21325,10 +21294,9 @@ impl CGame {
                 base_index: crystal_index,
                 amount: required_crystal,
             };
-            let audit_deliveries = self.send_ci_qing_log(&crystal_log);
+            self.send_ci_qing_log(&crystal_log);
             tracing::trace!(
                 player_id,
-                ?audit_deliveries,
                 "аудит кристаллов соединения CiQing отправлен"
             );
             let consumptions = self
@@ -21410,12 +21378,11 @@ impl CGame {
                 base_index: source.0,
                 amount: source.1,
             };
-            let audit_deliveries = self.send_ci_qing_log(&log);
+            self.send_ci_qing_log(&log);
             tracing::trace!(
                 player_id,
                 position,
                 source_index = source.0,
-                ?audit_deliveries,
                 "аудит исходного узла CiQing отправлен"
             );
             if let Some(consumption) = self
@@ -21465,7 +21432,7 @@ impl CGame {
                 base_index: result_index,
                 amount: result_amount,
             };
-            let audit_deliveries = self.send_ci_qing_log(&log);
+            self.send_ci_qing_log(&log);
             tracing::debug!(
                 player_id,
                 source_a_index,
@@ -21475,7 +21442,6 @@ impl CGame {
                 result_index,
                 result_amount,
                 result_delivery,
-                ?audit_deliveries,
                 "соединение CiQing завершено успешно"
             );
         } else {
@@ -21528,11 +21494,10 @@ impl CGame {
             base_index: reset_index,
             amount: 1,
         };
-        let audit_deliveries = self.send_ci_qing_log(&reset_log);
+        self.send_ci_qing_log(&reset_log);
         tracing::trace!(
             player_id,
             position,
-            ?audit_deliveries,
             "аудит предмета сброса CiQing отправлен"
         );
         let reset_consumptions = self
@@ -21642,11 +21607,10 @@ impl CGame {
                 base_index: hand_base_index,
                 amount: 1,
             };
-            let audit_deliveries = self.send_ci_qing_log(&log);
+            self.send_ci_qing_log(&log);
             tracing::trace!(
                 player_id,
                 position,
-                ?audit_deliveries,
                 "аудит неудачной установки CiQing отправлен"
             );
         }
@@ -21706,7 +21670,7 @@ impl CGame {
             base_index: node.base_index,
             amount,
         };
-        let material_audit_deliveries = self.send_ci_qing_log(&material_log);
+        self.send_ci_qing_log(&material_log);
         let consumptions = self
             .players
             .get_mut(&player_id)
@@ -21731,7 +21695,6 @@ impl CGame {
             chance,
             roll,
             succeeded,
-            ?material_audit_deliveries,
             result_delivery,
             "установка CiQing завершена"
         );
@@ -23941,7 +23904,7 @@ impl CGame {
         vec![message.send_to_player(self.net_server(), update.player_id)]
     }
 
-    fn send_fairy_grow_log(&self, log: &FairyGrowLog) -> Vec<i32> {
+    fn send_fairy_grow_log(&self, log: &FairyGrowLog) {
         let mut message = CMessage::new(0x0006_0210);
         message.add_long(0);
         message.add_long(log.player_id);
@@ -23949,19 +23912,31 @@ impl CGame {
         add_legacy_c_string(message.base_mut(), &log.fairy_guid);
         add_legacy_c_string(message.base_mut(), &log.fairy_name);
         message.add_ulong(log.level);
-        message.send(self, false).into_iter().collect()
+        let delivery = message.send(self, false);
+        tracing::trace!(player_id = log.player_id, ?delivery, "журнал роста феи отправлен");
     }
 
-    fn send_fairy_incubate_log(&self, log: &FairyIncubateLog) -> Vec<i32> {
+    fn deliver_fairy_exp_effects(&self, journal: &mut GameEffectJournal) {
+        for effect in journal.take_all() {
+            let GameEffect::FairyGrowLog(log) = effect else {
+                tracing::error!(?effect, "неверный эффект передан владельцу роста феи");
+                continue;
+            };
+            self.send_fairy_grow_log(&log);
+        }
+    }
+
+    fn send_fairy_incubate_log(&self, log: &FairyIncubateLog) {
         let mut message = CMessage::new(log.message_type as i32);
         message.add_long(log.log_type);
         message.add_long(log.player_id);
         message.base_mut().add_guid(log.goods.ex_id);
         add_legacy_c_string(message.base_mut(), &log.goods_name);
-        message.send(self, false).into_iter().collect()
+        let delivery = message.send(self, false);
+        tracing::trace!(player_id = log.player_id, ?delivery, "журнал инкубации феи отправлен");
     }
 
-    fn send_fairy_implantation_log(&self, log: &FairyImplantationLog) -> Vec<i32> {
+    fn send_fairy_implantation_log(&self, log: &FairyImplantationLog) {
         let mut message = CMessage::new(0x0006_0210);
         message.add_long(2);
         message.add_long(log.player_id);
@@ -23970,10 +23945,11 @@ impl CGame {
         message.add_ulong(log.old_level);
         message.add_ulong(log.resulting_level);
         message.add_ulong(log.crystal_amount);
-        message.send(self, false).into_iter().collect()
+        let delivery = message.send(self, false);
+        tracing::trace!(player_id = log.player_id, ?delivery, "журнал имплантации феи отправлен");
     }
 
-    fn send_fairy_syncretize_log(&self, log: &FairySyncretizeLog) -> Vec<i32> {
+    fn send_fairy_syncretize_log(&self, log: &FairySyncretizeLog) {
         let mut message = CMessage::new(log.message_type as i32);
         message.add_long(log.log_type);
         message.add_long(log.player_id);
@@ -23991,7 +23967,8 @@ impl CGame {
         message.add_ulong(log.main_ability);
         message.add_ulong(log.combinated_times);
         message.add_ulong(log.growing_rate);
-        message.send(self, false).into_iter().collect()
+        let delivery = message.send(self, false);
+        tracing::trace!(player_id = log.player_id, ?delivery, "журнал соединения фей отправлен");
     }
 
     pub(crate) fn update_fairy_hatch_state<Context: FairyContext>(
@@ -24122,21 +24099,17 @@ impl CGame {
             )
         };
         let mut state_effects = 0usize;
-        let mut world_messages = 0usize;
         for entry in &entries {
             state_effects =
                 state_effects.wrapping_add(deliver_fairy_state_change(&entry.transition, self));
             if let Some(log) = &entry.incubate_log {
-                let deliveries = self.send_fairy_incubate_log(log);
-                world_messages = world_messages.wrapping_add(deliveries.len());
-                tracing::trace!(player_id, ?deliveries, "отправлен журнал инкубации феи");
+                self.send_fairy_incubate_log(log);
             }
         }
         tracing::trace!(
             player_id,
             entries = entries.len(),
             state_effects,
-            world_messages,
             "завершена проверка инкубатора феи"
         );
         Some(())
@@ -24269,7 +24242,7 @@ impl CGame {
                 &mut encode,
             )
         };
-        let Ok(Some(implantation)) = implantation else {
+        let Ok(Some(mut implantation)) = implantation else {
             tracing::trace!(
                 player_id,
                 requested_vigour,
@@ -24277,10 +24250,7 @@ impl CGame {
             );
             return;
         };
-        for log in &implantation.exp.grow_logs {
-            let deliveries = self.send_fairy_grow_log(log);
-            tracing::trace!(player_id, ?deliveries, "журнал роста феи отправлен");
-        }
+        self.deliver_fairy_exp_effects(&mut implantation.exp.effects);
         if let FairyImplantDelivery::StateChanged(transition) = &implantation.delivery {
             let effects = deliver_fairy_state_change(transition, self);
             tracing::trace!(player_id, effects, "эффекты смены состояния феи отправлены");
@@ -24294,12 +24264,7 @@ impl CGame {
                 resulting_level: implantation.resulting_level,
                 crystal_amount: initial_crystals,
             };
-            let deliveries = self.send_fairy_implantation_log(&log);
-            tracing::trace!(
-                player_id,
-                ?deliveries,
-                "журнал имплантации опыта феи отправлен"
-            );
+            self.send_fairy_implantation_log(&log);
         }
         let consumed_vigour = if implantation.exp.remaining_experience != 0 && exp_scale != 0.0 {
             requested_vigour.wrapping_sub(round_fairy_value(
@@ -24458,13 +24423,11 @@ impl CGame {
             .player_update
             .map(|update| self.send_fairy_player_update(&update))
             .unwrap_or_default();
-        let world_deliveries = report
-            .log
-            .as_ref()
-            .map(|log| vec![self.send_fairy_syncretize_log(log)])
-            .unwrap_or_default();
+        if let Some(log) = &report.log {
+            self.send_fairy_syncretize_log(log);
+        }
         let result_delivery = send_fairy_long(self, player_id, 0x0b_f91f, report.result as u32);
-        tracing::debug!(player_id, ?property, ?report.result, ?money_deliveries, ?player_update_deliveries, ?world_deliveries, result_delivery, "соединение фей завершено");
+        tracing::debug!(player_id, ?property, ?report.result, ?money_deliveries, ?player_update_deliveries, result_delivery, "соединение фей завершено");
         Some(())
     }
 
@@ -29661,7 +29624,8 @@ impl CGame {
                 | GameEffect::BattleFairyPotentialAllocation(_)
                 | GameEffect::BattleFairyUpgrade(_)
                 | GameEffect::BattleFairyPotentialReset(_)
-                | GameEffect::BattleFairySkillReset(_) => {
+                | GameEffect::BattleFairySkillReset(_)
+                | GameEffect::FairyGrowLog(_) => {
                     warn!("Неналоговый эффект попал в разделяемый налоговый журнал");
                 }
             }
@@ -31506,12 +31470,7 @@ impl CGame {
                     );
                 }
                 effect @ BattleFairyUpgradeEffect::Audit { .. } => {
-                    let deliveries = self.send_battle_fairy_upgrade_audit(&effect);
-                    tracing::trace!(
-                        player_id,
-                        ?deliveries,
-                        "аудит улучшения боевой феи отправлен"
-                    );
+                    self.send_battle_fairy_upgrade_audit(&effect);
                 }
             }
         }
@@ -31696,7 +31655,7 @@ impl CGame {
         message.send_to_player(self, player_id)
     }
 
-    fn send_battle_fairy_upgrade_audit(&self, effect: &BattleFairyUpgradeEffect) -> Vec<i32> {
+    fn send_battle_fairy_upgrade_audit(&self, effect: &BattleFairyUpgradeEffect) {
         let BattleFairyUpgradeEffect::Audit {
             message_type,
             event,
@@ -31706,7 +31665,8 @@ impl CGame {
             gems,
         } = effect
         else {
-            return Vec::new();
+            tracing::error!("неверный эффект передан владельцу аудита улучшения боевой феи");
+            return;
         };
         let mut message = CMessage::new(*message_type as i32);
         message.add_byte(*event);
@@ -31734,7 +31694,8 @@ impl CGame {
             message.add_long(player.tile_y);
             message.add_ulong(player.client_ip);
         }
-        message.send(self, false).into_iter().collect()
+        let delivery = message.send(self, false);
+        tracing::trace!(player_id, ?delivery, "аудит улучшения боевой феи отправлен");
     }
 
     fn send_battle_fairy_packet_consumption(
@@ -32057,7 +32018,7 @@ impl CGame {
         let egg_max_level = self.globe_setup.fairy_egg_max_level();
         let upgrade_rate = self.globe_setup.fairy_upgrade_rate();
         let mut remaining = experience;
-        let (exp, ripe_id, update) = {
+        let (mut exp, ripe_id, update) = {
             let (players, factory, exp_config) =
                 (&mut self.players, &self.goods_factory, &self.fairy_exp_conf);
             let Some(goods) = players
@@ -32103,9 +32064,7 @@ impl CGame {
             (exp, ripe_id, update)
         };
 
-        for log in &exp.grow_logs {
-            let _ = self.send_fairy_grow_log(log);
-        }
+        self.deliver_fairy_exp_effects(&mut exp.effects);
         if let Some((goods, payload)) = update {
             let mut message = CMessage::new(0x0b_f918);
             message.add_long(player_id);
@@ -32558,10 +32517,6 @@ impl CGame {
                 let Some(target_player_id) = target_id(self, &player_name) else {
                     return 0;
                 };
-                let account = self
-                    .find_player(target_player_id)
-                    .map(|player| player.account().to_vec())
-                    .unwrap_or_default();
                 let Some(source_player_id) = script_player_id else {
                     return 0;
                 };
@@ -32583,7 +32538,6 @@ impl CGame {
                     }
                     let facts = BattleFairyPlayerFacts {
                         player_id: target_player_id,
-                        account: &account,
                     };
                     let Ok(Some(report)) = goods.battle_fairy_exp_up(
                         factory,
@@ -32606,15 +32560,6 @@ impl CGame {
                         };
                     (report, update)
                 };
-                for log in report_and_update.0.level_logs {
-                    let level = log.level.to_string();
-                    let text = format_legacy_text_fields(
-                        self.get_string_by_id(b"ZHGS0017"),
-                        &[&log.account, &log.goods_name, level.as_bytes()],
-                        0xff,
-                    );
-                    put_string_to_file("BattleFairy", &text);
-                }
                 let _ = self.send_battle_fairy_goods_update(&report_and_update.1);
                 0
             }
@@ -32815,7 +32760,8 @@ impl CGame {
                 | GameEffect::BattleFairyPotentialAllocation(_)
                 | GameEffect::BattleFairyUpgrade(_)
                 | GameEffect::BattleFairyPotentialReset(_)
-                | GameEffect::BattleFairySkillReset(_) => {
+                | GameEffect::BattleFairySkillReset(_)
+                | GameEffect::FairyGrowLog(_) => {
                     warn!("Чужой эффект попал в локальный журнал навыка");
                 }
             }

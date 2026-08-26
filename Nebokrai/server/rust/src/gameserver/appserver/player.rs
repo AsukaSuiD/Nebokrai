@@ -264,7 +264,7 @@ use super::container::camountlimitgoodsshadowcontainer::{
 use super::container::cbank::{BankGoodsAddOutcome, CBank};
 use super::container::cbattlefairycontainer::{
     BattleFairyCell, BattleFairyCombineCheck, BattleFairyContainerAddOutcome,
-    BattleFairyDefaultGoodsUpdate, BattleFairyDefaultPropertyReport, BattleFairyDefaultSkill,
+    BattleFairyDefaultGoodsUpdate, BattleFairyDefaultSkill,
     BattleFairyPropertyAddEffect, BattleFairyUpgradeConsumedGem, CBattleFairyContainer,
 };
 use super::container::ccontainer::ContainerListenerHandle;
@@ -7652,7 +7652,7 @@ impl CPlayer {
         factory: &CGoodsFactory,
         skill_factory: &CSkillFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> Option<(BattleFairyDefaultPropertyReport, Vec<BattleFairySkillAdded>)> {
+    ) -> Option<(BattleFairyDefaultGoodsUpdate, Vec<BattleFairySkillAdded>)> {
         let player_id = self.player_id();
         let mut skills = Vec::with_capacity(3);
         let mut register_skill = |skill: BattleFairyDefaultSkill| {
@@ -11594,7 +11594,7 @@ impl CPlayer {
         };
         report.effects.extend(skill_effects);
         report.effects.push(BattleFairyCombineEffect::GoodsUpdated(
-            default_properties.goods_update,
+            default_properties,
         ));
         let goods_name = self
             .battle_fairy_container

@@ -513,7 +513,7 @@ impl CGoods {
     pub(crate) fn battle_fairy_exp_up<Threshold>(
         &mut self,
         factory: &CGoodsFactory,
-        player: Option<BattleFairyPlayerFacts<'_>>,
+        player: Option<BattleFairyPlayerFacts>,
         experience: &mut u32,
         threshold_for_level: Threshold,
     ) -> Result<Option<BattleFairyExpReport>, BattleFairyExpBlock>

@@ -4,8 +4,8 @@
 //! `server/gameserver/appserver/goods/fairyproperties.cpp`. Constructor и
 //! `ExpUp/LevelUp` перенесены целиком: wrapping experience, границы egg/ripe
 //! level, числовой приоритет result, четыре main-ability формулы на `f32` и
-//! ordered grow-log effect. Его exact World `0x60210` теперь исполняет
-//! canonical `CGame` после завершения mutation.
+//! упорядоченный эффект журнала роста. Его точное World-сообщение `0x60210`
+//! исполняет канонический `CGame` после завершения изменения.
 //!
 //! Legacy `m_plExp` был nullable указателем внутрь addon storage `CGoods`.
 //! Rust хранит linked value как `Option<i32>` и возвращает typed block только
@@ -13,6 +13,8 @@
 //! загрузки/сохранения товара остаётся владельцем синхронизации. Таблица опыта,
 //! globe setup и log setup передаются явно. MSVC `ROUND -> long long -> int`
 //! заменён `f32::round -> i64 -> i32`, включая truncation младших 32 бит.
+
+use crate::gameserver::appserver::gameeffectjournal::GameEffectJournal;
 
 pub(crate) const FAIRY_GROW_WORLD_MESSAGE_TYPE: u32 = 0x60210;
 
@@ -59,12 +61,12 @@ pub(crate) struct FairyExpRuntime<'a> {
     pub(crate) upgrade_rate: f32,
 }
 
-#[must_use = "report содержит remaining experience и ordered world-log effects"]
+#[must_use = "результат содержит остаток опыта и упорядоченные World-эффекты"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FairyExpReport {
     pub(crate) result: FairyExpUpResult,
     pub(crate) remaining_experience: u32,
-    pub(crate) grow_logs: Vec<FairyGrowLog>,
+    pub(crate) effects: GameEffectJournal,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -152,7 +154,7 @@ impl CFairyProperties {
         }
         let fairy_name = visible_c_bytes(runtime.fairy_name);
         let mut result = FairyExpUpResult::None;
-        let mut grow_logs = Vec::new();
+        let mut effects = GameEffectJournal::default();
 
         while *experience != 0
             && (self.fairy_state != 0 || self.level < runtime.egg_max_level)
@@ -175,7 +177,7 @@ impl CFairyProperties {
                 &fairy_guid,
                 &fairy_name,
                 &mut threshold_for_level,
-                &mut grow_logs,
+                &mut effects,
             );
             result = result.max(level_result);
             self.experience = Some(0);
@@ -184,7 +186,7 @@ impl CFairyProperties {
         Ok(FairyExpReport {
             result,
             remaining_experience: *experience,
-            grow_logs,
+            effects,
         })
     }
 
@@ -194,7 +196,7 @@ impl CFairyProperties {
         fairy_guid: &[u8],
         fairy_name: &[u8],
         threshold_for_level: &mut Threshold,
-        grow_logs: &mut Vec<FairyGrowLog>,
+        effects: &mut GameEffectJournal,
     ) -> FairyExpUpResult
     where
         Threshold: FnMut(u32, u32) -> u32,
@@ -202,7 +204,7 @@ impl CFairyProperties {
         self.level = self.level.wrapping_add(1);
         self.max_exp = threshold_for_level(self.equip_level, self.level);
         if !runtime.suppress_grow_log && runtime.grow_log_enabled {
-            grow_logs.push(FairyGrowLog {
+            effects.push(FairyGrowLog {
                 player_id: runtime.player_id,
                 log_value: runtime.log_value,
                 fairy_guid: fairy_guid.to_vec(),

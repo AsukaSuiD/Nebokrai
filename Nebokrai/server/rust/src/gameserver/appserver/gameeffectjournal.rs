@@ -19,6 +19,7 @@ use super::player::{
     BattleFairyUpgradeEffect, PlayerEquipmentAddEffect, PlayerEquipmentRemoveEffect,
     PlayerSkillDispatch,
 };
+use super::goods::fairyproperties::FairyGrowLog;
 use super::serverregion::RegionTaxSessionKind;
 use crate::nets::msgqueue::CMsgQueue;
 
@@ -72,6 +73,7 @@ pub(crate) enum GameEffect {
     BattleFairyUpgrade(BattleFairyUpgradeEffect),
     BattleFairyPotentialReset(BattleFairyPotentialResetEffect),
     BattleFairySkillReset(BattleFairySkillResetEffect),
+    FairyGrowLog(FairyGrowLog),
 }
 
 macro_rules! game_effect_conversion {
@@ -100,6 +102,7 @@ game_effect_conversion!(
 game_effect_conversion!(BattleFairyUpgradeEffect, BattleFairyUpgrade);
 game_effect_conversion!(BattleFairyPotentialResetEffect, BattleFairyPotentialReset);
 game_effect_conversion!(BattleFairySkillResetEffect, BattleFairySkillReset);
+game_effect_conversion!(FairyGrowLog, FairyGrowLog);
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GameEffectJournal {

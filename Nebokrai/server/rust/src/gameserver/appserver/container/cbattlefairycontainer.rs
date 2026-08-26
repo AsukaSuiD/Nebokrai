@@ -175,33 +175,12 @@ pub(crate) struct BattleFairyDefaultSkill {
     pub(crate) level: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyDefaultAddonWrite {
-    pub(crate) property_type: i32,
-    pub(crate) value_id: u32,
-    pub(crate) value: i32,
-    /// У setter-а нет registry fallback: false означает, что catalog-addon
-    /// существовал только в статическом описании и instance не изменён.
-    pub(crate) stored: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyDefaultGoodsUpdate {
     pub(crate) message_type: u32,
     pub(crate) player_id: i32,
     pub(crate) goods: ShapeIdentity,
     pub(crate) old_client_payload: Vec<u8>,
-}
-
-/// Результат `LoadBFDefualtProperty`: callback регистрирует skill в owner-е
-/// player до следующей addon-записи, а отчёт сохраняет только успешно
-/// найденные через `GetSkill` registrations.
-#[must_use = "report содержит обязательные skill-state и goods-update effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyDefaultPropertyReport {
-    pub(crate) attempted_writes: Vec<BattleFairyDefaultAddonWrite>,
-    pub(crate) registered_skills: Vec<BattleFairyDefaultSkill>,
-    pub(crate) goods_update: BattleFairyDefaultGoodsUpdate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -585,31 +564,23 @@ impl CBattleFairyContainer {
         factory: &CGoodsFactory,
         register_skill: &mut Register,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> Option<BattleFairyDefaultPropertyReport>
+    ) -> Option<BattleFairyDefaultGoodsUpdate>
     where
         Register: FnMut(BattleFairyDefaultSkill) -> bool,
     {
         let player_id = player_id?;
         let strength = goods.addon_property_value(factory, GAP_BF_STRENGH_BASE, 1);
         let spiritualism = goods.addon_property_value(factory, GAP_BF_SPRITUALISM_BASE, 1);
-        let mut attempted_writes: Vec<_> = [
+        for (property_type, value_id, value) in [
             (GAP_BF_HP, 1, strength),
             (GAP_BF_MAX_HP, 1, strength),
             (GAP_BF_MP, 1, spiritualism),
             (GAP_BF_MAX_MP, 1, spiritualism),
-        ]
-        .into_iter()
-        .map(
-            |(property_type, value_id, value)| BattleFairyDefaultAddonWrite {
-                property_type,
-                value_id,
-                value,
-                stored: goods.set_addon_property_value_core(property_type, value_id, value),
-            },
-        )
-        .collect();
+        ] {
+            let stored = goods.set_addon_property_value_core(property_type, value_id, value);
+            tracing::trace!(property_type, value_id, value, stored, "свойство боевой феи инициализировано");
+        }
 
-        let mut registered_skills = Vec::with_capacity(3);
         for (property_type, skill) in [
             (
                 GAP_BF_HUOXIESHU_SKILL,
@@ -633,42 +604,25 @@ impl CBattleFairyContainer {
                 },
             ),
         ] {
-            attempted_writes.push(BattleFairyDefaultAddonWrite {
-                property_type,
-                value_id: 2,
-                value: skill.id as i32,
-                stored: goods.set_addon_property_value_core(property_type, 2, skill.id as i32),
-            });
-            if register_skill(skill) {
-                registered_skills.push(skill);
-            }
+            let stored =
+                goods.set_addon_property_value_core(property_type, 2, skill.id as i32);
+            let registered = register_skill(skill);
+            tracing::trace!(property_type, skill_id = skill.id, stored, registered, "начальный навык боевой феи обработан");
         }
 
-        attempted_writes.extend(
-            [
-                (GAP_BF_SKY, 2, 0x3c0),
-                (GAP_BF_EARTH, 2, 0x3c1),
-                (GAP_BF_MAN, 2, 0x3c2),
-            ]
-            .into_iter()
-            .map(
-                |(property_type, value_id, value)| BattleFairyDefaultAddonWrite {
-                    property_type,
-                    value_id,
-                    value,
-                    stored: goods.set_addon_property_value_core(property_type, value_id, value),
-                },
-            ),
-        );
-        Some(BattleFairyDefaultPropertyReport {
-            attempted_writes,
-            registered_skills,
-            goods_update: BattleFairyDefaultGoodsUpdate {
-                message_type: crate::gameserver::appserver::goods::cbattlefairyproperty::BATTLE_FAIRY_GOODS_UPDATE_MESSAGE_TYPE,
-                player_id,
-                goods: goods.identity(),
-                old_client_payload: encode_old_client(goods),
-            },
+        for (property_type, value_id, value) in [
+            (GAP_BF_SKY, 2, 0x3c0),
+            (GAP_BF_EARTH, 2, 0x3c1),
+            (GAP_BF_MAN, 2, 0x3c2),
+        ] {
+            let stored = goods.set_addon_property_value_core(property_type, value_id, value);
+            tracing::trace!(property_type, value_id, value, stored, "талант боевой феи инициализирован");
+        }
+        Some(BattleFairyDefaultGoodsUpdate {
+            message_type: crate::gameserver::appserver::goods::cbattlefairyproperty::BATTLE_FAIRY_GOODS_UPDATE_MESSAGE_TYPE,
+            player_id,
+            goods: goods.identity(),
+            old_client_payload: encode_old_client(goods),
         })
     }
 

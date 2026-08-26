@@ -42,10 +42,11 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GOODS_TYPE_EQUIPMENT,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::goods::fairyproperties::{
     FairyExpBlock, FairyExpReport, FairyExpRuntime, FairyExpUpResult,
 };
+use crate::gameserver::appserver::gameeffectjournal::GameEffectJournal;
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 use thiserror::Error;
@@ -384,8 +385,8 @@ pub(crate) struct EquipmentFairyExpRuntimeFacts {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct EquipmentBattleFairyExpRuntimeFacts<'a> {
-    pub(crate) player: Option<BattleFairyPlayerFacts<'a>>,
+pub(crate) struct EquipmentBattleFairyExpRuntimeFacts {
+    pub(crate) player: Option<BattleFairyPlayerFacts>,
     pub(crate) remove: EquipmentRemoveRuntimeFacts,
     pub(crate) replacement_add: EquipmentAddRuntimeFacts,
 }
@@ -633,7 +634,7 @@ impl CEquipmentContainer {
             return Ok(EquipmentFairyExpOutcome::NoChange(FairyExpReport {
                 result: FairyExpUpResult::None,
                 remaining_experience: remaining,
-                grow_logs: Vec::new(),
+                effects: GameEffectJournal::default(),
             }));
         }
 
@@ -642,7 +643,7 @@ impl CEquipmentContainer {
             return Ok(EquipmentFairyExpOutcome::NoChange(FairyExpReport {
                 result: FairyExpUpResult::None,
                 remaining_experience: remaining,
-                grow_logs: Vec::new(),
+                effects: GameEffectJournal::default(),
             }));
         };
         let fairy_guid = goods.identity().ex_id.to_string().into_bytes();
@@ -668,7 +669,7 @@ impl CEquipmentContainer {
             return Ok(EquipmentFairyExpOutcome::NoChange(FairyExpReport {
                 result: FairyExpUpResult::None,
                 remaining_experience: remaining,
-                grow_logs: Vec::new(),
+                effects: GameEffectJournal::default(),
             }));
         };
         if exp.result <= FairyExpUpResult::None {
@@ -729,7 +730,7 @@ impl CEquipmentContainer {
         &mut self,
         experience: u32,
         factory: &CGoodsFactory,
-        runtime: EquipmentBattleFairyExpRuntimeFacts<'_>,
+        runtime: EquipmentBattleFairyExpRuntimeFacts,
         battle_threshold_for_level: &mut dyn FnMut(u32, u32) -> u32,
         create_goods: &mut dyn FnMut(u32) -> Option<CGoods>,
         register_with_goods_ai: &mut dyn FnMut(&CGoods),
@@ -824,7 +825,6 @@ impl CEquipmentContainer {
         BattleFairyExpReport {
             result: BattleFairyExpUpResult::None,
             remaining_experience,
-            level_logs: Vec::new(),
             goods_update: None,
         }
     }

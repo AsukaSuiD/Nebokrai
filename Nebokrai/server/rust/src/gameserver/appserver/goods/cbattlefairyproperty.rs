@@ -6,8 +6,9 @@
 //! World serializer допускает только SSO-строки до 15 байт, потому что heap
 //! pointer другого процесса непереносим. Decoder сохраняет это ограничение,
 //! очищает список до count и публикует только полные records. Constructor и
-//! signed modifier-based `ExpUp/LevelUp` также материализованы; player lookup,
-//! level-log и обязательный old-client update выражены typed facts/effects.
+//! signed modifier-based `ExpUp/LevelUp` также материализованы; player lookup
+//! и обязательный old-client update выражены типизированными facts/effects,
+//! а диагностические сведения уровня публикуются в месте изменения.
 //! Process-global lazy singleton заменён обычным explicit owner-ом; пустой
 //! `vecUpLevelReleated` сохранён как owned vector. Поля, которые exact
 //! constructor не инициализировал и эти методы не читают, намеренно не
@@ -111,17 +112,8 @@ pub(crate) enum BattleFairyExpBlock {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BattleFairyPlayerFacts<'a> {
+pub(crate) struct BattleFairyPlayerFacts {
     pub(crate) player_id: i32,
-    pub(crate) account: &'a [u8],
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyLevelLog {
-    pub(crate) player_id: i32,
-    pub(crate) account: Vec<u8>,
-    pub(crate) goods_name: Vec<u8>,
-    pub(crate) level: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,12 +122,11 @@ pub(crate) struct BattleFairyGoodsUpdate {
     pub(crate) goods: ShapeIdentity,
 }
 
-#[must_use = "report содержит level logs и обязательный old-client update"]
+#[must_use = "результат содержит остаток опыта и обязательный old-client update"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyExpReport {
     pub(crate) result: BattleFairyExpUpResult,
     pub(crate) remaining_experience: u32,
-    pub(crate) level_logs: Vec<BattleFairyLevelLog>,
     pub(crate) goods_update: Option<BattleFairyGoodsUpdate>,
 }
 
@@ -176,7 +167,7 @@ impl CBattleFairyProperty {
         &mut self,
         goods: Option<&mut CGoods>,
         factory: &CGoodsFactory,
-        player: Option<BattleFairyPlayerFacts<'_>>,
+        player: Option<BattleFairyPlayerFacts>,
         experience: &mut u32,
         mut threshold_for_level: Threshold,
     ) -> Result<BattleFairyExpReport, BattleFairyExpBlock>
@@ -187,7 +178,6 @@ impl CBattleFairyProperty {
             return Ok(BattleFairyExpReport {
                 result: BattleFairyExpUpResult::None,
                 remaining_experience: *experience,
-                level_logs: Vec::new(),
                 goods_update: None,
             });
         };
@@ -195,13 +185,11 @@ impl CBattleFairyProperty {
             return Ok(BattleFairyExpReport {
                 result: BattleFairyExpUpResult::None,
                 remaining_experience: *experience,
-                level_logs: Vec::new(),
                 goods_update: None,
             });
         };
 
         let mut result = BattleFairyExpUpResult::None;
-        let mut level_logs = Vec::new();
         while *experience != 0 {
             let max_level = goods.addon_property_value(factory, GAP_BF_MAX_LEVEL, 1);
             let current_level = goods.addon_property_value(factory, GAP_BF_LEVEL, 1);
@@ -225,12 +213,12 @@ impl CBattleFairyProperty {
 
             *experience = accumulated.wrapping_sub(maximum_exp) as u32;
             let level_result = self.level_up(goods, factory, &mut threshold_for_level);
-            level_logs.push(BattleFairyLevelLog {
-                player_id: player.player_id,
-                account: visible_c_bytes(player.account),
-                goods_name: goods.name().to_vec(),
-                level: goods.addon_property_value(factory, GAP_BF_LEVEL, 1),
-            });
+            tracing::trace!(
+                player_id = player.player_id,
+                goods_id = ?goods.identity().ex_id,
+                level = goods.addon_property_value(factory, GAP_BF_LEVEL, 1),
+                "уровень боевой феи повышен"
+            );
             result = result.max(level_result);
             let _ = goods.set_addon_property_value_core(GAP_BF_CURRENT_EXP, 1, 0);
         }
@@ -238,7 +226,6 @@ impl CBattleFairyProperty {
         Ok(BattleFairyExpReport {
             result,
             remaining_experience: *experience,
-            level_logs,
             goods_update: Some(BattleFairyGoodsUpdate {
                 player_id: player.player_id,
                 goods: goods.identity(),
@@ -421,13 +408,6 @@ fn battle_fairy_read_error(
     }
 }
 
-fn visible_c_bytes(bytes: &[u8]) -> Vec<u8> {
-    bytes[..bytes
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(bytes.len())]
-        .to_vec()
-}
 
 fn read_record_u32(record: &[u8], offset: usize) -> u32 {
     LegacyReader::at(record, offset)
