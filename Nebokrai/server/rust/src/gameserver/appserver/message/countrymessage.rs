@@ -288,12 +288,12 @@ fn dispatch_country_quest_reset_message(game: &mut CGame, opcode: u32) {
                 .expect("country owner проверен перед quest reset")
                 .quest_switch_message(job, false);
             let delivery = message.send(game, false);
-            let mutation = game
+            game
                 .country_handler_mut()
                 .country_mut(country)
                 .expect("country owner жив после synchronous World enqueue")
                 .apply_quest_switch(job, false);
-            tracing::trace!(opcode, country, job, ?mutation, ?delivery, "переключатель задания страны сброшен");
+            tracing::trace!(opcode, country, job, ?delivery, "переключатель задания страны сброшен");
         }
     }
 }
@@ -381,12 +381,12 @@ fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
         for _ in 0..advertised_count.max(0) {
             let player_id = message.base_mut().get_long().unwrap_or(0);
             let sampled_at_ms = runtime.now_milliseconds();
-            let mutation = game
+            game
                 .country_handler_mut()
                 .country_mut(country)
                 .expect("country owner проверен перед синхронизацией exile-list")
                 .add_to_exile_list(player_id, sampled_at_ms);
-            tracing::trace!(opcode, country, player_id, sampled_at_ms, ?mutation, "запись списка изгнанных синхронизирована");
+            tracing::trace!(opcode, country, player_id, sampled_at_ms, "запись списка изгнанных синхронизирована");
         }
         tracing::trace!(opcode, country, country_complete = decoded_country.is_some(), advertised_count, "список изгнанных синхронизирован");
         return;
@@ -433,13 +433,13 @@ fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
             tracing::trace!(opcode, country, player_id, ?relocation, "игрок перемещён при изгнании");
         }
         let sampled_at_ms = runtime.now_milliseconds();
-        let mutation = game
+        game
             .country_handler_mut()
             .country_mut(country)
             .expect("country owner проверен перед AddToExileList")
             .add_to_exile_list(player_id, sampled_at_ms);
         mutation_applied = true;
-        tracing::trace!(opcode, country, player_id, sampled_at_ms, ?mutation, "игрок добавлен в список изгнанных");
+        tracing::trace!(opcode, country, player_id, sampled_at_ms, "игрок добавлен в список изгнанных");
     }
 
     let player_ids = game
@@ -485,7 +485,7 @@ fn dispatch_country_governance_effect_message<Runtime: GameCountryWarRuntime>(
             return;
         };
         let player_name = player.shape().base_object().get_name().to_vec();
-        let reset = player.reset_murder_counters();
+        player.reset_murder_counters();
         let text =
             format_country_player_name_notice(game.get_string_by_id(b"GS0023"), &player_name);
         for recipient_id in game.player_ids_in_country(u32::from(country)) {
@@ -506,7 +506,6 @@ fn dispatch_country_governance_effect_message<Runtime: GameCountryWarRuntime>(
             opcode,
             country,
             player_id,
-            ?reset,
             ?around_delivery,
             "прощение игрока применено"
         );
@@ -600,14 +599,13 @@ fn dispatch_country_direct_response_message(
             );
             return;
         };
-        let mutation = country_owner.set_king_id(king_id);
+        country_owner.set_king_id(king_id);
         tracing::trace!(
             opcode,
             country,
             country_complete = decoded_country.is_some(),
             king_id,
             king_id_complete = decoded_king_id.is_some(),
-            ?mutation,
             "правитель страны обновлён"
         );
         return;
@@ -648,9 +646,9 @@ fn dispatch_country_information_change_message(
         tracing::warn!(country, player_id, job, active, "сведения о стране не изменены: страна отсутствует");
         return;
     };
-    let mutation = country_owner.set_country_information(job, player_id, active);
+    country_owner.set_country_information(job, player_id, active);
     if game.find_player(player_id).is_none() {
-        tracing::debug!(country, player_id, job, active, ?mutation, "сведения о стране изменены без публикации: игрок отсутствует");
+        tracing::debug!(country, player_id, job, active, "сведения о стране изменены без публикации: игрок отсутствует");
         return;
     }
     let client_job = if active == 2 { 0 } else { job };
@@ -667,7 +665,6 @@ fn dispatch_country_information_change_message(
         job_complete = decoded_job.is_some(),
         active,
         active_complete = decoded_active.is_some(),
-        ?mutation,
         client_job,
         ?around_delivery,
         "изменение сведений о стране опубликовано"
@@ -692,7 +689,7 @@ fn dispatch_player_country_change_message(
         );
         return;
     };
-    let mutation = player.apply_world_country(country);
+    player.apply_world_country(country);
     let mut publication = CMessage::new(0x000c_0301);
     publication.add_long(country);
     publication.add_long(player_id);
@@ -702,7 +699,6 @@ fn dispatch_player_country_change_message(
         player_id_complete = decoded_player_id.is_some(),
         country,
         country_complete = decoded_country.is_some(),
-        ?mutation,
         ?around_delivery,
         "изменение страны игрока опубликовано"
     );

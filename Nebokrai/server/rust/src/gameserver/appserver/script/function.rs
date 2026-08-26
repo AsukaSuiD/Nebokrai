@@ -420,9 +420,6 @@
 //! фабрики `CMoveShape`, а `GetStatesNum 2322` вычисляет один ID и считает
 //! живые материализованные состояния игрока через тот же достигнутый вызов.
 
-use crate::gameserver::appserver::country::country::{
-    CountryExileRestTimeReport, CountryScalarMutationReport,
-};
 use crate::gameserver::appserver::exstate::ExtendedStateKind;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::message::gmmessage::publish_local_online_gm_list;
@@ -3037,7 +3034,6 @@ pub(crate) enum CountryControlPointScriptDisposition {
     Applied {
         country: u8,
         delta: i32,
-        mutation: CountryScalarMutationReport,
         delivery: Result<i32, SendMessageError>,
     },
 }
@@ -3082,7 +3078,7 @@ pub(crate) fn run_country_control_point_script_function(
         };
     };
     let applied = country_owner.control_point.wrapping_add(delta);
-    let (mutation, message) = game
+    let message = game
         .country_handler_mut()
         .country_mut(country)
         .expect("country owner жив до control-point mutation")
@@ -3093,7 +3089,6 @@ pub(crate) fn run_country_control_point_script_function(
         disposition: CountryControlPointScriptDisposition::Applied {
             country,
             delta,
-            mutation,
             delivery,
         },
     }
@@ -3109,7 +3104,7 @@ pub(crate) enum CountryExileTimeScriptDisposition {
         field: &'static str,
         sampled_at_ms: u32,
     },
-    Completed(CountryExileRestTimeReport),
+    Completed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3155,10 +3150,10 @@ pub(crate) fn run_country_exile_time_script_function<Context: GameClockContext>(
     let sampled_at_ms = context.now_milliseconds();
     match country_owner.exile_rest_time(player_id, sampled_at_ms, game.country_param().exile_time())
     {
-        Ok(report) => CountryExileTimeScriptFunctionOutcome::Handled {
+        Ok(remaining_seconds) => CountryExileTimeScriptFunctionOutcome::Handled {
             player_id,
-            legacy_return: report.remaining_seconds,
-            disposition: CountryExileTimeScriptDisposition::Completed(report),
+            legacy_return: remaining_seconds,
+            disposition: CountryExileTimeScriptDisposition::Completed,
         },
         Err(field) => CountryExileTimeScriptFunctionOutcome::Handled {
             player_id,
@@ -3185,7 +3180,6 @@ pub(crate) enum CountryQuestSwitchScriptDisposition {
     Written {
         country: u8,
         raw_switch: i32,
-        mutation: crate::gameserver::appserver::country::country::CountryQuestSwitchMutationReport,
         delivery: Result<i32, SendMessageError>,
     },
 }
@@ -3265,7 +3259,7 @@ pub(crate) fn run_country_quest_switch_script_function(
 
     let message = country_owner.quest_switch_message(identity as u8, true);
     let delivery = message.send(game, false);
-    let mutation = game
+    game
         .country_handler_mut()
         .country_mut(country)
         .expect("country owner жив после quest-switch World enqueue")
@@ -3277,7 +3271,6 @@ pub(crate) fn run_country_quest_switch_script_function(
         disposition: CountryQuestSwitchScriptDisposition::Written {
             country,
             raw_switch,
-            mutation,
             delivery,
         },
     }
@@ -3299,7 +3292,6 @@ pub(crate) enum CountryScalarScriptDisposition {
         country: u8,
         requested: i32,
         applied: i32,
-        mutation: CountryScalarMutationReport,
         delivery: Result<i32, SendMessageError>,
     },
 }
@@ -3421,7 +3413,7 @@ pub(crate) fn run_country_scalar_script_function(
         }
         _ => unreachable!("country scalar function ID проверен перед clamp"),
     };
-    let (mutation, message) = game
+    let message = game
         .country_handler_mut()
         .country_mut(country)
         .expect("country owner жив до scalar mutation")
@@ -3434,7 +3426,6 @@ pub(crate) fn run_country_scalar_script_function(
             country,
             requested,
             applied,
-            mutation,
             delivery,
         },
     }

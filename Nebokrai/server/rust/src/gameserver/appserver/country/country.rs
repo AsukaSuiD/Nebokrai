@@ -56,59 +56,6 @@ pub(crate) struct CCountry {
     exile_started_at_ms: BTreeMap<i32, i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryInformationMutationReport {
-    pub(crate) country_id: u8,
-    pub(crate) job: u8,
-    pub(crate) player_id: i32,
-    pub(crate) active: u8,
-    pub(crate) previous_player_id: i32,
-    pub(crate) applied_player_id: i32,
-    pub(crate) previous_king_id: i32,
-    pub(crate) applied_king_id: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryKingIdMutationReport {
-    pub(crate) country_id: u8,
-    pub(crate) previous: i32,
-    pub(crate) applied: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryExileMutationReport {
-    pub(crate) country_id: u8,
-    pub(crate) player_id: i32,
-    pub(crate) previous_started_at_ms: Option<i32>,
-    pub(crate) applied_started_at_ms: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryQuestSwitchMutationReport {
-    pub(crate) country_id: u8,
-    pub(crate) job: u8,
-    pub(crate) previous: Option<bool>,
-    pub(crate) applied: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryScalarMutationReport {
-    pub(crate) country_id: u8,
-    pub(crate) selector: u8,
-    pub(crate) previous: i32,
-    pub(crate) applied: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryExileRestTimeReport {
-    pub(crate) country_id: u8,
-    pub(crate) player_id: i32,
-    pub(crate) started_at_ms: Option<i32>,
-    pub(crate) sampled_at_ms: u32,
-    pub(crate) remaining_ms: i32,
-    pub(crate) remaining_seconds: i32,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error("country snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
 pub(crate) struct CountryDecodeError {
@@ -181,7 +128,7 @@ impl CCountry {
         job: u8,
         player_id: i32,
         active: u8,
-    ) -> CountryInformationMutationReport {
+    ) {
         let previous_king_id = self.king_id;
         let applied_player_id = if active == 1 { player_id } else { 0 };
         let previous_player_id = self
@@ -191,26 +138,13 @@ impl CCountry {
         if active == 1 {
             self.king_id = 0;
         }
-        CountryInformationMutationReport {
-            country_id: self.country_id,
-            job,
-            player_id,
-            active,
-            previous_player_id,
-            applied_player_id,
-            previous_king_id,
-            applied_king_id: self.king_id,
-        }
+        tracing::trace!(country_id = self.country_id, job, player_id, active, previous_player_id, applied_player_id, previous_king_id, applied_king_id = self.king_id, "сведения о стране изменены");
     }
 
-    pub(crate) fn set_king_id(&mut self, king_id: i32) -> CountryKingIdMutationReport {
+    pub(crate) fn set_king_id(&mut self, king_id: i32) {
         let previous = self.king_id;
         self.king_id = king_id;
-        CountryKingIdMutationReport {
-            country_id: self.country_id,
-            previous,
-            applied: king_id,
-        }
+        tracing::trace!(country_id = self.country_id, previous, applied = king_id, "правитель страны изменён");
     }
 
     pub(crate) const fn king_id(&self) -> i32 {
@@ -221,17 +155,12 @@ impl CCountry {
         &mut self,
         player_id: i32,
         sampled_at_ms: u32,
-    ) -> CountryExileMutationReport {
+    ) {
         let applied_started_at_ms = sampled_at_ms as i32;
         let previous_started_at_ms = self
             .exile_started_at_ms
             .insert(player_id, applied_started_at_ms);
-        CountryExileMutationReport {
-            country_id: self.country_id,
-            player_id,
-            previous_started_at_ms,
-            applied_started_at_ms,
-        }
+        tracing::trace!(country_id = self.country_id, player_id, ?previous_started_at_ms, applied_started_at_ms, "запись изгнания изменена");
     }
 
     pub(crate) fn exile_player_ids(&self) -> Vec<i32> {
@@ -243,30 +172,18 @@ impl CCountry {
         player_id: i32,
         sampled_at_ms: u32,
         exile_time_ms: Option<i32>,
-    ) -> Result<CountryExileRestTimeReport, &'static str> {
+    ) -> Result<i32, &'static str> {
         let Some(&started_at_ms) = self.exile_started_at_ms.get(&player_id) else {
-            return Ok(CountryExileRestTimeReport {
-                country_id: self.country_id,
-                player_id,
-                started_at_ms: None,
-                sampled_at_ms,
-                remaining_ms: 0,
-                remaining_seconds: 0,
-            });
+            tracing::trace!(country_id = self.country_id, player_id, sampled_at_ms, "запись изгнания отсутствует");
+            return Ok(0);
         };
         let exile_time_ms = exile_time_ms.ok_or("_exile_time")?;
         let remaining_ms = exile_time_ms
             .wrapping_sub(sampled_at_ms as i32)
             .wrapping_add(started_at_ms);
         let remaining_seconds = (remaining_ms / 1_000).max(0);
-        Ok(CountryExileRestTimeReport {
-            country_id: self.country_id,
-            player_id,
-            started_at_ms: Some(started_at_ms),
-            sampled_at_ms,
-            remaining_ms,
-            remaining_seconds,
-        })
+        tracing::trace!(country_id = self.country_id, player_id, started_at_ms, sampled_at_ms, remaining_ms, remaining_seconds, "остаток времени изгнания вычислен");
+        Ok(remaining_seconds)
     }
 
     pub(crate) fn quest_switch_message(&self, job: u8, enabled: bool) -> CMessage {
@@ -283,14 +200,9 @@ impl CCountry {
         &mut self,
         job: u8,
         enabled: bool,
-    ) -> CountryQuestSwitchMutationReport {
+    ) {
         let previous = self.quest_switches.insert(job, enabled);
-        CountryQuestSwitchMutationReport {
-            country_id: self.country_id,
-            job,
-            previous,
-            applied: enabled,
-        }
+        tracing::trace!(country_id = self.country_id, job, ?previous, applied = enabled, "переключатель задания страны изменён");
     }
 
     /// Exact `SetCountryTreasury`: сначала публикует новое значение, затем
@@ -306,7 +218,7 @@ impl CCountry {
         &mut self,
         selector: u8,
         value: i32,
-    ) -> (CountryScalarMutationReport, CMessage) {
+    ) -> CMessage {
         let previous = match selector {
             1 => std::mem::replace(&mut self.treasury, value),
             2 => std::mem::replace(&mut self.power, value),
@@ -316,15 +228,8 @@ impl CCountry {
             6 => std::mem::replace(&mut self.material_point, value),
             _ => unreachable!("CCountry scalar selector ограничен exact owner-ами"),
         };
-        (
-            CountryScalarMutationReport {
-                country_id: self.country_id,
-                selector,
-                previous,
-                applied: value,
-            },
-            self.change_attribute_to_world_message(selector, value),
-        )
+        tracing::trace!(country_id = self.country_id, selector, previous, applied = value, "скаляр страны изменён");
+        self.change_attribute_to_world_message(selector, value)
     }
 
     fn change_attribute_to_world_message(&self, attribute: u8, value: i32) -> CMessage {

@@ -1403,22 +1403,6 @@ pub(crate) struct PlayerExploitMutationReport {
     pub(crate) applied: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerCountryMutationReport {
-    pub(crate) player_id: i32,
-    pub(crate) previous: u8,
-    pub(crate) requested: i32,
-    pub(crate) applied: u8,
-    pub(crate) changed: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerMurderCountersResetReport {
-    pub(crate) player_id: i32,
-    pub(crate) previous_pk_count: u16,
-    pub(crate) previous_kill_count: u32,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerCombatProperties {
     pub(crate) maximum_hp: u32,
@@ -3433,18 +3417,12 @@ impl CPlayer {
 
     /// Ответ World `0x7FF01` меняет страну только для signed диапазона `1..4`;
     /// невалидное значение всё равно публикуется caller-ом в `0xC0301`.
-    pub(crate) fn apply_world_country(&mut self, requested: i32) -> PlayerCountryMutationReport {
+    pub(crate) fn apply_world_country(&mut self, requested: i32) {
         let previous = self.country;
         if (1..5).contains(&requested) {
             self.country = requested as u8;
         }
-        PlayerCountryMutationReport {
-            player_id: self.player_id(),
-            previous,
-            requested,
-            applied: self.country,
-            changed: self.country != previous,
-        }
+        tracing::trace!(player_id = self.player_id(), previous, requested, applied = self.country, changed = self.country != previous, "страна игрока изменена ответом World");
     }
 
     /// Сохраняет player tail total-honor startup ветви: days сбрасывается
@@ -7311,15 +7289,12 @@ impl CPlayer {
         Some(started)
     }
 
-    pub(crate) fn reset_murder_counters(&mut self) -> PlayerMurderCountersResetReport {
-        let report = PlayerMurderCountersResetReport {
-            player_id: self.player_id(),
-            previous_pk_count: self.base_properties.pk_count,
-            previous_kill_count: self.base_properties.kill_count,
-        };
+    pub(crate) fn reset_murder_counters(&mut self) {
+        let previous_pk_count = self.base_properties.pk_count;
+        let previous_kill_count = self.base_properties.kill_count;
         self.base_properties.pk_count = 0;
         self.base_properties.kill_count = 0;
-        report
+        tracing::trace!(player_id = self.player_id(), previous_pk_count, previous_kill_count, "счётчики убийств игрока сброшены");
     }
 
     /// World kill confirmation tail: unsigned saturation, wrapping kill count
