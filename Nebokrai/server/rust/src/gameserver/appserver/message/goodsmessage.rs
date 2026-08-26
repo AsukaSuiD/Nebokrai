@@ -1,72 +1,24 @@
-//! Входные goods-сообщения GameServer.
+//! Входные сообщения GameServer для предметов и связанных с ними сеансов.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
-//! `server/gameserver/appserver/message/goodsmessage.cpp`. Материализован
-//! полный combine-проход боевой феи: `0x8FC26` проверяет состав и публикует
-//! notification либо `0xBF92C`, а `0x8FC27` исполняет player/container/game
-//! mutations, old-client codec, сетевые результаты и аудит. `0x8FC28`
-//! продолжает тот же транспортный owner полным upgrade-проходом через RNG,
-//! player wallet, gems, equipment update и audit gates. Decoder `0x8FC2A`
-//! сохраняет count/reserved/pairs wire-формат и доводит распределение potential
-//! до player properties и повторных old-client goods updates. `0x8FC2B`
-//! замыкает расход reset-item, сброс potential/player state и клиентский update.
-//! Парные `0x8FC2C/0x8FC2D` ведут summon/recall через один WarSoul lifecycle,
-//! region spatial map, around packets и пересчёт player properties. `0x8FC29`
-//! сохраняет два `long`, detach → live script → attach и World ack; сам script
-//! входит в concrete `CGame::run_script_file` с player/region context и
-//! исполняется на следующей Script-stage, как исходный `RunScript` registry:
-//! attach и World ack завершают Message-stage до диалога, а client reply на
-//! `TalkBoxSmall` позднее ведёт к canonical `AddSkillBF` mutation.
-//! `0x8FC2E` читает два GUID, выполняет exact four-container lookup и только
-//! для найденного goods замыкает `UpdateProperty`: equipment recompute,
-//! canonical player state, `0xBF721` и conditional `DoneTaoZhuang`.
-//! Парные `0x8FC2F/0x8FC30` публикуют ordered CiQing goods preview и global
-//! setup; первый непустой preview сохраняет ранний return исходного EXE.
-//! `0x8FC31` продолжает тот же owner полным make-проходом: оба feature gate-а
-//! стоят до decode, ресурсы расходуются в audit/delete order, factory и packet
-//! add сохраняют stacking/ownership effects, затем отправляется `0xBF932`.
-//! `0x8FC32` замыкает compose slots `0/1/2`, exact fallback без оплаты,
-//! recipe payment/RNG, source deletion, unlock/query и `0xBF81B` tail.
-//! `0x8FC33` расходует `CQ0008`, удаляет одну единицу из основного CiQing
-//! container и вызывает обязательный property runtime либо шлёт отказ.
-//! `0x8FC34` читает amount до gate и ведёт hand goods через level/slot/improve
-//! проверки, chance roll, failure destruction либо native clone/mount,
-//! material consumption, property callback и `0xC0111`.
-//! `0x8FC35` разрешает target по ID либо bounded имени и публикует exact
-//! `0xC010F` payload; неизвестный mode и отсутствующий target остаются silent.
-//! `0x8FC25` подключает process-owned session/plug registry: после exact
-//! owner lookup и plug-ID guard выполняются concrete ordered session End,
-//! player progress/moveable release и plug Exit; terminal equipment sessions
-//! снимают container listeners и собираются на штатной MainLoop session-stage.
-//! `0x8FC24` соседним route-ом замыкает equipment compose: session/plug
-//! identity, validation, необратимое удаление двух equipment и камня,
-//! universal upgrade, packet ownership, result-shadow и announcement script.
-//! `0x8FC1E..0x8FC23` ведут единый equipment DaKong plug: terminal close
-//! сохраняет last-equipment до ordered End/progress/Exit и итогового `0xBF918`;
-//! остальные routes выполняют создание отверстия, вставку камней, смену цвета,
-//! preview и уничтожение камня с общими addon, расходными, audit и script effects.
-//! Парные `0x8FC1C/0x8FC1D` замыкают уничтожение goods: query/delete route,
-//! global restrictions, hand ownership, equipment-state guard, World audit и
-//! адресные `0xBF926/0xBF927` проходят одним вертикальным сценарием.
-//! `0x8FC17..0x8FC1B` ведут полный synthesis lifecycle: open-lock, list/search,
-//! formula, payment/RNG/resources/result/broadcast и terminal release.
-//! `0x8FC13..0x8FC16` замыкают ordinary-fairy lifecycle: hatch timer и
-//! periodic completion, implantation с точным расходом vigour/crystal,
-//! syncretize со state/container/player effects и positional setup wire.
-//! `0x8FC08..0x8FC0A` восстанавливают весь hotkey lifecycle: безопасную
-//! 24-slot проекцию, возврат consumable из hand, positional/auto fallback,
-//! rollback/garbage object-move и ответы `0xBF908..0xBF90A`.
-//! `0x8FC11/0x8FC12` используют только server-trusted last-container script:
-//! confirm запускает live VM с region/player context, cancel очищает owned
-//! enhancement shadow, precious-box tail повторяет тот же script dispatch.
-//! `0x8FC0B` замыкает просмотр чужой экипировки: target/mode guards, appearance
-//! snapshot, exact 17-slot iteration, old-client payload и отказ `GSN0336`.
-//! `0x8FC0F/0x8FC10` завершают ordinary equipment-upgrade: session/plug guard,
-//! цена и gem validation, RNG/addon mutation, расход, player/equipment effects,
-//! `0xBF918`, audit и terminal End/progress/`0xBF913`/registry GC.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `server/gameserver/appserver/message/goodsmessage.cpp`. Обработчик сохраняет
+//! точные коды сообщений, двоичные поля и подтверждённый порядок изменений
+//! игрока, контейнеров, предметов, региона, World и клиентских ответов.
+//! Диагностические итоги публикуются через `tracing` в месте возникновения и
+//! не возвращаются вызывающей стороне отдельными деревьями отчётов.
 //!
-//! Все подтверждённые cases этого owner-а теперь имеют live Rust routes;
-//! полностью замещённое switch-тело удалено ниже.
+//! Особо существенны необратимые границы операций: расход предметов и денег
+//! остаётся на прежнем месте относительно бросков RNG, аудита и отправки
+//! пакетов; завершение сеанса выполняет `end_session`, затем освобождение
+//! состояния игрока и только потом `exit_plug`; обработка `0x8FC29` сохраняет
+//! последовательность отсоединения навыков боевой феи, запуска сценария,
+//! обратного присоединения и подтверждения World. Для `0x8FC2F/0x8FC30`
+//! сохранён ранний выход после первого непустого предпросмотра CiQing, а
+//! терминальные сеансы экипировки по-прежнему снимают слушателей контейнера и
+//! удаляются на штатной стадии основного цикла.
+//!
+//! Все подтверждённые ветви этого владельца подключены к исполняемым маршрутам
+//! Rust; полностью замещённое тело исходного `switch` удалено.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -74,36 +26,16 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\goodsmessage.cpp
 
-use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyCombineCheck;
 use crate::gameserver::appserver::container::cfairycontainer::FairySyncreticProperty;
-use crate::gameserver::appserver::player::{
-    BattleFairyCombineReport, BattleFairyPotentialAllocationReport,
-    BattleFairyPotentialResetReport, BattleFairySummonReport, BattleFairyUpgradeReport,
-    GoodsSessionPlayerRelease,
-};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
-use crate::gameserver::appserver::session::cequipmentcompose::EquipmentComposeReport;
-use crate::gameserver::appserver::session::cequipmentdakong::{
-    EquipmentDaKongCloseReport, EquipmentDaKongOperation, EquipmentDaKongReport,
-};
-use crate::gameserver::appserver::session::cequipmentupgrade::{
-    EquipmentUpgradeCloseReport, EquipmentUpgradeReport,
-};
-use crate::gameserver::appserver::session::csessionfactory::{PlugExitReport, SessionEndReport};
+use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongOperation;
 use crate::gameserver::gameserver::game::{
-    BattleFairyDeathContext, BattleFairyScriptSkillAttachReport, CGame, CiQingComposeContext,
-    CiQingComposeReport, CiQingDeleteReport, CiQingGoodsQueryReport, CiQingMakeReport,
-    CiQingMountReport, CiQingOtherPersonReport, CiQingOtherPersonTarget, CiQingSetupQueryReport,
-    ContainerScriptActionReport, EquipmentComposeContext, EquipmentDaKongContext,
-    EquipmentUpgradeContext, FairyContext, FairyHatchReport, FairyImplantResultReport,
-    FairySetupQueryReport, FairySyncretizeResultReport, GameContainerMessageRuntime,
-    GoodsDestroyConfirmReport, GoodsDestroyOpenReport, HotkeyAssignmentReport, HotkeyChangeReport,
-    HotkeyRemovalReport, PlayerEquipmentInspectionReport, SynthesisComposeReport, SynthesisContext,
-    SynthesisOpenReport,
+    BattleFairyDeathContext, CGame, CiQingComposeContext, CiQingOtherPersonTarget,
+    EquipmentComposeContext, EquipmentDaKongContext, EquipmentUpgradeContext, FairyContext,
+    GameContainerMessageRuntime, SynthesisContext,
 };
-use crate::nets::netserver::message::{CMessage, SendMessageError};
-use crate::public::guid::CGuid;
+use crate::nets::netserver::message::CMessage;
 
 const CHECK_BATTLE_FAIRY_COMBINE: u32 = 0x0008_fc26;
 const ASSIGN_HOTKEY: u32 = 0x0008_fc08;
@@ -167,129 +99,11 @@ pub(crate) enum GameGoodsMessageError {
     MissingField(&'static str),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyScriptResetOutcome {
-    MissingBattleFairyEquipment,
-    Dispatched,
-}
-
-#[must_use = "script reset report сохраняет detach, script, attach и World ack"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyScriptResetReport {
-    pub(crate) ignored_value: i32,
-    pub(crate) script_index: i32,
-    pub(crate) script_path: Vec<u8>,
-    pub(crate) outcome: BattleFairyScriptResetOutcome,
-    pub(crate) detached_skill_ids: Vec<u32>,
-    pub(crate) attached: Option<BattleFairyScriptSkillAttachReport>,
-    pub(crate) world_ack: Option<Result<i32, SendMessageError>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyPropertyRefreshOutcome {
-    MissingGoods,
-    Updated {
-        property_delivery: i32,
-        tao_zhuang_ran: bool,
-    },
-}
-
-#[must_use = "property refresh report сохраняет оба GUID и virtual update result"]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BattleFairyPropertyRefreshReport {
-    pub(crate) ignored_guid: CGuid,
-    pub(crate) goods_guid: CGuid,
-    pub(crate) outcome: BattleFairyPropertyRefreshOutcome,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GoodsSessionEndOutcome {
-    MissingSession,
-    MissingPlayerPlug,
-    PlugIdMismatch,
-    Ended,
-}
-
-#[must_use = "session end report сохраняет lookup, player release и ordered lifecycle effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GoodsSessionEndReport {
-    pub(crate) session_id: i32,
-    pub(crate) requested_plug_id: i32,
-    pub(crate) actual_plug_id: Option<i32>,
-    pub(crate) outcome: GoodsSessionEndOutcome,
-    pub(crate) player_release: Option<GoodsSessionPlayerRelease>,
-    pub(crate) session_end: Option<SessionEndReport>,
-    pub(crate) plug_exit: Option<PlugExitReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameGoodsMessageOutcome {
-    MissingPlayer,
-    FairyUnavailable,
-    FairyHatch(FairyHatchReport),
-    FairyImplant(FairyImplantResultReport),
-    FairySyncretize(FairySyncretizeResultReport),
-    FairySetup(FairySetupQueryReport),
-    HotkeyAssignment(HotkeyAssignmentReport),
-    HotkeyRemoval(HotkeyRemovalReport),
-    HotkeyChange(HotkeyChangeReport),
-    PlayerEquipmentInspection(PlayerEquipmentInspectionReport),
-    ContainerScriptAction(ContainerScriptActionReport),
-    BattleFairyCombineCheck(BattleFairyCombineCheck),
-    BattleFairyCombine(BattleFairyCombineReport),
-    BattleFairyUpgrade(BattleFairyUpgradeReport),
-    BattleFairyScriptReset(BattleFairyScriptResetReport),
-    BattleFairyPotentialAllocation(BattleFairyPotentialAllocationReport),
-    BattleFairyPotentialReset(BattleFairyPotentialResetReport),
-    BattleFairySummon(BattleFairySummonReport),
-    BattleFairyPropertyRefresh(BattleFairyPropertyRefreshReport),
-    CiQingGoods(CiQingGoodsQueryReport),
-    CiQingSetup(CiQingSetupQueryReport),
-    CiQingUnavailable,
-    CiQingMake(CiQingMakeReport),
-    CiQingCompose(CiQingComposeReport),
-    CiQingPositionOutOfRange {
-        position: u32,
-    },
-    CiQingDelete(CiQingDeleteReport),
-    CiQingMount(CiQingMountReport),
-    CiQingOtherPerson(CiQingOtherPersonReport),
-    EquipmentCompose(EquipmentComposeReport),
-    EquipmentDaKongClose(EquipmentDaKongCloseReport),
-    EquipmentDaKong(EquipmentDaKongReport),
-    EquipmentUpgrade(EquipmentUpgradeReport),
-    EquipmentUpgradeClose(EquipmentUpgradeCloseReport),
-    GoodsDestroyOpen(GoodsDestroyOpenReport),
-    GoodsDestroyConfirm(GoodsDestroyConfirmReport),
-    SynthesisOpen(SynthesisOpenReport),
-    SynthesisList {
-        count: u32,
-        delivery: Option<i32>,
-    },
-    SynthesisFormula {
-        synthesis_index: u32,
-        delivery: Option<i32>,
-    },
-    SynthesisCompose(SynthesisComposeReport),
-    SynthesisClosed(Option<GoodsSessionPlayerRelease>),
-    GoodsSessionEnd(GoodsSessionEndReport),
-}
-
-#[must_use = "goods-message report содержит routing и полный gameplay result"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameGoodsMessageReport {
-    pub(crate) message_type: u32,
-    pub(crate) socket_id: i32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) outcome: GameGoodsMessageOutcome,
-}
-
 pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GameGoodsMessageReport, GameGoodsMessageError>> {
+) -> Option<Result<(), GameGoodsMessageError>> {
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
@@ -341,17 +155,10 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
     }
 
     message.resolve_player_context(game);
-    let socket_id = message.socket_id();
     let player_id = message.player_id();
     let region_id = message.region_id();
     let Some(player_id) = player_id else {
-        return Some(Ok(GameGoodsMessageReport {
-            message_type,
-            socket_id,
-            player_id: None,
-            region_id,
-            outcome: GameGoodsMessageOutcome::MissingPlayer,
-        }));
+        return Some(Ok(()));
     };
     let read_long = |message: &mut CMessage, field| {
         message
@@ -359,7 +166,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             .get_long()
             .ok_or(GameGoodsMessageError::MissingField(field))
     };
-    let outcome = match message_type {
+    match message_type {
         ASSIGN_HOTKEY => {
             let slot = match message.base_mut().get_char() {
                 Some(value) => value as u8,
@@ -369,20 +176,18 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value as u32,
                 Err(error) => return Some(Err(error)),
             };
-            GameGoodsMessageOutcome::HotkeyAssignment(
-                game.assign_hotkey(player_id, slot, value)
-                    .expect("resolved message player остаётся live во время hotkey assignment"),
-            )
+            let _ = game
+                .assign_hotkey(player_id, slot, value)
+                .expect("resolved message player остаётся live во время hotkey assignment");
         }
         REMOVE_HOTKEY => {
             let slot = match message.base_mut().get_char() {
                 Some(value) => value as u8,
                 None => return Some(Err(GameGoodsMessageError::MissingField("hotkey slot"))),
             };
-            GameGoodsMessageOutcome::HotkeyRemoval(
-                game.remove_hotkey(player_id, slot)
-                    .expect("resolved message player остаётся live во время hotkey removal"),
-            )
+            let _ = game
+                .remove_hotkey(player_id, slot)
+                .expect("resolved message player остаётся live во время hotkey removal");
         }
         CHANGE_HOTKEY => {
             let slot = match message.base_mut().get_char() {
@@ -393,19 +198,16 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value as u32,
                 Err(error) => return Some(Err(error)),
             };
-            GameGoodsMessageOutcome::HotkeyChange(
-                game.change_hotkey(player_id, slot, value)
-                    .expect("resolved message player остаётся live во время hotkey change"),
-            )
+            let _ = game
+                .change_hotkey(player_id, slot, value)
+                .expect("resolved message player остаётся live во время hotkey change");
         }
         QUERY_PLAYER_EQUIPMENT => {
             let target_id = match read_long(message, "equipment target player ID") {
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            GameGoodsMessageOutcome::PlayerEquipmentInspection(
-                game.query_player_equipment(player_id, target_id, runtime),
-            )
+            let _ = game.query_player_equipment(player_id, target_id, runtime);
         }
         UPGRADE_EQUIPMENT => {
             let session_id = match read_long(message, "equipment upgrade session ID") {
@@ -416,21 +218,19 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            GameGoodsMessageOutcome::EquipmentUpgrade(game.upgrade_equipment(
+            let _ = game.upgrade_equipment(
                 player_id,
                 session_id,
                 requested_plug_id,
                 runtime,
-            ))
+            );
         }
         CLOSE_EQUIPMENT_UPGRADE => {
             let session_id = match read_long(message, "equipment upgrade close session ID") {
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            GameGoodsMessageOutcome::EquipmentUpgradeClose(
-                game.close_equipment_upgrade(player_id, session_id),
-            )
+            let _ = game.close_equipment_upgrade(player_id, session_id);
         }
         HANDLE_CONTAINER_SCRIPT_ACTION => {
             let action = match message.base_mut().get_char() {
@@ -441,21 +241,21 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     )));
                 }
             };
-            GameGoodsMessageOutcome::ContainerScriptAction(
-                game.handle_container_script_action(player_id, region_id, action, runtime)
-                    .expect("resolved player остаётся live во время container script action"),
-            )
+            let _ = game
+                .handle_container_script_action(player_id, region_id, action, runtime)
+                .expect("resolved player остаётся live во время container script action");
         }
-        RUN_PRECIOUS_BOX_ITEM_SCRIPT => GameGoodsMessageOutcome::ContainerScriptAction(
-            game.run_precious_box_item_script(player_id, region_id, runtime)
-                .expect("resolved player остаётся live во время precious-box script action"),
-        ),
+        RUN_PRECIOUS_BOX_ITEM_SCRIPT => {
+            let _ = game
+                .run_precious_box_item_script(player_id, region_id, runtime)
+                .expect("resolved player остаётся live во время precious-box script action");
+        }
         UPDATE_FAIRY_HATCH => {
             if !game
                 .find_player(player_id)
                 .is_some_and(|player| player.fairy_container_enabled())
             {
-                GameGoodsMessageOutcome::FairyUnavailable
+                tracing::trace!(player_id, "контейнер феи недоступен");
             } else {
                 let slot = match read_long(message, "fairy hatch slot") {
                     Ok(value) => value as u32,
@@ -469,9 +269,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                         )));
                     }
                 };
-                GameGoodsMessageOutcome::FairyHatch(
-                    game.update_fairy_hatch_state(player_id, slot, action, runtime),
-                )
+                let _ = game.update_fairy_hatch_state(player_id, slot, action, runtime);
             }
         }
         IMPLANT_FAIRY_EXPERIENCE => {
@@ -479,7 +277,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 unreachable!("resolved player checked before goods dispatch")
             };
             if !player.fairy_container_enabled() {
-                GameGoodsMessageOutcome::FairyUnavailable
+                tracing::trace!(player_id, "контейнер феи недоступен");
             } else {
                 let needs_vigour = player
                     .fairy_container()
@@ -499,11 +297,11 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 } else {
                     0
                 };
-                GameGoodsMessageOutcome::FairyImplant(game.implant_fairy_experience(
+                let _ = game.implant_fairy_experience(
                     player_id,
                     requested_vigour,
                     runtime,
-                ))
+                );
             }
         }
         SYNCRETIZE_FAIRY => {
@@ -511,24 +309,26 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 .find_player(player_id)
                 .is_some_and(|player| player.fairy_container_enabled())
             {
-                GameGoodsMessageOutcome::FairyUnavailable
+                tracing::trace!(player_id, "контейнер феи недоступен");
             } else {
                 let property = match read_long(message, "fairy syncretic property") {
                     Ok(0) => FairySyncreticProperty::FairyAttribute,
                     Ok(_) => FairySyncreticProperty::GrowingRate,
                     Err(error) => return Some(Err(error)),
                 };
-                GameGoodsMessageOutcome::FairySyncretize(
-                    game.syncretize_fairy(player_id, property, runtime)
-                        .expect("enabled fairy player remains registered during dispatch"),
-                )
+                let _ = game
+                    .syncretize_fairy(player_id, property, runtime)
+                    .expect("enabled fairy player remains registered during dispatch");
             }
         }
-        QUERY_FAIRY_SETUP => GameGoodsMessageOutcome::FairySetup(game.query_fairy_setup(player_id)),
-        OPEN_SYNTHESIS => GameGoodsMessageOutcome::SynthesisOpen(
-            game.open_synthesis(player_id)
-                .expect("resolved message player остаётся в CGame"),
-        ),
+        QUERY_FAIRY_SETUP => {
+            let _ = game.query_fairy_setup(player_id);
+        }
+        OPEN_SYNTHESIS => {
+            let _ = game
+                .open_synthesis(player_id)
+                .expect("resolved message player остаётся в CGame");
+        }
         QUERY_SYNTHESIS_LIST => {
             let mode = match message.base_mut().get_char() {
                 Some(value) => value,
@@ -566,7 +366,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 }
                 _ => None,
             };
-            let (count, delivery) = if let Some(forms) = forms {
+            if let Some(forms) = forms {
                 let count = forms.len() as u32;
                 let mut response = CMessage::new(0x0b_f923);
                 if include_count {
@@ -577,21 +377,15 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                         response.add_ulong(index);
                     }
                 }
-                (
-                    count,
-                    Some(response.send_to_player(game.net_server(), player_id)),
-                )
-            } else {
-                (0, None)
-            };
-            GameGoodsMessageOutcome::SynthesisList { count, delivery }
+                let _ = response.send_to_player(game.net_server(), player_id);
+            }
         }
         QUERY_SYNTHESIS_FORMULA => {
             let synthesis_index = match read_long(message, "synthesis formula index") {
                 Ok(value) => value as u32,
                 Err(error) => return Some(Err(error)),
             };
-            let delivery = game
+            let _ = game
                 .synthesis()
                 .recipe(synthesis_index)
                 .filter(|recipe| {
@@ -616,10 +410,6 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     }
                     response.send_to_player(game.net_server(), player_id)
                 });
-            GameGoodsMessageOutcome::SynthesisFormula {
-                synthesis_index,
-                delivery,
-            }
         }
         COMPOSE_SYNTHESIS => {
             let synthesis_index = match read_long(message, "synthesis compose index") {
@@ -630,20 +420,13 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value as u32,
                 Err(error) => return Some(Err(error)),
             };
-            let Some(report) = game.compose_synthesis(player_id, synthesis_index, amount, runtime)
+            let Some(_report) = game.compose_synthesis(player_id, synthesis_index, amount, runtime)
             else {
-                return Some(Ok(GameGoodsMessageReport {
-                    message_type,
-                    socket_id,
-                    player_id: Some(player_id),
-                    region_id,
-                    outcome: GameGoodsMessageOutcome::MissingPlayer,
-                }));
+                return Some(Ok(()));
             };
-            GameGoodsMessageOutcome::SynthesisCompose(report)
         }
         CLOSE_SYNTHESIS => {
-            GameGoodsMessageOutcome::SynthesisClosed(game.close_synthesis(player_id))
+            let _ = game.close_synthesis(player_id);
         }
         OPEN_GOODS_DESTROY => {
             let container_extend_id = match read_long(message, "goods destroy container extend ID")
@@ -668,16 +451,16 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 };
                 (Some(goods_id), requested_amount)
             };
-            GameGoodsMessageOutcome::GoodsDestroyOpen(game.open_goods_destroy(
+            let _ = game.open_goods_destroy(
                 player_id,
                 container_extend_id,
                 goods_id,
                 requested_amount,
                 runtime,
-            ))
+            );
         }
         CONFIRM_GOODS_DESTROY => {
-            GameGoodsMessageOutcome::GoodsDestroyConfirm(game.confirm_goods_destroy(player_id))
+            let _ = game.confirm_goods_destroy(player_id);
         }
         CLOSE_EQUIPMENT_DA_KONG => {
             let session_id = match read_long(message, "equipment DaKong close session ID") {
@@ -688,12 +471,12 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            GameGoodsMessageOutcome::EquipmentDaKongClose(game.close_equipment_da_kong(
+            let _ = game.close_equipment_da_kong(
                 player_id,
                 session_id,
                 requested_plug_id,
                 runtime,
-            ))
+            );
         }
         EQUIPMENT_DA_KONG
         | EQUIPMENT_ENCHASE_GEM
@@ -740,13 +523,13 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 }
                 _ => unreachable!("DaKong opcode отфильтрован outer match"),
             };
-            GameGoodsMessageOutcome::EquipmentDaKong(game.process_equipment_da_kong(
+            let _ = game.process_equipment_da_kong(
                 player_id,
                 session_id,
                 requested_plug_id,
                 operation,
                 runtime,
-            ))
+            );
         }
         COMPOSE_EQUIPMENT => {
             let session_id = match read_long(message, "equipment compose session ID") {
@@ -757,12 +540,12 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            GameGoodsMessageOutcome::EquipmentCompose(game.compose_equipment(
+            let _ = game.compose_equipment(
                 player_id,
                 session_id,
                 requested_plug_id,
                 runtime,
-            ))
+            );
         }
         END_GOODS_SESSION => {
             let session_id = match read_long(message, "goods session ID") {
@@ -773,52 +556,39 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            let mut report = GoodsSessionEndReport {
-                session_id,
-                requested_plug_id,
-                actual_plug_id: None,
-                outcome: GoodsSessionEndOutcome::MissingSession,
-                player_release: None,
-                session_end: None,
-                plug_exit: None,
-            };
             if game.session_factory().query_session(session_id).is_some() {
-                report.outcome = GoodsSessionEndOutcome::MissingPlayerPlug;
-                report.actual_plug_id = game
+                let actual_plug_id = game
                     .session_factory()
                     .query_session_plug_by_owner(session_id, 400, player_id)
                     .map(|plug| plug.id());
-                if let Some(actual_plug_id) = report.actual_plug_id {
+                if let Some(actual_plug_id) = actual_plug_id {
                     if actual_plug_id == requested_plug_id {
-                        report.session_end = game.session_factory_mut().end_session(session_id);
-                        report.player_release = game
+                        let _ = game.session_factory_mut().end_session(session_id);
+                        let _ = game
                             .find_player_mut(player_id)
                             .map(|player| player.release_goods_session_state());
-                        report.plug_exit = Some(
-                            game.session_factory_mut()
-                                .exit_plug(session_id, actual_plug_id),
-                        );
-                        report.outcome = GoodsSessionEndOutcome::Ended;
-                    } else {
-                        report.outcome = GoodsSessionEndOutcome::PlugIdMismatch;
+                        let _ = game
+                            .session_factory_mut()
+                            .exit_plug(session_id, actual_plug_id);
                     }
                 }
             }
-            GameGoodsMessageOutcome::GoodsSessionEnd(report)
         }
-        CHECK_BATTLE_FAIRY_COMBINE => GameGoodsMessageOutcome::BattleFairyCombineCheck(
-            game.check_battle_fairy_combine(player_id),
-        ),
-        COMBINE_BATTLE_FAIRY => GameGoodsMessageOutcome::BattleFairyCombine(
-            game.combine_battle_fairy(player_id, runtime)
-                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
-        ),
-        UPGRADE_BATTLE_FAIRY => GameGoodsMessageOutcome::BattleFairyUpgrade(
-            game.upgrade_battle_fairy_equipment(player_id, runtime)
-                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
-        ),
+        CHECK_BATTLE_FAIRY_COMBINE => {
+            let _ = game.check_battle_fairy_combine(player_id);
+        }
+        COMBINE_BATTLE_FAIRY => {
+            let _ = game
+                .combine_battle_fairy(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch");
+        }
+        UPGRADE_BATTLE_FAIRY => {
+            let _ = game
+                .upgrade_battle_fairy_equipment(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch");
+        }
         RESET_BATTLE_FAIRY_SKILLS => {
-            let ignored_value = match read_long(message, "skill reset ignored value") {
+            let _ignored_value = match read_long(message, "skill reset ignored value") {
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
@@ -828,24 +598,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             };
             let script_path =
                 format!("scripts/skills/restskills_0{script_index}.script").into_bytes();
-            let Some(detached_skill_ids) = game.detach_battle_fairy_script_skills(player_id) else {
-                return Some(Ok(GameGoodsMessageReport {
-                    message_type,
-                    socket_id,
-                    player_id: Some(player_id),
-                    region_id,
-                    outcome: GameGoodsMessageOutcome::BattleFairyScriptReset(
-                        BattleFairyScriptResetReport {
-                            ignored_value,
-                            script_index,
-                            script_path,
-                            outcome: BattleFairyScriptResetOutcome::MissingBattleFairyEquipment,
-                            detached_skill_ids: Vec::new(),
-                            attached: None,
-                            world_ack: None,
-                        },
-                    ),
-                }));
+            let Some(_detached_skill_ids) = game.detach_battle_fairy_script_skills(player_id) else {
+                return Some(Ok(()));
             };
             let _ = game.run_script_file(
                 &script_path,
@@ -857,17 +611,8 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 },
                 runtime,
             );
-            let attached = game.attach_battle_fairy_script_skills(player_id);
-            let world_ack = CMessage::new(0x0b_f931).send(game, player_id != 0);
-            GameGoodsMessageOutcome::BattleFairyScriptReset(BattleFairyScriptResetReport {
-                ignored_value,
-                script_index,
-                script_path,
-                outcome: BattleFairyScriptResetOutcome::Dispatched,
-                detached_skill_ids,
-                attached: Some(attached),
-                world_ack: Some(world_ack),
-            })
+            let _ = game.attach_battle_fairy_script_skills(player_id);
+            let _ = CMessage::new(0x0b_f931).send(game, player_id != 0);
         }
         ALLOCATE_BATTLE_FAIRY_POTENTIAL => {
             let count = match read_long(message, "allocation count") {
@@ -889,31 +634,27 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 };
                 allocations.push((property, points));
             }
-            GameGoodsMessageOutcome::BattleFairyPotentialAllocation(
-                game.allocate_battle_fairy_potential(player_id, &allocations, runtime)
-                    .expect(
-                        "resolved message player остаётся в CGame во время synchronous dispatch",
-                    ),
-            )
+            let _ = game
+                .allocate_battle_fairy_potential(player_id, &allocations, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
-        RESET_BATTLE_FAIRY_POTENTIAL => GameGoodsMessageOutcome::BattleFairyPotentialReset(
-            game.reset_battle_fairy_potential(player_id, runtime)
-                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
-        ),
+        RESET_BATTLE_FAIRY_POTENTIAL => {
+            let _ = game
+                .reset_battle_fairy_potential(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch");
+        }
         SUMMON_BATTLE_FAIRY | RECALL_BATTLE_FAIRY => {
             let mode = if message_type == SUMMON_BATTLE_FAIRY {
                 1
             } else {
                 -1
             };
-            GameGoodsMessageOutcome::BattleFairySummon(
-                game.summon_battle_fairy(player_id, mode).expect(
-                    "resolved message player остаётся в CGame во время synchronous dispatch",
-                ),
-            )
+            let _ = game.summon_battle_fairy(player_id, mode).expect(
+                "resolved message player остаётся в CGame во время synchronous dispatch",
+            );
         }
         REFRESH_BATTLE_FAIRY_PROPERTY => {
-            let ignored_guid = match message.base_mut().get_guid() {
+            let _ignored_guid = match message.base_mut().get_guid() {
                 Some(guid) => guid,
                 None => return Some(Err(GameGoodsMessageError::MissingField("ignored GUID"))),
             };
@@ -924,33 +665,23 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             let goods_exists = game
                 .find_player(player_id)
                 .is_some_and(|player| player.get_goods_by_id(goods_guid).is_some());
-            let outcome = if goods_exists {
-                let (property_delivery, tao_zhuang_ran) = game
+            if goods_exists {
+                let _ = game
                     .update_player_properties(player_id, runtime)
                     .expect("0x8FC2E player сохранён после four-container lookup");
-                BattleFairyPropertyRefreshOutcome::Updated {
-                    property_delivery,
-                    tao_zhuang_ran,
-                }
-            } else {
-                BattleFairyPropertyRefreshOutcome::MissingGoods
-            };
-            GameGoodsMessageOutcome::BattleFairyPropertyRefresh(BattleFairyPropertyRefreshReport {
-                ignored_guid,
-                goods_guid,
-                outcome,
-            })
+            }
         }
-        QUERY_CI_QING_GOODS => GameGoodsMessageOutcome::CiQingGoods(
-            game.query_ci_qing_goods(player_id, runtime)
-                .expect("resolved message player остаётся в CGame во время synchronous dispatch"),
-        ),
+        QUERY_CI_QING_GOODS => {
+            let _ = game
+                .query_ci_qing_goods(player_id, runtime)
+                .expect("resolved message player остаётся в CGame во время synchronous dispatch");
+        }
         QUERY_CI_QING_SETUP => {
-            GameGoodsMessageOutcome::CiQingSetup(game.query_ci_qing_setup(player_id))
+            let _ = game.query_ci_qing_setup(player_id);
         }
         MAKE_CI_QING_NODE => {
             if !game.ci_qing_message_enabled(player_id) {
-                GameGoodsMessageOutcome::CiQingUnavailable
+                tracing::trace!(player_id, "CiQing недоступен");
             } else {
                 let base_index = match read_long(message, "CiQing make base index") {
                     Ok(value) => value as u32,
@@ -960,42 +691,38 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     Ok(value) => value as u32,
                     Err(error) => return Some(Err(error)),
                 };
-                GameGoodsMessageOutcome::CiQingMake(
-                    game.make_ci_qing_node(player_id, base_index, amount, runtime)
-                        .expect(
-                            "resolved message player остаётся в CGame во время synchronous dispatch",
-                        ),
-                )
+                let _ = game
+                    .make_ci_qing_node(player_id, base_index, amount, runtime)
+                    .expect(
+                        "resolved message player остаётся в CGame во время synchronous dispatch",
+                    );
             }
         }
         COMPOSE_CI_QING_NODE => {
             if !game.ci_qing_message_enabled(player_id) {
-                GameGoodsMessageOutcome::CiQingUnavailable
+                tracing::trace!(player_id, "CiQing недоступен");
             } else {
-                GameGoodsMessageOutcome::CiQingCompose(
-                    game.compose_ci_qing_node(player_id, runtime).expect(
-                        "resolved message player остаётся в CGame во время synchronous dispatch",
-                    ),
-                )
+                let _ = game.compose_ci_qing_node(player_id, runtime).expect(
+                    "resolved message player остаётся в CGame во время synchronous dispatch",
+                );
             }
         }
         DELETE_CI_QING_GOODS => {
             if !game.ci_qing_message_enabled(player_id) {
-                GameGoodsMessageOutcome::CiQingUnavailable
+                tracing::trace!(player_id, "CiQing недоступен");
             } else {
                 let position = match read_long(message, "CiQing delete position") {
                     Ok(value) => value as u32,
                     Err(error) => return Some(Err(error)),
                 };
                 if position >= 8 {
-                    GameGoodsMessageOutcome::CiQingPositionOutOfRange { position }
+                    tracing::trace!(player_id, position, "позиция CiQing вне диапазона");
                 } else {
-                    GameGoodsMessageOutcome::CiQingDelete(
-                        game.delete_goods_from_ci_qing(player_id, position, runtime)
-                            .expect(
-                                "resolved message player остаётся в CGame во время synchronous dispatch",
-                            ),
-                    )
+                    let _ = game
+                        .delete_goods_from_ci_qing(player_id, position, runtime)
+                        .expect(
+                            "resolved message player остаётся в CGame во время synchronous dispatch",
+                        );
                 }
             }
         }
@@ -1005,14 +732,13 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             if !game.ci_qing_message_enabled(player_id) {
-                GameGoodsMessageOutcome::CiQingUnavailable
+                tracing::trace!(player_id, "CiQing недоступен");
             } else {
-                GameGoodsMessageOutcome::CiQingMount(
-                    game.mount_ci_qing_from_hand(player_id, amount, runtime)
-                        .expect(
+                let _ = game
+                    .mount_ci_qing_from_hand(player_id, amount, runtime)
+                    .expect(
                         "resolved message player остаётся в CGame во время synchronous dispatch",
-                    ),
-                )
+                    );
             }
         }
         QUERY_CI_QING_OTHER_PERSON => {
@@ -1039,19 +765,11 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 },
                 mode => CiQingOtherPersonTarget::UnsupportedMode(mode),
             };
-            GameGoodsMessageOutcome::CiQingOtherPerson(
-                game.query_ci_qing_other_person(player_id, target, runtime),
-            )
+            let _ = game.query_ci_qing_other_person(player_id, target, runtime);
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),
-    };
-    Some(Ok(GameGoodsMessageReport {
-        message_type,
-        socket_id,
-        player_id: Some(player_id),
-        region_id,
-        outcome,
-    }))
+    }
+    Some(Ok(()))
 }
 
 // IMPLEMENTED: оставшиеся cases `0x8FC0F/0x8FC10` материализованы выше;
