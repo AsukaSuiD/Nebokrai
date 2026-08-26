@@ -9,8 +9,10 @@
 //! append до изменения destination.
 
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::fmt;
+use thiserror::Error;
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 const DEFAULT_GOD_PASSPORT: &[u8] = b"@^$^#SDFSDslfld/$dsl2a";
 
@@ -163,12 +165,14 @@ pub(crate) enum GmListStringField {
     GodPassport,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GmListSerializationBlock {
+    #[error("CGMList {collection:?} содержит {count} записей вне signed 32-битного диапазона")]
     CountOutOfRange {
         collection: GmListCollection,
         count: usize,
     },
+    #[error("CGMList {collection:?} запись {entry_index:?}: поле {field:?} содержит внутренний NUL")]
     StringContainsNul {
         collection: Option<GmListCollection>,
         entry_index: Option<usize>,
@@ -176,58 +180,19 @@ pub(crate) enum GmListSerializationBlock {
     },
 }
 
-impl fmt::Display for GmListSerializationBlock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CountOutOfRange { collection, count } => write!(
-                formatter,
-                "CGMList {collection:?} содержит {count} записей вне signed 32-битного диапазона"
-            ),
-            Self::StringContainsNul {
-                collection,
-                entry_index,
-                field,
-            } => write!(
-                formatter,
-                "CGMList {collection:?} запись {entry_index:?}: поле {field:?} содержит внутренний NUL"
-            ),
-        }
-    }
-}
-
-impl Error for GmListSerializationBlock {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GmListDecodeError {
+    #[error("GMList snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
         needed: usize,
         available: usize,
     },
+    #[error("GMList string с {offset} не завершена нулём")]
     MissingStringTerminator {
         offset: usize,
     },
 }
-
-impl fmt::Display for GmListDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "GMList snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
-            ),
-            Self::MissingStringTerminator { offset } => {
-                write!(formatter, "GMList string с {offset} не завершена нулём")
-            }
-        }
-    }
-}
-
-impl Error for GmListDecodeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GmListLoadError {
@@ -246,7 +211,7 @@ impl fmt::Display for GmListLoadError {
     }
 }
 
-impl Error for GmListLoadError {}
+impl std::error::Error for GmListLoadError {}
 
 fn write_gm_map(
     destination: &mut Vec<u8>,
@@ -258,15 +223,16 @@ fn write_gm_map(
             collection,
             count: entries.len(),
         })?;
-    destination.extend_from_slice(&count.to_le_bytes());
+    let mut writer = LegacyWriter::new(destination);
+    writer.write_i32(count);
     for (entry_index, info) in entries.values().enumerate() {
         write_gm_string(
-            destination,
+            writer.destination_mut(),
             Some((collection, entry_index)),
             GmListStringField::Name,
             &info.name,
         )?;
-        destination.extend_from_slice(&info.level.to_le_bytes());
+        writer.write_i32(info.level);
     }
     Ok(())
 }
@@ -284,8 +250,7 @@ fn write_gm_string(
             field,
         });
     }
-    destination.extend_from_slice(value);
-    destination.push(0);
+    LegacyWriter::new(destination).write_c_string(value);
     Ok(())
 }
 
@@ -304,38 +269,24 @@ fn decode_gm_map(
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, GmListDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], GmListDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(GmListDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes.try_into().expect("размер GMList scalar уже проверен"))
+fn map_read_block(block: LegacyReadBlock) -> GmListDecodeError {
+    GmListDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_wire_c_string(source: &[u8], cursor: &mut usize) -> Result<Vec<u8>, GmListDecodeError> {
     let offset = *cursor;
-    let remaining = source
-        .get(offset..)
-        .ok_or(GmListDecodeError::UnexpectedEnd {
-            offset,
-            needed: 1,
-            available: 0,
-        })?;
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(GmListDecodeError::MissingStringTerminator { offset });
-    };
-    *cursor += length + 1;
-    Ok(remaining[..length].to_vec())
+    let mut reader = LegacyReader::at(source, offset).map_err(map_read_block)?;
+    let value = reader
+        .read_c_string(reader.remaining())
+        .map_err(|_| GmListDecodeError::MissingStringTerminator { offset })?
+        .to_vec();
+    *cursor = reader.position();
+    Ok(value)
 }

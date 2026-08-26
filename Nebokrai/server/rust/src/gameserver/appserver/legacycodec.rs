@@ -218,6 +218,10 @@ impl<'destination> LegacyWriter<'destination> {
         self.destination.len()
     }
 
+    pub(crate) fn destination_mut(&mut self) -> &mut Vec<u8> {
+        self.destination
+    }
+
     pub(crate) fn write_u8(&mut self, value: u8) {
         self.destination.put_u8(value);
     }
