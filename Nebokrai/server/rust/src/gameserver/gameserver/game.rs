@@ -499,9 +499,7 @@ use rustix::time::{ClockId, clock_gettime};
 use tracing::{debug, info, trace, warn};
 use thiserror::Error;
 
-use crate::gameserver::appserver::ai::playerai::{
-    CPlayerAI, PlayerAutoProgress, PlayerEnergyRegeneration,
-};
+use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerAutoProgress};
 use crate::gameserver::appserver::area::{AreaAiContext, AreaAiReport, AreaMonsterAiFacts};
 use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
@@ -524,7 +522,7 @@ use crate::gameserver::appserver::container::cequipmentcontainer::{
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::UpgradeEquipmentCell;
 use crate::gameserver::appserver::container::cfairycontainer::{
     FairyContainerAddOutcome, FairyContainerAmountChange, FairyContainerGoodsUpdate,
-    FairyContainerMoveOperation, FairyContainerRemoveOutcome, FairyHatcherEntry,
+    FairyContainerMoveOperation, FairyContainerRemoveOutcome,
     FairyImplantDelivery, FairyIncubateLog, FairyStateChangeEffect,
     FairyStateChangeOutcome, FairySyncreticProperty, FairySyncretizeConfig,
     FairySyncretizeFragmentEffect, FairySyncretizeLog, FairySyncretizePlayer,
@@ -659,8 +657,7 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
-    PlayerGoodsAiDeletion, PlayerLoginGoodsLocation,
-    PlayerMurdererSignDecrease, PlayerProgress,
+    PlayerGoodsAiDeletion, PlayerLoginGoodsLocation, PlayerProgress,
     PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel,
     PlayerUncreatedCarriage,
     PlayerUncreatedPet, PlayerYuanBaoChange,
@@ -698,7 +695,7 @@ use crate::gameserver::appserver::servernationregion::{
     classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
-    AreaTransitionBlock, CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin,
+    CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin,
     RegionTaxSessionEndpoint, RegionTaxSessionKind, ServerRegionAreaTransitionContext,
     ServerRegionClearPlayerTick,
     ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
@@ -1527,46 +1524,6 @@ pub(crate) struct HotkeyChangeReport {
     pub(crate) delivery: Option<i32>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FairyHatcherRunReport {
-    pub(crate) player_id: i32,
-    pub(crate) entries: Vec<FairyHatcherEntry>,
-    pub(crate) state_effect_deliveries: Vec<Vec<i32>>,
-    pub(crate) world_deliveries: Vec<Vec<i32>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerPeriodicalPingTick {
-    Waiting { count: i32 },
-    Sent { sampled_at_ms: u32, delivery: i32 },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerPeriodicalUpdateReport {
-    pub(crate) player_id: i32,
-    pub(crate) murderer_sign: Option<PlayerMurdererSignDecreaseReport>,
-    pub(crate) ping: PlayerPeriodicalPingTick,
-    pub(crate) nation_died_state: Option<NationPlayerDiedStateTick>,
-    pub(crate) fairy_hatcher: Option<FairyHatcherRunReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerMurdererSignDecreaseReport {
-    pub(crate) mutation: PlayerMurdererSignDecrease,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerAiTailReport {
-    pub(crate) player_id: i32,
-    pub(crate) goods_ai_ran: bool,
-    pub(crate) goods_ai: Option<PlayerGoodsAiReport>,
-    pub(crate) current_ticket: u32,
-    pub(crate) packet_expansion_applied: Option<u32>,
-    pub(crate) flash_update: Option<PlayerFlashUpdateReport>,
-    pub(crate) tao_zhuang_ran: bool,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueuedSkillExecutionState {
     Pending,
@@ -1636,53 +1593,6 @@ pub(crate) struct GamePlayerDeathReport {
     pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
     pub(crate) property_delivery: Option<i32>,
     pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerEnergyRegenerationReport {
-    pub(crate) mutation: PlayerEnergyRegeneration,
-    pub(crate) delivery: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerLevelStepReport {
-    pub(crate) level: u8,
-    pub(crate) faction_delivery: Option<Result<i32, SendMessageError>>,
-    pub(crate) level_script_id: Option<i32>,
-    pub(crate) protection_notice_delivery: Option<i32>,
-    pub(crate) upgrade_applied: bool,
-    pub(crate) upgrade_notice_delivery: Option<i32>,
-    pub(crate) property_applied: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerAutoProgressReport {
-    pub(crate) mutation: PlayerAutoProgress,
-    pub(crate) original_level: u8,
-    pub(crate) current_level: u8,
-    pub(crate) steps: Vec<PlayerLevelStepReport>,
-    pub(crate) final_property_applied: bool,
-    pub(crate) player_delivery: Option<i32>,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) level_log_delivery: Option<Result<i32, SendMessageError>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerGoodsAiReport {
-    pub(crate) player_id: i32,
-    pub(crate) moved_to_delete_queue: usize,
-    pub(crate) attempted_goods: Vec<CGuid>,
-    pub(crate) deletions: Vec<PlayerGoodsAiDeletion>,
-    pub(crate) client_deliveries: Vec<i32>,
-    pub(crate) world_deliveries: Vec<Result<i32, SendMessageError>>,
-}
-
-#[must_use = "DoneFlash report сохраняет 17 пар и around delivery"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerFlashUpdateReport {
-    pub(crate) player_id: i32,
-    pub(crate) pairs: [(u32, u32); 17],
-    pub(crate) delivery: Option<Result<i32, ShapeCoordinateBlock>>,
 }
 
 pub(crate) trait EquipmentComposeContext: GameContainerMessageRuntime {}
@@ -3378,24 +3288,6 @@ pub(crate) struct NationPlayerDiedStatePublication {
     pub(crate) around_delivery: Result<i32, ShapeCoordinateBlock>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum NationPlayerDiedStateTick {
-    Inactive,
-    Waiting {
-        elapsed_ms: u32,
-    },
-    Advanced {
-        elapsed_ms: u32,
-        remaining_ms: i32,
-        time_delivery: Option<i32>,
-    },
-    Expired {
-        elapsed_ms: u32,
-        time_delivery: Option<i32>,
-        state_publication: NationPlayerDiedStatePublication,
-    },
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NationMonsterDeathOutcome {
     KillerMissing,
@@ -3466,18 +3358,6 @@ pub(crate) enum GamePlayerExitReturnPoint {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerAbnormalityReport {
-    pub(crate) player_id: i32,
-    pub(crate) sampled_at_ms: Option<u32>,
-    pub(crate) change_body_states_ended: usize,
-    pub(crate) extended_states_ended: usize,
-    pub(crate) extended_items_consumed: u32,
-    pub(crate) appellation_states_ended: usize,
-    pub(crate) appellation_items_consumed: u32,
-    pub(crate) ride_ended: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GamePlayerFightStateReport {
     pub(crate) phase: GamePlayerFightStatePhase,
     pub(crate) transition: PlayerFightStateTransition,
@@ -3496,24 +3376,6 @@ pub(crate) enum GamePlayerFightStatePhase {
     Relive,
     PeriodicalUpdate,
     MoveShapeAi,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRegionDeletionReport {
-    pub(crate) identity: ShapeIdentity,
-    pub(crate) result: Result<bool, RegionMembershipBlock>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRegionRemovalReport {
-    pub(crate) identity: ShapeIdentity,
-    pub(crate) result: Option<Result<bool, RegionMembershipBlock>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameAreaTransitionReport {
-    pub(crate) identity: ShapeIdentity,
-    pub(crate) result: Option<Result<bool, AreaTransitionBlock>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13084,36 +12946,41 @@ impl CGame {
         publication
     }
 
-    /// Exact ping fragment `CPlayer::PeriodicalUpdate`: counter меняется на
-    /// каждом eligible player AI, clock читается только на 251-м проходе, а
-    /// пустой `0xBF809` уходит тому же live player после записи timestamp.
+    /// Точный фрагмент проверки связи `CPlayer::PeriodicalUpdate`: счётчик
+    /// меняется при каждом допустимом проходе ИИ игрока, часы читаются только
+    /// на 251-м проходе, а пустой `0xBF809` отправляется тому же существующему
+    /// игроку после записи времени.
     pub(crate) fn periodical_update_player_ping<Context: NationCombatContext>(
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<PlayerPeriodicalPingTick> {
+    ) -> Option<()> {
         let count = self.find_player_mut(player_id)?.advance_periodical_ping();
         if count <= 250 {
-            return Some(PlayerPeriodicalPingTick::Waiting { count });
+            tracing::trace!(player_id, count, "периодическая проверка связи ожидает порога");
+            return Some(());
         }
         let sampled_at_ms = context.now_milliseconds();
         self.find_player_mut(player_id)?
             .complete_periodical_ping(sampled_at_ms);
         let delivery = CMessage::new(0x000b_f809).send_to_player(self.net_server(), player_id);
-        Some(PlayerPeriodicalPingTick::Sent {
+        tracing::trace!(
+            player_id,
             sampled_at_ms,
             delivery,
-        })
+            "отправлена периодическая проверка связи"
+        );
+        Some(())
     }
 
-    /// Exact `OnDecreaseMurdererSign` внутри `PeriodicalUpdate`: owned player
-    /// меняет persisted PK/timer, после чего тот же live shape публикует
+    /// Точный `OnDecreaseMurdererSign` внутри `PeriodicalUpdate`: игрок меняет
+    /// сохранённые PK и таймер, после чего та же существующая форма публикует
     /// `0xBF70E(player, pk, kills)` всем вокруг, включая самого player-а.
     pub(crate) fn periodical_update_murderer_sign<Context: NationCombatContext>(
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<PlayerMurdererSignDecreaseReport> {
+    ) -> Option<()> {
         let one_pk_count_time_ms = self.globe_setup.one_pk_count_time_ms();
         let mutation = self
             .players
@@ -13124,40 +12991,42 @@ impl CGame {
         message.base_mut().add_word(mutation.pk_count);
         message.add_ulong(mutation.kill_count);
         let around_delivery = self.send_player_shape_around(player_id, None, &message);
-        Some(PlayerMurdererSignDecreaseReport {
-            mutation,
-            around_delivery,
-        })
+        tracing::trace!(player_id, ?mutation, ?around_delivery, "уменьшен признак убийцы");
+        Some(())
     }
 
-    /// Exact death-state tail `CPlayer::PeriodicalUpdate`: `timeGetTime`
-    /// читается всегда, threshold строго `>1000`, DWORD elapsed wraps, а
-    /// сравнение выполняется после signed cast.
+    /// Точный хвост состояния смерти `CPlayer::PeriodicalUpdate`: `timeGetTime`
+    /// читается всегда, порог строго `>1000`, истёкшее время DWORD
+    /// переполняется, а сравнение выполняется после знакового преобразования.
     pub(crate) fn periodical_update_nation_died_state<Context: NationCombatContext>(
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<NationPlayerDiedStateTick> {
+    ) -> Option<()> {
         let now_ms = context.now_milliseconds();
         let player = self.find_player(player_id)?;
         let time_ms = player.city_war_died_state_time_ms();
         if time_ms <= 0 {
-            return Some(NationPlayerDiedStateTick::Inactive);
+            return Some(());
         }
         let elapsed_ms = now_ms.wrapping_sub(player.died_state_start_time_ms());
         if elapsed_ms <= 1000 {
-            return Some(NationPlayerDiedStateTick::Waiting { elapsed_ms });
+            tracing::trace!(player_id, elapsed_ms, "ожидает счётчик состояния смерти на войне наций");
+            return Some(());
         }
         self.find_player_mut(player_id)?
             .restart_died_state_clock(now_ms);
         if (elapsed_ms as i32) < time_ms {
             let remaining_ms = time_ms.wrapping_sub(elapsed_ms as i32);
             let time_delivery = self.set_player_died_state_time(player_id, remaining_ms);
-            return Some(NationPlayerDiedStateTick::Advanced {
+            tracing::trace!(
+                player_id,
                 elapsed_ms,
                 remaining_ms,
-                time_delivery,
-            });
+                ?time_delivery,
+                "продвинут счётчик состояния смерти на войне наций"
+            );
+            return Some(());
         }
         let time_delivery = self.set_player_died_state_time(player_id, 0);
         let region_id = self.find_player(player_id)?.server_region_id()?;
@@ -13165,11 +13034,14 @@ impl CGame {
         let state_publication = self.publish_player_died_state(owner.base(), player_id, false);
         self.restore_region_owner(owner);
         let state_publication = state_publication?;
-        Some(NationPlayerDiedStateTick::Expired {
+        tracing::trace!(
+            player_id,
             elapsed_ms,
-            time_delivery,
-            state_publication,
-        })
+            ?time_delivery,
+            ?state_publication,
+            "завершено состояние смерти на войне наций"
+        );
+        Some(())
     }
 
     fn send_nation_contend_time(&self, player_id: i32, percentage: i32) -> i32 {
@@ -23823,15 +23695,15 @@ impl CGame {
         tracing::debug!(player_id, slot, action, delivery, "состояние инкубатора изменено");
     }
 
-    /// Concrete `CPlayer::PeriodicalUpdate -> CFairyContainer::CheckHatcher`
-    /// tail. Caller передаёт ровно текущего player-а после ping и nation died
-    /// countdown, сохраняя timer, replacement, object-move и incubate-log в
-    /// том же per-player AI pass.
+    /// Конкретный хвост `CPlayer::PeriodicalUpdate -> CFairyContainer::CheckHatcher`.
+    /// Вызывающая сторона передаёт ровно текущего игрока после проверки связи
+    /// и счётчика смерти на войне наций, сохраняя таймер, замену, перемещение
+    /// объекта и журнал инкубации в том же проходе ИИ игрока.
     pub(crate) fn run_fairy_hatcher<Context: FairyContext>(
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<FairyHatcherRunReport> {
+    ) -> Option<()> {
         if !self
             .players
             .get(&player_id)
@@ -23883,20 +23755,25 @@ impl CGame {
                 &mut encode,
             )
         };
-        let mut state_effect_deliveries = Vec::new();
-        let mut world_deliveries = Vec::new();
+        let mut state_effects = 0usize;
+        let mut world_messages = 0usize;
         for entry in &entries {
-            deliver_fairy_state_change(&entry.transition, self, &mut state_effect_deliveries);
+            state_effects = state_effects
+                .wrapping_add(deliver_fairy_state_change(&entry.transition, self));
             if let Some(log) = &entry.incubate_log {
-                world_deliveries.push(self.send_fairy_incubate_log(log));
+                let deliveries = self.send_fairy_incubate_log(log);
+                world_messages = world_messages.wrapping_add(deliveries.len());
+                tracing::trace!(player_id, ?deliveries, "отправлен журнал инкубации феи");
             }
         }
-        Some(FairyHatcherRunReport {
+        tracing::trace!(
             player_id,
-            entries,
-            state_effect_deliveries,
-            world_deliveries,
-        })
+            entries = entries.len(),
+            state_effects,
+            world_messages,
+            "завершена проверка инкубатора феи"
+        );
+        Some(())
     }
 
     pub(crate) fn implant_fairy_experience<Context: FairyContext>(
@@ -24005,9 +23882,8 @@ impl CGame {
             tracing::trace!(player_id, ?deliveries, "журнал роста феи отправлен");
         }
         if let FairyImplantDelivery::StateChanged(transition) = &implantation.delivery {
-            let mut deliveries = Vec::new();
-            deliver_fairy_state_change(transition, self, &mut deliveries);
-            tracing::trace!(player_id, ?deliveries, "эффекты смены состояния феи отправлены");
+            let effects = deliver_fairy_state_change(transition, self);
+            tracing::trace!(player_id, effects, "эффекты смены состояния феи отправлены");
         }
         if implantation_log_enabled {
             let log = FairyImplantationLog {
@@ -24150,15 +24026,8 @@ impl CGame {
         } else {
             None
         };
-        let mut state_effect_deliveries = Vec::new();
-        let mut amount_change_deliveries = Vec::new();
-        deliver_fairy_syncretize_effects(
-            &report,
-            self,
-            &mut state_effect_deliveries,
-            &mut amount_change_deliveries,
-        );
-        tracing::trace!(player_id, ?state_effect_deliveries, ?amount_change_deliveries, "эффекты соединения фей отправлены");
+        let (state_effects, amount_changes) = deliver_fairy_syncretize_effects(&report, self);
+        tracing::trace!(player_id, state_effects, amount_changes, "эффекты соединения фей отправлены");
         let money_deliveries = money_change
             .as_ref()
             .map(|change| self.send_player_money_decrease(player_id, &change.outcome))
@@ -25318,30 +25187,20 @@ impl CGame {
     }
 
     /// Материализованная часть `CMoveShape::UpdateAbnormality` для player:
-    /// state expiry, периодический расход предметов, visual/property effects
-    /// и ride equipment check выполняются из exact `CMoveShape::AI` caller-а.
+    /// завершение состояний, периодический расход предметов, визуальные эффекты
+    /// и эффекты свойств, а также проверка ездового снаряжения выполняются из
+    /// точной вызывающей цепочки `CMoveShape::AI`.
     fn update_player_abnormality<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> Option<GamePlayerAbnormalityReport> {
+    ) -> Option<()> {
         let materialized = self
             .find_player(player_id)
             .is_some_and(CPlayer::has_materialized_abnormality);
         let sampled_at_ms = materialized.then(|| runtime.now_milliseconds());
         let Some(now_ms) = sampled_at_ms else {
-            return self
-                .find_player(player_id)
-                .map(|_| GamePlayerAbnormalityReport {
-                    player_id,
-                    sampled_at_ms: None,
-                    change_body_states_ended: 0,
-                    extended_states_ended: 0,
-                    extended_items_consumed: 0,
-                    appellation_states_ended: 0,
-                    appellation_items_consumed: 0,
-                    ride_ended: false,
-                });
+            return self.find_player(player_id).map(|_| ());
         };
         let change_body_states_ended =
             self.update_player_change_body_states(player_id, now_ms, runtime);
@@ -25350,16 +25209,18 @@ impl CGame {
         let (appellation_states_ended, appellation_items_consumed) =
             self.update_player_appellation_states(player_id, now_ms, runtime);
         let ride_ended = self.update_player_ride_state(player_id, now_ms, runtime);
-        Some(GamePlayerAbnormalityReport {
+        tracing::trace!(
             player_id,
-            sampled_at_ms,
+            sampled_at_ms = now_ms,
             change_body_states_ended,
             extended_states_ended,
             extended_items_consumed,
             appellation_states_ended,
             appellation_items_consumed,
             ride_ended,
-        })
+            "обновлены временные состояния игрока"
+        );
+        Some(())
     }
 
     pub(crate) fn change_body_after_region_transition<Context: RealmAppellationScriptContext>(
@@ -36919,13 +36780,11 @@ impl CGame {
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> Option<PlayerGoodsAiReport> {
+    ) -> Option<()> {
         let player = self.players.get_mut(&player_id)?;
         let moved_to_delete_queue = player.done_goods_ai_tree();
         let attempted_goods = player.take_goods_ai_deletions();
-        let mut deletions = Vec::new();
-        let mut client_deliveries = Vec::new();
-        let mut world_deliveries = Vec::new();
+        let mut deletions = 0usize;
         for goods_id in &attempted_goods {
             let Some(location) = self
                 .players
@@ -36982,29 +36841,35 @@ impl CGame {
             };
             let player = self.players.get(&player_id)?;
             let (client, world) = self.publish_goods_ai_deletion(player, &deletion);
-            client_deliveries.push(client);
-            world_deliveries.push(world);
-            deletions.push(deletion);
+            deletions = deletions.wrapping_add(1);
+            tracing::trace!(
+                player_id,
+                goods_id = ?deletion.goods.identity().ex_id,
+                client_delivery = client,
+                world_delivery = ?world,
+                "удалён просроченный предмет игрока"
+            );
         }
-        Some(PlayerGoodsAiReport {
+        tracing::trace!(
             player_id,
             moved_to_delete_queue,
-            attempted_goods,
+            attempted_goods = attempted_goods.len(),
             deletions,
-            client_deliveries,
-            world_deliveries,
-        })
+            "завершён проход срока действия предметов игрока"
+        );
+        Some(())
     }
 
-    /// Точный остаток `CPlayer::AI` после live/dead war-soul ветви.
-    /// Feature gates принадлежат live GlobeSetup, ticket/packet/Flash —
-    /// CPlayer; owned GoodsAI/delete и TaoZhuang выполняются в подтверждённом
-    /// порядке, runtime нужен только reached equipment property callbacks.
+    /// Точный остаток `CPlayer::AI` после живой или мёртвой ветви боевой феи.
+    /// Переключатели принадлежат текущему `GlobeSetup`, а билет, пакет и
+    /// `Flash` — `CPlayer`; `GoodsAI`, удаление и `TaoZhuang` выполняются в
+    /// подтверждённом порядке. Среда выполнения нужна только достигнутым
+    /// обратным вызовам свойств снаряжения.
     pub(crate) fn run_player_ai_tail<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> Option<PlayerAiTailReport> {
+    ) -> Option<()> {
         self.find_player(player_id)?;
         let goods_ai_ran = self.globe_setup.goods_ai_enabled();
         let goods_ai = goods_ai_ran
@@ -37016,15 +36881,17 @@ impl CGame {
             .advance_ai_ticket_and_packet(pack_add_enabled);
         let flash_update = self.done_player_flash(player_id);
         let tao_zhuang_ran = self.done_player_tao_zhuang(player_id);
-        Some(PlayerAiTailReport {
+        tracing::trace!(
             player_id,
             goods_ai_ran,
-            goods_ai,
+            goods_ai_completed = goods_ai.is_some(),
             current_ticket,
-            packet_expansion_applied,
-            flash_update,
+            ?packet_expansion_applied,
+            flash_updated = flash_update.is_some(),
             tao_zhuang_ran,
-        })
+            "завершён хвост ИИ игрока"
+        );
+        Some(())
     }
 
     fn recompute_player_level_properties<Runtime: PlayerPropertyContext>(
@@ -37059,10 +36926,10 @@ impl CGame {
         &mut self,
         mutation: PlayerAutoProgress,
         runtime: &mut Runtime,
-    ) -> Option<PlayerAutoProgressReport> {
+    ) -> Option<()> {
         let player_id = mutation.player_id;
         let original_level = self.find_player(player_id)?.level();
-        let mut steps = Vec::new();
+        let mut steps = 0usize;
         let mut experience_beyond_level =
             self.find_player(player_id)?
                 .experience()
@@ -37134,15 +37001,18 @@ impl CGame {
             self.find_player_mut(player_id)?
                 .set_base_maximum_rp(base_maximum_rp);
             let property_applied = self.recompute_player_level_properties(player_id, true, runtime);
-            steps.push(PlayerLevelStepReport {
+            steps = steps.wrapping_add(1);
+            tracing::trace!(
+                player_id,
                 level,
-                faction_delivery,
-                level_script_id,
-                protection_notice_delivery,
-                upgrade_applied: upgrade.is_some(),
-                upgrade_notice_delivery,
+                ?faction_delivery,
+                ?level_script_id,
+                ?protection_notice_delivery,
+                upgrade_applied = upgrade.is_some(),
+                ?upgrade_notice_delivery,
                 property_applied,
-            });
+                "выполнен шаг повышения уровня игрока"
+            );
 
             let player = self.find_player(player_id)?;
             experience_beyond_level = player
@@ -37193,16 +37063,18 @@ impl CGame {
             {
                 (Ok(tile_x), Ok(tile_y)) => (tile_x, tile_y),
                 _ => {
-                    return Some(PlayerAutoProgressReport {
-                        mutation,
+                    tracing::trace!(
+                        player_id,
+                        ?mutation,
                         original_level,
                         current_level,
                         steps,
                         final_property_applied,
-                        player_delivery,
-                        around_delivery,
-                        level_log_delivery: None,
-                    });
+                        ?player_delivery,
+                        ?around_delivery,
+                        "автоматическое развитие завершено без журнала уровня из-за координат"
+                    );
+                    return Some(());
                 }
             };
             let mut message = CMessage::new(0x0006_0206);
@@ -37217,16 +37089,19 @@ impl CGame {
         } else {
             None
         };
-        Some(PlayerAutoProgressReport {
-            mutation,
+        tracing::trace!(
+            player_id,
+            ?mutation,
             original_level,
             current_level,
             steps,
             final_property_applied,
-            player_delivery,
-            around_delivery,
-            level_log_delivery,
-        })
+            ?player_delivery,
+            ?around_delivery,
+            ?level_log_delivery,
+            "завершено автоматическое развитие игрока"
+        );
+        Some(())
     }
 
     /// Сценарный `CheckLevel` передаёт исходному владельцу нулевые приросты,
@@ -37425,9 +37300,10 @@ impl CGame {
         true
     }
 
-    /// `DoneFlash`: pending property snapshot становится exact `0xBF73B` и
-    /// доходит до canonical region around-route; пустой tick ничего не шлёт.
-    fn done_player_flash(&mut self, player_id: i32) -> Option<PlayerFlashUpdateReport> {
+    /// `DoneFlash`: ожидающий снимок свойств становится точным `0xBF73B` и
+    /// доходит до канонического маршрута рассылки вокруг в регионе; пустой
+    /// проход ничего не отправляет.
+    fn done_player_flash(&mut self, player_id: i32) -> Option<()> {
         let pairs = self.players.get_mut(&player_id)?.take_flash_update()?;
         let mut message = CMessage::new(0x000b_f73b);
         message.add_long(player_id);
@@ -37444,11 +37320,13 @@ impl CGame {
                     self.send_battle_fairy_around(region.base(), player.shape(), &message)
                 })
         });
-        Some(PlayerFlashUpdateReport {
+        tracing::trace!(
             player_id,
-            pairs,
-            delivery,
-        })
+            ?pairs,
+            ?delivery,
+            "опубликовано изменение свойств игрока"
+        );
+        Some(())
     }
 
     fn send_battle_fairy_around(
@@ -38083,20 +37961,21 @@ impl CGame {
                 .find_region(region_id)
                 .map(|region| region.base().registered_player_ids())
                 .unwrap_or_default();
-            let mut battle_fairy_deaths = Vec::with_capacity(player_ids.len());
-            let mut periodical_updates = Vec::with_capacity(player_ids.len());
-            let mut player_abnormalities = Vec::with_capacity(player_ids.len());
-            let mut battle_fairy_follows = Vec::with_capacity(player_ids.len());
-            let mut player_ai_tails = Vec::with_capacity(player_ids.len());
+            let mut battle_fairy_deaths = 0usize;
+            let mut periodical_updates = 0usize;
+            let mut player_abnormalities = 0usize;
+            let mut battle_fairy_follows = 0usize;
+            let mut player_ai_tails = 0usize;
             let mut player_skill_executions = 0usize;
-            let mut player_energy_regenerations = Vec::with_capacity(player_ids.len());
-            let mut player_auto_progress = Vec::with_capacity(player_ids.len());
+            let mut player_energy_regenerations = 0usize;
+            let mut player_auto_progress = 0usize;
             let mut player_lost_timeouts = 0usize;
-            let mut player_fight_states = Vec::new();
-            let mut player_criminal_states = Vec::new();
+            let mut player_fight_states = 0usize;
+            let mut player_criminal_states = 0usize;
             for player_id in player_ids {
                 if let Some(death) = self.refresh_battle_fairy_death(player_id) {
-                    battle_fairy_deaths.push(death);
+                    battle_fairy_deaths = battle_fairy_deaths.wrapping_add(1);
+                    tracing::trace!(player_id, ?death, "проверено состояние смерти боевой феи");
                 }
                 if self.run_player_lost_timeout(player_id, runtime) {
                     player_lost_timeouts = player_lost_timeouts.wrapping_add(1);
@@ -38111,31 +37990,24 @@ impl CGame {
                         player_id,
                         GamePlayerFightStatePhase::PeriodicalUpdate,
                     ) {
-                        player_fight_states.push(fight_state);
+                        player_fight_states = player_fight_states.wrapping_add(1);
+                        tracing::trace!(player_id, ?fight_state, "обновлено боевое состояние игрока");
                     }
                     if let Some(criminal_state) = self.update_player_criminal_state(
                         player_id,
                         GamePlayerFightStatePhase::PeriodicalUpdate,
                         runtime,
                     ) {
-                        player_criminal_states.push(criminal_state);
+                        player_criminal_states = player_criminal_states.wrapping_add(1);
+                        tracing::trace!(player_id, ?criminal_state, "обновлено преступное состояние игрока");
                     }
-                    let murderer_sign = self.periodical_update_murderer_sign(player_id, runtime);
-                    if let Some(ping) = self.periodical_update_player_ping(player_id, runtime) {
-                        let nation_died_state =
-                            self.periodical_update_nation_died_state(player_id, runtime);
-                        let fairy_hatcher = self.run_fairy_hatcher(player_id, runtime);
-                        periodical_updates.push(PlayerPeriodicalUpdateReport {
-                            player_id,
-                            murderer_sign,
-                            ping,
-                            nation_died_state,
-                            fairy_hatcher,
-                        });
-                        if let Some(abnormality) =
-                            self.update_player_abnormality(player_id, runtime)
-                        {
-                            player_abnormalities.push(abnormality);
+                    let _ = self.periodical_update_murderer_sign(player_id, runtime);
+                    if self.periodical_update_player_ping(player_id, runtime).is_some() {
+                        let _ = self.periodical_update_nation_died_state(player_id, runtime);
+                        let _ = self.run_fairy_hatcher(player_id, runtime);
+                        periodical_updates = periodical_updates.wrapping_add(1);
+                        if self.update_player_abnormality(player_id, runtime).is_some() {
+                            player_abnormalities = player_abnormalities.wrapping_add(1);
                         }
                         runtime.player_move_shape_unmaterialized_state_ai(self, player_id);
                         if self.find_player(player_id).is_some() {
@@ -38143,14 +38015,16 @@ impl CGame {
                                 player_id,
                                 GamePlayerFightStatePhase::MoveShapeAi,
                             ) {
-                                player_fight_states.push(fight_state);
+                                player_fight_states = player_fight_states.wrapping_add(1);
+                                tracing::trace!(player_id, ?fight_state, "обновлено боевое состояние движения игрока");
                             }
                             if let Some(criminal_state) = self.update_player_criminal_state(
                                 player_id,
                                 GamePlayerFightStatePhase::MoveShapeAi,
                                 runtime,
                             ) {
-                                player_criminal_states.push(criminal_state);
+                                player_criminal_states = player_criminal_states.wrapping_add(1);
+                                tracing::trace!(player_id, ?criminal_state, "обновлено преступное состояние движения игрока");
                             }
                             let mut player_ai = self
                                 .find_player_mut(player_id)
@@ -38188,10 +38062,10 @@ impl CGame {
                                     &mut || runtime.now_milliseconds(),
                                 )
                             });
-                            if let Some(report) = progress.and_then(|mutation| {
+                            if progress.and_then(|mutation| {
                                 self.finish_player_auto_progress(mutation, runtime)
-                            }) {
-                                player_auto_progress.push(report);
+                            }).is_some() {
+                                player_auto_progress = player_auto_progress.wrapping_add(1);
                             }
                             let interval_ms = self.globe_setup.auto_inc_energy_time_ms();
                             let energy = self.find_player_mut(player_id).and_then(|player| {
@@ -38208,8 +38082,9 @@ impl CGame {
                                 message.add_ulong(mutation.current_energy);
                                 let delivery =
                                     message.send_to_player(self.net_server(), mutation.player_id);
-                                player_energy_regenerations
-                                    .push(PlayerEnergyRegenerationReport { mutation, delivery });
+                                player_energy_regenerations =
+                                    player_energy_regenerations.wrapping_add(1);
+                                tracing::trace!(?mutation, delivery, "восстановлена энергия игрока");
                             }
                         }
                     }
@@ -38221,10 +38096,11 @@ impl CGame {
                         None => None,
                     };
                     if let Some(war_soul) = war_soul {
-                        battle_fairy_follows.push(war_soul);
+                        battle_fairy_follows = battle_fairy_follows.wrapping_add(1);
+                        tracing::trace!(player_id, ?war_soul, "обновлено следование боевой феи");
                     }
-                    if let Some(tail) = self.run_player_ai_tail(player_id, runtime) {
-                        player_ai_tails.push(tail);
+                    if self.run_player_ai_tail(player_id, runtime).is_some() {
+                        player_ai_tails = player_ai_tails.wrapping_add(1);
                     }
                 }
             }
@@ -38350,7 +38226,7 @@ impl CGame {
             };
             let staged_deletions = owner.base().staged_delete_shapes().to_vec();
             let mut completed_deletions = BTreeSet::new();
-            let mut deletions = Vec::new();
+            let mut deletions = 0usize;
             for identity in staged_deletions {
                 let result = match identity.object_type {
                     PLAYER_TYPE => self.players.remove(&identity.id).map(|mut player| {
@@ -38408,12 +38284,13 @@ impl CGame {
                 if matches!(result, Ok(true)) {
                     completed_deletions.insert(identity);
                 }
-                deletions.push(GameRegionDeletionReport { identity, result });
+                deletions = deletions.wrapping_add(1);
+                tracing::trace!(region_id, ?identity, ?result, "обработано удаление объекта региона");
             }
             owner
                 .base_mut()
                 .retain_staged_delete_shapes(|identity| !completed_deletions.contains(&identity));
-            let mut removals = Vec::new();
+            let mut removals = 0usize;
             for identity in owner.base_mut().take_staged_remove_shapes() {
                 let result = match identity.object_type {
                     PLAYER_TYPE => self.players.remove(&identity.id).map(|mut player| {
@@ -38446,10 +38323,11 @@ impl CGame {
                     NPC_TYPE => Some(owner.base_mut().detach_owned_npc_by_id(identity.id)),
                     _ => runtime.remove_external_region_shape(self, owner.base_mut(), identity),
                 };
-                removals.push(GameRegionRemovalReport { identity, result });
+                removals = removals.wrapping_add(1);
+                tracing::trace!(region_id, ?identity, ?result, "обработано изъятие объекта региона");
             }
             let staged_area_transitions = owner.base().staged_area_transitions();
-            let mut area_transitions = Vec::with_capacity(staged_area_transitions.len());
+            let mut area_transitions = 0usize;
             for identity in staged_area_transitions {
                 let now_ms = runtime.now_milliseconds();
                 let result = match identity.object_type {
@@ -38491,7 +38369,8 @@ impl CGame {
                     ),
                     _ => None,
                 };
-                area_transitions.push(GameAreaTransitionReport { identity, result });
+                area_transitions = area_transitions.wrapping_add(1);
+                tracing::trace!(region_id, ?identity, ?result, "обработан переход объекта между областями");
             }
             owner.base_mut().clear_staged_area_transitions();
             let region_changes: Vec<GameLocalRegionChange> = owner
@@ -38570,26 +38449,26 @@ impl CGame {
                         }
                         trace_region_ai_pass(
                             region_id,
-                            battle_fairy_deaths.len(),
-                            periodical_updates.len(),
-                            player_abnormalities.len(),
-                            battle_fairy_follows.len(),
-                            player_ai_tails.len(),
+                            battle_fairy_deaths,
+                            periodical_updates,
+                            player_abnormalities,
+                            battle_fairy_follows,
+                            player_ai_tails,
                             player_skill_executions,
-                            player_energy_regenerations.len(),
-                            player_auto_progress.len(),
+                            player_energy_regenerations,
+                            player_auto_progress,
                             player_lost_timeouts,
-                            player_fight_states.len(),
-                            player_criminal_states.len(),
+                            player_fight_states,
+                            player_criminal_states,
                             base_region.is_some(),
                             nation_contend.is_some(),
                             city_contend.is_some(),
                             village_contend.is_some(),
                             country_contend.is_some(),
                             gods_battle.is_some(),
-                            deletions.len(),
-                            removals.len(),
-                            area_transitions.len(),
+                            deletions,
+                            removals,
+                            area_transitions,
                             region_changes.len(),
                             returned_players,
                         );
@@ -38603,26 +38482,26 @@ impl CGame {
             }
             trace_region_ai_pass(
                 region_id,
-                battle_fairy_deaths.len(),
-                periodical_updates.len(),
-                player_abnormalities.len(),
-                battle_fairy_follows.len(),
-                player_ai_tails.len(),
+                battle_fairy_deaths,
+                periodical_updates,
+                player_abnormalities,
+                battle_fairy_follows,
+                player_ai_tails,
                 player_skill_executions,
-                player_energy_regenerations.len(),
-                player_auto_progress.len(),
+                player_energy_regenerations,
+                player_auto_progress,
                 player_lost_timeouts,
-                player_fight_states.len(),
-                player_criminal_states.len(),
+                player_fight_states,
+                player_criminal_states,
                 base_region.is_some(),
                 nation_contend.is_some(),
                 city_contend.is_some(),
                 village_contend.is_some(),
                 country_contend.is_some(),
                 gods_battle.is_some(),
-                deletions.len(),
-                removals.len(),
-                area_transitions.len(),
+                deletions,
+                removals,
+                area_transitions,
                 region_changes.len(),
                 0,
             );
@@ -39415,43 +39294,51 @@ fn send_fairy_goods_update(game: &CGame, update: &FairyContainerGoodsUpdate) -> 
 fn deliver_fairy_state_change(
     outcome: &FairyStateChangeOutcome,
     game: &CGame,
-    deliveries: &mut Vec<Vec<i32>>,
-) {
+) -> usize {
     let effects = match outcome {
         FairyStateChangeOutcome::ReplacementRejected { effects, .. }
         | FairyStateChangeOutcome::Changed { effects, .. } => effects,
-        _ => return,
+        _ => return 0,
     };
     for effect in effects {
-        deliveries.push(game.send_fairy_state_effect(effect));
+        let deliveries = game.send_fairy_state_effect(effect);
+        tracing::trace!(?deliveries, "отправлен эффект смены состояния феи");
     }
+    effects.len()
 }
 
 fn deliver_fairy_syncretize_effects(
     report: &FairySyncretizeReport,
     game: &CGame,
-    state_deliveries: &mut Vec<Vec<i32>>,
-    amount_deliveries: &mut Vec<Vec<i32>>,
-) {
+) -> (usize, usize) {
+    let mut state_effects = 0usize;
+    let mut amount_changes = 0usize;
     if let Some(state_change) = &report.state_change {
-        deliver_fairy_state_change(state_change, game, state_deliveries);
+        state_effects = state_effects.wrapping_add(deliver_fairy_state_change(state_change, game));
     }
     if let Some(FairySyncretizeRemoval::Removed { effects, .. }) = &report.secondary_removal {
         for effect in effects {
-            state_deliveries.push(game.send_fairy_state_effect(effect));
+            let deliveries = game.send_fairy_state_effect(effect);
+            tracing::trace!(?deliveries, "отправлен эффект удаления второй феи");
         }
+        state_effects = state_effects.wrapping_add(effects.len());
     }
     match &report.fragment_effect {
         Some(FairySyncretizeFragmentEffect::AmountChanged(change)) => {
-            amount_deliveries.push(game.send_fairy_amount_change(change));
+            let deliveries = game.send_fairy_amount_change(change);
+            tracing::trace!(?deliveries, "отправлено изменение количества фрагментов феи");
+            amount_changes = amount_changes.wrapping_add(1);
         }
         Some(FairySyncretizeFragmentEffect::Removed { effects, .. }) => {
             for effect in effects {
-                state_deliveries.push(game.send_fairy_state_effect(effect));
+                let deliveries = game.send_fairy_state_effect(effect);
+                tracing::trace!(?deliveries, "отправлен эффект удаления фрагмента феи");
             }
+            state_effects = state_effects.wrapping_add(effects.len());
         }
         Some(FairySyncretizeFragmentEffect::RemovalFailed(_)) | None => {}
     }
+    (state_effects, amount_changes)
 }
 
 fn send_synthesis_result(game: &CGame, player_id: i32, result: u8) -> i32 {
