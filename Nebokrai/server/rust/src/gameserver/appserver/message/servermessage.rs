@@ -1631,14 +1631,14 @@ fn decode_script_startup(
         }
         GENERAL_VARIABLE_SELECTOR => {
             let start_offset = *cursor;
-            let snapshot = match game.set_general_variable_file_data(source, *cursor) {
-                Ok(snapshot) => snapshot,
+            match game.set_general_variable_file_data(source, *cursor) {
+                Ok(()) => {}
                 Err(error) => {
                     return Some(Err(GameScriptStartupError::GeneralVariables(error)));
                 }
-            };
+            }
             add_log_text(b"GeneralVariableList...OK!");
-            tracing::trace!(start_offset, ?snapshot, "общие переменные загружены");
+            tracing::trace!(start_offset, "общие переменные загружены");
             Some(Ok(()))
         }
         SCRIPT_FILE_SELECTOR => {

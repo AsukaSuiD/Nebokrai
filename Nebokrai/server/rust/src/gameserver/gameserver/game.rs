@@ -674,7 +674,6 @@ use crate::gameserver::appserver::script::script::{
 };
 use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
-    GameVariableSnapshotReport,
 };
 use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityGateRuntimeContext, CityRegionContext, CityReturnPointContext,
@@ -14091,7 +14090,7 @@ impl CGame {
         &mut self,
         source: &[u8],
         cursor: usize,
-    ) -> Result<GameVariableSnapshotReport, GameVariableSnapshotError> {
+    ) -> Result<(), GameVariableSnapshotError> {
         let mut local_cursor = cursor;
         self.general_variables.decode_world_snapshot(
             self.variable_list_file_data.as_deref(),

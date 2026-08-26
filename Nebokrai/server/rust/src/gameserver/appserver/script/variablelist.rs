@@ -34,14 +34,6 @@ pub(crate) struct CVariableList {
     variables: Vec<GameVariable>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GameVariableSnapshotReport {
-    pub(crate) declared_variables: usize,
-    pub(crate) snapshot_variables: usize,
-    pub(crate) declared_payload_length: i32,
-    pub(crate) consumed_bytes: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameVariableMutationOutcome {
     UpdatedInteger {
@@ -181,7 +173,7 @@ impl CVariableList {
         definitions: Option<&[u8]>,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<GameVariableSnapshotReport, GameVariableSnapshotError> {
+    ) -> Result<(), GameVariableSnapshotError> {
         self.load_definitions(definitions);
         let declared_variables = self.variables.len();
         let start = *cursor;
@@ -211,12 +203,14 @@ impl CVariableList {
             };
             self.insert_or_update(name, value);
         }
-        Ok(GameVariableSnapshotReport {
+        tracing::trace!(
             declared_variables,
-            snapshot_variables: count as usize,
+            snapshot_variables = count as usize,
             declared_payload_length,
-            consumed_bytes: cursor.saturating_sub(start),
-        })
+            consumed_bytes = cursor.saturating_sub(start),
+            "снимок сценарных переменных применён"
+        );
+        Ok(())
     }
 
     /// Exact `AddToByteArray`: count, размер временного payload и сами records.
