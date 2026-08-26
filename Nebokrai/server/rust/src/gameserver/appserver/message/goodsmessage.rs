@@ -710,8 +710,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 if position >= 8 {
                     tracing::trace!(player_id, position, "позиция CiQing вне диапазона");
                 } else {
-                    let _ = game
-                        .delete_goods_from_ci_qing(player_id, position, runtime)
+                    game.delete_goods_from_ci_qing(player_id, position, runtime)
                         .expect(
                             "resolved message player остаётся в CGame во время synchronous dispatch",
                         );
@@ -726,8 +725,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             if !game.ci_qing_message_enabled(player_id) {
                 tracing::trace!(player_id, "CiQing недоступен");
             } else {
-                let _ = game
-                    .mount_ci_qing_from_hand(player_id, amount, runtime)
+                game.mount_ci_qing_from_hand(player_id, amount, runtime)
                     .expect(
                         "resolved message player остаётся в CGame во время synchronous dispatch",
                     );
