@@ -1,14 +1,16 @@
-//! World → Game dispatcher `CJJcSystem`.
+//! Диспетчер World → Game для `CJJcSystem`.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/message/jjcsystemmessage.cpp`. `0x80502..0x8050A` теперь
-//! разбираются из общего `CGame::ProcessMessage` FIFO и вызывают owned JJC,
-//! player, region, script и network owners; `0x80506/07` остаются точными
-//! no-op callback-ами оригинала.
+//! разбираются из общего FIFO `CGame::ProcessMessage` и вызывают владельцев
+//! JJC, player, region, script и сети; `0x80506/07` остаются точными пустыми
+//! callback оригинала. Синхронные эффекты не дублируются отчётом, а их итог
+//! публикуется через `tracing`.
 
 use crate::gameserver::appserver::jjcsystem::JjcInfo;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
+use tracing::{debug, trace};
 
 const APPLICATION_RESPONSE: u32 = 0x0008_0502;
 const MATCHED: u32 = 0x0008_0503;
@@ -21,28 +23,6 @@ const SEASON_UPDATE: u32 = 0x0008_050a;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameJjcSystemMessageError {
     MissingField,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameJjcSystemMessageOutcome {
-    ApplicationNotified,
-    Matched,
-    Started,
-    Timeout,
-    Forwarded,
-    WeekUpdated,
-    SeasonUpdated,
-    Ignored,
-}
-
-#[must_use = "JJC message report сохраняет reached effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameJjcSystemMessageReport {
-    pub(crate) source_type: u32,
-    pub(crate) outcome: GameJjcSystemMessageOutcome,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) delivery: Option<i32>,
-    pub(crate) affected_players: usize,
 }
 
 fn decode_jjc_info(message: &mut CMessage) -> Option<JjcInfo> {
@@ -61,9 +41,9 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GameJjcSystemMessageReport, GameJjcSystemMessageError>> {
+) -> Option<Result<(), GameJjcSystemMessageError>> {
     let source_type = message.message_type() as u32;
-    let result = match source_type {
+    match source_type {
         APPLICATION_RESPONSE => {
             let Some(result) = message.base_mut().get_long() else {
                 return Some(Err(GameJjcSystemMessageError::MissingField));
@@ -71,14 +51,8 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
             let Some(player_id) = message.base_mut().get_long() else {
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
-            let delivery = game.jjc_notify_application(player_id, result);
-            GameJjcSystemMessageReport {
-                source_type,
-                outcome: GameJjcSystemMessageOutcome::ApplicationNotified,
-                player_id: Some(player_id),
-                delivery: Some(delivery),
-                affected_players: usize::from(game.find_player(player_id).is_some()),
-            }
+            let _ = game.jjc_notify_application(player_id, result);
+            debug!(player_id, result, "игроку отправлен итог заявки JJC");
         }
         MATCHED => {
             let Some(first) = decode_jjc_info(message) else {
@@ -88,13 +62,7 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
             game.jjc_on_matched(first, second);
-            GameJjcSystemMessageReport {
-                source_type,
-                outcome: GameJjcSystemMessageOutcome::Matched,
-                player_id: None,
-                delivery: None,
-                affected_players: 2,
-            }
+            debug!("применено сопоставление участников JJC");
         }
         STARTED => {
             let Some(player_id) = message.base_mut().get_long() else {
@@ -103,16 +71,8 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
             let Some(region_id) = message.base_mut().get_long() else {
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
-            let changed = game
-                .jjc_start_player(region_id, player_id, runtime)
-                .is_some();
-            GameJjcSystemMessageReport {
-                source_type,
-                outcome: GameJjcSystemMessageOutcome::Started,
-                player_id: Some(player_id),
-                delivery: None,
-                affected_players: usize::from(changed),
-            }
+            let changed = game.jjc_start_player(region_id, player_id, runtime).is_some();
+            debug!(player_id, region_id, changed, "обработан старт JJC для игрока");
         }
         TIMEOUT => {
             let Some(_region_id) = message.base_mut().get_long() else {
@@ -125,34 +85,16 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
             let scripts = game.jjc_timeout([first, second]);
-            GameJjcSystemMessageReport {
-                source_type,
-                outcome: GameJjcSystemMessageOutcome::Timeout,
-                player_id: None,
-                delivery: None,
-                affected_players: scripts.into_iter().flatten().count(),
-            }
+            debug!(first, second, affected_players = scripts.into_iter().flatten().count(), "обработан тайм-аут JJC");
         }
-        0x0008_0506 | 0x0008_0507 => GameJjcSystemMessageReport {
-            source_type,
-            outcome: GameJjcSystemMessageOutcome::Ignored,
-            player_id: None,
-            delivery: None,
-            affected_players: 0,
-        },
+        0x0008_0506 | 0x0008_0507 => trace!(source_type, "пустой callback JJC сохранён"),
         FORWARD_RESULT => {
             let Some(player_id) = message.base_mut().get_long() else {
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
             message.base_mut().set_message_type(0x000c_0801);
-            let delivery = message.send_to_player(game.net_server(), player_id);
-            GameJjcSystemMessageReport {
-                source_type,
-                outcome: GameJjcSystemMessageOutcome::Forwarded,
-                player_id: Some(player_id),
-                delivery: Some(delivery),
-                affected_players: usize::from(game.find_player(player_id).is_some()),
-            }
+            let _ = message.send_to_player(game.net_server(), player_id);
+            debug!(player_id, "результат JJC перенаправлен игроку");
         }
         WEEK_UPDATE | SEASON_UPDATE => {
             let Some(_timestamp) = message.base_mut().get_long() else {
@@ -163,21 +105,11 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
             } else {
                 game.jjc_season_update().len()
             };
-            GameJjcSystemMessageReport {
-                source_type,
-                outcome: if source_type == WEEK_UPDATE {
-                    GameJjcSystemMessageOutcome::WeekUpdated
-                } else {
-                    GameJjcSystemMessageOutcome::SeasonUpdated
-                },
-                player_id: None,
-                delivery: None,
-                affected_players,
-            }
+            debug!(source_type, affected_players, "обновлён период JJC");
         }
         _ => return None,
-    };
-    Some(Ok(result))
+    }
+    Some(Ok(()))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
