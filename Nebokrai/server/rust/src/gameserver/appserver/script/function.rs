@@ -443,20 +443,17 @@ use crate::gameserver::appserver::serverregion::{
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
 };
-use crate::gameserver::appserver::session::cequipmentdakong::{
-    EquipmentDaKongScriptModifyKind,
-};
+use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongScriptModifyKind;
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
-    CiQingComposeContext, EquipmentDaKongContext, GameClockContext,
-    GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
-    MonsterDeathContext, NationCarriageReturnReport,
-    NationCombatContext, NationContendEnterReport, PlayerReliveContext,
-    RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
-    ScriptRegionChangeContext, ScriptTimedGoodsParameters, ServerRegionOwner,
-    colored_player_notice_message, colored_text_message, format_legacy_text_fields,
+    CiQingComposeContext, EquipmentDaKongContext, GameClockContext, GameContainerMessageRuntime,
+    GameKickAroundOutcome, GodsBattleDeathContext, MonsterDeathContext, NationCombatContext,
+    PlayerReliveContext, RealmAppellationScriptContext, ScriptDepotOpenOutcome,
+    ScriptNpcShopOpenOutcome, ScriptRegionChangeContext, ScriptTimedGoodsParameters,
+    ServerRegionOwner, colored_player_notice_message, colored_text_message,
+    format_legacy_text_fields,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
 use crate::public::date::TagTime;
@@ -1689,7 +1686,7 @@ fn country_war_action_handled(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NationWarScriptKind {
+enum NationWarScriptKind {
     SendPlayerId,
     CarriageBackTown,
     GetFlagStatus,
@@ -1704,65 +1701,10 @@ pub(crate) enum NationWarScriptKind {
     ClearMorale,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum NationWarScriptDisposition {
-    ArgumentMissing {
-        argument: usize,
-    },
-    PlayerMissing,
-    TimingStart {
-        target_player_id: i32,
-        started: bool,
-    },
-    CarriageBackTown {
-        enter_debug: Vec<u8>,
-        report: Option<NationCarriageReturnReport>,
-        completed_debug: Option<Vec<u8>>,
-    },
-    Scalar {
-        region_id: Option<i32>,
-        player_id: Option<i32>,
-        value: i32,
-    },
-    PlayerWarTime {
-        player_id: i32,
-        enter_debug: Vec<u8>,
-        value_debug: Vec<u8>,
-        value: i32,
-    },
-    Contend {
-        player_id: i32,
-        duration_ms: u32,
-        report: Option<NationContendEnterReport>,
-    },
-    SignUpSkipped,
-    SignUpRequested {
-        country: i32,
-        delivery: Result<i32, SendMessageError>,
-    },
-    PlayerTimeCleared {
-        player_id: i32,
-        previous_ms: Option<u32>,
-    },
-    PlayerTimeSet {
-        player_id: i32,
-        time_ms: u32,
-        previous_ms: Option<u32>,
-    },
-    MoraleCleared {
-        previous: i32,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NationWarScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        function_id: i32,
-        kind: NationWarScriptKind,
-        legacy_return: i32,
-        disposition: NationWarScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
@@ -1788,72 +1730,72 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
         _ => return NationWarScriptFunctionOutcome::DifferentFunction,
     };
     let argument = |index: usize| {
-        evaluated_arguments[index]
-            .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
-            .ok_or(NationWarScriptDisposition::ArgumentMissing { argument: index })
+        evaluated_arguments[index].filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
     };
+    let handled = |legacy_return| NationWarScriptFunctionOutcome::Handled { legacy_return };
 
     match kind {
         NationWarScriptKind::SendPlayerId => {
-            let target_player_id = match argument(0) {
-                Ok(value) => value,
-                Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition);
-                }
+            let Some(target_player_id) = argument(0) else {
+                tracing::debug!(
+                    function_id,
+                    ?kind,
+                    argument = 0,
+                    "сценарной функции войны наций не передан аргумент"
+                );
+                return handled(0);
             };
             let Some(script_player_id) = script_player_id else {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::PlayerMissing,
+                    ?kind,
+                    "для сценарной функции войны наций не найден игрок"
                 );
+                return handled(0);
             };
             let started =
                 game.script_nation_war_send_player_id(script_player_id, target_player_id, || {
                     runtime.now_milliseconds()
                 });
-            nation_war_script_handled(
+            tracing::debug!(
                 function_id,
-                kind,
-                0,
-                NationWarScriptDisposition::TimingStart {
-                    target_player_id,
-                    started,
-                },
-            )
+                ?kind,
+                script_player_id,
+                target_player_id,
+                started,
+                "обработан запуск отсчёта войны наций"
+            );
+            handled(0)
         }
         NationWarScriptKind::CarriageBackTown => {
-            let enter_debug = nation_war_script_debug(game, b"GS1053");
+            nation_war_script_debug(game, b"GS1053");
             let Some((region_id, country)) = script_player_id.and_then(|player_id| {
                 let player = game.find_player(player_id)?;
                 Some((player.server_region_id()?, i32::from(player.country())))
             }) else {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::CarriageBackTown {
-                        enter_debug,
-                        report: None,
-                        completed_debug: None,
-                    },
+                    ?kind,
+                    ?script_player_id,
+                    "для возврата обоза войны наций не найден регион игрока"
                 );
+                return handled(0);
             };
-            let report = game.script_nation_carriage_back_town(region_id, country);
-            let completed_debug = report
-                .is_some()
-                .then(|| nation_war_script_debug(game, b"GS1054"));
-            nation_war_script_handled(
+            let completed = game
+                .script_nation_carriage_back_town(region_id, country)
+                .is_some();
+            if completed {
+                nation_war_script_debug(game, b"GS1054");
+            }
+            tracing::debug!(
                 function_id,
-                kind,
-                0,
-                NationWarScriptDisposition::CarriageBackTown {
-                    enter_debug,
-                    report,
-                    completed_debug,
-                },
-            )
+                ?kind,
+                region_id,
+                country,
+                completed,
+                "обработан возврат обоза войны наций"
+            );
+            handled(0)
         }
         NationWarScriptKind::GetFlagStatus => {
             let region_id = nation_script_player_region_id(game, script_player_id);
@@ -1863,26 +1805,25 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
                     _ => None,
                 })
                 .unwrap_or(0);
-            nation_war_script_handled(
+            tracing::trace!(
                 function_id,
-                kind,
+                ?kind,
+                ?region_id,
+                ?script_player_id,
                 value,
-                NationWarScriptDisposition::Scalar {
-                    region_id,
-                    player_id: script_player_id,
-                    value,
-                },
-            )
+                "прочитано сценарное значение войны наций"
+            );
+            handled(value)
         }
         NationWarScriptKind::GetTime => {
-            let enter_debug = nation_war_script_debug(game, b"GS1055");
+            nation_war_script_debug(game, b"GS1055");
             let Some(player_id) = script_player_id else {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::PlayerMissing,
+                    ?kind,
+                    "для чтения времени войны наций не найден игрок"
                 );
+                return handled(0);
             };
             let debug_time = game
                 .four_nation_war_sys()
@@ -1891,12 +1832,13 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
                 .find_player(player_id)
                 .map(|player| player.player_name().to_vec())
             else {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::PlayerMissing,
+                    ?kind,
+                    player_id,
+                    "для чтения времени войны наций не найден игрок"
                 );
+                return handled(0);
             };
             let value_debug = format_nation_war_time_debug(
                 game.get_string_by_id(b"GS1056"),
@@ -1907,82 +1849,87 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             let value = game
                 .four_nation_war_sys()
                 .player_war_time_seconds(player_id) as i32;
-            nation_war_script_handled(
+            tracing::trace!(
                 function_id,
-                kind,
+                ?kind,
+                player_id,
                 value,
-                NationWarScriptDisposition::PlayerWarTime {
-                    player_id,
-                    enter_debug,
-                    value_debug,
-                    value,
-                },
-            )
+                "прочитано время игрока на войне наций"
+            );
+            handled(value)
         }
         NationWarScriptKind::EnterContend => {
-            let seconds = match argument(0) {
-                Ok(value) => value,
-                Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition);
-                }
+            let Some(seconds) = argument(0) else {
+                tracing::debug!(
+                    function_id,
+                    ?kind,
+                    argument = 0,
+                    "сценарной функции войны наций не передан аргумент"
+                );
+                return handled(0);
             };
             let Some(player_id) = script_player_id else {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::PlayerMissing,
+                    ?kind,
+                    "для входа в захват войны наций не найден игрок"
                 );
+                return handled(0);
             };
             if game.find_player(player_id).is_none() {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::PlayerMissing,
+                    ?kind,
+                    player_id,
+                    "для входа в захват войны наций не найден игрок"
                 );
+                return handled(0);
             }
             let duration_ms = (seconds as u32).wrapping_mul(1_000);
-            let report =
-                nation_script_player_region_id(game, Some(player_id)).and_then(|region_id| {
+            let entered = nation_script_player_region_id(game, Some(player_id))
+                .and_then(|region_id| {
                     game.nation_enter_contend(region_id, player_id, duration_ms, runtime)
-                });
-            nation_war_script_handled(
+                })
+                .is_some();
+            tracing::debug!(
                 function_id,
-                kind,
-                0,
-                NationWarScriptDisposition::Contend {
-                    player_id,
-                    duration_ms,
-                    report,
-                },
-            )
+                ?kind,
+                player_id,
+                duration_ms,
+                entered,
+                "обработан вход в захват войны наций"
+            );
+            handled(0)
         }
         NationWarScriptKind::CountrySignUp => {
-            let operation = match argument(0) {
-                Ok(value) => value,
-                Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition);
-                }
+            let Some(operation) = argument(0) else {
+                tracing::debug!(
+                    function_id,
+                    ?kind,
+                    argument = 0,
+                    "сценарной функции войны наций не передан аргумент"
+                );
+                return handled(0);
             };
             if operation == 0 {
-                return nation_war_script_handled(
+                tracing::trace!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::SignUpSkipped,
+                    ?kind,
+                    "регистрация страны на войну наций пропущена"
                 );
+                return handled(0);
             }
             let Some(country) = script_player_id
                 .and_then(|player_id| game.find_player(player_id))
                 .map(|player| i32::from(player.country()))
             else {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::PlayerMissing,
+                    ?kind,
+                    ?script_player_id,
+                    "для регистрации страны не найден игрок"
                 );
+                return handled(0);
             };
             let mut request = CMessage::new(0x0006_031b);
             request.base_mut().add_long(country);
@@ -1991,32 +1938,37 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
                 Ok(value) => value,
                 Err(_) => 0,
             };
-            nation_war_script_handled(
+            tracing::debug!(
                 function_id,
-                kind,
+                ?kind,
+                country,
+                ?delivery,
                 legacy_return,
-                NationWarScriptDisposition::SignUpRequested { country, delivery },
-            )
+                "отправлена регистрация страны на войну наций"
+            );
+            handled(legacy_return)
         }
         NationWarScriptKind::ClearPlayerTime => {
-            let player_id = match argument(0) {
-                Ok(value) => value,
-                Err(disposition) => {
-                    return nation_war_script_handled(function_id, kind, 0, disposition);
-                }
+            let Some(player_id) = argument(0) else {
+                tracing::debug!(
+                    function_id,
+                    ?kind,
+                    argument = 0,
+                    "сценарной функции войны наций не передан аргумент"
+                );
+                return handled(0);
             };
             let previous_ms = game
                 .four_nation_war_sys_mut()
                 .clear_one_player_war_time(player_id);
-            nation_war_script_handled(
+            tracing::debug!(
                 function_id,
-                kind,
-                0,
-                NationWarScriptDisposition::PlayerTimeCleared {
-                    player_id,
-                    previous_ms,
-                },
-            )
+                ?kind,
+                player_id,
+                ?previous_ms,
+                "очищено время игрока на войне наций"
+            );
+            handled(0)
         }
         NationWarScriptKind::GetNationStatus => {
             let region_id = nation_script_player_region_id(game, script_player_id);
@@ -2030,16 +1982,15 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
                 },
                 _ => 0,
             };
-            nation_war_script_handled(
+            tracing::trace!(
                 function_id,
-                kind,
+                ?kind,
+                ?region_id,
+                ?script_player_id,
                 value,
-                NationWarScriptDisposition::Scalar {
-                    region_id,
-                    player_id: script_player_id,
-                    value,
-                },
-            )
+                "прочитано состояние страны на войне наций"
+            );
+            handled(value)
         }
         NationWarScriptKind::SetPlayerTime => {
             // Исходный диспетчер вычисляет оба выражения до любой проверки
@@ -2047,73 +1998,65 @@ pub(crate) fn run_nation_war_script_function<Runtime: NationCombatContext>(
             let player_id = evaluated_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
             let time_ms = evaluated_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
             if player_id == SCRIPT_INT_PARAMETER_ERROR {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::ArgumentMissing { argument: 0 },
+                    ?kind,
+                    argument = 0,
+                    "сценарной функции войны наций не передан аргумент"
                 );
+                return handled(0);
             }
             if time_ms == SCRIPT_INT_PARAMETER_ERROR {
-                return nation_war_script_handled(
+                tracing::debug!(
                     function_id,
-                    kind,
-                    0,
-                    NationWarScriptDisposition::ArgumentMissing { argument: 1 },
+                    ?kind,
+                    argument = 1,
+                    "сценарной функции войны наций не передан аргумент"
                 );
+                return handled(0);
             }
             let time_ms = time_ms as u32;
             let previous_ms = game
                 .four_nation_war_sys_mut()
                 .set_one_player_war_time(player_id, time_ms);
-            nation_war_script_handled(
+            tracing::debug!(
                 function_id,
-                kind,
-                0,
-                NationWarScriptDisposition::PlayerTimeSet {
-                    player_id,
-                    time_ms,
-                    previous_ms,
-                },
-            )
+                ?kind,
+                player_id,
+                time_ms,
+                ?previous_ms,
+                "установлено время игрока на войне наций"
+            );
+            handled(0)
         }
         NationWarScriptKind::IsPlayerWeak => {
             let value = script_player_id
                 .and_then(|player_id| game.find_player(player_id))
                 .map(|player| i32::from(player.is_nation_war_player_weak()))
                 .unwrap_or(0);
-            nation_war_script_handled(
+            tracing::trace!(
                 function_id,
-                kind,
+                ?kind,
+                ?script_player_id,
                 value,
-                NationWarScriptDisposition::Scalar {
-                    region_id: None,
-                    player_id: script_player_id,
-                    value,
-                },
-            )
+                "прочитана слабость игрока на войне наций"
+            );
+            handled(value)
         }
         NationWarScriptKind::GetMorale => {
             let value = game.four_nation_war_sys().morale();
-            nation_war_script_handled(
-                function_id,
-                kind,
-                value,
-                NationWarScriptDisposition::Scalar {
-                    region_id: None,
-                    player_id: None,
-                    value,
-                },
-            )
+            tracing::trace!(function_id, ?kind, value, "прочитан боевой дух войны наций");
+            handled(value)
         }
         NationWarScriptKind::ClearMorale => {
             let previous = game.four_nation_war_sys_mut().clear_morale_value();
-            nation_war_script_handled(
+            tracing::debug!(
                 function_id,
-                kind,
-                0,
-                NationWarScriptDisposition::MoraleCleared { previous },
-            )
+                ?kind,
+                previous,
+                "очищен боевой дух войны наций"
+            );
+            handled(0)
         }
     }
 }
@@ -2124,10 +2067,8 @@ fn nation_script_player_region_id(game: &CGame, player_id: Option<i32>) -> Optio
         .and_then(|player| player.server_region_id())
 }
 
-fn nation_war_script_debug(game: &CGame, string_id: &[u8]) -> Vec<u8> {
-    let text = game.get_string_by_id(string_id).to_vec();
-    put_debug_string(&text);
-    text
+fn nation_war_script_debug(game: &CGame, string_id: &[u8]) {
+    put_debug_string(game.get_string_by_id(string_id));
 }
 
 fn format_nation_war_time_debug(template: &[u8], player_name: &[u8], time: i32) -> Vec<u8> {
@@ -2178,20 +2119,6 @@ fn format_nation_war_time_debug(template: &[u8], player_name: &[u8], time: i32) 
         offset += 2;
     }
     output
-}
-
-fn nation_war_script_handled(
-    function_id: i32,
-    kind: NationWarScriptKind,
-    legacy_return: i32,
-    disposition: NationWarScriptDisposition,
-) -> NationWarScriptFunctionOutcome {
-    NationWarScriptFunctionOutcome::Handled {
-        function_id,
-        kind,
-        legacy_return,
-        disposition,
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3259,8 +3186,7 @@ pub(crate) fn run_country_quest_switch_script_function(
 
     let message = country_owner.quest_switch_message(identity as u8, true);
     let delivery = message.send(game, false);
-    game
-        .country_handler_mut()
+    game.country_handler_mut()
         .country_mut(country)
         .expect("country owner жив после quest-switch World enqueue")
         .apply_quest_switch(identity as u8, true);
