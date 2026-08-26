@@ -1371,16 +1371,6 @@ pub(crate) struct HotkeyHandTransferReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerHonorResetReport {
-    pub(crate) player_id: i32,
-    pub(crate) reset_mask: u32,
-    pub(crate) previous_days: u32,
-    pub(crate) previous_weeks: u32,
-    pub(crate) previous_months: u32,
-    pub(crate) adjust_honor_rank_script: Option<&'static [u8]>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerHonorEliminateMutation {
     pub(crate) player_id: i32,
     pub(crate) previous: [u32; 4],
@@ -3409,22 +3399,14 @@ impl CPlayer {
         tracing::trace!(player_id = self.player_id(), previous, requested, applied = self.country, changed = self.country != previous, "страна игрока изменена ответом World");
     }
 
-    /// Сохраняет player tail total-honor startup ветви: days сбрасывается
-    /// всегда, weeks/months — по mask `2/4`, total не меняется, а ненулевой
-    /// nobility rank требует точного `AdjustHonorRank` script-effect-а.
-    pub(crate) fn reset_total_honor_eliminate(
-        &mut self,
-        reset_mask: u32,
-    ) -> PlayerHonorResetReport {
-        let report = PlayerHonorResetReport {
-            player_id: self.player_id(),
-            reset_mask,
-            previous_days: self.base_properties.days_honor_eliminate,
-            previous_weeks: self.base_properties.weeks_honor_eliminate,
-            previous_months: self.base_properties.months_honor_eliminate,
-            adjust_honor_rank_script: (self.base_properties.rank_of_nobility_id != 0)
-                .then_some(b"scripts/circle/honorrank/adjusthonorrank.script"),
-        };
+    /// Сбрасывает подтверждённые счётчики чести; путь корректировки ранга в
+    /// достигнутом caller-графе был только диагностикой и не запускал сценарий.
+    pub(crate) fn reset_total_honor_eliminate(&mut self, reset_mask: u32) {
+        let player_id = self.player_id();
+        let previous_days = self.base_properties.days_honor_eliminate;
+        let previous_weeks = self.base_properties.weeks_honor_eliminate;
+        let previous_months = self.base_properties.months_honor_eliminate;
+        let adjust_honor_rank = self.base_properties.rank_of_nobility_id != 0;
         self.base_properties.days_honor_eliminate = 0;
         if reset_mask & 2 != 0 {
             self.base_properties.weeks_honor_eliminate = 0;
@@ -3432,7 +3414,15 @@ impl CPlayer {
         if reset_mask & 4 != 0 {
             self.base_properties.months_honor_eliminate = 0;
         }
-        report
+        tracing::trace!(
+            player_id,
+            reset_mask,
+            previous_days,
+            previous_weeks,
+            previous_months,
+            adjust_honor_rank,
+            "счётчики чести игрока сброшены"
+        );
     }
 
     pub(crate) const fn server_region_id(&self) -> Option<i32> {

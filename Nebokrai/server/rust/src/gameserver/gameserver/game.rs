@@ -3730,26 +3730,6 @@ pub(crate) enum PersonalShopBillingCompletion {
 }
 
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GameJjcMutationReport {
-    pub(crate) player_id: i32,
-    pub(crate) opponent_id: Option<i32>,
-    pub(crate) player_script_id: Option<i32>,
-    pub(crate) opponent_script_id: Option<i32>,
-    pub(crate) world_delivery: Option<i32>,
-    pub(crate) changed: bool,
-}
-
-#[must_use = "reconnect report сохраняет replacement, player snapshot и World delivery"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameWorldReconnectReport {
-    pub(crate) previous_client_closed: bool,
-    pub(crate) player_count: u32,
-    pub(crate) encoded_players: Vec<i32>,
-    pub(crate) failed_players: Vec<i32>,
-    pub(crate) registration: Result<i32, SendMessageError>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameTeamJoinResult {
     Succeed,
@@ -16311,48 +16291,36 @@ impl CGame {
         Some(message.send(self, false).unwrap_or_default())
     }
 
-    pub(crate) fn jjc_week_update(&mut self) -> Vec<GameJjcMutationReport> {
+    pub(crate) fn jjc_week_update(&mut self) -> usize {
         let player_ids = self.ordered_player_ids();
-        player_ids
-            .into_iter()
-            .map(|player_id| {
-                if let Some(player) = self.players.get_mut(&player_id) {
-                    player.clear_jjc_week();
-                }
-                GameJjcMutationReport {
-                    player_id,
-                    world_delivery: self.send_jjc_data(player_id),
-                    changed: true,
-                    ..GameJjcMutationReport::default()
-                }
-            })
-            .collect()
+        let players = player_ids.len();
+        for player_id in player_ids {
+            if let Some(player) = self.players.get_mut(&player_id) {
+                player.clear_jjc_week();
+            }
+            let world_delivery = self.send_jjc_data(player_id);
+            tracing::trace!(player_id, ?world_delivery, "сброшены недельные данные JJC игрока");
+        }
+        tracing::debug!(players, "завершён недельный сброс JJC");
+        players
     }
 
-    pub(crate) fn jjc_season_update(&mut self) -> Vec<GameJjcMutationReport> {
+    pub(crate) fn jjc_season_update(&mut self) -> usize {
         let (_, _, default_level, _) = self.globe_setup.jjc_game_config();
         let player_ids = self.ordered_player_ids();
-        player_ids
-            .into_iter()
-            .map(|player_id| {
-                if let Some(player) = self.players.get_mut(&player_id) {
-                    player.clear_jjc_season(default_level);
-                }
-                GameJjcMutationReport {
-                    player_id,
-                    world_delivery: self.send_jjc_data(player_id),
-                    changed: true,
-                    ..GameJjcMutationReport::default()
-                }
-            })
-            .collect()
+        let players = player_ids.len();
+        for player_id in player_ids {
+            if let Some(player) = self.players.get_mut(&player_id) {
+                player.clear_jjc_season(default_level);
+            }
+            let world_delivery = self.send_jjc_data(player_id);
+            tracing::trace!(player_id, ?world_delivery, "сброшены сезонные данные JJC игрока");
+        }
+        tracing::debug!(players, default_level, "завершён сезонный сброс JJC");
+        players
     }
 
-    pub(crate) fn quit_player_jjc(&mut self, player_id: i32) -> GameJjcMutationReport {
-        let mut report = GameJjcMutationReport {
-            player_id,
-            ..GameJjcMutationReport::default()
-        };
+    pub(crate) fn quit_player_jjc(&mut self, player_id: i32) -> bool {
         let (region_min, region_max, _, buff_id) = self.globe_setup.jjc_game_config();
         let Some((region_id, changing_region, changing_server, pk_state)) =
             self.players.get(&player_id).and_then(|player| {
@@ -16364,37 +16332,44 @@ impl CGame {
                 ))
             })
         else {
-            return report;
+            tracing::trace!(player_id, "выход из JJC пропущен: игрок или регион отсутствует");
+            return false;
         };
         let in_jjc_region = region_min <= region_id && region_id <= region_max;
         if !in_jjc_region && changing_region && changing_server {
-            return report;
+            tracing::trace!(player_id, region_id, "выход из JJC пропущен во время межсерверного перехода");
+            return false;
         }
         if in_jjc_region && !pk_state {
-            return report;
+            tracing::trace!(player_id, region_id, "выход из JJC пропущен: боевое состояние не активно");
+            return false;
         }
+        let mut opponent_id = None;
+        let mut opponent_script_id = None;
+        let mut player_script_id = None;
         if in_jjc_region {
             if let Some(player) = self.players.get_mut(&player_id) {
                 player.set_jjc_pk_state(false);
             }
-            report.changed = true;
-            let opponent_id = self.jjc_system.opponent_info(1, region_id, player_id);
-            report.opponent_id = opponent_id;
-            let Some(opponent_id) = opponent_id.filter(|id| self.players.contains_key(id)) else {
-                return report;
+            opponent_id = self.jjc_system.opponent_info(1, region_id, player_id);
+            let Some(existing_opponent_id) =
+                opponent_id.filter(|id| self.players.contains_key(id))
+            else {
+                tracing::trace!(player_id, region_id, ?opponent_id, "JJC-состояние игрока снято без доступного соперника");
+                return true;
             };
-            if let Some(opponent) = self.players.get_mut(&opponent_id) {
+            if let Some(opponent) = self.players.get_mut(&existing_opponent_id) {
                 opponent.set_jjc_pk_state(false);
             }
-            report.opponent_script_id = self.queue_script_file(
+            opponent_script_id = self.queue_script_file(
                 b"scripts/quest/pvp_jjc_on_kill_1.script",
                 ScriptExecutionContext {
-                    player_id: Some(opponent_id),
+                    player_id: Some(existing_opponent_id),
                     region_id: Some(region_id),
                     ..ScriptExecutionContext::default()
                 },
             );
-            report.player_script_id = self.queue_script_file(
+            player_script_id = self.queue_script_file(
                 b"scripts/quest/pvp_jjc_on_dead_1.script",
                 ScriptExecutionContext {
                     player_id: Some(player_id),
@@ -16410,9 +16385,9 @@ impl CGame {
         let mut message = CMessage::new(0x0006_0903);
         message.add_long(player_id);
         message.add_long(region_id);
-        report.world_delivery = Some(message.send(self, false).unwrap_or_default());
-        report.changed = true;
-        report
+        let world_delivery = message.send(self, false).unwrap_or_default();
+        tracing::debug!(player_id, region_id, ?opponent_id, ?player_script_id, ?opponent_script_id, world_delivery, "игрок выведен из JJC");
+        true
     }
 
     /// Exact live `0x6FA01 -> CPlayer::OnLost` lifecycle. Общий caller
@@ -16468,7 +16443,7 @@ impl CGame {
             self.send_running_script_countdown(player_id, 0);
         }
         let scripts_removed = scripts_before.wrapping_sub(self.active_scripts.len());
-        let jjc_quit = self.quit_player_jjc(player_id).changed;
+        let jjc_quit = self.quit_player_jjc(player_id);
 
         let mut nation_timing_finished = false;
         let mut change_body_states_ended = 0;
@@ -24997,13 +24972,13 @@ impl CGame {
         &mut self,
         client: CMyNetClient,
         context: &mut Context,
-    ) -> GameWorldReconnectReport {
+    ) {
         let previous_client_closed = self.close_and_remove_world_client();
         self.attach_world_client(client);
 
         let player_count = self.player_count();
-        let mut encoded_players = Vec::with_capacity(player_count as usize);
-        let mut failed_players = Vec::new();
+        let mut encoded_players = 0usize;
+        let mut failed_players = 0usize;
         let mut registration = CMessage::new(WORLD_REGISTRATION);
         registration.add_byte(1);
         let setup = self
@@ -25016,13 +24991,13 @@ impl CGame {
         for player_id in self.ordered_player_ids() {
             let Some(player) = self.find_player(player_id) else {
                 registration.add_long(0);
-                failed_players.push(player_id);
+                failed_players = failed_players.wrapping_add(1);
                 continue;
             };
             let mut snapshot = Vec::new();
             if !self.encode_player_game_save(player, &mut snapshot, context) {
                 registration.add_long(0);
-                failed_players.push(player_id);
+                failed_players = failed_players.wrapping_add(1);
                 continue;
             }
             registration.add_long(1);
@@ -25030,7 +25005,7 @@ impl CGame {
             registration.base_mut().add(&snapshot);
             registration.add_long(player.server_region_id().unwrap_or_default());
             registration.base_mut().update();
-            encoded_players.push(player_id);
+            encoded_players = encoded_players.wrapping_add(1);
         }
         let registration = registration.send(self, true);
         self.world_client
@@ -25038,13 +25013,14 @@ impl CGame {
             .expect("reconnected World client опубликован до registration")
             .enable_control_send();
         add_game_log_text(b"Reconnect to WorldServer Success!");
-        GameWorldReconnectReport {
+        tracing::info!(
             previous_client_closed,
             player_count,
             encoded_players,
             failed_players,
-            registration,
-        }
+            ?registration,
+            "принято повторное подключение World"
+        );
     }
 
     /// Подключает новый Billing owner и публикует typed reconnect event.
@@ -26315,9 +26291,7 @@ impl CGame {
 
     pub(crate) fn reset_total_honor_eliminate(&mut self, reset_mask: u32) {
         for player in self.players.values_mut() {
-            let player_id = player.player_id();
-            let reset = player.reset_total_honor_eliminate(reset_mask);
-            tracing::trace!(player_id, reset_mask, ?reset, "счётчики чести игрока сброшены");
+            player.reset_total_honor_eliminate(reset_mask);
         }
     }
 

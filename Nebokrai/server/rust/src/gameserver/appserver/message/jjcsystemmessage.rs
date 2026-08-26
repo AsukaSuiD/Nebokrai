@@ -101,9 +101,9 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
             let affected_players = if source_type == WEEK_UPDATE {
-                game.jjc_week_update().len()
+                game.jjc_week_update()
             } else {
-                game.jjc_season_update().len()
+                game.jjc_season_update()
             };
             debug!(source_type, affected_players, "обновлён период JJC");
         }
