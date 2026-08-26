@@ -17,6 +17,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::public::readwrite::read_to;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -78,10 +79,11 @@ impl CEmotion {
         let count = i32::try_from(self.emotions.len()).map_err(|_| EmotionSerializeError {
             count: self.emotions.len(),
         })?;
-        destination.extend_from_slice(&count.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(count);
         for (&emotion_id, &value) in &self.emotions {
-            destination.extend_from_slice(&emotion_id.to_le_bytes());
-            destination.extend_from_slice(&value.to_le_bytes());
+            writer.write_i32(emotion_id);
+            writer.write_i32(value);
         }
         Ok(())
     }
@@ -207,24 +209,11 @@ fn read_wire_i32(
     cursor: &mut usize,
     field: &'static str,
 ) -> Result<i32, EmotionDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(4) else {
-        return Err(EmotionDecodeError::Field {
+    LegacyReader::read_i32_from(source, cursor).map_err(|block: LegacyReadBlock| {
+        EmotionDecodeError::Field {
             field,
-            offset,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(EmotionDecodeError::Field {
-            field,
-            offset,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(i32::from_le_bytes(
-        bytes.try_into().expect("emotion signed long уже проверен"),
-    ))
+            offset: block.offset,
+            available: block.available,
+        }
+    })
 }
