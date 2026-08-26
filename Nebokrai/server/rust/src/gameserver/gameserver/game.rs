@@ -1479,51 +1479,6 @@ pub(crate) trait PlayerEquipmentInspectionContext: OldClientGoodsCodec {}
 impl<T: OldClientGoodsCodec> PlayerEquipmentInspectionContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HotkeyAssignmentOutcome {
-    InvalidSlot,
-    Assigned,
-    MissingHandAssigned,
-    HandMoveFailed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HotkeyAssignmentReport {
-    pub(crate) slot: u8,
-    pub(crate) value: u32,
-    pub(crate) outcome: HotkeyAssignmentOutcome,
-    pub(crate) transfer: Option<HotkeyHandTransferReport>,
-    pub(crate) transfer_deliveries: Vec<i32>,
-    pub(crate) response_deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HotkeyRemovalOutcome {
-    InvalidOrEmpty,
-    Removed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HotkeyRemovalReport {
-    pub(crate) slot: u8,
-    pub(crate) outcome: HotkeyRemovalOutcome,
-    pub(crate) delivery: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HotkeyChangeOutcome {
-    InvalidOrEmpty,
-    Changed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HotkeyChangeReport {
-    pub(crate) slot: u8,
-    pub(crate) value: u32,
-    pub(crate) outcome: HotkeyChangeOutcome,
-    pub(crate) delivery: Option<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueuedSkillExecutionState {
     Pending,
     Completed,
@@ -22775,11 +22730,11 @@ impl CGame {
         &self,
         player: &CPlayer,
         transfer: &HotkeyHandTransferReport,
-    ) -> Vec<i32> {
+    ) -> Option<i32> {
         use crate::gameserver::appserver::container::cwallet::CurrencyGoodsAddOutcome;
 
         let (Some(goods), Some(removal)) = (transfer.goods, transfer.hand_removal.as_ref()) else {
-            return Vec::new();
+            return None;
         };
         let mut message = CS2CContainerObjectMove::default();
         message.set_source_container(removal.owner_type, removal.owner_id, 0);
@@ -22839,7 +22794,7 @@ impl CGame {
                     _ => None,
                 };
                 let Some((position, identity, amount)) = destination else {
-                    return Vec::new();
+                    return None;
                 };
                 message.set_operation(ContainerObjectMoveOperation::MoveObject);
                 message.set_destination_container(PLAYER_TYPE, player.player_id(), position);
@@ -22857,9 +22812,9 @@ impl CGame {
             }
             HotkeyHandTransferOutcome::MissingHandGoods
             | HotkeyHandTransferOutcome::NotConsumable
-            | HotkeyHandTransferOutcome::UnsupportedSource => return Vec::new(),
+            | HotkeyHandTransferOutcome::UnsupportedSource => return None,
         }
-        vec![message.send_to_player(self, player.player_id())]
+        Some(message.send_to_player(self, player.player_id()))
     }
 
     pub(crate) fn assign_hotkey(
@@ -22867,48 +22822,39 @@ impl CGame {
         player_id: i32,
         slot: u8,
         value: u32,
-    ) -> Option<HotkeyAssignmentReport> {
-        let mut report = HotkeyAssignmentReport {
-            slot,
-            value,
-            outcome: HotkeyAssignmentOutcome::InvalidSlot,
-            transfer: None,
-            transfer_deliveries: Vec::new(),
-            response_deliveries: Vec::new(),
-        };
+    ) -> Option<()> {
         if usize::from(slot) >= 24 {
             // Старый negative-value path писал за `dwHotKey[24]`; это UB без
             // подтверждённого wire-эффекта, поэтому malformed slot получает
             // тот же безопасный reject, что и обычная out-of-range ветвь.
-            report
-                .response_deliveries
-                .push(send_hotkey_response(self, player_id, 0x0b_f908, b'.', None));
-            return Some(report);
+            let delivery = send_hotkey_response(self, player_id, 0x0b_f908, b'.', None);
+            tracing::trace!(player_id, slot, value, delivery, "назначение горячей клавиши отклонено из-за номера ячейки");
+            return Some(());
         }
         if (value as i32) < 0 {
             self.find_player_mut(player_id)?.set_hotkey(slot, value);
-            report.outcome = HotkeyAssignmentOutcome::Assigned;
-            report.response_deliveries.push(send_hotkey_response(
+            let delivery = send_hotkey_response(
                 self,
                 player_id,
                 0x0b_f908,
                 b'-',
                 Some((slot, Some(value))),
-            ));
-            return Some(report);
+            );
+            tracing::trace!(player_id, slot, value, delivery, "назначена горячая клавиша с отрицательным значением");
+            return Some(());
         }
         let hand_missing = self.find_player(player_id)?.ci_qing_hand_goods().is_none();
         if hand_missing {
             self.find_player_mut(player_id)?.set_hotkey(slot, value);
-            report.outcome = HotkeyAssignmentOutcome::MissingHandAssigned;
-            report.response_deliveries.push(send_hotkey_response(
+            let delivery = send_hotkey_response(
                 self,
                 player_id,
                 0x0b_f908,
                 b'-',
                 Some((slot, Some(value))),
-            ));
-            return Some(report);
+            );
+            tracing::trace!(player_id, slot, value, delivery, "назначена горячая клавиша без предмета в руке");
+            return Some(());
         }
 
         let transfer = {
@@ -22917,39 +22863,39 @@ impl CGame {
                 .get_mut(&player_id)?
                 .return_hotkey_hand_goods(factory)
         };
-        if transfer.outcome == HotkeyHandTransferOutcome::Moved {
+        let assigned = transfer.outcome == HotkeyHandTransferOutcome::Moved;
+        let response_delivery = if assigned {
             self.find_player_mut(player_id)?.set_hotkey(slot, value);
-            report.outcome = HotkeyAssignmentOutcome::Assigned;
-            report.response_deliveries.push(send_hotkey_response(
+            Some(send_hotkey_response(
                 self,
                 player_id,
                 0x0b_f908,
                 b'-',
                 Some((slot, Some(value))),
-            ));
+            ))
         } else {
-            report.outcome = HotkeyAssignmentOutcome::HandMoveFailed;
-        }
-        if transfer.hand_removal.is_some() || transfer.outcome == HotkeyHandTransferOutcome::Moved {
-            report.transfer_deliveries = self
+            None
+        };
+        let transfer_delivery = if transfer.hand_removal.is_some() || assigned {
+            self
                 .find_player(player_id)
                 .map(|player| self.send_hotkey_hand_transfer(player, &transfer))
-                .unwrap_or_default();
-        }
-        if transfer.hand_removal.is_none() {
-            report
-                .response_deliveries
-                .push(send_hotkey_response(self, player_id, 0x0b_f908, b'.', None));
-        }
-        report.transfer = Some(transfer);
-        Some(report)
+                .flatten()
+        } else {
+            None
+        };
+        let rejection_delivery = transfer.hand_removal.is_none().then(|| {
+            send_hotkey_response(self, player_id, 0x0b_f908, b'.', None)
+        });
+        tracing::trace!(player_id, slot, value, assigned, transfer = ?transfer, ?transfer_delivery, ?response_delivery, ?rejection_delivery, "обработано назначение горячей клавиши");
+        Some(())
     }
 
     pub(crate) fn remove_hotkey(
         &mut self,
         player_id: i32,
         slot: u8,
-    ) -> Option<HotkeyRemovalReport> {
+    ) -> Option<()> {
         let removed = self
             .find_player(player_id)?
             .hotkey(slot)
@@ -22957,11 +22903,6 @@ impl CGame {
         if removed {
             self.find_player_mut(player_id)?.set_hotkey(slot, 0);
         }
-        let outcome = if removed {
-            HotkeyRemovalOutcome::Removed
-        } else {
-            HotkeyRemovalOutcome::InvalidOrEmpty
-        };
         let delivery = send_hotkey_response(
             self,
             player_id,
@@ -22969,11 +22910,8 @@ impl CGame {
             if removed { b'/' } else { b'0' },
             removed.then_some((slot, None)),
         );
-        Some(HotkeyRemovalReport {
-            slot,
-            outcome,
-            delivery,
-        })
+        tracing::trace!(player_id, slot, removed, delivery, "обработано удаление горячей клавиши");
+        Some(())
     }
 
     pub(crate) fn change_hotkey(
@@ -22981,7 +22919,7 @@ impl CGame {
         player_id: i32,
         slot: u8,
         value: u32,
-    ) -> Option<HotkeyChangeReport> {
+    ) -> Option<()> {
         let changed = self
             .find_player(player_id)?
             .hotkey(slot)
@@ -22998,16 +22936,8 @@ impl CGame {
         } else {
             None
         };
-        Some(HotkeyChangeReport {
-            slot,
-            value,
-            outcome: if changed {
-                HotkeyChangeOutcome::Changed
-            } else {
-                HotkeyChangeOutcome::InvalidOrEmpty
-            },
-            delivery,
-        })
+        tracing::trace!(player_id, slot, value, changed, ?delivery, "обработано изменение горячей клавиши");
+        Some(())
     }
 
     fn send_fairy_state_effect(&self, effect: &FairyStateChangeEffect) -> Vec<i32> {
