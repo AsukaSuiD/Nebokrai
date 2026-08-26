@@ -452,7 +452,7 @@ use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     CiQingComposeContext, EquipmentDaKongContext, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
-    GodsBattleSzlPlayerUpdate, MonsterDeathContext, NationCarriageReturnReport,
+    MonsterDeathContext, NationCarriageReturnReport,
     NationCombatContext, NationContendEnterReport, PlayerReliveContext,
     RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
     ScriptRegionChangeContext, ScriptTimedGoodsParameters, ServerRegionOwner,
@@ -1275,7 +1275,7 @@ pub(crate) enum GodsBattleScalarScriptDisposition {
     Changed {
         player_id: Option<i32>,
         requested: i32,
-        update: Option<GodsBattleSzlPlayerUpdate>,
+        update: Option<()>,
     },
 }
 

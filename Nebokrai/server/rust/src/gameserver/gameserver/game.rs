@@ -1394,12 +1394,6 @@ pub(crate) struct GameWarStartupOwners {
     pub(crate) four_nation: CFourNationWarSys,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleTopTenRequestReport {
-    pub(crate) player_id: i32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
 pub(crate) trait OldClientGoodsCodec {
     fn encode_goods_for_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
 }
@@ -2824,20 +2818,6 @@ fn append_gods_battle_number(output: &mut Vec<u8>, label: &[u8], value: i32) {
     output.extend_from_slice(value.to_string().as_bytes());
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleReturnPointSource {
-    GodsBattleConfiguration,
-    BaseRegionFallback,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleReturnPointReport {
-    pub(crate) player_id: i32,
-    pub(crate) faction: i32,
-    pub(crate) point: RegionReturnPoint,
-    pub(crate) source: GodsBattleReturnPointSource,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleContendEnterOutcome {
     PlayerMissing,
@@ -2861,24 +2841,6 @@ pub(crate) struct GodsBattleContendEnterReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleMonsterTokenBlock {
-    FieldCount { token: Vec<u8>, fields: usize },
-    MissingMonsterProperty { original_name: Vec<u8> },
-    Membership(RegionMembershipBlock),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleNpcFactionReport {
-    pub(crate) region_id: i32,
-    pub(crate) npc_id: i32,
-    pub(crate) npc_name: Vec<u8>,
-    pub(crate) faction: i32,
-    pub(crate) spawned_monster_ids: Vec<i32>,
-    pub(crate) spawn_blocks: Vec<GodsBattleMonsterTokenBlock>,
-    pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GodsBattleMonsterDeathReport {
     pub(crate) region_id: i32,
     pub(crate) monster_id: i32,
@@ -2886,51 +2848,6 @@ pub(crate) struct GodsBattleMonsterDeathReport {
     pub(crate) killed: Option<u32>,
     pub(crate) total: Option<u32>,
     pub(crate) player_notice_delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattlePlayerRegionReport {
-    pub(crate) region_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) assigned_faction: Option<i32>,
-    pub(crate) faction_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) membership_changed: bool,
-    pub(crate) region_state_delivery: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleXydRequestReport {
-    pub(crate) faction: i32,
-    pub(crate) xyd: u32,
-    pub(crate) delivery: Option<Result<i32, SendMessageError>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleXydApplyReport {
-    pub(crate) updates: [GodsBattleFactionXydUpdate; 2],
-    pub(crate) deliveries: Vec<(i32, i32, i32)>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleSzlPlayerUpdate {
-    pub(crate) player_id: i32,
-    pub(crate) previous: u32,
-    pub(crate) current: u32,
-    pub(crate) property_delivery: i32,
-    pub(crate) notice_delivery: i32,
-    pub(crate) removed_attempt_appellation: Option<u32>,
-    pub(crate) appellation_notice_delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleDeathSzlReport {
-    pub(crate) killer_id: i32,
-    pub(crate) victim_id: i32,
-    pub(crate) gain: GodsBattleSzlCalculation,
-    pub(crate) loss: GodsBattleSzlCalculation,
-    pub(crate) team: Option<GodsBattleTeamSnapshot>,
-    pub(crate) updates: Vec<GodsBattleSzlPlayerUpdate>,
-    pub(crate) region_notice_delivery: Option<i32>,
 }
 
 pub(crate) trait NationCombatContext: ServerRegionNpcContext + GameClockContext {}
@@ -16616,7 +16533,6 @@ impl CGame {
             return self
                 .gods_battle_return_point(source_region_id, player_id)
                 .map_err(GameReturnPointBlock::Base)?
-                .map(|point| point.point)
                 .ok_or(GameReturnPointBlock::GodsBattleMissing);
         }
         let Some(mut owner) = self.take_region_owner(source_region_id) else {
@@ -20886,14 +20802,11 @@ impl CGame {
     pub(crate) fn request_gods_battle_top_ten(
         &mut self,
         player_id: i32,
-    ) -> GodsBattleTopTenRequestReport {
+    ) {
         let request = CMessage::new(0x5fa10);
         let delivery = request.send(self, false);
         self.gods_battle_mgr.record_top_ten_request(player_id);
-        GodsBattleTopTenRequestReport {
-            player_id,
-            delivery,
-        }
+        tracing::trace!(player_id, ?delivery, "запрошена десятка лидеров битвы богов");
     }
 
     /// Script producer at `0x4C3C11/0x4C3C2E`: factions 5/6 преобразуются
@@ -20902,27 +20815,22 @@ impl CGame {
         &self,
         faction: i32,
         xyd: u32,
-    ) -> GodsBattleXydRequestReport {
+    ) -> bool {
         let world_faction = match faction {
             5 => 1,
             6 => 2,
             _ => {
-                return GodsBattleXydRequestReport {
-                    faction,
-                    xyd,
-                    delivery: None,
-                };
+                tracing::debug!(faction, xyd, "запрос XYD отклонён: фракция не поддерживается");
+                return false;
             }
         };
         let mut request = CMessage::new(0x5fa0f);
         request.add_byte(1);
         request.add_long(world_faction);
         request.add_ulong(xyd);
-        GodsBattleXydRequestReport {
-            faction,
-            xyd,
-            delivery: Some(request.send(self, false)),
-        }
+        let delivery = request.send(self, false);
+        tracing::trace!(faction, xyd, ?delivery, "изменение XYD отправлено World");
+        true
     }
 
     /// Точный player-tail после успешного base `CServerRegion::AddObject`.
@@ -20930,14 +20838,19 @@ impl CGame {
         &mut self,
         region_id: i32,
         player_id: i32,
-    ) -> Option<GodsBattlePlayerRegionReport> {
-        let (country, previous_faction) = self
+    ) -> bool {
+        let Some((country, previous_faction)) = self
             .find_player(player_id)
-            .map(|player| (player.country(), player.gods_battle_faction()))?;
-        let owner = self.take_region_owner(region_id)?;
+            .map(|player| (player.country(), player.gods_battle_faction()))
+        else {
+            return false;
+        };
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
-            return None;
+            return false;
         };
         let assigned_faction = (previous_faction == 0).then(|| {
             self.gods_battle_mgr
@@ -20962,14 +20875,8 @@ impl CGame {
         let region_state_delivery = gods_battle_property_message(player_id, b"m_lIsInGodRegion", 1)
             .send_to_player(self.net_server(), player_id);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        Some(GodsBattlePlayerRegionReport {
-            region_id,
-            player_id,
-            assigned_faction,
-            faction_delivery,
-            membership_changed,
-            region_state_delivery,
-        })
+        tracing::trace!(region_id, player_id, ?assigned_faction, ?faction_delivery, membership_changed, region_state_delivery, "игрок добавлен во фракцию битвы богов");
+        true
     }
 
     /// Общий player-tail `RemoveObject/DelObj` после spatial/base удаления.
@@ -20977,24 +20884,20 @@ impl CGame {
         &mut self,
         region_id: i32,
         player_id: i32,
-    ) -> Option<GodsBattlePlayerRegionReport> {
-        let owner = self.take_region_owner(region_id)?;
+    ) -> bool {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
-            return None;
+            return false;
         };
         let membership_changed = region.remove_faction_player(player_id);
         let region_state_delivery = gods_battle_property_message(player_id, b"m_lIsInGodRegion", 0)
             .send_to_player(self.net_server(), player_id);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        Some(GodsBattlePlayerRegionReport {
-            region_id,
-            player_id,
-            assigned_faction: None,
-            faction_delivery: None,
-            membership_changed,
-            region_state_delivery,
-        })
+        tracing::trace!(region_id, player_id, membership_changed, region_state_delivery, "игрок удалён из фракции битвы богов");
+        true
     }
 
     /// NPC-tail concrete GodsBattle `AddObject`: membership предшествует
@@ -21004,11 +20907,13 @@ impl CGame {
         region_id: i32,
         npc_id: i32,
         context: &mut Context,
-    ) -> Option<GodsBattleNpcFactionReport> {
-        let owner = self.take_region_owner(region_id)?;
+    ) -> bool {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
-            return None;
+            return false;
         };
         let Some((npc_name, configuration)) =
             region.war.base.find_npc_by_id(npc_id).and_then(|npc| {
@@ -21020,28 +20925,21 @@ impl CGame {
             })
         else {
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return None;
+            return false;
         };
         let faction = configuration.faction;
         if !region.add_faction_npc(npc_id, faction) {
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return None;
+            return false;
         }
 
-        let (spawned_monster_ids, spawn_blocks) =
+        let (spawned_monsters, blocked_spawns) =
             self.spawn_gods_battle_npc_monsters(&mut region, &configuration, faction, context);
         self.gods_battle_mgr
             .reset_npc_killed_monster_count(&npc_name);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        Some(GodsBattleNpcFactionReport {
-            region_id,
-            npc_id,
-            npc_name,
-            faction,
-            spawned_monster_ids,
-            spawn_blocks,
-            world_delivery: None,
-        })
+        tracing::debug!(region_id, npc_id, faction, spawned_monsters, blocked_spawns, npc_name_bytes = npc_name.len(), "NPC добавлен во фракцию битвы богов");
+        true
     }
 
     fn spawn_gods_battle_npc_monsters<Context: GodsBattleNpcContendContext>(
@@ -21050,10 +20948,10 @@ impl CGame {
         configuration: &crate::setup::godsbattleconf::GodsBattleFactionNpcName,
         faction: i32,
         context: &mut Context,
-    ) -> (Vec<i32>, Vec<GodsBattleMonsterTokenBlock>) {
+    ) -> (usize, usize) {
         let (area_width, area_height) = self.area_dimensions();
-        let mut spawned_monster_ids = Vec::new();
-        let mut spawn_blocks = Vec::new();
+        let mut spawned_monsters = 0usize;
+        let mut blocked_spawns = 0usize;
         for token in configuration
             .monsters
             .split(|byte| *byte == b',')
@@ -21067,10 +20965,8 @@ impl CGame {
                 record_gods_battle_log(GodsBattleNpcLog::InvalidMonsterToken {
                     token: token.to_vec(),
                 });
-                spawn_blocks.push(GodsBattleMonsterTokenBlock::FieldCount {
-                    token: token.to_vec(),
-                    fields: fields.len(),
-                });
+                blocked_spawns = blocked_spawns.wrapping_add(1);
+                tracing::warn!(fields = fields.len(), token_bytes = token.len(), "некорректное описание монстра NPC битвы богов");
                 break;
             }
             let original_name = fields[0];
@@ -21082,9 +20978,8 @@ impl CGame {
                     npc_name: configuration.name.clone(),
                     monster: original_name.to_vec(),
                 });
-                spawn_blocks.push(GodsBattleMonsterTokenBlock::MissingMonsterProperty {
-                    original_name: original_name.to_vec(),
-                });
+                blocked_spawns = blocked_spawns.wrapping_add(1);
+                tracing::warn!(original_name_bytes = original_name.len(), "свойства монстра NPC битвы богов отсутствуют");
                 continue;
             };
             let spawn = region.war.base.add_monster(
@@ -21099,17 +20994,15 @@ impl CGame {
                 area_height,
                 context,
             );
-            let monster_id = match spawn {
-                Ok(monster_id) => monster_id,
-                Err(block) => {
+            if let Err(block) = spawn {
                     record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
                         npc_name: configuration.name.clone(),
                         monster: original_name.to_vec(),
                     });
-                    spawn_blocks.push(GodsBattleMonsterTokenBlock::Membership(block));
+                    blocked_spawns = blocked_spawns.wrapping_add(1);
+                    tracing::warn!(?block, "создание монстра NPC битвы богов заблокировано");
                     continue;
-                }
-            };
+            }
             if let Some(property) = self.find_monster_property_by_origin_name_mut(original_name) {
                 property.race = faction as u32;
             }
@@ -21118,9 +21011,9 @@ impl CGame {
                 monster: original_name.to_vec(),
                 faction,
             });
-            spawned_monster_ids.push(monster_id);
+            spawned_monsters = spawned_monsters.wrapping_add(1);
         }
-        (spawned_monster_ids, spawn_blocks)
+        (spawned_monsters, blocked_spawns)
     }
 
     pub(crate) fn change_gods_battle_npc_faction<Context: GodsBattleNpcContendContext>(
@@ -21129,11 +21022,13 @@ impl CGame {
         npc_id: i32,
         faction: i32,
         context: &mut Context,
-    ) -> Option<GodsBattleNpcFactionReport> {
-        let owner = self.take_region_owner(region_id)?;
+    ) -> bool {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
-            return None;
+            return false;
         };
         let Some((npc_name, configuration)) =
             region.war.base.find_npc_by_id(npc_id).and_then(|npc| {
@@ -21145,13 +21040,13 @@ impl CGame {
             })
         else {
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return None;
+            return false;
         };
         if !region.change_npc_faction(npc_id, faction) {
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return None;
+            return false;
         }
-        let (spawned_monster_ids, spawn_blocks) =
+        let (spawned_monsters, blocked_spawns) =
             self.spawn_gods_battle_npc_monsters(&mut region, &configuration, faction, context);
         self.gods_battle_mgr
             .reset_npc_killed_monster_count(&npc_name);
@@ -21170,15 +21065,8 @@ impl CGame {
                 message.send(self, false)
             });
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        Some(GodsBattleNpcFactionReport {
-            region_id,
-            npc_id,
-            npc_name,
-            faction,
-            spawned_monster_ids,
-            spawn_blocks,
-            world_delivery,
-        })
+        tracing::debug!(region_id, npc_id, faction, spawned_monsters, blocked_spawns, npc_name_bytes = npc_name.len(), ?world_delivery, "фракция NPC битвы богов изменена");
+        true
     }
 
     pub(crate) fn leave_gods_battle_npc(&mut self, region_id: i32, npc_id: i32) -> bool {
@@ -21200,7 +21088,7 @@ impl CGame {
         &mut self,
         region_id: i32,
         player_id: i32,
-    ) -> Result<Option<GodsBattleReturnPointReport>, ServerReturnSetupBlock> {
+    ) -> Result<Option<RegionReturnPoint>, ServerReturnSetupBlock> {
         let Some(player) = self.find_player(player_id) else {
             return Ok(None);
         };
@@ -21225,12 +21113,8 @@ impl CGame {
                 point,
             });
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return Ok(Some(GodsBattleReturnPointReport {
-                player_id,
-                faction,
-                point,
-                source: GodsBattleReturnPointSource::GodsBattleConfiguration,
-            }));
+            tracing::trace!(player_id, faction, ?point, "выбрана точка возврата конфигурации битвы богов");
+            return Ok(Some(point));
         }
         let fallback = region
             .war
@@ -21238,12 +21122,8 @@ impl CGame {
             .get_return_point(Some(player_facts), &mut self.country_param);
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
         fallback.map(|point| {
-            Some(GodsBattleReturnPointReport {
-                player_id,
-                faction,
-                point,
-                source: GodsBattleReturnPointSource::BaseRegionFallback,
-            })
+            tracing::trace!(player_id, faction, ?point, "выбрана базовая точка возврата из битвы богов");
+            Some(point)
         })
     }
 
@@ -21911,7 +21791,7 @@ impl CGame {
         let changed =
             self.change_gods_battle_npc_faction(region_id, contender.symbol_id, faction, context);
         let mut deliveries = self.cancel_gods_battle_contend_symbol(region_id, contender.symbol_id);
-        if changed.is_none() {
+        if !changed {
             tracing::warn!(region_id, player_id = contender.player_id, symbol_id = contender.symbol_id, deliveries, "смена фракции символа битвы богов отклонена");
             return;
         }
@@ -22061,17 +21941,17 @@ impl CGame {
         &mut self,
         faction_a: u32,
         faction_b: u32,
-    ) -> GodsBattleXydApplyReport {
+    ) {
         let updates = self.gods_battle_mgr.set_xyd(faction_a, faction_b);
         let region_ids = self.gods_battle_mgr.region_ids();
-        let mut deliveries = Vec::new();
-        for update in updates {
+        let mut deliveries = 0usize;
+        for update in &updates {
             let (faction, xyd, changed) = match update {
                 GodsBattleFactionXydUpdate::FactionA { previous, current } => {
-                    (5, current, previous != current)
+                    (5, *current, previous != current)
                 }
                 GodsBattleFactionXydUpdate::FactionB { previous, current } => {
-                    (6, current, previous != current)
+                    (6, *current, previous != current)
                 }
                 GodsBattleFactionXydUpdate::IgnoredFaction { .. } => unreachable!(),
             };
@@ -22092,14 +21972,12 @@ impl CGame {
                     }
                     let delivery = gods_battle_property_message(player_id, b"dwXYD", xyd as i32)
                         .send_to_player(self.net_server(), player_id);
-                    deliveries.push((*region_id, player_id, delivery));
+                    deliveries = deliveries.wrapping_add(1);
+                    tracing::trace!(region_id, player_id, faction, xyd, delivery, "XYD битвы богов отправлен игроку");
                 }
             }
         }
-        GodsBattleXydApplyReport {
-            updates,
-            deliveries,
-        }
+        tracing::debug!(faction_a, faction_b, ?updates, deliveries, "значения XYD битвы богов применены");
     }
 
     /// Достигнутый GodsBattle-tail `CPlayer::OnDied` после общих death effects.
@@ -22110,7 +21988,7 @@ impl CGame {
         killer_id: i32,
         victim_id: i32,
         context: &mut Context,
-    ) -> Option<GodsBattleDeathSzlReport> {
+    ) -> Option<()> {
         let (killer_level, killer_szl, killer_faction, killer_team, killer_region) =
             self.find_player(killer_id).map(|player| {
                 (
@@ -22156,7 +22034,7 @@ impl CGame {
         let team = (killer_team != 0)
             .then(|| context.gods_battle_team_snapshot(killer_team))
             .flatten();
-        let mut updates = Vec::new();
+        let mut updates = 0usize;
         if let Some(team) = &team {
             if team.teammate_amount != 0 {
                 let share = gods_battle_team_szl_share(gain.value, team.teammate_amount);
@@ -22171,33 +22049,37 @@ impl CGame {
                                 .find_player(*player_id)
                                 .expect("проверенный GodsBattle teammate")
                                 .szl();
-                            updates.push(self.update_gods_battle_player_szl(
+                            self.update_gods_battle_player_szl(
                                 *player_id,
                                 current.wrapping_add(share),
                                 context,
-                            ));
+                            );
+                            updates = updates.wrapping_add(1);
                         }
                     }
                 }
             }
         } else if gain.value != 0 {
-            updates.push(self.update_gods_battle_player_szl(
+            self.update_gods_battle_player_szl(
                 killer_id,
                 killer_szl.wrapping_add(gain.value),
                 context,
-            ));
+            );
+            updates = updates.wrapping_add(1);
         }
 
         if victim_szl < loss.value {
             if victim_szl != 0 {
-                updates.push(self.update_gods_battle_player_szl(victim_id, 0, context));
+                self.update_gods_battle_player_szl(victim_id, 0, context);
+                updates = updates.wrapping_add(1);
             }
         } else {
-            updates.push(self.update_gods_battle_player_szl(
+            self.update_gods_battle_player_szl(
                 victim_id,
                 victim_szl.wrapping_sub(loss.value),
                 context,
-            ));
+            );
+            updates = updates.wrapping_add(1);
         }
 
         let region_notice_delivery = (|| {
@@ -22213,15 +22095,8 @@ impl CGame {
             add_legacy_c_string(message.base_mut(), &text[..text.len().min(0xff)]);
             Some(message.send_to_region(Some(region.base()), None, self))
         })();
-        Some(GodsBattleDeathSzlReport {
-            killer_id,
-            victim_id,
-            gain,
-            loss,
-            team,
-            updates,
-            region_notice_delivery,
-        })
+        tracing::debug!(killer_id, victim_id, ?gain, ?loss, team_players = team.as_ref().map_or(0, |team| team.player_ids.len()), updates, ?region_notice_delivery, "SZL после смерти в битве богов применён");
+        Some(())
     }
 
     fn update_gods_battle_player_szl<Context: GodsBattleDeathContext>(
@@ -22229,7 +22104,7 @@ impl CGame {
         player_id: i32,
         current: u32,
         context: &mut Context,
-    ) -> GodsBattleSzlPlayerUpdate {
+    ) {
         let (previous, attempt_appellation_id) = {
             let player = self
                 .find_player_mut(player_id)
@@ -22261,15 +22136,7 @@ impl CGame {
             colored_player_notice_message(0xffff_ffff, 0, self.get_string_by_id(b"SZLGS10"))
                 .send_to_player(self.net_server(), player_id)
         });
-        GodsBattleSzlPlayerUpdate {
-            player_id,
-            previous,
-            current,
-            property_delivery,
-            notice_delivery,
-            removed_attempt_appellation,
-            appellation_notice_delivery,
-        }
+        tracing::trace!(player_id, previous, current, property_delivery, notice_delivery, ?removed_attempt_appellation, ?appellation_notice_delivery, "SZL игрока битвы богов обновлён");
     }
 
     /// Script scalar `11128 / ChangePlayerSZL`: вычисляется только первый
@@ -22279,11 +22146,12 @@ impl CGame {
         player_id: i32,
         value: i32,
         context: &mut Context,
-    ) -> Option<GodsBattleSzlPlayerUpdate> {
+    ) -> Option<()> {
         if value < 0 || value == SCRIPT_SCALAR_ERROR || self.find_player(player_id).is_none() {
             return None;
         }
-        Some(self.update_gods_battle_player_szl(player_id, value as u32, context))
+        self.update_gods_battle_player_szl(player_id, value as u32, context);
+        Some(())
     }
 
     pub(crate) const fn synthesis_mut(&mut self) -> &mut CSynthesis {
