@@ -37577,62 +37577,62 @@ impl CGame {
         if let Some(result) =
             dispatch_server_message(message, self, runtime, |runtime| runtime.now_milliseconds())
         {
-            trace_message_dispatch("server", message_type, result.is_ok());
+            trace_message_dispatch("server", message_type, &result);
         } else if dispatch_client_auction_message(message, self, runtime, |runtime| {
             runtime.now_milliseconds()
         })
         .is_some()
         {
-            trace_message_dispatch("client_auction", message_type, true);
+            trace_message_dispatch_success("client_auction", message_type);
         } else if let Some(result) =
             dispatch_world_auction_message(message, self, runtime, |runtime| {
                 runtime.now_milliseconds()
             })
         {
-            trace_message_dispatch("world_auction", message_type, result.is_ok());
+            trace_message_dispatch("world_auction", message_type, &result);
         } else if let Some(result) = dispatch_player_shop_message(message, self, runtime) {
-            trace_message_dispatch("player_shop", message_type, result.is_ok());
+            trace_message_dispatch("player_shop", message_type, &result);
         } else if let Some(result) = dispatch_shop_message(message, self, runtime) {
-            trace_message_dispatch("shop", message_type, result.is_ok());
+            trace_message_dispatch("shop", message_type, &result);
         } else if let Some(result) = dispatch_gm_message(message, self, runtime) {
-            trace_message_dispatch("gm", message_type, result.is_ok());
+            trace_message_dispatch("gm", message_type, &result);
         } else if let Some(result) = dispatch_gma_message(message, self) {
-            trace_message_dispatch("gma", message_type, result.is_ok());
+            trace_message_dispatch("gma", message_type, &result);
         } else if dispatch_depot_message(message, self).is_some() {
-            trace_message_dispatch("depot", message_type, true);
+            trace_message_dispatch_success("depot", message_type);
         } else if let Some(result) = dispatch_increment_shop_message(message, self) {
-            trace_message_dispatch("increment_shop", message_type, result.is_ok());
+            trace_message_dispatch("increment_shop", message_type, &result);
         } else if let Some(result) = dispatch_game_jjc_system_message(message, self, runtime) {
-            trace_message_dispatch("jjc", message_type, result.is_ok());
+            trace_message_dispatch("jjc", message_type, &result);
         } else if let Some(result) = dispatch_increment_shop_billing_message(message, self, runtime)
         {
-            trace_message_dispatch("billing", message_type, result.is_ok());
+            trace_message_dispatch("billing", message_type, &result);
         } else if let Some(result) = dispatch_game_organizing_message(message, self, runtime) {
-            trace_message_dispatch("organizing", message_type, result.is_ok());
+            trace_message_dispatch("organizing", message_type, &result);
         } else if let Some(result) = dispatch_game_country_war_message(message, self, runtime) {
-            trace_message_dispatch("country", message_type, result.is_ok());
+            trace_message_dispatch("country", message_type, &result);
         } else if let Some(result) = dispatch_game_goods_war_message(message, self) {
-            trace_message_dispatch("goods_war", message_type, result.is_ok());
+            trace_message_dispatch("goods_war", message_type, &result);
         } else if let Some(result) = dispatch_game_container_message(message, self, runtime) {
-            trace_message_dispatch("container", message_type, result.is_ok());
+            trace_message_dispatch("container", message_type, &result);
         } else if let Some(result) = dispatch_game_goods_message(message, self, runtime) {
-            trace_message_dispatch("goods", message_type, result.is_ok());
+            trace_message_dispatch("goods", message_type, &result);
         } else if let Some(result) = dispatch_game_skill_message(message, self, runtime) {
-            trace_message_dispatch("skill", message_type, result.is_ok());
+            trace_message_dispatch("skill", message_type, &result);
         } else if let Some(result) = dispatch_game_team_message(message, self) {
-            trace_message_dispatch("team", message_type, result.is_ok());
+            trace_message_dispatch("team", message_type, &result);
         } else if dispatch_game_region_message(message, self, runtime).is_some() {
-            trace_message_dispatch("region", message_type, true);
+            trace_message_dispatch_success("region", message_type);
         } else if let Some(result) = dispatch_game_shape_message(message, self, runtime) {
-            trace_message_dispatch("shape", message_type, result.is_ok());
+            trace_message_dispatch("shape", message_type, &result);
         } else if let Some(result) = dispatch_game_other_message(message, self, runtime) {
-            trace_message_dispatch("other", message_type, result.is_ok());
+            trace_message_dispatch("other", message_type, &result);
         } else if let Some(result) = dispatch_game_pet_message(message, self) {
-            trace_message_dispatch("pet", message_type, result.is_ok());
+            trace_message_dispatch("pet", message_type, &result);
         } else if let Some(result) = dispatch_game_player_message(message, self, runtime) {
-            trace_message_dispatch("player", message_type, result.is_ok());
+            trace_message_dispatch("player", message_type, &result);
         } else if let Some(result) = dispatch_game_log_message(message, self, runtime) {
-            trace_message_dispatch("log", message_type, result.is_ok());
+            trace_message_dispatch("log", message_type, &result);
         } else {
             warn!(
                 target: "miracle_server::gameserver::messages",
@@ -37644,8 +37644,12 @@ impl CGame {
     }
 }
 
-fn trace_message_dispatch(family: &'static str, message_type: i32, succeeded: bool) {
-    if succeeded {
+fn trace_message_dispatch<Error: std::fmt::Debug>(
+    family: &'static str,
+    message_type: i32,
+    result: &Result<(), Error>,
+) {
+    if result.is_ok() {
         trace!(
             target: "miracle_server::gameserver::messages",
             family,
@@ -37657,9 +37661,19 @@ fn trace_message_dispatch(family: &'static str, message_type: i32, succeeded: bo
             target: "miracle_server::gameserver::messages",
             family,
             message_type,
+            error = ?result.as_ref().expect_err("ветвь ошибки уже проверена"),
             "обработчик входящего сообщения завершился ошибкой"
         );
     }
+}
+
+fn trace_message_dispatch_success(family: &'static str, message_type: i32) {
+    trace!(
+        target: "miracle_server::gameserver::messages",
+        family,
+        message_type,
+        "входящее сообщение обработано"
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

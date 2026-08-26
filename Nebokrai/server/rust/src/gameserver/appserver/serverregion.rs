@@ -521,7 +521,7 @@ pub(crate) struct ServerRegionVisibleNpc {
 pub(crate) trait ServerRegionDecodeContext:
     ServerRegionNpcContext + ServerRegionMonsterContext
 {
-    type RuntimeError;
+    type RuntimeError: std::fmt::Debug;
 
     fn area_dimensions(&self) -> (i32, i32);
     fn now_millis(&mut self) -> u32;
