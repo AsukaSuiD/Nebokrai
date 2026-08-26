@@ -186,6 +186,8 @@
 //! отверстий вычисляет заново только для каждого созданного предмета, который
 //! поддерживает инкрустацию. Успешное добавление проходит через пакет игрока,
 //! клиентские сообщения и регистрацию временного предмета в `GoodsAI`.
+//! Читатель `9734` принимает только позицию `0..16` и возвращает базовый индекс
+//! живого предмета непосредственно из `CEquipmentContainer` текущего игрока.
 //! PreciousBox `2221/2222/2237` сохраняет доверенный сценарий действия у
 //! игрока, клиентский обмен открытия, результата и закрытия, общий RNG игры,
 //! бросок конфигурации, владение фабрикой, улучшением и пакетом предметов, а
@@ -477,6 +479,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_TIME_GOODS: i32 = 9605;
 pub(crate) const SCRIPT_FUNCTION_DELETE_GOODS_FROM_CI_QING: i32 = 9627;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CI_QING_PAGE: i32 = 9628;
 pub(crate) const SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING: i32 = 9629;
+pub(crate) const SCRIPT_FUNCTION_GET_EQUIPPED_GOODS_INDEX: i32 = 9734;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE: i32 = 2216;
 pub(crate) const SCRIPT_FUNCTION_OPEN_PRECIOUS_BOX: i32 = 2221;
@@ -4094,6 +4097,10 @@ pub(crate) fn script_function_parameter_kind(
             0 => String,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_EQUIPPED_GOODS_INDEX => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS => match index {
             0 => Integer,
             _ => Unused,
@@ -7476,6 +7483,17 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = game.push_script_ci_qing_item(player_id, original_name, runtime);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
+        }
+        SCRIPT_FUNCTION_GET_EQUIPPED_GOODS_INDEX => {
+            let legacy_return = integer_arguments[0]
+                .filter(|position| (0..17).contains(position))
+                .and_then(|position| {
+                    game.find_player(player_id)
+                        .and_then(|player| player.script_equipment_base_index(position as u32))
+                })
+                .map(|index| index as i32)
+                .unwrap_or(0);
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }
         SCRIPT_FUNCTION_GET_COPY_NUMBER => {
             let Some(increment_flag) = integer_arguments[0].filter(|value| matches!(value, 0 | 1))
