@@ -236,7 +236,7 @@ impl CBattleFairyExpConfig {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<BattleFairyExpDecodeReport, BattleFairyExpDecodeError> {
+    ) -> Result<(), BattleFairyExpDecodeError> {
         self.exp_lists.clear();
         let group_count = read_wire_i32(source, cursor)?;
         for _ in 0..group_count.max(0) {
@@ -247,10 +247,8 @@ impl CBattleFairyExpConfig {
                 self.exp_lists.entry(owner_level).or_default().push(value);
             }
         }
-        Ok(BattleFairyExpDecodeReport {
-            groups: self.exp_lists.len(),
-            experience_values: self.exp_lists.values().map(Vec::len).sum(),
-        })
+        tracing::trace!(groups = self.exp_lists.len(), experience_values = self.exp_lists.values().map(Vec::len).sum::<usize>(), "таблица опыта боевых фей декодирована");
+        Ok(())
     }
 }
 
@@ -428,12 +426,6 @@ impl fmt::Display for BattleFairyExpSerializeError {
 }
 
 impl Error for BattleFairyExpSerializeError {}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BattleFairyExpDecodeReport {
-    pub(crate) groups: usize,
-    pub(crate) experience_values: usize,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyExpDecodeError {

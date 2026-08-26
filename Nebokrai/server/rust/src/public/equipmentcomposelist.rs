@@ -92,7 +92,7 @@ impl EquipmentComposeList {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<EquipmentComposeDecodeReport, EquipmentComposeDecodeError> {
+    ) -> Result<(), EquipmentComposeDecodeError> {
         self.clear();
         decode_map(
             source,
@@ -106,10 +106,8 @@ impl EquipmentComposeList {
             EquipmentComposeSection::Second,
             &mut self.second,
         )?;
-        Ok(EquipmentComposeDecodeReport {
-            first: self.first.len(),
-            second: self.second.len(),
-        })
+        tracing::trace!(first = self.first.len(), second = self.second.len(), "правила составления снаряжения декодированы");
+        Ok(())
     }
 }
 
@@ -145,12 +143,6 @@ impl fmt::Display for EquipmentComposeSerializeError {
 }
 
 impl Error for EquipmentComposeSerializeError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentComposeDecodeReport {
-    pub(crate) first: usize,
-    pub(crate) second: usize,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EquipmentComposeDecodeError {

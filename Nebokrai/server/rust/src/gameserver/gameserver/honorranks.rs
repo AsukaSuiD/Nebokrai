@@ -104,7 +104,7 @@ impl CHonorRanks {
         cursor: &mut usize,
         rank_type: i32,
         country: i32,
-    ) -> Result<HonorRanksDecodeReport, HonorRanksDecodeError> {
+    ) -> Result<(), HonorRanksDecodeError> {
         let rank_type_index = valid_index(rank_type, RANK_TYPE_COUNT)
             .ok_or(HonorRanksDecodeError::InvalidRankType { rank_type })?;
         let countries = if country == -1 {
@@ -177,19 +177,9 @@ impl CHonorRanks {
             decoded_countries += 1;
         }
 
-        Ok(HonorRanksDecodeReport {
-            rank_type,
-            decoded_countries,
-            decoded_entries,
-        })
+        tracing::trace!(rank_type, decoded_countries, decoded_entries, "рейтинг чести декодирован");
+        Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct HonorRanksDecodeReport {
-    pub(crate) rank_type: i32,
-    pub(crate) decoded_countries: usize,
-    pub(crate) decoded_entries: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]

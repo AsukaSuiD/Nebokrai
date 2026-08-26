@@ -13,8 +13,7 @@ use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::setup::cbattlefairyexpconfig::{
-    BattleFairyExpDecodeError, BattleFairyExpDecodeReport, BattleFairyExpSerializeError,
-    CBattleFairyExpConfig,
+    BattleFairyExpDecodeError, BattleFairyExpSerializeError, CBattleFairyExpConfig,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -166,7 +165,7 @@ impl CFairyExpConf {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<BattleFairyExpDecodeReport, BattleFairyExpDecodeError> {
+    ) -> Result<(), BattleFairyExpDecodeError> {
         self.base.decord_from_byte_array(source, cursor)
     }
 

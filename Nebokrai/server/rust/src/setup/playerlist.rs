@@ -403,7 +403,7 @@ impl CPlayerList {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<PlayerListDecodeReport, PlayerListDecodeError> {
+    ) -> Result<(), PlayerListDecodeError> {
         self.player_properties.clear();
         self.player_experience.clear();
 
@@ -429,23 +429,9 @@ impl CPlayerList {
         decode_upgrade_map(source, cursor, &mut self.hunter_upgrades)?;
         decode_upgrade_map(source, cursor, &mut self.taoist_upgrades)?;
 
-        Ok(PlayerListDecodeReport {
-            player_properties: self.player_properties.len(),
-            player_experience: self.player_experience.len(),
-            fighter_upgrades: self.fighter_upgrades.len(),
-            hunter_upgrades: self.hunter_upgrades.len(),
-            taoist_upgrades: self.taoist_upgrades.len(),
-        })
+        tracing::trace!(player_properties = self.player_properties.len(), player_experience = self.player_experience.len(), fighter_upgrades = self.fighter_upgrades.len(), hunter_upgrades = self.hunter_upgrades.len(), taoist_upgrades = self.taoist_upgrades.len(), "шаблоны игроков декодированы");
+        Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerListDecodeReport {
-    pub(crate) player_properties: usize,
-    pub(crate) player_experience: usize,
-    pub(crate) fighter_upgrades: usize,
-    pub(crate) hunter_upgrades: usize,
-    pub(crate) taoist_upgrades: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

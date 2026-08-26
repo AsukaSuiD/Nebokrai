@@ -1719,22 +1719,22 @@ fn decode_honor_startup(
     } else {
         None
     };
-    let decoded = match game
+    match game
         .honor_ranks_mut()
         .decord_from_byte_array(source, cursor, rank_type, -1)
     {
-        Ok(decoded) => decoded,
+        Ok(()) => {}
         Err(error) => {
             return Some(Err(GameHonorStartupError::Ranks(
                 HonorRankStartupError::Decode(error),
             )));
         }
-    };
+    }
     if let Some(mask) = reset_mask {
         game.reset_total_honor_eliminate(mask);
     }
     put_string_to_file("HonorRanksLog", log_text);
-    tracing::trace!(rank_type, ?decoded, ?reset_mask, "рейтинг чести загружен");
+    tracing::trace!(rank_type, ?reset_mask, "рейтинг чести загружен");
     Some(Ok(()))
 }
 
@@ -2230,7 +2230,7 @@ fn decode_player_economy_startup(
         PLAYER_LIST_SELECTOR => game
             .player_list_mut()
             .decord_from_byte_array(source, cursor)
-            .map(|report| tracing::trace!(?report, "шаблоны игроков загружены"))
+            .map(|()| tracing::trace!("шаблоны игроков загружены"))
             .map_err(GamePlayerEconomyStartupError::PlayerTemplates),
         TRADE_LIST_SELECTOR => game
             .trade_list_mut()
@@ -2323,7 +2323,7 @@ fn decode_battle_fairy_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_FAIRY_EXP...ok!");
             }
-            Some(report.map(|report| tracing::trace!(?report, "опыт фей загружен")))
+            Some(report.map(|()| tracing::trace!("опыт фей загружен")))
         }
         BATTLE_FAIRY_EXP_SELECTOR => {
             let report = game
@@ -2333,7 +2333,7 @@ fn decode_battle_fairy_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_BATLLE_FAIRY_CONF...ok\xA3\xA1");
             }
-            Some(report.map(|report| tracing::trace!(?report, "опыт боевых фей загружен")))
+            Some(report.map(|()| tracing::trace!("опыт боевых фей загружен")))
         }
         BATTLE_FAIRY_COMBINE_SELECTOR => {
             let entries = game
@@ -2348,7 +2348,7 @@ fn decode_battle_fairy_startup(
         EQUIPMENT_COMPOSE_SELECTOR => Some(
             game.equipment_compose_list_mut()
                 .decord_from_byte_array(source, cursor)
-                .map(|report| tracing::trace!(?report, "правила составления снаряжения загружены"))
+                .map(|()| tracing::trace!("правила составления снаряжения загружены"))
                 .map_err(GameBattleFairyStartupError::EquipmentCompose),
         ),
         _ => None,
