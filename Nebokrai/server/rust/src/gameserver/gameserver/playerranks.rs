@@ -11,6 +11,8 @@
 //! prefix. Двухсекундный cooldown использует wrapping `u32` timestamps и удаляет
 //! expired keys в sorted order. Compatibility quirk serializer-а сохранён:
 //! ограниченный declared count не ограничивает фактический обход rank list.
+//! `LegacyReader` и `LegacyWriter` поверх `bytes` отвечают только за границы,
+//! курсор и little-endian primitives; signed count и partial prefix сохранены.
 //! Reached `6051 / RequestPlayerRanks` вызывается живым `CScript` через
 //! `CGame`: NPC/player gate и аргумент остаются у script owner-а, а этот owner
 //! получает единый process tick, применяет cooldown и отправляет `0xBFF30`.
@@ -18,6 +20,7 @@
 use std::collections::{BTreeMap, TryReserveError};
 use thiserror::Error;
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::nets::netserver::message::CMessage;
 use crate::nets::netserver::mynetserver::CMyNetServer;
 
@@ -58,13 +61,14 @@ impl CPlayerRanks {
         let total = u32::try_from(self.ranks.len())
             .map_err(|_| PlayerRanksSerializeError::CountOutsideLegacyRange)?;
         let declared = total.min(maximum_rank_count as u32);
-        destination.extend_from_slice(&declared.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_u32(declared);
         for rank in &self.ranks {
-            destination.extend_from_slice(&rank.player_id.to_le_bytes());
-            append_legacy_c_string(destination, &rank.name);
-            destination.extend_from_slice(&rank.occupation.to_le_bytes());
-            destination.extend_from_slice(&rank.level.to_le_bytes());
-            append_legacy_c_string(destination, &rank.faction_name);
+            writer.write_i32(rank.player_id);
+            writer.write_c_string(&rank.name);
+            writer.write_u16(rank.occupation);
+            writer.write_u16(rank.level);
+            writer.write_c_string(&rank.faction_name);
         }
         Ok(())
     }
@@ -178,38 +182,38 @@ pub(crate) enum PlayerRanksRequestOutcome {
     Sent { queue_result: i32 },
 }
 
-fn append_legacy_c_string(destination: &mut Vec<u8>, value: &[u8]) {
-    let prefix = value
-        .iter()
-        .position(|byte| *byte == 0)
-        .map_or(value, |end| &value[..end]);
-    destination.extend_from_slice(prefix);
-    destination.push(0);
-}
-
 fn read_i32(source: &[u8], cursor: &mut usize) -> Result<i32, PlayerRanksDecodeError> {
-    Ok(i32::from_le_bytes(read_array(source, cursor)?))
+    let mut reader = rank_reader(source, *cursor, 4)?;
+    let value = reader.read_i32().map_err(map_rank_block)?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_u16(source: &[u8], cursor: &mut usize) -> Result<u16, PlayerRanksDecodeError> {
-    Ok(u16::from_le_bytes(read_array(source, cursor)?))
+    let mut reader = rank_reader(source, *cursor, 2)?;
+    let value = reader.read_u16().map_err(map_rank_block)?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
-fn read_array<const N: usize>(
+fn rank_reader(
     source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], PlayerRanksDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(PlayerRanksDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes.try_into().expect("размер rank scalar уже проверен"))
+    cursor: usize,
+    needed: usize,
+) -> Result<LegacyReader<'_>, PlayerRanksDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| PlayerRanksDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed,
+        available: block.available,
+    })
+}
+
+fn map_rank_block(block: LegacyReadBlock) -> PlayerRanksDecodeError {
+    PlayerRanksDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_legacy_c_string(
@@ -217,16 +221,11 @@ fn read_legacy_c_string(
     cursor: &mut usize,
 ) -> Result<Vec<u8>, PlayerRanksDecodeError> {
     let offset = *cursor;
-    let remaining = source
-        .get(offset..)
-        .ok_or(PlayerRanksDecodeError::UnexpectedEnd {
-            offset,
-            needed: 1,
-            available: 0,
-        })?;
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(PlayerRanksDecodeError::MissingStringTerminator { offset });
-    };
-    *cursor += length + 1;
-    Ok(remaining[..length].to_vec())
+    let mut reader = rank_reader(source, offset, 1)?;
+    let maximum = reader.remaining();
+    let value = reader
+        .read_c_string(maximum)
+        .map_err(|_| PlayerRanksDecodeError::MissingStringTerminator { offset })?;
+    *cursor = reader.position();
+    Ok(value.to_vec())
 }

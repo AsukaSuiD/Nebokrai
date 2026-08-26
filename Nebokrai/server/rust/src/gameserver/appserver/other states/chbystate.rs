@@ -6,8 +6,10 @@
 //! сохранённые hotkey 12..23. Системный wrapping tick передаётся caller-ом;
 //! Rust-владение заменяет raw `CState*`. Сохранённый ниже псевдокод служит
 //! локальным provenance для реализованного owner-а и не входит в runtime.
+//! Доступ к little-endian полям делегирован общему legacy codec поверх `bytes`.
 
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 
 pub(crate) const CHANGE_BODY_STATE_ID: u32 = 0x37;
 pub(crate) const CHANGE_BODY_SKILL_TYPE: u32 = 55;
@@ -160,7 +162,7 @@ impl ChangeBodyState {
         }
         payload.drain(offset..offset + 4 + CHANGE_BODY_PARAMETER_BYTES);
         if let Some(count) = read_u32(payload, 0) {
-            payload[..4].copy_from_slice(&count.saturating_sub(1).to_le_bytes());
+            write_u32(payload, 0, count.saturating_sub(1));
         }
     }
 
@@ -171,9 +173,9 @@ impl ChangeBodyState {
 
     pub(crate) fn write_serialized(&mut self, payload: &mut [u8], offset: usize) {
         let base = offset + 4;
-        payload[offset..offset + 4].copy_from_slice(&CHANGE_BODY_STATE_ID.to_le_bytes());
+        write_u32(payload, offset, CHANGE_BODY_STATE_ID);
         payload[base] = u8::from(self.has_changed_region);
-        payload[base + 2..base + 4].copy_from_slice(&self.visual_effect.to_le_bytes());
+        write_u16(payload, base + 2, self.visual_effect);
         write_u32(payload, base + 4, self.level);
         write_u32(payload, base + 8, self.keep_time_ms);
         write_u32(payload, base + 12, self.mode);
@@ -187,14 +189,12 @@ impl ChangeBodyState {
         write_u32(payload, base + 32, self.maximum_attack);
         write_u32(payload, base + 36, self.defense);
         write_u32(payload, base + 40, self.element_resistance);
-        payload[base + 44..base + 46].copy_from_slice(&self.cch.to_le_bytes());
-        payload[base + 46..base + 48].copy_from_slice(&self.blast_attack.to_le_bytes());
-        payload[base + 48..base + 50].copy_from_slice(&self.blast_element_attack.to_le_bytes());
+        write_u16(payload, base + 44, self.cch);
+        write_u16(payload, base + 46, self.blast_attack);
+        write_u16(payload, base + 48, self.blast_element_attack);
         for (index, (skill_id, level)) in self.skills.iter().copied().enumerate() {
-            payload[base + 50 + index * 4..base + 52 + index * 4]
-                .copy_from_slice(&skill_id.to_le_bytes());
-            payload[base + 52 + index * 4..base + 54 + index * 4]
-                .copy_from_slice(&level.to_le_bytes());
+            write_u16(payload, base + 50 + index * 4, skill_id);
+            write_u16(payload, base + 52 + index * 4, level);
         }
         for (index, hotkey) in self.old_hotkeys.iter().copied().enumerate() {
             write_u32(payload, base + 72 + index * 4, hotkey);
@@ -261,19 +261,19 @@ impl ChangeBodyState {
 }
 
 fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        source.get(offset..offset + 2)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_u16().ok()
 }
 
 fn read_u32(source: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        source.get(offset..offset + 4)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_u32().ok()
+}
+
+fn write_u16(destination: &mut [u8], offset: usize, value: u16) {
+    LegacyWriter::write_u16_at(destination, offset, value).expect("проверенное поле CHBYState");
 }
 
 fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
-    destination[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_u32_at(destination, offset, value).expect("проверенное поле CHBYState");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

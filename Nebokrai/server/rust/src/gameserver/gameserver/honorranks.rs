@@ -12,8 +12,12 @@
 //! `Vec` заменяет только `std::list`; уже очищенные списки и полностью
 //! прочитанный prefix сохраняются при безопасном отказе на обрыве wire. Остальной
 //! сырой C++ ниже остаётся доказательной документацией незакрытых методов.
+//! Последовательный доступ делегирован `LegacyReader` и `LegacyWriter` поверх
+//! `bytes`, а порядок списков и частично прочитанный prefix остаются у owner-а.
 
 use thiserror::Error;
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 const RANK_TYPE_COUNT: usize = 4;
 const COUNTRY_COUNT: usize = 4;
@@ -81,15 +85,15 @@ impl CHonorRanks {
         let Ok(count) = i32::try_from(ranks.len()) else {
             return false;
         };
-        destination.extend_from_slice(&count.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(count);
         for rank in ranks {
-            destination.extend_from_slice(&rank.player_id.to_le_bytes());
-            destination.push(rank.level);
-            destination.extend_from_slice(&rank.name);
-            destination.push(0);
-            destination.push(rank.occupation_id);
-            destination.extend_from_slice(&rank.appellation_id.to_le_bytes());
-            destination.extend_from_slice(&rank.eliminate_count.to_le_bytes());
+            writer.write_i32(rank.player_id);
+            writer.write_u8(rank.level);
+            writer.write_c_string(&rank.name);
+            writer.write_u8(rank.occupation_id);
+            writer.write_u32(rank.appellation_id);
+            writer.write_u32(rank.eliminate_count);
         }
         true
     }
@@ -223,9 +227,12 @@ fn read_i32(
     country: usize,
     rank_index: Option<i32>,
 ) -> Result<i32, HonorRanksDecodeError> {
-    Ok(i32::from_le_bytes(read_array(
-        source, cursor, field, rank_type, country, rank_index,
-    )?))
+    let mut reader = honor_reader(source, *cursor, field, rank_type, country, rank_index, 4)?;
+    let value = reader
+        .read_i32()
+        .map_err(|block| honor_block(field, rank_type, country, rank_index, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_u32(
@@ -236,9 +243,12 @@ fn read_u32(
     country: usize,
     rank_index: Option<i32>,
 ) -> Result<u32, HonorRanksDecodeError> {
-    Ok(u32::from_le_bytes(read_array(
-        source, cursor, field, rank_type, country, rank_index,
-    )?))
+    let mut reader = honor_reader(source, *cursor, field, rank_type, country, rank_index, 4)?;
+    let value = reader
+        .read_u32()
+        .map_err(|block| honor_block(field, rank_type, country, rank_index, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
 fn read_u8(
@@ -249,45 +259,53 @@ fn read_u8(
     country: usize,
     rank_index: Option<i32>,
 ) -> Result<u8, HonorRanksDecodeError> {
-    Ok(read_array::<1>(source, cursor, field, rank_type, country, rank_index)?[0])
+    let mut reader = honor_reader(source, *cursor, field, rank_type, country, rank_index, 1)?;
+    let value = reader
+        .read_u8()
+        .map_err(|block| honor_block(field, rank_type, country, rank_index, block))?;
+    *cursor = reader.position();
+    Ok(value)
 }
 
-fn read_array<const SIZE: usize>(
-    source: &[u8],
-    cursor: &mut usize,
+fn honor_reader<'source>(
+    source: &'source [u8],
+    cursor: usize,
     field: &'static str,
     rank_type: i32,
     country: usize,
     rank_index: Option<i32>,
-) -> Result<[u8; SIZE], HonorRanksDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(end) = offset.checked_add(SIZE) else {
-        return Err(HonorRanksDecodeError::UnexpectedEnd {
+    required: usize,
+) -> Result<LegacyReader<'source>, HonorRanksDecodeError> {
+    LegacyReader::at(source, cursor).map_err(|block| {
+        honor_block(
             field,
             rank_type,
             country,
             rank_index,
-            offset,
-            required: SIZE,
-            available,
-        });
-    };
-    let Some(bytes) = source.get(offset..end) else {
-        return Err(HonorRanksDecodeError::UnexpectedEnd {
-            field,
-            rank_type,
-            country,
-            rank_index,
-            offset,
-            required: SIZE,
-            available,
-        });
-    };
-    *cursor = end;
-    Ok(bytes
-        .try_into()
-        .expect("размер CHonorRanks scalar уже проверен"))
+            LegacyReadBlock {
+                needed: required,
+                ..block
+            },
+        )
+    })
+}
+
+fn honor_block(
+    field: &'static str,
+    rank_type: i32,
+    country: usize,
+    rank_index: Option<i32>,
+    block: LegacyReadBlock,
+) -> HonorRanksDecodeError {
+    HonorRanksDecodeError::UnexpectedEnd {
+        field,
+        rank_type,
+        country,
+        rank_index,
+        offset: block.offset,
+        required: block.needed,
+        available: block.available,
+    }
 }
 
 fn read_c_string(
@@ -299,20 +317,14 @@ fn read_c_string(
     rank_index: i32,
 ) -> Result<Vec<u8>, HonorRanksDecodeError> {
     let offset = *cursor;
-    let remaining = source.get(offset..).unwrap_or_default();
-    let Some(length) = remaining.iter().position(|byte| *byte == 0) else {
-        return Err(HonorRanksDecodeError::UnexpectedEnd {
-            field,
-            rank_type,
-            country,
-            rank_index: Some(rank_index),
-            offset,
-            required: 1,
-            available: remaining.len(),
-        });
-    };
-    *cursor += length + 1;
-    Ok(remaining[..length].to_vec())
+    let mut reader = honor_reader(source, offset, field, rank_type, country, Some(rank_index), 1)?;
+    let maximum = reader.remaining();
+    let value = reader.read_c_string(maximum).map_err(|block| {
+        let block = LegacyReadBlock { needed: 1, ..block };
+        honor_block(field, rank_type, country, Some(rank_index), block)
+    })?;
+    *cursor = reader.position();
+    Ok(value.to_vec())
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

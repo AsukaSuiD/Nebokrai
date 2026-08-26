@@ -13,6 +13,8 @@
 //! игровое поведение читает типизированные состояния. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
+//! Little-endian доступ к legacy codec выполняют общие `LegacyReader` и
+//! `LegacyWriter`; размещение записей и их смещения остаются у этого owner-а.
 //!
 //! Реализованные `AddSkill`, `DelSkill`, `AddState`, `GetStatesNum` и
 //! `UpdateAbnormality` используют это же хранилище. Ещё не восстановленные
@@ -24,6 +26,7 @@ use std::ops::{Deref, DerefMut};
 use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::chbystate::{ChangeBodyMutation, ChangeBodyState};
 use super::exstate::{ExtendedState, ExtendedStateKind, ExtendedStateMutation};
+use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
@@ -705,10 +708,10 @@ impl CMoveShape {
         }
         if self.ex_states.len() < 4 {
             self.ex_states.clear();
-            self.ex_states.extend_from_slice(&0_u32.to_le_bytes());
+            LegacyWriter::new(&mut self.ex_states).write_u32(0);
         }
-        let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
-        self.ex_states[..4].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
         state.append_serialized(&mut self.ex_states);
         self.set_fightable(false);
         self.ride_state = Some(state.clone());
@@ -722,9 +725,8 @@ impl CMoveShape {
         {
             self.ex_states.drain(offset..offset + amount);
             if self.ex_states.len() >= 4 {
-                let count =
-                    u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
-                self.ex_states[..4].copy_from_slice(&count.saturating_sub(1).to_le_bytes());
+                let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+                write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
             }
             for state in &mut self.extended_states {
                 state.shift_serialized_offset_after(offset, amount);
@@ -791,10 +793,10 @@ impl CMoveShape {
         }
         if self.ex_states.len() < 4 {
             self.ex_states.clear();
-            self.ex_states.extend_from_slice(&0_u32.to_le_bytes());
+            LegacyWriter::new(&mut self.ex_states).write_u32(0);
         }
-        let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
-        self.ex_states[..4].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
         let offset = self.ex_states.len();
         self.ex_states
             .resize(offset + 4 + UNDEAD_STATE_PARAMETER_BYTES, 0);
@@ -850,8 +852,8 @@ impl CMoveShape {
         }
         self.ex_states.drain(offset..offset + amount);
         if self.ex_states.len() >= 4 {
-            let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
-            self.ex_states[..4].copy_from_slice(&count.saturating_sub(1).to_le_bytes());
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
         }
         for state in &mut self.extended_states {
             state.shift_serialized_offset_after(offset, amount);
@@ -927,10 +929,10 @@ impl CMoveShape {
         }
         if self.ex_states.len() < 4 {
             self.ex_states.clear();
-            self.ex_states.extend_from_slice(&0_u32.to_le_bytes());
+            LegacyWriter::new(&mut self.ex_states).write_u32(0);
         }
-        let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
-        self.ex_states[..4].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
         let offset = self.ex_states.len();
         let size = match kind {
             ExtendedStateKind::Original => 44,
@@ -1082,13 +1084,12 @@ impl CMoveShape {
             });
         if self.ex_states.len() < 4 {
             self.ex_states.clear();
-            self.ex_states.extend_from_slice(&0_u32.to_le_bytes());
+            LegacyWriter::new(&mut self.ex_states).write_u32(0);
         }
-        let count = u32::from_le_bytes(self.ex_states[..4].try_into().expect("state count"));
-        self.ex_states[..4].copy_from_slice(&count.wrapping_add(1).to_le_bytes());
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
         let offset = self.ex_states.len();
-        self.ex_states
-            .extend_from_slice(&super::chbystate::CHANGE_BODY_STATE_ID.to_le_bytes());
+        LegacyWriter::new(&mut self.ex_states).write_u32(super::chbystate::CHANGE_BODY_STATE_ID);
         self.ex_states.resize(offset + 124, 0);
         added.write_serialized(&mut self.ex_states, offset);
         self.change_body_states.push(added.clone());
@@ -1596,43 +1597,35 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
 }
 
 fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        source.get(offset..offset + 2)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_u16().ok()
 }
 
 fn read_i16(source: &[u8], offset: usize) -> Option<i16> {
-    Some(i16::from_le_bytes(
-        source.get(offset..offset + 2)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_i16().ok()
 }
 
 fn read_u32(source: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        source.get(offset..offset + 4)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_u32().ok()
 }
 
 fn read_i32(source: &[u8], offset: usize) -> Option<i32> {
-    Some(i32::from_le_bytes(
-        source.get(offset..offset + 4)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_i32().ok()
 }
 
 fn write_u16(destination: &mut [u8], offset: usize, value: u16) {
-    destination[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_u16_at(destination, offset, value).expect("проверенное поле состояния");
 }
 
 fn write_i16(destination: &mut [u8], offset: usize, value: i16) {
-    destination[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_i16_at(destination, offset, value).expect("проверенное поле состояния");
 }
 
 fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
-    destination[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_u32_at(destination, offset, value).expect("проверенное поле состояния");
 }
 
 fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
-    destination[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_i32_at(destination, offset, value).expect("проверенное поле состояния");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

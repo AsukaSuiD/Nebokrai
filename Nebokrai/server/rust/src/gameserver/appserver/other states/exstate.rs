@@ -6,7 +6,9 @@
 //! сохраняет state ID `0x32/0x33`, byte-layout `40/52`, wrapping DWORD clock,
 //! replacement по type/level, property overlay и periodic item consumption.
 //! Сырой псевдокод ниже остаётся локальным provenance реализованного owner-а.
+//! Little-endian поля читает и пишет общий legacy codec поверх `bytes`.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 
 pub(crate) const EX_STATE_ID: u32 = 0x32;
@@ -277,23 +279,19 @@ impl ExtendedState {
 }
 
 fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        source.get(offset..offset + 2)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_u16().ok()
 }
 
 fn read_u32(source: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        source.get(offset..offset + 4)?.try_into().ok()?,
-    ))
+    LegacyReader::at(source, offset).ok()?.read_u32().ok()
 }
 
 fn write_u16(destination: &mut [u8], offset: usize, value: u16) {
-    destination[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_u16_at(destination, offset, value).expect("проверенное поле CExState");
 }
 
 fn write_u32(destination: &mut [u8], offset: usize, value: u32) {
-    destination[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    LegacyWriter::write_u32_at(destination, offset, value).expect("проверенное поле CExState");
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

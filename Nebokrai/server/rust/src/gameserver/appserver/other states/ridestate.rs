@@ -8,7 +8,9 @@
 //! проверяет packet каждый последующий AI turn. `Vec`/`Option` заменяют
 //! `CState*`, visual-effect allocation и cached raw goods pointer; gameplay
 //! ordering, GUID cache invalidation и wrapping DWORD compare сохранены.
+//! Wire-примитивы делегированы общему legacy codec поверх `bytes`.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::public::guid::CGuid;
 
 pub(crate) const RIDE_STATE_ID: u32 = 100_004;
@@ -117,12 +119,12 @@ impl RideState {
 
     pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>) {
         let offset = payload.len();
-        payload.extend_from_slice(&RIDE_STATE_ID.to_le_bytes());
-        payload.extend_from_slice(&self.mount_type.to_le_bytes());
-        payload.extend_from_slice(&self.level.to_le_bytes());
-        payload.extend_from_slice(&self.role_limit.to_le_bytes());
-        payload.extend_from_slice(&self.goods_name);
-        payload.push(0);
+        let mut writer = LegacyWriter::new(payload);
+        writer.write_u32(RIDE_STATE_ID);
+        writer.write_u32(self.mount_type);
+        writer.write_u32(self.level);
+        writer.write_u32(self.role_limit);
+        writer.write_c_string(&self.goods_name);
         self.serialized_offset = Some(offset);
     }
 
@@ -142,9 +144,7 @@ impl RideState {
 }
 
 fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        payload.get(offset..offset + 4)?.try_into().ok()?,
-    ))
+    LegacyReader::at(payload, offset).ok()?.read_u32().ok()
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
