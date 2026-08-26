@@ -1,39 +1,20 @@
-//! World/log-message dispatcher GameServer.
+//! Диспетчер сообщений LoginServer и потери игрока.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/message/logmessage.cpp`. Friend presence `0x7F904/905` сохраняет
-//! исходный `(playerId, friendName)` payload, меняет только message type на
-//! `0xBF404/405` и адресно пересылает указанному игроку. Player login
-//! `0x7F901` теперь проходит тот же live main-loop runtime: status/captain/
-//! team читаются владельцем сообщения, полный `CPlayer` декодируется единым
-//! GameSave codec-ом, после чего `CGame` выполняет map/region membership,
-//! login/honor script scheduling, property/client publication, Billing
-//! `0xEF201`, полный GoodsAI traversal и expired-equipment `0xBF928` tail.
-//! Legacy pending `s_mapPlayer` placeholder заменён уже существующим transport
-//! map-id: полноценный owned `CPlayer` появляется в canonical map только после
-//! успешного decode, а любой malformed/duplicate/membership отказ очищает
-//! route и публикует подтверждённые client/World результаты.
-//! Client entry `0x8F702` теперь сам создаёт этот pending route после World
-//! `0x5FB01`; duplicate live owner закрывает новый socket. До player decode
-//! успешный `0x7F901` выдаёт optional validate `0xBF402` и sequence `0xBF403`,
-//! а `0x6FA01` теперь проходит полный reached `OnLost` lifecycle: JJC,
-//! scripts, nation timing, particular goods/states, immediate либо delayed
-//! fight-state departure и region/map cleanup. Original сохраняет team при
-//! offline. Reached `OnExit` корректирует silence, публикует `0xBF504`,
-//! применяет virtual return point и при обычном logout отправляет полный
-//! GameSave в World `0x5FB02`.
-//! LoginServer kick
-//! `0x7F903` полностью различает live, pending, orphan-region и missing player:
-//! публикует `GS0041`, transport close либо World `0x5FB02` и очищает route.
+//! Источник: `gameserver.exe`, `GameServer.pdb` и исходный владелец
+//! `appserver/message/logmessage.cpp`. Реализованные ветви сохраняют точное
+//! чтение входных полей, адресную пересылку состояния друзей, создание и очистку
+//! маршрута входа, порядок регистрации игрока, его удаления из региона и
+//! client/World/Billing-отправок. Отложенное удаление в боевом состоянии остаётся
+//! частью канонического жизненного цикла `CPlayer`.
+//!
+//! Все эффекты выполняются синхронно их владельцами. Их результаты публикуются
+//! через `tracing`; диспетчер возвращает только ошибку разбора или семантического
+//! входа и не создаёт отчёт о уже выполненных действиях.
 
 use crate::gameserver::appserver::player::PlayerGameSaveCodecError;
-use crate::gameserver::appserver::player::{PlayerLostDelayStarted, PlayerParticularGoodsDrop};
-use crate::gameserver::appserver::serverregion::RegionMembershipBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerExitReport, GamePlayerLoginBlock,
-    GamePlayerLoginPreludeError, GamePlayerLoginPreludeReport, GamePlayerLoginReport,
-    GroundGoodsMoveBlock, GroundGoodsMoveReport, colored_player_notice_message,
-    game_wall_time_seconds,
+    CGame, GameMainLoopRuntime, GamePlayerLoginBlock, GamePlayerLoginPreludeError,
+    colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -43,54 +24,6 @@ const FRIEND_ONLINE: u32 = 0x0007_f904;
 const FRIEND_OFFLINE: u32 = 0x0007_f905;
 const CLIENT_ENTER: u32 = 0x0008_f702;
 const PLAYER_LOST: u32 = 0x0006_fa01;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameLogMessageOutcome {
-    Forwarded,
-    ClientEnterRequested,
-    DuplicateClientEnterRejected,
-    LivePlayerKicked,
-    PendingPlayerKicked,
-    OrphanRegionPlayerKicked,
-    MissingPlayerConfirmed,
-    PlayerLogin,
-    PlayerLoginRejected,
-    IgnoredStatus,
-    PlayerLost,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerLostParticularGoodsDrop {
-    pub(crate) source: PlayerParticularGoodsDrop,
-    pub(crate) result: Result<GroundGoodsMoveReport, GroundGoodsMoveBlock>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GamePlayerLostDisposition {
-    PendingLoginCleared,
-    OrphanRegionEntry,
-    Missing,
-    Delayed,
-    Removed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerLostReport {
-    pub(crate) player_id: i32,
-    pub(crate) disposition: GamePlayerLostDisposition,
-    pub(crate) changing_server: bool,
-    pub(crate) changing_region: bool,
-    pub(crate) scripts_removed: usize,
-    pub(crate) team_detached: bool,
-    pub(crate) jjc_quit: bool,
-    pub(crate) nation_timing_finished: bool,
-    pub(crate) particular_goods: Vec<GamePlayerLostParticularGoodsDrop>,
-    pub(crate) change_body_states_ended: usize,
-    pub(crate) exit: Option<GamePlayerExitReport>,
-    pub(crate) delay: Option<PlayerLostDelayStarted>,
-    pub(crate) departure: Option<Result<(), RegionMembershipBlock>>,
-    pub(crate) route_command: Option<i32>,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameLogMessageError {
@@ -103,49 +36,18 @@ pub(crate) enum GameLogMessageError {
     PlayerLogin(GamePlayerLoginBlock),
 }
 
-#[must_use = "log-message report сохраняет presence forwarding"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameLogMessageReport {
-    pub(crate) source_type: u32,
-    pub(crate) outcome: GameLogMessageOutcome,
-    pub(crate) client_type: u32,
-    pub(crate) player_id: i32,
-    pub(crate) delivery: i32,
-    pub(crate) login_status: Option<i32>,
-    pub(crate) decoded_bytes: usize,
-    pub(crate) route_command: Option<i32>,
-    pub(crate) login_prelude: Option<GamePlayerLoginPreludeReport>,
-    pub(crate) login: Option<GamePlayerLoginReport>,
-    pub(crate) lost: Option<GamePlayerLostReport>,
-}
-
 pub(crate) fn dispatch_game_log_message<Runtime: GameMainLoopRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GameLogMessageReport, GameLogMessageError>> {
+) -> Option<Result<(), GameLogMessageError>> {
     let source_type = message.message_type() as u32;
     if source_type == PLAYER_LOST {
         let player_id = message
             .base_mut()
             .get_long()
             .ok_or(GameLogMessageError::MissingPlayerId);
-        return Some(player_id.map(|player_id| {
-            let lost = game.on_player_lost(player_id, runtime);
-            GameLogMessageReport {
-                source_type,
-                outcome: GameLogMessageOutcome::PlayerLost,
-                client_type: 0,
-                player_id,
-                delivery: 0,
-                login_status: None,
-                decoded_bytes: 0,
-                route_command: lost.route_command,
-                login_prelude: None,
-                login: None,
-                lost: Some(lost),
-            }
-        }));
+        return Some(player_id.map(|player_id| game.on_player_lost(player_id, runtime)));
     }
     if source_type == PLAYER_KICK {
         return Some(dispatch_player_kick(message, game));
@@ -166,25 +68,14 @@ pub(crate) fn dispatch_game_log_message<Runtime: GameMainLoopRuntime>(
     };
     message.base_mut().set_message_type(client_type as i32);
     let delivery = message.send_to_player(game.net_server(), player_id);
-    Some(Ok(GameLogMessageReport {
-        source_type,
-        outcome: GameLogMessageOutcome::Forwarded,
-        client_type,
-        player_id,
-        delivery,
-        login_status: None,
-        decoded_bytes: 0,
-        route_command: None,
-        login_prelude: None,
-        login: None,
-        lost: None,
-    }))
+    tracing::trace!(source_type, client_type, player_id, delivery, "состояние друга передано игроку");
+    Some(Ok(()))
 }
 
 fn dispatch_client_enter(
     message: &mut CMessage,
     game: &mut CGame,
-) -> Result<GameLogMessageReport, GameLogMessageError> {
+) -> Result<(), GameLogMessageError> {
     let player_id = message
         .base_mut()
         .get_long()
@@ -195,19 +86,8 @@ fn dispatch_client_enter(
             .net_server()
             .command_handle()
             .quit_by_socket_id(socket_id);
-        return Ok(GameLogMessageReport {
-            source_type: CLIENT_ENTER,
-            outcome: GameLogMessageOutcome::DuplicateClientEnterRejected,
-            client_type: 0,
-            player_id,
-            delivery: 0,
-            login_status: None,
-            decoded_bytes: 0,
-            route_command: Some(route_command),
-            login_prelude: None,
-            login: None,
-            lost: None,
-        });
+        tracing::debug!(player_id, socket_id, route_command, "повторный вход клиента отклонён");
+        return Ok(());
     }
 
     message.base_mut().set_message_type(0x0005_fb01);
@@ -216,25 +96,14 @@ fn dispatch_client_enter(
         .net_server()
         .command_handle()
         .set_client_map_id(socket_id, player_id);
-    Ok(GameLogMessageReport {
-        source_type: CLIENT_ENTER,
-        outcome: GameLogMessageOutcome::ClientEnterRequested,
-        client_type: 0,
-        player_id,
-        delivery,
-        login_status: None,
-        decoded_bytes: 0,
-        route_command: Some(route_command),
-        login_prelude: None,
-        login: None,
-        lost: None,
-    })
+    tracing::trace!(player_id, socket_id, delivery, route_command, "вход клиента запрошен у World");
+    Ok(())
 }
 
 fn dispatch_player_kick(
     message: &mut CMessage,
     game: &mut CGame,
-) -> Result<GameLogMessageReport, GameLogMessageError> {
+) -> Result<(), GameLogMessageError> {
     let player_id = message
         .base_mut()
         .get_long()
@@ -249,41 +118,26 @@ fn dispatch_player_kick(
         );
         let delivery = notice.send_to_player(game.net_server(), player_id);
         let kick = game.kick_player(player_id);
-        return Ok(kick_report(
-            player_id,
-            GameLogMessageOutcome::LivePlayerKicked,
-            delivery,
-            Some(kick.command_result),
-        ));
+        tracing::trace!(player_id, delivery, route_command = kick.command_result, "активный игрок отключён");
+        return Ok(());
     }
 
     if game.net_server().has_player_map_id(player_id) {
         let delivery = publish_login_kick_confirmation(game, player_id);
         let (_, route_command) = game.discard_player_login(player_id);
-        return Ok(kick_report(
-            player_id,
-            GameLogMessageOutcome::PendingPlayerKicked,
-            delivery,
-            Some(route_command),
-        ));
+        tracing::trace!(player_id, delivery, route_command, "ожидающий входа игрок отключён");
+        return Ok(());
     }
 
     if game.player_registered_in_region(player_id) {
         let kick = game.kick_player(player_id);
-        return Ok(kick_report(
-            player_id,
-            GameLogMessageOutcome::OrphanRegionPlayerKicked,
-            0,
-            Some(kick.command_result),
-        ));
+        tracing::warn!(player_id, route_command = kick.command_result, "игрок без основного владельца удалён из региона");
+        return Ok(());
     }
 
-    Ok(kick_report(
-        player_id,
-        GameLogMessageOutcome::MissingPlayerConfirmed,
-        publish_login_kick_confirmation(game, player_id),
-        None,
-    ))
+    let delivery = publish_login_kick_confirmation(game, player_id);
+    tracing::trace!(player_id, delivery, "отсутствие игрока подтверждено LoginServer");
+    Ok(())
 }
 
 fn publish_login_kick_confirmation(game: &CGame, player_id: i32) -> i32 {
@@ -293,32 +147,11 @@ fn publish_login_kick_confirmation(game: &CGame, player_id: i32) -> i32 {
     confirmation.send(game, false).unwrap_or_default()
 }
 
-fn kick_report(
-    player_id: i32,
-    outcome: GameLogMessageOutcome,
-    delivery: i32,
-    route_command: Option<i32>,
-) -> GameLogMessageReport {
-    GameLogMessageReport {
-        source_type: PLAYER_KICK,
-        outcome,
-        client_type: 0,
-        player_id,
-        delivery,
-        login_status: None,
-        decoded_bytes: 0,
-        route_command,
-        login_prelude: None,
-        login: None,
-        lost: None,
-    }
-}
-
 fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<GameLogMessageReport, GameLogMessageError> {
+) -> Result<(), GameLogMessageError> {
     let status = message
         .base_mut()
         .get_long()
@@ -329,34 +162,12 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
             .get_long()
             .ok_or(GameLogMessageError::MissingPlayerId)?;
         let delivery = reject_player_login(game, player_id, false);
-        return Ok(GameLogMessageReport {
-            source_type: PLAYER_LOGIN,
-            outcome: GameLogMessageOutcome::PlayerLoginRejected,
-            client_type: 0x000b_f401,
-            player_id,
-            delivery,
-            login_status: Some(status),
-            decoded_bytes: 0,
-            route_command: None,
-            login_prelude: None,
-            login: None,
-            lost: None,
-        });
+        tracing::debug!(player_id, status, delivery, "вход игрока отклонён World");
+        return Ok(());
     }
     if status == -2 {
-        return Ok(GameLogMessageReport {
-            source_type: PLAYER_LOGIN,
-            outcome: GameLogMessageOutcome::IgnoredStatus,
-            client_type: 0,
-            player_id: 0,
-            delivery: 0,
-            login_status: Some(status),
-            decoded_bytes: 0,
-            route_command: None,
-            login_prelude: None,
-            login: None,
-            lost: None,
-        });
+        tracing::trace!(status, "служебный результат входа игрока проигнорирован");
+        return Ok(());
     }
 
     let player_id = status;
@@ -397,19 +208,19 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
             let _delivery = reject_player_login(game, player_id, true);
             GameLogMessageError::PlayerLogin(block)
         })?;
-    Ok(GameLogMessageReport {
-        source_type: PLAYER_LOGIN,
-        outcome: GameLogMessageOutcome::PlayerLogin,
-        client_type: 0x000b_f401,
+    let delivery = login.client_deliveries.first().copied().unwrap_or_default();
+    tracing::trace!(
         player_id,
-        delivery: login.client_deliveries.first().copied().unwrap_or_default(),
-        login_status: Some(status),
+        status,
+        captain,
+        team_id,
         decoded_bytes,
-        route_command: None,
-        login_prelude: Some(login_prelude),
-        login: Some(login),
-        lost: None,
-    })
+        delivery,
+        ?login_prelude,
+        ?login,
+        "вход игрока завершён"
+    );
+    Ok(())
 }
 
 fn reject_player_login(game: &mut CGame, player_id: i32, notify_world: bool) -> i32 {

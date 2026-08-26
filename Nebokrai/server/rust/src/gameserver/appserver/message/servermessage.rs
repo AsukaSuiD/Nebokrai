@@ -168,7 +168,6 @@ use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
 use crate::gameserver::appserver::legacycodec::LegacyReader;
-use crate::gameserver::appserver::message::logmessage::GamePlayerLostReport;
 use crate::gameserver::appserver::player::{PlayerConfirmedKillReport, PlayerHonorResetReport};
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
 use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
@@ -1151,7 +1150,6 @@ pub(crate) enum GameRegionChangeResponseOutcome {
         captain: bool,
         team_id: i32,
         client_delivery: i32,
-        lost: GamePlayerLostReport,
     },
 }
 
@@ -1433,7 +1431,7 @@ where
         response.add_byte(u8::from(captain));
         response.add_long(team_id);
         let client_delivery = response.send_to_player(game.net_server(), player_id);
-        let lost = game.on_player_lost(player_id, script_context);
+        game.on_player_lost(player_id, script_context);
         return Some(Ok(GameServerMessageReport::RegionChange(
             GameRegionChangeResponseReport {
                 accepted: true,
@@ -1444,7 +1442,6 @@ where
                     captain,
                     team_id,
                     client_delivery,
-                    lost,
                 },
             },
         )));

@@ -591,10 +591,7 @@ use crate::gameserver::appserver::message::goodsmessage::{
 };
 use crate::gameserver::appserver::message::incrementshopmessage::dispatch_increment_shop_message;
 use crate::gameserver::appserver::message::jjcsystemmessage::dispatch_game_jjc_system_message;
-use crate::gameserver::appserver::message::logmessage::{
-    GamePlayerLostDisposition, GamePlayerLostParticularGoodsDrop, GamePlayerLostReport,
-    dispatch_game_log_message,
-};
+use crate::gameserver::appserver::message::logmessage::dispatch_game_log_message;
 use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_message;
 use crate::gameserver::appserver::message::onmsg_w2s_auction::dispatch_world_auction_message;
 use crate::gameserver::appserver::message::organsysmessage::{
@@ -18073,36 +18070,24 @@ impl CGame {
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> GamePlayerLostReport {
+    ) {
         if self.find_player(player_id).is_none() {
             self.clear_player_login_validation(player_id);
             let (disposition, route_command) = if self.net_server().has_player_map_id(player_id) {
                 let (_, command) = self.discard_player_login(player_id);
-                (
-                    GamePlayerLostDisposition::PendingLoginCleared,
-                    Some(command),
-                )
+                ("ожидание входа очищено", Some(command))
             } else if self.player_registered_in_region(player_id) {
-                (GamePlayerLostDisposition::OrphanRegionEntry, None)
+                ("сохранена запись региона без игрока", None)
             } else {
-                (GamePlayerLostDisposition::Missing, None)
+                ("игрок отсутствует", None)
             };
-            return GamePlayerLostReport {
+            tracing::debug!(
                 player_id,
                 disposition,
-                changing_server: false,
-                changing_region: false,
-                scripts_removed: 0,
-                team_detached: false,
-                jjc_quit: false,
-                nation_timing_finished: false,
-                particular_goods: Vec::new(),
-                change_body_states_ended: 0,
-                exit: None,
-                delay: None,
-                departure: None,
-                route_command,
-            };
+                ?route_command,
+                "потеря игрока обработана без активного владельца"
+            );
+            return;
         }
 
         let (changing_server, changing_region, fight_state_count) = {
@@ -18115,7 +18100,6 @@ impl CGame {
                 player.fight_state_count(),
             )
         };
-        let team_detached = false;
         self.clear_player_login_validation(player_id);
         let runtime_scripts = self
             .active_scripts
@@ -18134,12 +18118,11 @@ impl CGame {
         let jjc_quit = self.quit_player_jjc(player_id).changed;
 
         let mut nation_timing_finished = false;
-        let mut particular_goods = Vec::new();
         let mut change_body_states_ended = 0;
         if !changing_server {
             nation_timing_finished = self
                 .finish_nation_war_timing_on_player_lost(player_id, || runtime.now_milliseconds());
-            particular_goods = self.drop_particular_goods_on_player_lost(player_id, runtime);
+            self.drop_particular_goods_on_player_lost(player_id, runtime);
             change_body_states_ended = self.change_body_after_player_lost(player_id, runtime);
         }
 
@@ -18149,42 +18132,34 @@ impl CGame {
             let delay = self
                 .find_player_mut(player_id)
                 .and_then(|player| player.begin_lost_delay(sampled_at_ms, fight_state_timer_ms));
-            return GamePlayerLostReport {
+            tracing::trace!(
                 player_id,
-                disposition: GamePlayerLostDisposition::Delayed,
                 changing_server,
                 changing_region,
                 scripts_removed,
-                team_detached,
                 jjc_quit,
                 nation_timing_finished,
-                particular_goods,
                 change_body_states_ended,
-                exit: None,
-                delay,
-                departure: None,
-                route_command: None,
-            };
+                ?delay,
+                "удаление потерянного игрока отложено до завершения боевого состояния"
+            );
+            return;
         }
 
         let exit = self.finish_player_exit(player_id, changing_server, runtime);
         let departure = self.remove_lost_player(player_id);
-        GamePlayerLostReport {
+        tracing::trace!(
             player_id,
-            disposition: GamePlayerLostDisposition::Removed,
             changing_server,
             changing_region,
             scripts_removed,
-            team_detached,
             jjc_quit,
             nation_timing_finished,
-            particular_goods,
             change_body_states_ended,
-            exit: Some(exit),
-            delay: None,
-            departure,
-            route_command: None,
-        }
+            ?exit,
+            ?departure,
+            "потерянный игрок удалён"
+        );
     }
 
     fn remove_lost_player(&mut self, player_id: i32) -> Option<Result<(), RegionMembershipBlock>> {
@@ -18212,30 +18187,27 @@ impl CGame {
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> Vec<GamePlayerLostParticularGoodsDrop> {
+    ) {
         let Some((region_id, sources)) = self.find_player(player_id).and_then(|player| {
             Some((
                 player.server_region_id()?,
                 player.particular_goods_drops(&self.goods_factory),
             ))
         }) else {
-            return Vec::new();
+            return;
         };
-        sources
-            .into_iter()
-            .map(|source| GamePlayerLostParticularGoodsDrop {
-                result: self.drop_player_goods_to_region(
-                    player_id,
-                    region_id,
-                    source.location.extend_id,
-                    source.location.position,
-                    source.goods_id,
-                    source.amount,
-                    runtime,
-                ),
-                source,
-            })
-            .collect()
+        for source in sources {
+            let result = self.drop_player_goods_to_region(
+                player_id,
+                region_id,
+                source.location.extend_id,
+                source.location.position,
+                source.goods_id,
+                source.amount,
+                runtime,
+            );
+            tracing::trace!(player_id, region_id, ?source, ?result, "особый предмет обработан при потере игрока");
+        }
     }
 
     /// Достигнутый `CPlayer::OnExit`: business уже принадлежит canonical
