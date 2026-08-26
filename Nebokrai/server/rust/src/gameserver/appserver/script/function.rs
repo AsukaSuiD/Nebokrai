@@ -5793,7 +5793,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: spawn
                     .ok()
-                    .and_then(|spawn| spawn.created_ids.first().copied())
+                    .and_then(|spawn| spawn.first_created_id)
                     .unwrap_or_default(),
             })
         }

@@ -621,28 +621,15 @@ pub(crate) enum ServerRegionMonsterRectBlock {
     Membership(RegionMembershipBlock),
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionMonsterRectReport {
-    pub(crate) created_ids: Vec<i32>,
-    pub(crate) missing_properties: usize,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionMonsterRefreshReport {
-    pub(crate) due_groups: Vec<i32>,
-    pub(crate) created_ids: Vec<i32>,
-    pub(crate) missing_properties: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServerRegionNpcSpawnBlock {
     RandomPosition(RegionCellAccessBlock),
     Membership(RegionMembershipBlock),
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionNpcSpawnReport {
-    pub(crate) created_ids: Vec<i32>,
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServerRegionNpcSpawnOutcome {
+    pub(crate) first_created_id: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -944,13 +931,13 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
         context: &mut Context,
-    ) -> Result<Option<ServerRegionMonsterRefreshReport>, ServerRegionMonsterRectBlock> {
+    ) -> Result<bool, ServerRegionMonsterRectBlock> {
         let period = (1_000i32 / tick_interval_ms) as u32;
         if ai_tick % period != 0 {
-            return Ok(None);
+            return Ok(false);
         }
-        self.refresh_monster_groups(now_ms, area_width, area_height, context)
-            .map(Some)
+        self.refresh_monster_groups(now_ms, area_width, area_height, context)?;
+        Ok(true)
     }
 
     /// Выполняет исходный periodic monster refresh fragment после gate region
@@ -961,7 +948,7 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
         context: &mut Context,
-    ) -> Result<ServerRegionMonsterRefreshReport, ServerRegionMonsterRectBlock> {
+    ) -> Result<(), ServerRegionMonsterRectBlock> {
         let move_existing = self
             .return_setup
             .is_some_and(|setup| setup.move_monster_when_refeash != 0);
@@ -975,9 +962,8 @@ impl CServerRegion {
             }
         }
 
-        let mut report = ServerRegionMonsterRefreshReport::default();
+        let due_groups = due.len();
         for (setup_index, refresh_index) in due {
-            report.due_groups.push(refresh_index);
             if move_existing {
                 for area in &mut self.areas {
                     if area.plug_list().is_empty() {
@@ -992,7 +978,7 @@ impl CServerRegion {
                 continue;
             }
             let setup = self.monster_setups[setup_index].clone();
-            let spawned = self.add_monster_rect(
+            self.add_monster_rect(
                 &setup,
                 amount,
                 false,
@@ -1002,12 +988,14 @@ impl CServerRegion {
                 area_height,
                 context,
             )?;
-            report.created_ids.extend(spawned.created_ids);
-            report.missing_properties = report
-                .missing_properties
-                .wrapping_add(spawned.missing_properties);
         }
-        Ok(report)
+        tracing::trace!(
+            region_id = self.id,
+            due_groups,
+            move_existing,
+            "завершено обновление групп монстров региона"
+        );
+        Ok(())
     }
 
     pub(crate) fn add_monster_rect<Context: ServerRegionMonsterContext>(
@@ -1020,7 +1008,7 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
         context: &mut Context,
-    ) -> Result<ServerRegionMonsterRectReport, ServerRegionMonsterRectBlock> {
+    ) -> Result<(), ServerRegionMonsterRectBlock> {
         if remember_setup {
             self.monster_setups.push(setup.clone());
         }
@@ -1032,7 +1020,8 @@ impl CServerRegion {
             return Err(ServerRegionMonsterRectBlock::MissingRefreshSetup { index: setup.index });
         };
 
-        let mut report = ServerRegionMonsterRectReport::default();
+        let mut created = 0usize;
+        let mut missing_properties = 0usize;
         let mut remaining = amount;
         while remaining > 0 {
             let random_odds = context.random_below(100);
@@ -1064,7 +1053,7 @@ impl CServerRegion {
             }
 
             let Some(property) = context.monster_property(&selected.name) else {
-                report.missing_properties = report.missing_properties.wrapping_add(1);
+                missing_properties = missing_properties.wrapping_add(1);
                 remaining = remaining.wrapping_sub(1);
                 continue;
             };
@@ -1101,13 +1090,20 @@ impl CServerRegion {
             if !selected.script.is_empty() && selected.script != b"0" {
                 monster.set_script_file(&selected.script);
             }
-            report.created_ids.push(id);
+            created = created.wrapping_add(1);
             if matches!(property.ai, 10 | 11) && !suppress_immediate_guard_ai {
                 context.refresh_guard_region(refresh_index);
             }
             remaining = remaining.wrapping_sub(1);
         }
-        Ok(report)
+        tracing::trace!(
+            region_id = self.id,
+            refresh_index = setup.index,
+            created,
+            missing_properties,
+            "завершено создание группы монстров"
+        );
+        Ok(())
     }
 
     #[allow(
@@ -1745,7 +1741,7 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
         context: &mut Context,
-    ) -> Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock> {
+    ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
         self.add_npc_with_clock(
             setup,
             remember_setup,
@@ -1766,12 +1762,13 @@ impl CServerRegion {
         area_height: i32,
         context: &mut Context,
         mut now_ms: impl FnMut(&mut Context) -> u32,
-    ) -> Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock> {
+    ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
         if remember_setup {
             self.npc_setups.push(setup.clone());
         }
 
-        let mut report = ServerRegionNpcSpawnReport::default();
+        let mut created = 0usize;
+        let mut first_created_id = None;
         let mut remaining = setup.count;
         while remaining > 0 {
             let position = self
@@ -1828,7 +1825,8 @@ impl CServerRegion {
             .map_err(ServerRegionNpcSpawnBlock::Membership)?;
 
             self.owned_npcs.insert(id, npc);
-            report.created_ids.push(id);
+            created = created.wrapping_add(1);
+            first_created_id.get_or_insert(id);
             if send_around {
                 context.send_npc_entered_around(
                     self.owned_npcs
@@ -1838,7 +1836,14 @@ impl CServerRegion {
             }
             remaining = remaining.wrapping_sub(1);
         }
-        Ok(report)
+        tracing::trace!(
+            region_id = self.id,
+            created,
+            requested = setup.count,
+            send_around,
+            "завершено создание NPC региона"
+        );
+        Ok(ServerRegionNpcSpawnOutcome { first_created_id })
     }
 
     pub(crate) fn find_npc_by_id(&self, id: i32) -> Option<&CNpc> {

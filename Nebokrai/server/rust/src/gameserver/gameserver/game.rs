@@ -699,7 +699,7 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionClearPlayerTick,
     ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
     ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionWeather,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome, ServerRegionWeather,
     ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
@@ -3094,7 +3094,7 @@ pub(crate) struct NationMonsterDeathReport {
 pub(crate) struct NationYuYingShiSpawnReport {
     pub(crate) country: u8,
     pub(crate) notify_country: u8,
-    pub(crate) spawn: Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>,
+    pub(crate) spawn: Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock>,
     pub(crate) region_delivery: Option<i32>,
     pub(crate) country_deliveries: Vec<i32>,
 }
@@ -12136,7 +12136,7 @@ impl CGame {
         x: i32,
         y: i32,
         context: &mut Context,
-    ) -> Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock> {
+    ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
         let setup = ServerRegionNpcSetup {
             show_list: true,
             picture_id: 0x104,
@@ -37122,22 +37122,20 @@ impl CGame {
     ) -> Result<(), ServerRegionMonsterRectBlock> {
         let period = (1_000i32 / tick_interval_ms) as u32;
         let periodic_due = (ai_tick as u32) % period == 0;
-        let monster_refresh = if periodic_due {
+        if periodic_due {
             let now_ms = runtime.now_milliseconds();
-            Some(region.refresh_monster_groups(
+            region.refresh_monster_groups(
                 now_ms,
                 self.globe_setup.area_width(),
                 self.globe_setup.area_height(),
                 runtime,
-            )?)
-        } else {
-            None
-        };
+            )?;
+        }
         if periodic_due {
             self.run_region_weather_tick(region, runtime);
         }
         self.run_region_shape_scan(region, runtime);
-        tracing::trace!(region_id = region.id, ai_tick, ?monster_refresh, periodic_due, "завершён базовый проход ИИ региона");
+        tracing::trace!(region_id = region.id, ai_tick, periodic_due, "завершён базовый проход ИИ региона");
         Ok(())
     }
 
