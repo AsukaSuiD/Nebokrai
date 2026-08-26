@@ -1879,7 +1879,7 @@ fn format_nation_war_time_debug(template: &[u8], player_name: &[u8], time: i32) 
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarQueryKind {
+enum CountryWarQueryKind {
     DeclarationOpen,
     CountryDeclared,
     PreparationOpen,
@@ -1892,7 +1892,7 @@ pub(crate) enum CountryWarQueryKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarQueryScriptDisposition {
+enum CountryWarQueryScriptDisposition {
     CallerMissing,
     CallerShapeMissing,
     TooFar {
@@ -1918,11 +1918,7 @@ pub(crate) enum CountryWarQueryScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarQueryScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        function_id: i32,
-        legacy_return: i32,
-        disposition: CountryWarQueryScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_war_query_script_function(
@@ -2178,15 +2174,12 @@ fn country_war_query_handled(
     legacy_return: i32,
     disposition: CountryWarQueryScriptDisposition,
 ) -> CountryWarQueryScriptFunctionOutcome {
-    CountryWarQueryScriptFunctionOutcome::Handled {
-        function_id,
-        legacy_return,
-        disposition,
-    }
+    tracing::trace!(function_id, legacy_return, ?disposition, "обработан сценарный запрос войны стран");
+    CountryWarQueryScriptFunctionOutcome::Handled { legacy_return }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarDeclarationScriptDisposition {
+enum CountryWarDeclarationScriptDisposition {
     CallerMissing,
     CallerShapeMissing,
     TooFar {
@@ -2228,10 +2221,7 @@ pub(crate) enum CountryWarDeclarationScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarDeclarationScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        legacy_return: i32,
-        disposition: CountryWarDeclarationScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_war_declaration_script_function(
@@ -2379,14 +2369,12 @@ fn country_war_declaration_handled(
     legacy_return: i32,
     disposition: CountryWarDeclarationScriptDisposition,
 ) -> CountryWarDeclarationScriptFunctionOutcome {
-    CountryWarDeclarationScriptFunctionOutcome::Handled {
-        legacy_return,
-        disposition,
-    }
+    tracing::debug!(legacy_return, ?disposition, "обработано объявление войны стран");
+    CountryWarDeclarationScriptFunctionOutcome::Handled { legacy_return }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryScalarQueryField {
+enum CountryScalarQueryField {
     Power,
     TechnologyLevel,
     Treasury,
@@ -2395,7 +2383,7 @@ pub(crate) enum CountryScalarQueryField {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryScalarQueryDisposition {
+enum CountryScalarQueryDisposition {
     ScriptPlayerMissing,
     CountryMissing {
         country: u8,
@@ -2410,11 +2398,7 @@ pub(crate) enum CountryScalarQueryDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryScalarQueryScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        function_id: i32,
-        legacy_return: i32,
-        disposition: CountryScalarQueryDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_scalar_query_script_function(
@@ -2431,26 +2415,22 @@ pub(crate) fn run_country_scalar_query_script_function(
         SCRIPT_FUNCTION_GET_COUNTRY_TECH => CountryScalarQueryField::TechnologyExperience,
         _ => return CountryScalarQueryScriptFunctionOutcome::DifferentFunction,
     };
+    let handled = |legacy_return, disposition| {
+        tracing::trace!(function_id, ?field, legacy_return, ?disposition, "прочитано числовое значение страны");
+        CountryScalarQueryScriptFunctionOutcome::Handled { legacy_return }
+    };
     let raw_country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
     let country = if raw_country == SCRIPT_INT_PARAMETER_ERROR {
         let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
         else {
-            return CountryScalarQueryScriptFunctionOutcome::Handled {
-                function_id,
-                legacy_return: -1,
-                disposition: CountryScalarQueryDisposition::ScriptPlayerMissing,
-            };
+            return handled(-1, CountryScalarQueryDisposition::ScriptPlayerMissing);
         };
         player.country()
     } else {
         raw_country as u8
     };
     let Some(country_owner) = game.country_handler().country(country) else {
-        return CountryScalarQueryScriptFunctionOutcome::Handled {
-            function_id,
-            legacy_return: -1,
-            disposition: CountryScalarQueryDisposition::CountryMissing { country },
-        };
+        return handled(-1, CountryScalarQueryDisposition::CountryMissing { country });
     };
     let value = match field {
         CountryScalarQueryField::Power => country_owner.power,
@@ -2459,19 +2439,11 @@ pub(crate) fn run_country_scalar_query_script_function(
         CountryScalarQueryField::Material => country_owner.material_point,
         CountryScalarQueryField::TechnologyExperience => country_owner.tech_current_exp,
     };
-    CountryScalarQueryScriptFunctionOutcome::Handled {
-        function_id,
-        legacy_return: value,
-        disposition: CountryScalarQueryDisposition::Completed {
-            country,
-            field,
-            value,
-        },
-    }
+    handled(value, CountryScalarQueryDisposition::Completed { country, field, value })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryIdentityScriptDisposition {
+enum CountryIdentityScriptDisposition {
     ArgumentMissing {
         argument: usize,
     },
@@ -2515,11 +2487,7 @@ pub(crate) enum CountryIdentityScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryIdentityScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        function_id: i32,
-        legacy_return: i32,
-        disposition: CountryIdentityScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_identity_script_function(
@@ -2700,15 +2668,12 @@ fn country_identity_handled(
     legacy_return: i32,
     disposition: CountryIdentityScriptDisposition,
 ) -> CountryIdentityScriptFunctionOutcome {
-    CountryIdentityScriptFunctionOutcome::Handled {
-        function_id,
-        legacy_return,
-        disposition,
-    }
+    tracing::debug!(function_id, legacy_return, ?disposition, "обработано сценарное назначение страны");
+    CountryIdentityScriptFunctionOutcome::Handled { legacy_return }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryControlPointScriptDisposition {
+enum CountryControlPointScriptDisposition {
     ArgumentMissing {
         argument: usize,
     },
@@ -2725,10 +2690,7 @@ pub(crate) enum CountryControlPointScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryControlPointScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        legacy_return: i32,
-        disposition: CountryControlPointScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_control_point_script_function(
@@ -2740,26 +2702,21 @@ pub(crate) fn run_country_control_point_script_function(
     if function_id != SCRIPT_FUNCTION_ADD_KING_POINT {
         return CountryControlPointScriptFunctionOutcome::DifferentFunction;
     }
+    let handled = |disposition| {
+        tracing::debug!(function_id, ?disposition, "обработано изменение очков правителя");
+        CountryControlPointScriptFunctionOutcome::Handled { legacy_return: 0 }
+    };
     let delta = evaluated_delta.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
     if delta == SCRIPT_INT_PARAMETER_ERROR {
-        return CountryControlPointScriptFunctionOutcome::Handled {
-            legacy_return: 0,
-            disposition: CountryControlPointScriptDisposition::ArgumentMissing { argument: 0 },
-        };
+        return handled(CountryControlPointScriptDisposition::ArgumentMissing { argument: 0 });
     }
     let raw_country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
     if raw_country == SCRIPT_INT_PARAMETER_ERROR {
-        return CountryControlPointScriptFunctionOutcome::Handled {
-            legacy_return: 0,
-            disposition: CountryControlPointScriptDisposition::ArgumentMissing { argument: 1 },
-        };
+        return handled(CountryControlPointScriptDisposition::ArgumentMissing { argument: 1 });
     }
     let country = raw_country as u8;
     let Some(country_owner) = game.country_handler().country(country) else {
-        return CountryControlPointScriptFunctionOutcome::Handled {
-            legacy_return: 0,
-            disposition: CountryControlPointScriptDisposition::CountryMissing { country },
-        };
+        return handled(CountryControlPointScriptDisposition::CountryMissing { country });
     };
     let applied = country_owner.control_point.wrapping_add(delta);
     let message = game
@@ -2768,18 +2725,11 @@ pub(crate) fn run_country_control_point_script_function(
         .expect("country owner жив до control-point mutation")
         .set_script_scalar(5, applied);
     let delivery = message.send(game, false);
-    CountryControlPointScriptFunctionOutcome::Handled {
-        legacy_return: 0,
-        disposition: CountryControlPointScriptDisposition::Applied {
-            country,
-            delta,
-            delivery,
-        },
-    }
+    handled(CountryControlPointScriptDisposition::Applied { country, delta, delivery })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryExileTimeScriptDisposition {
+enum CountryExileTimeScriptDisposition {
     ScriptPlayerMissing,
     CountryMissing {
         country: u8,
@@ -2794,11 +2744,7 @@ pub(crate) enum CountryExileTimeScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryExileTimeScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        player_id: i32,
-        legacy_return: i32,
-        disposition: CountryExileTimeScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_exile_time_script_function<Context: GameClockContext>(
@@ -2811,13 +2757,13 @@ pub(crate) fn run_country_exile_time_script_function<Context: GameClockContext>(
     if function_id != SCRIPT_FUNCTION_EXILE_TIME {
         return CountryExileTimeScriptFunctionOutcome::DifferentFunction;
     }
+    let handled = |player_id, legacy_return, disposition| {
+        tracing::trace!(function_id, player_id, legacy_return, ?disposition, "прочитано время изгнания игрока");
+        CountryExileTimeScriptFunctionOutcome::Handled { legacy_return }
+    };
     let Some(script_player) = script_player_id.and_then(|player_id| game.find_player(player_id))
     else {
-        return CountryExileTimeScriptFunctionOutcome::Handled {
-            player_id: evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
-            legacy_return: -1,
-            disposition: CountryExileTimeScriptDisposition::ScriptPlayerMissing,
-        };
+        return handled(evaluated_player_id.unwrap_or(SCRIPT_INT_PARAMETER_ERROR), -1, CountryExileTimeScriptDisposition::ScriptPlayerMissing);
     };
     let player_id = match evaluated_player_id {
         Some(value) if value != SCRIPT_INT_PARAMETER_ERROR => value,
@@ -2825,33 +2771,18 @@ pub(crate) fn run_country_exile_time_script_function<Context: GameClockContext>(
     };
     let country = script_player.country();
     let Some(country_owner) = game.country_handler().country(country) else {
-        return CountryExileTimeScriptFunctionOutcome::Handled {
-            player_id,
-            legacy_return: -1,
-            disposition: CountryExileTimeScriptDisposition::CountryMissing { country },
-        };
+        return handled(player_id, -1, CountryExileTimeScriptDisposition::CountryMissing { country });
     };
     let sampled_at_ms = context.now_milliseconds();
     match country_owner.exile_rest_time(player_id, sampled_at_ms, game.country_param().exile_time())
     {
-        Ok(remaining_seconds) => CountryExileTimeScriptFunctionOutcome::Handled {
-            player_id,
-            legacy_return: remaining_seconds,
-            disposition: CountryExileTimeScriptDisposition::Completed,
-        },
-        Err(field) => CountryExileTimeScriptFunctionOutcome::Handled {
-            player_id,
-            legacy_return: -1,
-            disposition: CountryExileTimeScriptDisposition::ParameterUnavailable {
-                field,
-                sampled_at_ms,
-            },
-        },
+        Ok(remaining_seconds) => handled(player_id, remaining_seconds, CountryExileTimeScriptDisposition::Completed),
+        Err(field) => handled(player_id, -1, CountryExileTimeScriptDisposition::ParameterUnavailable { field, sampled_at_ms }),
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryQuestSwitchScriptDisposition {
+enum CountryQuestSwitchScriptDisposition {
     IdentityMissing,
     PlayerMissing,
     CountryMissing {
@@ -2871,12 +2802,7 @@ pub(crate) enum CountryQuestSwitchScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryQuestSwitchScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        function_id: i32,
-        identity: i32,
-        legacy_return: i32,
-        disposition: CountryQuestSwitchScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_quest_switch_script_function(
@@ -2893,14 +2819,13 @@ pub(crate) fn run_country_quest_switch_script_function(
     ) {
         return CountryQuestSwitchScriptFunctionOutcome::DifferentFunction;
     }
+    let handled = |identity, legacy_return, disposition| {
+        tracing::debug!(function_id, identity, legacy_return, ?disposition, "обработан переключатель заданий страны");
+        CountryQuestSwitchScriptFunctionOutcome::Handled { legacy_return }
+    };
     let identity = evaluated_identity.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
     if identity == SCRIPT_INT_PARAMETER_ERROR {
-        return CountryQuestSwitchScriptFunctionOutcome::Handled {
-            function_id,
-            identity,
-            legacy_return: -1,
-            disposition: CountryQuestSwitchScriptDisposition::IdentityMissing,
-        };
+        return handled(identity, -1, CountryQuestSwitchScriptDisposition::IdentityMissing);
     }
     let raw_switch = evaluated_switch.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
     let raw_country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
@@ -2912,33 +2837,18 @@ pub(crate) fn run_country_quest_switch_script_function(
     let country = if needs_player_country {
         let Some(player) = script_player_id.and_then(|player_id| game.find_player(player_id))
         else {
-            return CountryQuestSwitchScriptFunctionOutcome::Handled {
-                function_id,
-                identity,
-                legacy_return: -1,
-                disposition: CountryQuestSwitchScriptDisposition::PlayerMissing,
-            };
+            return handled(identity, -1, CountryQuestSwitchScriptDisposition::PlayerMissing);
         };
         player.country()
     } else {
         raw_country as u8
     };
     let Some(country_owner) = game.country_handler().country(country) else {
-        return CountryQuestSwitchScriptFunctionOutcome::Handled {
-            function_id,
-            identity,
-            legacy_return: -1,
-            disposition: CountryQuestSwitchScriptDisposition::CountryMissing { country },
-        };
+        return handled(identity, -1, CountryQuestSwitchScriptDisposition::CountryMissing { country });
     };
     if function_id == SCRIPT_FUNCTION_GET_QUEST_SWITCH {
         let enabled = country_owner.quest_switch(identity as u8);
-        return CountryQuestSwitchScriptFunctionOutcome::Handled {
-            function_id,
-            identity,
-            legacy_return: i32::from(enabled),
-            disposition: CountryQuestSwitchScriptDisposition::Read { country, enabled },
-        };
+        return handled(identity, i32::from(enabled), CountryQuestSwitchScriptDisposition::Read { country, enabled });
     }
 
     let message = country_owner.quest_switch_message(identity as u8, true);
@@ -2948,20 +2858,15 @@ pub(crate) fn run_country_quest_switch_script_function(
         .country_mut(country)
         .expect("country owner жив после quest-switch World enqueue")
         .apply_quest_switch(identity as u8, true);
-    CountryQuestSwitchScriptFunctionOutcome::Handled {
-        function_id,
+    handled(
         identity,
-        legacy_return: if identity as u8 == 0 { -1 } else { identity },
-        disposition: CountryQuestSwitchScriptDisposition::Written {
-            country,
-            raw_switch,
-            delivery,
-        },
-    }
+        if identity as u8 == 0 { -1 } else { identity },
+        CountryQuestSwitchScriptDisposition::Written { country, raw_switch, delivery },
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryScalarScriptDisposition {
+enum CountryScalarScriptDisposition {
     ValueMissing,
     CountryMissing {
         country: u8,
@@ -2983,11 +2888,7 @@ pub(crate) enum CountryScalarScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryScalarScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        function_id: i32,
-        legacy_return: i32,
-        disposition: CountryScalarScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_country_scalar_script_function(
@@ -3005,20 +2906,16 @@ pub(crate) fn run_country_scalar_script_function(
         _ => return CountryScalarScriptFunctionOutcome::DifferentFunction,
     };
     let country = evaluated_country.unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u8;
+    let handled = |legacy_return, disposition| {
+        tracing::debug!(function_id, country, legacy_return, ?disposition, "обработано числовое изменение страны");
+        CountryScalarScriptFunctionOutcome::Handled { legacy_return }
+    };
     let Some(requested) = evaluated_value.filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
     else {
-        return CountryScalarScriptFunctionOutcome::Handled {
-            function_id,
-            legacy_return: default_return,
-            disposition: CountryScalarScriptDisposition::ValueMissing,
-        };
+        return handled(default_return, CountryScalarScriptDisposition::ValueMissing);
     };
     if game.country_handler().country(country).is_none() {
-        return CountryScalarScriptFunctionOutcome::Handled {
-            function_id,
-            legacy_return: default_return,
-            disposition: CountryScalarScriptDisposition::CountryMissing { country },
-        };
+        return handled(default_return, CountryScalarScriptDisposition::CountryMissing { country });
     }
 
     let applied = match function_id {
@@ -3079,13 +2976,7 @@ pub(crate) fn run_country_scalar_script_function(
                 .tech_level
                 .wrapping_add(1);
             let Some(level) = game.country_param().country_tech_level(next_level) else {
-                return CountryScalarScriptFunctionOutcome::Handled {
-                    function_id,
-                    legacy_return: default_return,
-                    disposition: CountryScalarScriptDisposition::TechnologyLevelMissing {
-                        level: next_level,
-                    },
-                };
+                return handled(default_return, CountryScalarScriptDisposition::TechnologyLevelMissing { level: next_level });
             };
             if requested > level.country_tech_exp {
                 level.country_tech_exp
@@ -3103,16 +2994,7 @@ pub(crate) fn run_country_scalar_script_function(
         .expect("country owner жив до scalar mutation")
         .set_script_scalar(selector, applied);
     let delivery = message.send(game, false);
-    CountryScalarScriptFunctionOutcome::Handled {
-        function_id,
-        legacy_return: applied,
-        disposition: CountryScalarScriptDisposition::Applied {
-            country,
-            requested,
-            applied,
-            delivery,
-        },
-    }
+    handled(applied, CountryScalarScriptDisposition::Applied { country, requested, applied, delivery })
 }
 
 fn scalar_parameter_unavailable(
@@ -3120,11 +3002,9 @@ fn scalar_parameter_unavailable(
     legacy_return: i32,
     field: &'static str,
 ) -> CountryScalarScriptFunctionOutcome {
-    CountryScalarScriptFunctionOutcome::Handled {
-        function_id,
-        legacy_return,
-        disposition: CountryScalarScriptDisposition::ParameterUnavailable { field },
-    }
+    let disposition = CountryScalarScriptDisposition::ParameterUnavailable { field };
+    tracing::debug!(function_id, legacy_return, ?disposition, "параметр числового изменения страны недоступен");
+    CountryScalarScriptFunctionOutcome::Handled { legacy_return }
 }
 
 fn run_goods_war_script_function(
