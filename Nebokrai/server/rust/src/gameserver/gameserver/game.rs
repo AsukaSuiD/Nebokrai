@@ -500,7 +500,7 @@ use tracing::{debug, info, trace, warn};
 use thiserror::Error;
 
 use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerAutoProgress};
-use crate::gameserver::appserver::area::{AreaAiContext, AreaAiReport, AreaMonsterAiFacts};
+use crate::gameserver::appserver::area::{AreaAiContext, AreaMonsterAiFacts};
 use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsTaken,
@@ -699,7 +699,7 @@ use crate::gameserver::appserver::serverregion::{
     RegionTaxSessionEndpoint, RegionTaxSessionKind, ServerRegionAreaTransitionContext,
     ServerRegionClearPlayerTick,
     ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
-    ServerRegionMonsterRefreshReport, ServerRegionNpcContext, ServerRegionNpcSetup,
+    ServerRegionNpcContext, ServerRegionNpcSetup,
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionWeather,
     ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
@@ -3013,7 +3013,6 @@ pub(crate) struct GodsBattleContendCompletionReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GodsBattleContendAiReport {
     pub(crate) region_id: i32,
-    pub(crate) base_ai: GameServerRegionBaseAiReport,
     pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
     pub(crate) completions: Vec<GodsBattleContendCompletionReport>,
 }
@@ -3209,7 +3208,6 @@ pub(crate) struct NationMagicStoneTransitionReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NationContendAiReport {
     pub(crate) region_id: i32,
-    pub(crate) base_ai: GameServerRegionBaseAiReport,
     pub(crate) magic_stone_transitions: Vec<NationMagicStoneTransitionReport>,
     pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
     pub(crate) completed: Option<NationContend>,
@@ -3323,51 +3321,6 @@ pub(crate) enum GamePlayerFightStatePhase {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BaseRegionAiReport {
-    pub(crate) region_id: i32,
-    pub(crate) ai_tick: i32,
-    pub(crate) base_ai: Result<GameServerRegionBaseAiReport, ServerRegionMonsterRectBlock>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameServerRegionBaseAiReport {
-    pub(crate) monster_refresh: Option<ServerRegionMonsterRefreshReport>,
-    pub(crate) weather: Option<GameRegionWeatherReport>,
-    pub(crate) shape_scan: GameRegionShapeScanReport,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GameRegionShapeScanReport {
-    pub(crate) areas: usize,
-    pub(crate) area_ai: Vec<AreaAiReport>,
-    pub(crate) ground_goods_expirations: Vec<GameGroundGoodsExpiration>,
-    pub(crate) npc_expirations: Vec<GameNpcLifetimeExpiration>,
-    pub(crate) resolved_shapes: usize,
-    pub(crate) shape_ai_calls: usize,
-    pub(crate) stale_memberships: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameGroundGoodsExpiration {
-    pub(crate) ex_id: CGuid,
-    pub(crate) around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    pub(crate) staged_for_delete: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameNpcLifetimeExpiration {
-    pub(crate) npc_id: i32,
-    pub(crate) delivery: Option<i32>,
-    pub(crate) removal: Result<bool, RegionMembershipBlock>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRegionWeatherReport {
-    pub(crate) tick: ServerRegionWeatherTick,
-    pub(crate) delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryRegionAiEffect {
     ContendTime {
         player_id: i32,
@@ -3405,7 +3358,6 @@ pub(crate) enum CountryRegionAiEffect {
 pub(crate) struct CountryRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) result: Result<(), CountryRegionAiError>,
-    pub(crate) base_ai: Option<GameServerRegionBaseAiReport>,
     pub(crate) effects: Vec<CountryRegionAiEffect>,
 }
 
@@ -3414,7 +3366,6 @@ struct GameCountryRegionAiContext<'a, Runtime> {
     runtime: &'a mut Runtime,
     region: CServerRegion,
     ai_tick: i32,
-    base_ai: Option<GameServerRegionBaseAiReport>,
     effects: Vec<CountryRegionAiEffect>,
 }
 
@@ -3470,13 +3421,12 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
         region: &mut CServerRegion,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
-        let base_ai = self.game.run_server_region_base_ai(
+        self.game.run_server_region_base_ai(
             region,
             self.ai_tick,
             tick_interval_ms,
             self.runtime,
         )?;
-        self.base_ai = Some(base_ai);
         self.region = region.clone();
         Ok(())
     }
@@ -3611,7 +3561,6 @@ pub(crate) struct CityRegionAiReport {
     pub(crate) result: Result<(), ContendAiError<AttackCityMembershipBlock>>,
     pub(crate) owner: WarRegionOwnership,
     pub(crate) defence_side_faction_id: i32,
-    pub(crate) base_ai: Option<GameServerRegionBaseAiReport>,
     pub(crate) effects: Vec<CityRegionAiEffect>,
 }
 
@@ -3620,7 +3569,6 @@ struct GameCityRegionAiContext<'a, Runtime> {
     runtime: &'a mut Runtime,
     region: CServerRegion,
     ai_tick: i32,
-    base_ai: Option<GameServerRegionBaseAiReport>,
     war_number: i32,
     owner: WarRegionOwnership,
     defence_side_faction_id: i32,
@@ -3751,13 +3699,12 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
         region: &mut CServerRegion,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
-        let base_ai = self.game.run_server_region_base_ai(
+        self.game.run_server_region_base_ai(
             region,
             self.ai_tick,
             tick_interval_ms,
             self.runtime,
         )?;
-        self.base_ai = Some(base_ai);
         self.region = region.clone();
         self.owner = WarRegionOwnership {
             faction_id: region.param.owned_faction_id,
@@ -3914,7 +3861,6 @@ pub(crate) struct VillageRegionAiReport {
     pub(crate) region_id: i32,
     pub(crate) result: Result<(), ContendAiError<Infallible>>,
     pub(crate) flag_owner_faction_id: i32,
-    pub(crate) base_ai: Option<GameServerRegionBaseAiReport>,
     pub(crate) effects: Vec<VillageRegionAiEffect>,
 }
 
@@ -3924,7 +3870,6 @@ struct GameVillageRegionAiContext<'a, Runtime> {
     region: CServerRegion,
     war_number: i32,
     ai_tick: i32,
-    base_ai: Option<GameServerRegionBaseAiReport>,
     flag_owner_faction_id: i32,
     needed_goods: Vec<String>,
     effects: Vec<VillageRegionAiEffect>,
@@ -4079,13 +4024,12 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
         region: &mut CServerRegion,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
-        let base_ai = self.game.run_server_region_base_ai(
+        self.game.run_server_region_base_ai(
             region,
             self.ai_tick,
             tick_interval_ms,
             self.runtime,
         )?;
-        self.base_ai = Some(base_ai);
         self.region = region.clone();
         Ok(())
     }
@@ -12375,18 +12319,18 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let base_ai = match self.run_server_region_base_ai(
+        match self.run_server_region_base_ai(
             &mut region.war.base,
             ai_tick,
             tick_interval_ms,
             runtime,
         ) {
-            Ok(report) => report,
+            Ok(()) => {},
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::Nation(region));
                 return Some(Err(NationRegionAiError::Base(error)));
             }
-        };
+        }
         let mut magic_stone_transitions = Vec::new();
         for country in region.take_due_magic_stone_transitions() {
             magic_stone_transitions.push(self.replace_nation_magic_stone(
@@ -12520,7 +12464,6 @@ impl CGame {
         self.restore_region_owner(ServerRegionOwner::Nation(region));
         Some(Ok(NationContendAiReport {
             region_id,
-            base_ai,
             magic_stone_transitions,
             progress_deliveries,
             completed,
@@ -22575,22 +22518,21 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let base_ai = match self.run_server_region_base_ai(
+        match self.run_server_region_base_ai(
             &mut region.war.base,
             ai_tick,
             tick_interval_ms,
             runtime,
         ) {
-            Ok(report) => report,
+            Ok(()) => {},
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
                 return Some(Err(GodsBattleRegionAiError::Base(error)));
             }
-        };
+        }
         let advance = region.advance_contenders(runtime.now_milliseconds());
         let mut report = GodsBattleContendAiReport {
             region_id,
-            base_ai,
             progress_deliveries: Vec::new(),
             completions: Vec::new(),
         };
@@ -37486,7 +37428,7 @@ impl CGame {
         &self,
         region: &mut CServerRegion,
         context: &mut Context,
-    ) -> GameRegionWeatherReport {
+    ) {
         let tick = region.advance_weather_tick(|bound| context.random_below(bound));
         let delivery = match &tick {
             ServerRegionWeatherTick::Changed { weather, .. } => {
@@ -37505,7 +37447,7 @@ impl CGame {
             ServerRegionWeatherTick::Waiting { .. }
             | ServerRegionWeatherTick::AdvancedWithoutSelection { .. } => None,
         };
-        GameRegionWeatherReport { tick, delivery }
+        tracing::trace!(region_id = region.id, ?tick, ?delivery, "обновлена погода региона");
     }
 
     fn region_shape_change_state<Runtime: GameMainLoopRuntime>(
@@ -37549,7 +37491,7 @@ impl CGame {
         region: &mut CServerRegion,
         npc_id: i32,
         now_ms: u32,
-    ) -> Option<GameNpcLifetimeExpiration> {
+    ) -> Option<()> {
         let npc = region.find_npc_by_id(npc_id)?;
         if !npc.lifetime_expired(now_ms) || !npc.move_shape().shape().is_assigned_to_server_region()
         {
@@ -37557,23 +37499,32 @@ impl CGame {
         }
         let delivery = self.send_shape_exit_around(region, npc.move_shape().shape());
         let removal = region.remove_owned_npc_by_id(npc_id);
-        Some(GameNpcLifetimeExpiration {
+        tracing::trace!(
+            region_id = region.id,
             npc_id,
-            delivery,
-            removal,
-        })
+            ?delivery,
+            ?removal,
+            "завершён срок жизни NPC"
+        );
+        Some(())
     }
 
     fn run_region_shape_scan<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
         runtime: &mut Runtime,
-    ) -> GameRegionShapeScanReport {
-        let mut report = GameRegionShapeScanReport::default();
+    ) {
+        let mut areas = 0usize;
+        let mut area_ai_passes = 0usize;
+        let mut ground_goods_expirations = 0usize;
+        let mut npc_expirations = 0usize;
+        let mut resolved_shapes = 0usize;
+        let mut shape_ai_calls = 0usize;
+        let mut stale_memberships = 0usize;
         let goods_disappear_timer_ms = self.globe_setup.goods_disappear_timer_ms();
         let goods_protected_timer_ms = self.globe_setup.goods_protected_timer_ms();
         for area_index in 0..region.area_count() {
-            report.areas += 1;
+            areas = areas.wrapping_add(1);
             let mut monster_facts = BTreeMap::new();
             for identity in region
                 .active_shape_candidates(area_index)
@@ -37634,13 +37585,8 @@ impl CGame {
                         }
                     }
                     region.finish_area_ground_goods_expiration(area_index, *ex_id);
-                    report
-                        .ground_goods_expirations
-                        .push(GameGroundGoodsExpiration {
-                            ex_id: *ex_id,
-                            around_delivery,
-                            staged_for_delete: *resolved,
-                        });
+                    ground_goods_expirations = ground_goods_expirations.wrapping_add(1);
+                    tracing::trace!(region_id = region.id, ex_id = ?ex_id, ?around_delivery, staged_for_delete = *resolved, "завершён срок жизни предмета на земле");
                 }
                 {
                     let mut context = GameAreaAiContext {
@@ -37654,13 +37600,14 @@ impl CGame {
                         &mut area_ai,
                     );
                 }
-                report.area_ai.push(area_ai);
+                area_ai_passes = area_ai_passes.wrapping_add(1);
+                tracing::trace!(region_id = region.id, area_index, ?area_ai, "завершён проход ИИ области");
             }
             for identity in region.active_shape_candidates(area_index) {
                 let Some(change_state) = self.region_shape_change_state(region, identity, runtime)
                 else {
                     region.forget_unresolved_active_shape(area_index, identity);
-                    report.stale_memberships += 1;
+                    stale_memberships = stale_memberships.wrapping_add(1);
                     continue;
                 };
                 // `GetActivedShapes` разрешает ground goods, но публикует их
@@ -37668,7 +37615,7 @@ impl CGame {
                 if identity.object_type == GOODS_TYPE && change_state != SHAPE_CHANGE_DELETE {
                     continue;
                 }
-                report.resolved_shapes += 1;
+                resolved_shapes = resolved_shapes.wrapping_add(1);
                 let reset = match change_state {
                     SHAPE_CHANGE_DELETE => {
                         region.stage_delete_shape(identity);
@@ -37680,10 +37627,8 @@ impl CGame {
                     _ => {
                         if identity.object_type == NPC_TYPE {
                             let now_ms = runtime.now_milliseconds();
-                            if let Some(expiration) =
-                                self.run_region_npc_ai(region, identity.id, now_ms)
-                            {
-                                report.npc_expirations.push(expiration);
+                            if self.run_region_npc_ai(region, identity.id, now_ms).is_some() {
+                                npc_expirations = npc_expirations.wrapping_add(1);
                             }
                         } else if identity.object_type == MONSTER_TYPE
                             && region
@@ -37695,7 +37640,7 @@ impl CGame {
                         } else {
                             runtime.run_region_active_shape_ai(self, region, identity);
                         }
-                        report.shape_ai_calls += 1;
+                        shape_ai_calls = shape_ai_calls.wrapping_add(1);
                         false
                     }
                 };
@@ -37704,7 +37649,17 @@ impl CGame {
                 }
             }
         }
-        report
+        tracing::trace!(
+            region_id = region.id,
+            areas,
+            area_ai_passes,
+            ground_goods_expirations,
+            npc_expirations,
+            resolved_shapes,
+            shape_ai_calls,
+            stale_memberships,
+            "завершено сканирование форм региона"
+        );
     }
 
     fn run_server_region_base_ai<Runtime: GameMainLoopRuntime>(
@@ -37713,7 +37668,7 @@ impl CGame {
         ai_tick: i32,
         tick_interval_ms: i32,
         runtime: &mut Runtime,
-    ) -> Result<GameServerRegionBaseAiReport, ServerRegionMonsterRectBlock> {
+    ) -> Result<(), ServerRegionMonsterRectBlock> {
         let period = (1_000i32 / tick_interval_ms) as u32;
         let periodic_due = (ai_tick as u32) % period == 0;
         let monster_refresh = if periodic_due {
@@ -37727,13 +37682,12 @@ impl CGame {
         } else {
             None
         };
-        let weather = periodic_due.then(|| self.run_region_weather_tick(region, runtime));
-        let shape_scan = self.run_region_shape_scan(region, runtime);
-        Ok(GameServerRegionBaseAiReport {
-            monster_refresh,
-            weather,
-            shape_scan,
-        })
+        if periodic_due {
+            self.run_region_weather_tick(region, runtime);
+        }
+        self.run_region_shape_scan(region, runtime);
+        tracing::trace!(region_id = region.id, ai_tick, ?monster_refresh, periodic_due, "завершён базовый проход ИИ региона");
+        Ok(())
     }
 
     /// Достигнутый prefix `CServerRegion::AI` для concrete Base owner-а;
@@ -37743,7 +37697,7 @@ impl CGame {
         region_id: i32,
         ai_tick: i32,
         runtime: &mut Runtime,
-    ) -> Option<BaseRegionAiReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Base(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -37753,11 +37707,8 @@ impl CGame {
         let base_ai =
             self.run_server_region_base_ai(&mut region, ai_tick, tick_interval_ms, runtime);
         self.restore_region_owner(ServerRegionOwner::Base(region));
-        Some(BaseRegionAiReport {
-            region_id,
-            ai_tick,
-            base_ai,
-        })
+        tracing::trace!(region_id, ai_tick, ?base_ai, "завершён проход ИИ базового региона");
+        Some(())
     }
 
     /// Подключает уже materialized `CServerCountryRegion::AI` к virtual region
@@ -37780,18 +37731,15 @@ impl CGame {
             runtime,
             region: projection,
             ai_tick,
-            base_ai: None,
             effects: Vec::new(),
         };
         let result = region.ai(&mut context);
-        let base_ai = context.base_ai.take();
         let effects = std::mem::take(&mut context.effects);
         drop(context);
         self.restore_region_owner(ServerRegionOwner::Country(region));
         Some(CountryRegionAiReport {
             region_id,
             result,
-            base_ai,
             effects,
         })
     }
@@ -37816,7 +37764,6 @@ impl CGame {
             runtime,
             region: projection,
             ai_tick,
-            base_ai: None,
             war_number: region.war.base.war_number,
             owner: WarRegionOwnership {
                 faction_id: region.war.base.param.owned_faction_id,
@@ -37828,7 +37775,6 @@ impl CGame {
         let result = region.war.ai(&mut context);
         let owner = context.owner;
         let defence_side_faction_id = context.defence_side_faction_id;
-        let base_ai = context.base_ai.take();
         let effects = std::mem::take(&mut context.effects);
         drop(context);
         region.defence_side_faction_id = defence_side_faction_id;
@@ -37838,7 +37784,6 @@ impl CGame {
             result,
             owner,
             defence_side_faction_id,
-            base_ai,
             effects,
         })
     }
@@ -37864,14 +37809,12 @@ impl CGame {
             region: projection,
             war_number: region.war.base.war_number,
             ai_tick,
-            base_ai: None,
             flag_owner_faction_id: region.flag_owner_faction_id,
             needed_goods: Vec::new(),
             effects: Vec::new(),
         };
         let result = region.war.ai(&mut context);
         let flag_owner_faction_id = context.flag_owner_faction_id;
-        let base_ai = context.base_ai.take();
         let needed_goods = std::mem::take(&mut context.needed_goods);
         let effects = std::mem::take(&mut context.effects);
         drop(context);
@@ -37882,7 +37825,6 @@ impl CGame {
             region_id,
             result,
             flag_owner_faction_id,
-            base_ai,
             effects,
         })
     }
