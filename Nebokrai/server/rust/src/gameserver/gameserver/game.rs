@@ -773,7 +773,7 @@ use crate::nets::netserver::mynetserver::{
 use crate::nets::servers::ServerHostError;
 use crate::public::aucitionroom::CGameAuctionRoom;
 use crate::public::auctionnode::{AuctionAutomaticNodeFields, CGoodsNode};
-use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
+use crate::public::ciqing::CCiQingSetup;
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
 use crate::public::equipmentcomposelist::EquipmentComposeList;
@@ -2095,37 +2095,6 @@ pub(crate) enum BattleFairyScriptAction {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CiQingGoodsPreview {
-    pub(crate) base_index: u32,
-    pub(crate) old_client_payload: Vec<u8>,
-    pub(crate) delivery: i32,
-}
-
-#[must_use = "CiQing goods query хранит ранний preview-send tail"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CiQingGoodsQueryReport {
-    pub(crate) player_id: i32,
-    pub(crate) previews: Vec<CiQingGoodsPreview>,
-}
-
-#[must_use = "сценарное открытие предмета CiQing хранит изменение списка и все отправки"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CiQingScriptItemReport {
-    pub(crate) player_id: i32,
-    pub(crate) base_index: u32,
-    pub(crate) inserted: bool,
-    pub(crate) previews: Vec<CiQingGoodsPreview>,
-}
-
-#[must_use = "CiQing setup query хранит serialization и player delivery"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CiQingSetupQueryReport {
-    pub(crate) player_id: i32,
-    pub(crate) payload: Result<Vec<u8>, CiQingSerializationBlock>,
-    pub(crate) delivery: Option<i32>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CiQingLog {
     pub(crate) player_id: i32,
@@ -2186,7 +2155,6 @@ pub(crate) enum CiQingComposeDelivery {
     PacketConsumption(Vec<i32>),
     ContainerAddition(Vec<i32>),
     ContainerConsumption(Vec<i32>),
-    GoodsQuery(CiQingGoodsQueryReport),
 }
 
 #[must_use = "CiQing compose report хранит payment, RNG, container и unlock tail"]
@@ -2281,16 +2249,6 @@ pub(crate) enum CiQingOtherPersonTarget {
     Id(i32),
     Name(Vec<u8>),
     UnsupportedMode(i8),
-}
-
-#[must_use = "other-person report хранит target resolution, payload и delivery"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CiQingOtherPersonReport {
-    pub(crate) requester_id: i32,
-    pub(crate) target: CiQingOtherPersonTarget,
-    pub(crate) target_player_id: Option<i32>,
-    pub(crate) payload: Vec<u8>,
-    pub(crate) delivery: Option<i32>,
 }
 
 /// Container transfer использует уже материализованные player/equipment
@@ -21371,9 +21329,9 @@ impl CGame {
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<CiQingGoodsQueryReport> {
+    ) -> Option<()> {
         let base_indices: Vec<_> = self.find_player(player_id)?.ci_qing_list().collect();
-        let mut previews = Vec::new();
+        let mut sent = 0_usize;
         for base_index in base_indices {
             let created = {
                 let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
@@ -21399,19 +21357,14 @@ impl CGame {
             message.base_mut().add(&old_client_payload);
             let delivery = message.send_to_player(self.net_server(), player_id);
             let stop = !old_client_payload.is_empty();
-            previews.push(CiQingGoodsPreview {
-                base_index,
-                old_client_payload,
-                delivery,
-            });
+            sent += 1;
+            tracing::trace!(player_id, base_index, payload_len = old_client_payload.len(), delivery, "предпросмотр CiQing отправлен");
             if stop {
                 break;
             }
         }
-        Some(CiQingGoodsQueryReport {
-            player_id,
-            previews,
-        })
+        tracing::debug!(player_id, sent, "список предметов CiQing обработан");
+        Some(())
     }
 
     /// Сценарный `PushItemToCiQing` добавляет только подтверждённый базовый
@@ -21421,7 +21374,7 @@ impl CGame {
         player_id: i32,
         original_name: &[u8],
         context: &mut Context,
-    ) -> Option<CiQingScriptItemReport> {
+    ) -> Option<()> {
         let base_index = self
             .goods_factory
             .query_goods_id_by_original_name(Some(original_name));
@@ -21437,7 +21390,7 @@ impl CGame {
             .find_player_mut(player_id)?
             .restore_ci_qing_entry(base_index);
         let base_indices: Vec<_> = self.find_player(player_id)?.ci_qing_list().collect();
-        let mut previews = Vec::with_capacity(base_indices.len());
+        let mut sent = 0_usize;
         for base_index in base_indices {
             let created = {
                 let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
@@ -21462,18 +21415,11 @@ impl CGame {
             let mut message = CMessage::new(0x0c_010c);
             message.base_mut().add(&old_client_payload);
             let delivery = message.send_to_player(self.net_server(), player_id);
-            previews.push(CiQingGoodsPreview {
-                base_index,
-                old_client_payload,
-                delivery,
-            });
+            sent += 1;
+            tracing::trace!(player_id, base_index, payload_len = old_client_payload.len(), delivery, "сценарный предпросмотр CiQing отправлен");
         }
-        Some(CiQingScriptItemReport {
-            player_id,
-            base_index,
-            inserted,
-            previews,
-        })
+        tracing::debug!(player_id, base_index, inserted, sent, "сценарный предмет CiQing обработан");
+        Some(())
     }
 
     pub(crate) fn open_script_ci_qing_page(&mut self, player_id: i32) -> Option<i32> {
@@ -21485,21 +21431,21 @@ impl CGame {
 
     /// Global setup query `goodsmessage 0x8FC30`; serialization block не
     /// превращается в пустой успешный packet.
-    pub(crate) fn query_ci_qing_setup(&self, player_id: i32) -> CiQingSetupQueryReport {
+    pub(crate) fn query_ci_qing_setup(&self, player_id: i32) {
         let mut payload = Vec::new();
         let payload = self
             .ci_qing_setup
             .add_byte_to_array(&mut payload)
             .map(|()| payload);
-        let delivery = payload.as_ref().ok().map(|payload| {
-            let mut message = CMessage::new(0x0c_010d);
-            message.base_mut().add(payload);
-            message.send_to_player(self.net_server(), player_id)
-        });
-        CiQingSetupQueryReport {
-            player_id,
-            payload,
-            delivery,
+        match payload {
+            Ok(payload) => {
+                let payload_len = payload.len();
+                let mut message = CMessage::new(0x0c_010d);
+                message.base_mut().add(&payload);
+                let delivery = message.send_to_player(self.net_server(), player_id);
+                tracing::trace!(player_id, payload_len, delivery, "настройки CiQing отправлены");
+            }
+            Err(error) => tracing::warn!(player_id, ?error, "настройки CiQing не сериализованы"),
         }
     }
 
@@ -21897,11 +21843,7 @@ impl CGame {
                 .get_mut(&player_id)
                 .expect("player проверен до CiQing unlock")
                 .restore_ci_qing_entry(result_index);
-            if let Some(query) = self.query_ci_qing_goods(player_id, context) {
-                report
-                    .deliveries
-                    .push(CiQingComposeDelivery::GoodsQuery(query));
-            }
+            let _ = self.query_ci_qing_goods(player_id, context);
             let log = CiQingLog {
                 player_id,
                 delta: 1,
@@ -22152,7 +22094,7 @@ impl CGame {
         requester_id: i32,
         target: CiQingOtherPersonTarget,
         context: &mut Context,
-    ) -> CiQingOtherPersonReport {
+    ) {
         let target_player_id = match &target {
             CiQingOtherPersonTarget::Id(player_id) => {
                 self.find_player(*player_id).map(CPlayer::player_id)
@@ -22162,15 +22104,9 @@ impl CGame {
             }
             CiQingOtherPersonTarget::UnsupportedMode(_) => None,
         };
-        let mut report = CiQingOtherPersonReport {
-            requester_id,
-            target,
-            target_player_id,
-            payload: Vec::new(),
-            delivery: None,
-        };
         let Some(target_player_id) = target_player_id else {
-            return report;
+            tracing::trace!(requester_id, ?target, "цель просмотра CiQing не найдена");
+            return;
         };
         let player = self
             .find_player(target_player_id)
@@ -22195,9 +22131,8 @@ impl CGame {
         payload.extend_from_slice(&player.ci_qing_property_snapshot().2.to_le_bytes());
         let mut message = CMessage::new(0x0c_010f);
         message.base_mut().add(&payload);
-        report.delivery = Some(message.send_to_player(self.net_server(), requester_id));
-        report.payload = payload;
-        report
+        let delivery = message.send_to_player(self.net_server(), requester_id);
+        tracing::debug!(requester_id, target_player_id, payload_len = payload.len(), delivery, "данные CiQing другого игрока отправлены");
     }
 
     fn refresh_ci_qing_player_property<Context: CiQingComposeContext>(

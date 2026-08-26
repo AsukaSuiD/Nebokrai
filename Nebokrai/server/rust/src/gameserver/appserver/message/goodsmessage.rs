@@ -666,12 +666,11 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             }
         }
         QUERY_CI_QING_GOODS => {
-            let _ = game
-                .query_ci_qing_goods(player_id, runtime)
+            game.query_ci_qing_goods(player_id, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         QUERY_CI_QING_SETUP => {
-            let _ = game.query_ci_qing_setup(player_id);
+            game.query_ci_qing_setup(player_id);
         }
         MAKE_CI_QING_NODE => {
             if !game.ci_qing_message_enabled(player_id) {
@@ -759,7 +758,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 },
                 mode => CiQingOtherPersonTarget::UnsupportedMode(mode),
             };
-            let _ = game.query_ci_qing_other_person(player_id, target, runtime);
+            game.query_ci_qing_other_person(player_id, target, runtime);
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),
     }
