@@ -2991,37 +2991,6 @@ pub(crate) struct GodsBattleContendEnterReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleContendCompletionOutcome {
-    PlayerMissing,
-    FactionChangeRejected,
-    Captured {
-        faction: i32,
-        award_variable_result: i32,
-        award_script_result: Option<i32>,
-        top_info_delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleContendCompletionReport {
-    pub(crate) contender: GodsBattleContender,
-    pub(crate) outcome: GodsBattleContendCompletionOutcome,
-    pub(crate) deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleContendAiReport {
-    pub(crate) region_id: i32,
-    pub(crate) progress_deliveries: Vec<(i32, i32, i32)>,
-    pub(crate) completions: Vec<GodsBattleContendCompletionReport>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleRegionAiError {
-    Base(ServerRegionMonsterRectBlock),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleMonsterTokenBlock {
     FieldCount { token: Vec<u8>, fields: usize },
     MissingMonsterProperty { original_name: Vec<u8> },
@@ -22247,7 +22216,7 @@ impl CGame {
         ai_tick: i32,
         tick_interval_ms: i32,
         runtime: &mut Runtime,
-    ) -> Option<Result<GodsBattleContendAiReport, GodsBattleRegionAiError>> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -22262,28 +22231,23 @@ impl CGame {
             Ok(()) => {},
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-                return Some(Err(GodsBattleRegionAiError::Base(error)));
+                tracing::warn!(region_id, ai_tick, ?error, "базовый проход ИИ битвы богов заблокирован");
+                return Some(());
             }
         }
         let advance = region.advance_contenders(runtime.now_milliseconds());
-        let mut report = GodsBattleContendAiReport {
-            region_id,
-            progress_deliveries: Vec::new(),
-            completions: Vec::new(),
-        };
+        let progress_count = advance.progress.len();
+        let completion_count = advance.completed.len();
         for (player_id, percentage) in advance.progress {
             let delivery = self.send_gods_battle_contend_time(player_id, percentage);
-            report
-                .progress_deliveries
-                .push((player_id, percentage, delivery));
+            tracing::trace!(region_id, player_id, percentage, delivery, "отправлено время захвата в битве богов");
         }
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
         for contender in advance.completed {
-            report
-                .completions
-                .push(self.complete_gods_battle_contend(region_id, contender, runtime));
+            self.complete_gods_battle_contend(region_id, contender, runtime);
         }
-        Some(Ok(report))
+        tracing::trace!(region_id, progress_count, completion_count, "завершён проход захватов битвы богов");
+        Some(())
     }
 
     fn complete_gods_battle_contend<Context: GodsBattleNpcContendContext>(
@@ -22291,26 +22255,20 @@ impl CGame {
         region_id: i32,
         contender: GodsBattleContender,
         context: &mut Context,
-    ) -> GodsBattleContendCompletionReport {
+    ) {
         let Some(faction) = self
             .find_player(contender.player_id)
             .map(CPlayer::gods_battle_faction)
         else {
-            return GodsBattleContendCompletionReport {
-                contender,
-                outcome: GodsBattleContendCompletionOutcome::PlayerMissing,
-                deliveries: Vec::new(),
-            };
+            tracing::warn!(region_id, player_id = contender.player_id, symbol_id = contender.symbol_id, "игрок завершённого захвата битвы богов не найден");
+            return;
         };
         let changed =
             self.change_gods_battle_npc_faction(region_id, contender.symbol_id, faction, context);
         let mut deliveries = self.cancel_gods_battle_contend_symbol(region_id, contender.symbol_id);
         if changed.is_none() {
-            return GodsBattleContendCompletionReport {
-                contender,
-                outcome: GodsBattleContendCompletionOutcome::FactionChangeRejected,
-                deliveries,
-            };
+            tracing::warn!(region_id, player_id = contender.player_id, symbol_id = contender.symbol_id, deliveries, "смена фракции символа битвы богов отклонена");
+            return;
         }
         let capture_text = match faction {
             5 => self.get_string_by_id(b"SZLGS4").to_vec(),
@@ -22319,10 +22277,15 @@ impl CGame {
         };
         if let Some(owner) = self.take_region_owner(region_id) {
             if let ServerRegionOwner::GodsBattle(region) = &owner {
-                deliveries.push(
-                    nation_colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &capture_text)
-                        .send_to_region(Some(&region.war.base), None, self),
-                );
+                let delivery = nation_colored_text_message(
+                    0xbf806,
+                    0xffff_ffff,
+                    0xffff_0000,
+                    &capture_text,
+                )
+                .send_to_region(Some(&region.war.base), None, self);
+                deliveries = deliveries.wrapping_add(1);
+                tracing::trace!(region_id, delivery, "отправлено уведомление о захвате символа битвы богов");
             }
             self.restore_region_owner(owner);
         }
@@ -22372,35 +22335,30 @@ impl CGame {
             npc_name: contender.symbol_name.clone(),
             faction,
         });
-        GodsBattleContendCompletionReport {
-            contender,
-            outcome: GodsBattleContendCompletionOutcome::Captured {
-                faction,
-                award_variable_result,
-                award_script_result,
-                top_info_delivery,
-            },
-            deliveries,
-        }
+        tracing::debug!(region_id, player_id = contender.player_id, symbol_id = contender.symbol_id, faction, award_variable_result, ?award_script_result, ?top_info_delivery, deliveries, "завершён захват символа битвы богов");
     }
 
-    fn cancel_gods_battle_contend_symbol(&mut self, region_id: i32, symbol_id: i32) -> Vec<i32> {
+    fn cancel_gods_battle_contend_symbol(&mut self, region_id: i32, symbol_id: i32) -> usize {
         let Some(owner) = self.take_region_owner(region_id) else {
-            return Vec::new();
+            return 0;
         };
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
-            return Vec::new();
+            return 0;
         };
-        let mut deliveries = Vec::new();
+        let mut deliveries = 0usize;
         if let Some(contender) = region.cancel_contend_by_symbol(symbol_id) {
-            deliveries.push(self.send_gods_battle_contend_time(contender.player_id, 0));
+            let time_delivery = self.send_gods_battle_contend_time(contender.player_id, 0);
+            deliveries = deliveries.wrapping_add(1);
             if let Some(delivery) = self.set_gods_battle_player_contend_state(
                 &region.war.base,
                 contender.player_id,
                 false,
             ) {
-                deliveries.push(delivery);
+                deliveries = deliveries.wrapping_add(1);
+                tracing::trace!(region_id, symbol_id, player_id = contender.player_id, time_delivery, delivery, "отменён захват символа битвы богов");
+            } else {
+                tracing::trace!(region_id, symbol_id, player_id = contender.player_id, time_delivery, "отменён захват символа битвы богов без смены состояния");
             }
         }
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
