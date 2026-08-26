@@ -7040,6 +7040,7 @@ impl CGame {
             self.variable_list_file_data.as_deref(),
             now_ms,
             self.globe_setup.one_pk_count_time_ms(),
+            self.globe_setup.pack_add_enabled(),
             &mut ordinary_threshold,
             &mut battle_threshold,
         )
@@ -14655,6 +14656,28 @@ impl CGame {
 
     pub(crate) const fn auction_room_mut(&mut self) -> &mut CGameAuctionRoom {
         &mut self.auction_room
+    }
+
+    pub(crate) fn modify_script_player_auction_space(
+        &mut self,
+        requested_player_id: i32,
+        fallback_player_id: i32,
+        requested_space: u32,
+    ) {
+        let player_id = self
+            .find_player(requested_player_id)
+            .map(CPlayer::player_id)
+            .unwrap_or(fallback_player_id);
+        let pack_add_enabled = self.globe_setup.pack_add_enabled();
+        let Some(current) = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.modify_auction_space(requested_space, pack_add_enabled))
+        else {
+            return;
+        };
+        let mut message = CMessage::new(0x000c_070b);
+        message.add_ulong(current);
+        let _ = message.send_to_player(self.net_server(), player_id);
     }
 
     pub(crate) fn refresh_player_auction_self_goods(

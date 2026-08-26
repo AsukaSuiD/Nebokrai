@@ -393,8 +393,9 @@ const BASE_FETCH_POWER_OFFSET: usize = 0x164;
 const BASE_BATTLE_FAIRY_SUMMONED_OFFSET: usize = 0x16c;
 const BASE_BATTLE_FAIRY_RECALL_OFFSET: usize = 0x16d;
 const BASE_BATTLE_FAIRY_DIED_OFFSET: usize = 0x16e;
-const BASE_JJC_LEVEL_OFFSET: usize = 0x170;
-const BASE_JJC_SCORE_OFFSET: usize = 0x174;
+const BASE_AUCTION_SPACE_OFFSET: usize = 0x170;
+const BASE_JJC_LEVEL_OFFSET: usize = 0x174;
+const BASE_JJC_SCORE_OFFSET: usize = 0x178;
 const BASE_FY_ENERGY_OFFSET: usize = 0x17c;
 const BASE_FY_ENABLE_FLAGS_OFFSET: usize = 0x180;
 const BASE_LT_UP_60_COUNT_OFFSET: usize = 0x184;
@@ -1280,6 +1281,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) fetch_power: u32,
     pub(crate) battle_fairy_recall: bool,
     pub(crate) battle_fairy_died: bool,
+    pub(crate) auction_space: u32,
     pub(crate) jjc_level: u32,
     pub(crate) jjc_score: u32,
     pub(crate) days_honor_eliminate: u32,
@@ -2486,6 +2488,7 @@ impl CPlayer {
         variable_definitions: Option<&[u8]>,
         now_ms: u32,
         one_pk_count_time_ms: u32,
+        pack_add_enabled: bool,
         ordinary_threshold: &mut dyn FnMut(u32, u32) -> u32,
         battle_threshold: &mut dyn FnMut(u32, u32) -> u32,
     ) -> Result<(Self, PlayerGameSaveDecodeReport), PlayerGameSaveCodecError> {
@@ -2634,6 +2637,14 @@ impl CPlayer {
             &mut *ordinary_threshold,
             &mut *battle_threshold,
         )?;
+        player.auction_goods.set_all_inactive();
+        if pack_add_enabled {
+            let inactive = player
+                .auction_goods
+                .size()
+                .wrapping_sub(player.base_properties.auction_space);
+            player.auction_goods.apply_player_expansion_limit(inactive);
+        }
         let _released = player.auction_listing.set_container_volume(2);
         player.auction_listing.unserialize(
             source,
@@ -3113,6 +3124,10 @@ impl CPlayer {
             (BASE_APPELLATION_OFFSET, self.base_properties.appellation_id),
             (BASE_MODE_OFFSET, self.base_properties.mode),
             (BASE_FETCH_POWER_OFFSET, self.base_properties.fetch_power),
+            (
+                BASE_AUCTION_SPACE_OFFSET,
+                self.base_properties.auction_space,
+            ),
             (BASE_JJC_LEVEL_OFFSET, self.base_properties.jjc_level),
             (BASE_JJC_SCORE_OFFSET, self.base_properties.jjc_score),
             (BASE_FY_ENERGY_OFFSET, self.base_properties.fy_energy),
@@ -3244,6 +3259,7 @@ impl CPlayer {
         self.battle_fairy_summoned = wire[BASE_BATTLE_FAIRY_SUMMONED_OFFSET] != 0;
         self.base_properties.battle_fairy_recall = wire[BASE_BATTLE_FAIRY_RECALL_OFFSET] != 0;
         self.base_properties.battle_fairy_died = wire[BASE_BATTLE_FAIRY_DIED_OFFSET] != 0;
+        self.base_properties.auction_space = read_player_wire_u32(wire, BASE_AUCTION_SPACE_OFFSET);
         self.base_properties.jjc_level = read_player_wire_u32(wire, BASE_JJC_LEVEL_OFFSET);
         self.base_properties.jjc_score = read_player_wire_u32(wire, BASE_JJC_SCORE_OFFSET);
         self.base_properties.fy_energy = read_player_wire_u32(wire, BASE_FY_ENERGY_OFFSET);
@@ -7942,6 +7958,28 @@ impl CPlayer {
 
     pub(crate) const fn auction_goods(&self) -> &CVolumeLimitGoodsContainer {
         &self.auction_goods
+    }
+
+    /// Точная часть состояния `CPlayer::ModifyAuctionSpace`: значение должно
+    /// находиться между текущим числом свободных расширенных ячеек и полным
+    /// объёмом контейнера. Исходные методы контейнера работают только с
+    /// расширенной областью, начинающейся с позиции 48.
+    pub(crate) fn modify_auction_space(
+        &mut self,
+        requested: u32,
+        pack_add_enabled: bool,
+    ) -> Option<u32> {
+        if requested > self.auction_goods.size() || requested < self.base_properties.auction_space {
+            return None;
+        }
+        self.auction_goods.set_all_inactive();
+        if pack_add_enabled {
+            self.auction_goods
+                .apply_player_expansion_limit(self.auction_goods.size().wrapping_sub(requested));
+        }
+        let current = self.auction_goods.expansion_available_space();
+        self.base_properties.auction_space = current;
+        Some(current)
     }
 
     pub(crate) const fn auction_listing(&self) -> &CVolumeLimitGoodsContainer {

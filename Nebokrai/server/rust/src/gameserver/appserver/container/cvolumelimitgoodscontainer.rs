@@ -507,6 +507,15 @@ impl CVolumeLimitGoodsContainer {
         }
     }
 
+    pub(crate) fn expansion_available_space(&self) -> u32 {
+        self.cells
+            .iter()
+            .skip(EXPANSION_BASE_CELL)
+            .fold(0u32, |available, cell| {
+                available.wrapping_add(u32::from(*cell == VolumeCell::Available))
+            })
+    }
+
     /// `SetExpantePosInvalid`: после базового `SetAllInactive` equipment
     /// expansion открывает prefix дополнительных packet-ячеек.
     pub(crate) fn apply_player_expansion_limit(&mut self, expanded: u32) {

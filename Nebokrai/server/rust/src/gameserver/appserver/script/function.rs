@@ -464,6 +464,7 @@ pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
 pub(crate) const SCRIPT_FUNCTION_DA_KONG_MODIFY: i32 = 9352;
 pub(crate) const SCRIPT_FUNCTION_DA_KONG_DELUX_MODIFY: i32 = 9353;
 pub(crate) const SCRIPT_FUNCTION_MODIFY_GOODS_TIME: i32 = 9509;
+pub(crate) const SCRIPT_FUNCTION_MODIFY_AUCTION_SPACE: i32 = 9513;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CI_QING_PAGE: i32 = 9628;
 pub(crate) const SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING: i32 = 9629;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
@@ -749,7 +750,6 @@ pub(crate) const SCRIPT_FUNCTION_GET_CARRIAGE_DISTANCE: i32 = 3506;
 pub(crate) const SCRIPT_FUNCTION_GET_QUEST_TIME: i32 = 3507;
 pub(crate) const SCRIPT_FUNCTION_GET_CARRIAGE_INDEX: i32 = 3508;
 pub(crate) const SCRIPT_FUNCTION_OPEN_SYNTHESIS: i32 = 3510;
-pub(crate) const SCRIPT_FUNCTION_ACTIVITY_LOG: i32 = 9510;
 pub(crate) const SCRIPT_FUNCTION_SET_COUNTRY_POWER: i32 = 9001;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_POWER: i32 = 9000;
 pub(crate) const SCRIPT_FUNCTION_GET_COUNTRY_TECH_LEVEL: i32 = 9002;
@@ -4279,8 +4279,11 @@ pub(crate) fn script_function_parameter_kind(
             0 | 1 => String,
             _ => Unused,
         },
-        SCRIPT_FUNCTION_ACTIVITY_LOG => Unused,
         SCRIPT_FUNCTION_MODIFY_GOODS_TIME => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_MODIFY_AUCTION_SPACE => match index {
             0 | 1 => Integer,
             _ => Unused,
         },
@@ -7545,7 +7548,14 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
-        SCRIPT_FUNCTION_ACTIVITY_LOG => {
+        SCRIPT_FUNCTION_MODIFY_AUCTION_SPACE => {
+            if let Some(player_id) = script_player_id {
+                game.modify_script_player_auction_space(
+                    integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
+                    player_id,
+                    integer_arguments[1].unwrap_or(SCRIPT_INT_PARAMETER_ERROR) as u32,
+                );
+            }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_ADD_QUEST
