@@ -1501,46 +1501,6 @@ pub(crate) trait PlayerEquipmentInspectionContext: OldClientGoodsCodec {}
 impl<T: OldClientGoodsCodec> PlayerEquipmentInspectionContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerEquipmentInspectionOutcome {
-    MissingTarget,
-    ModeBlocked,
-    Sent,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerEquipmentInspectionEntry {
-    pub(crate) slot: u8,
-    pub(crate) goods: ShapeIdentity,
-    pub(crate) old_client_payload: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerEquipmentInspectionReport {
-    pub(crate) requester_id: i32,
-    pub(crate) target_id: i32,
-    pub(crate) outcome: PlayerEquipmentInspectionOutcome,
-    pub(crate) head_picture: Option<i32>,
-    pub(crate) face_picture: Option<i32>,
-    pub(crate) entries: Vec<PlayerEquipmentInspectionEntry>,
-    pub(crate) delivery: Option<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ContainerScriptActionOutcome {
-    InvalidAction,
-    SelectionCleared { shadows: usize },
-    EmptyScript,
-    Dispatched { script_data_found: bool },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ContainerScriptActionReport {
-    pub(crate) action: Option<i8>,
-    pub(crate) script_name: Vec<u8>,
-    pub(crate) outcome: ContainerScriptActionOutcome,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HotkeyAssignmentOutcome {
     InvalidSlot,
     Assigned,
@@ -24100,54 +24060,40 @@ impl CGame {
         requester_id: i32,
         target_id: i32,
         context: &mut Context,
-    ) -> PlayerEquipmentInspectionReport {
-        let mut report = PlayerEquipmentInspectionReport {
-            requester_id,
-            target_id,
-            outcome: PlayerEquipmentInspectionOutcome::MissingTarget,
-            head_picture: None,
-            face_picture: None,
-            entries: Vec::new(),
-            delivery: None,
-        };
+    ) {
         let Some(target) = self.find_player(target_id) else {
-            return report;
+            tracing::trace!(requester_id, target_id, "игрок для просмотра экипировки не найден");
+            return;
         };
         let (head_picture, face_picture, mode) = target.appearance_and_mode();
-        report.head_picture = Some(head_picture);
-        report.face_picture = Some(face_picture);
         if mode != 0 {
-            report.outcome = PlayerEquipmentInspectionOutcome::ModeBlocked;
-            report.delivery = Some(
-                colored_player_notice_message(0xffff_0000, 0, self.get_string_by_id(b"GSN0336"))
-                    .send_to_player(self.net_server(), requester_id),
-            );
-            return report;
+            let delivery = colored_player_notice_message(
+                0xffff_0000,
+                0,
+                self.get_string_by_id(b"GSN0336"),
+            )
+            .send_to_player(self.net_server(), requester_id);
+            tracing::trace!(requester_id, target_id, mode, delivery, "режим игрока запрещает просмотр экипировки");
+            return;
         }
 
         let equipment_count = target.equipment().goods_amount(&self.goods_factory) as u8;
-        for slot in 0..EQUIPMENT_COLUMN_LIMIT {
-            let Some(goods) = target.equipment().get_goods(slot) else {
-                continue;
-            };
-            report.entries.push(PlayerEquipmentInspectionEntry {
-                slot: slot as u8,
-                goods: goods.identity(),
-                old_client_payload: context.encode_goods_for_old_client(goods),
-            });
-        }
         let mut response = CMessage::new(0x0b_f911);
         response.add_long(target_id);
         response.add_long(head_picture);
         response.add_long(face_picture);
         response.add_byte(equipment_count);
-        for entry in &report.entries {
-            response.add_byte(entry.slot);
-            response.base_mut().add(&entry.old_client_payload);
+        for slot in 0..EQUIPMENT_COLUMN_LIMIT {
+            let Some(goods) = target.equipment().get_goods(slot) else {
+                continue;
+            };
+            response.add_byte(slot as u8);
+            response
+                .base_mut()
+                .add(&context.encode_goods_for_old_client(goods));
         }
-        report.delivery = Some(response.send_to_player(self.net_server(), requester_id));
-        report.outcome = PlayerEquipmentInspectionOutcome::Sent;
-        report
+        let delivery = response.send_to_player(self.net_server(), requester_id);
+        tracing::trace!(requester_id, target_id, equipment_count, delivery, "экипировка игрока отправлена");
     }
 
     pub(crate) fn handle_container_script_action<Runtime: ScriptFunctionRuntime>(
@@ -24156,23 +24102,17 @@ impl CGame {
         region_id: Option<i32>,
         action: i8,
         runtime: &mut Runtime,
-    ) -> Option<ContainerScriptActionReport> {
+    ) -> Option<()> {
         if action == 0 {
             let shadows = self
                 .find_player_mut(player_id)?
                 .clear_all_enhancement_selection();
-            return Some(ContainerScriptActionReport {
-                action: Some(action),
-                script_name: Vec::new(),
-                outcome: ContainerScriptActionOutcome::SelectionCleared { shadows },
-            });
+            tracing::trace!(player_id, action, shadows, "выбор контейнерного сценария очищен");
+            return Some(());
         }
         if action != 1 {
-            return Some(ContainerScriptActionReport {
-                action: Some(action),
-                script_name: Vec::new(),
-                outcome: ContainerScriptActionOutcome::InvalidAction,
-            });
+            tracing::trace!(player_id, action, "неверное действие контейнерного сценария");
+            return Some(());
         }
         self.run_last_container_script(player_id, region_id, Some(action), runtime)
     }
@@ -24182,7 +24122,7 @@ impl CGame {
         player_id: i32,
         region_id: Option<i32>,
         runtime: &mut Runtime,
-    ) -> Option<ContainerScriptActionReport> {
+    ) -> Option<()> {
         self.run_last_container_script(player_id, region_id, None, runtime)
     }
 
@@ -24312,17 +24252,14 @@ impl CGame {
         region_id: Option<i32>,
         action: Option<i8>,
         runtime: &mut Runtime,
-    ) -> Option<ContainerScriptActionReport> {
+    ) -> Option<()> {
         let script_name = self
             .find_player(player_id)?
             .last_container_script()
             .to_vec();
         if script_name.is_empty() {
-            return Some(ContainerScriptActionReport {
-                action,
-                script_name,
-                outcome: ContainerScriptActionOutcome::EmptyScript,
-            });
+            tracing::trace!(player_id, ?action, "имя контейнерного сценария пусто");
+            return Some(());
         }
         let script_data_found = self.script_file_data(&script_name).is_some();
         let _ = self.run_script_file(
@@ -24334,11 +24271,8 @@ impl CGame {
             },
             runtime,
         );
-        Some(ContainerScriptActionReport {
-            action,
-            script_name,
-            outcome: ContainerScriptActionOutcome::Dispatched { script_data_found },
-        })
+        tracing::trace!(player_id, ?action, ?script_name, script_data_found, "контейнерный сценарий выполнен");
+        Some(())
     }
 
     fn send_hotkey_hand_transfer(
