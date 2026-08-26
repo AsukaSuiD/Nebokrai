@@ -73,22 +73,17 @@ pub(crate) struct CScriptFunctionRegistry {
     functions: BTreeMap<Vec<u8>, i32>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ScriptFunctionLoadReport {
-    pub(crate) declared_functions: usize,
-    pub(crate) replaced_names: usize,
-}
-
 impl CScriptFunctionRegistry {
-    pub(crate) fn load(&mut self, source: &[u8]) -> ScriptFunctionLoadReport {
+    pub(crate) fn load(&mut self, source: &[u8]) {
         self.functions.clear();
-        let mut report = ScriptFunctionLoadReport::default();
+        let mut declared_functions = 0usize;
+        let mut replaced_names = 0usize;
         for (caption, name) in section_records(source, b"FunctionList") {
             let id = legacy_atoi(caption);
             if self.functions.insert(name.to_vec(), id).is_some() {
-                report.replaced_names += 1;
+                replaced_names += 1;
             }
-            report.declared_functions += 1;
+            declared_functions += 1;
         }
         if self
             .functions
@@ -98,9 +93,14 @@ impl CScriptFunctionRegistry {
             )
             .is_some()
         {
-            report.replaced_names += 1;
+            replaced_names += 1;
         }
-        report
+        tracing::debug!(
+            declared_functions,
+            replaced_names,
+            registered_functions = self.functions.len(),
+            "загружен реестр сценарных функций"
+        );
     }
 
     pub(crate) fn query(&self, name: &[u8]) -> Option<i32> {
@@ -182,14 +182,6 @@ pub(crate) enum ScriptCommandOutcome {
     InvalidExpression,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ScriptExecutionReport {
-    pub(crate) commands_read: usize,
-    pub(crate) function_calls: usize,
-    pub(crate) last_return: i32,
-    pub(crate) outcomes: Vec<ScriptCommandOutcome>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ScriptStepDisposition {
     Ended,
@@ -208,12 +200,6 @@ pub(crate) enum ScriptStepDisposition {
         countdown_seconds: Option<i32>,
         expired_path: Option<Vec<u8>>,
     },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptStepReport {
-    pub(crate) execution: ScriptExecutionReport,
-    pub(crate) disposition: ScriptStepDisposition,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -308,28 +294,22 @@ impl ActiveScript {
         &mut self,
         game: &mut CGame,
         runtime: &mut Runtime,
-    ) -> ScriptStepReport {
+    ) -> ScriptStepDisposition {
         if let Some(wait) = self.runtime_wait.as_mut() {
             let now = runtime.now_milliseconds();
             if matches!(&wait.completion, ScriptRuntimeCompletion::Continue) {
                 if wait.deadline_ms < now {
                     self.runtime_wait = None;
                 }
-                return ScriptStepReport {
-                    execution: ScriptExecutionReport::default(),
-                    disposition: ScriptStepDisposition::WaitingRuntime {
-                        countdown_seconds: None,
-                        expired_path: None,
-                    },
+                return ScriptStepDisposition::WaitingRuntime {
+                    countdown_seconds: None,
+                    expired_path: None,
                 };
             }
             if now.wrapping_sub(wait.last_update_ms) <= 999 {
-                return ScriptStepReport {
-                    execution: ScriptExecutionReport::default(),
-                    disposition: ScriptStepDisposition::WaitingRuntime {
-                        countdown_seconds: None,
-                        expired_path: None,
-                    },
+                return ScriptStepDisposition::WaitingRuntime {
+                    countdown_seconds: None,
+                    expired_path: None,
                 };
             }
             wait.last_update_ms = now;
@@ -345,12 +325,9 @@ impl ActiveScript {
             if expired_path.is_some() {
                 self.runtime_wait = None;
             }
-            return ScriptStepReport {
-                execution: ScriptExecutionReport::default(),
-                disposition: ScriptStepDisposition::WaitingRuntime {
-                    countdown_seconds: Some((remaining_ms / 1000) as i32),
-                    expired_path,
-                },
+            return ScriptStepDisposition::WaitingRuntime {
+                countdown_seconds: Some((remaining_ms / 1000) as i32),
+                expired_path,
             };
         }
         if let Some(function_id) = self.waiting_function {
@@ -371,20 +348,20 @@ impl ActiveScript {
                 };
                 self.integer_variables
                     .insert(normalize_name(b"$m_TalkRet"), legacy_return);
-                return ScriptStepReport {
-                    execution: ScriptExecutionReport::default(),
-                    disposition: ScriptStepDisposition::WaitingFunctionTimedOut {
-                        function_id,
-                        legacy_return,
-                    },
+                tracing::warn!(
+                    script_id = self.id,
+                    function_id,
+                    legacy_return,
+                    "истекло ожидание результата сценарной функции"
+                );
+                return ScriptStepDisposition::WaitingFunctionTimedOut {
+                    function_id,
+                    legacy_return,
                 };
             }
-            return ScriptStepReport {
-                execution: ScriptExecutionReport::default(),
-                disposition: ScriptStepDisposition::WaitingFunction {
-                    function_id,
-                    replay_command: self.waiting_replay,
-                },
+            return ScriptStepDisposition::WaitingFunction {
+                function_id,
+                replay_command: self.waiting_replay,
             };
         }
         let mut script = CScript {
@@ -399,7 +376,7 @@ impl ActiveScript {
             pending_yield: None,
             runtime_wait: &mut self.runtime_wait,
         };
-        let report = script.run_step(game, runtime);
+        let disposition = script.run_step(game, runtime);
         self.point = script.point;
         self.integer_variables = script.integer_variables;
         self.string_variables = script.string_variables;
@@ -407,13 +384,13 @@ impl ActiveScript {
         if let ScriptStepDisposition::WaitingFunction {
             function_id,
             replay_command,
-        } = &report.disposition
+        } = &disposition
         {
             self.waiting_function = Some(*function_id);
             self.waiting_replay = *replay_command;
             self.waiting_started_ms = Some(runtime.now_milliseconds());
         }
-        report
+        disposition
     }
 }
 
@@ -442,14 +419,12 @@ impl<'a> CScript<'a> {
         &mut self,
         game: &mut CGame,
         runtime: &mut Runtime,
-    ) -> ScriptStepReport {
-        let mut report = ScriptExecutionReport::default();
+    ) -> ScriptStepDisposition {
         loop {
             let command_point = self.point;
             let Some(command) = self.read_command() else {
                 break;
             };
-            report.commands_read += 1;
             let command = trim_ascii(&command);
             if command.is_empty() || command == b"{" || command == b"}" {
                 continue;
@@ -457,15 +432,20 @@ impl<'a> CScript<'a> {
             let name = command_name(command);
             if name.eq_ignore_ascii_case(b"return") {
                 let expression = trim_ascii(&command[6..]);
-                if !expression.is_empty() {
-                    report.last_return = self
+                let legacy_return = if expression.is_empty() {
+                    0
+                } else {
+                    self
                         .evaluate_integer(game, runtime, expression)
-                        .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
-                }
-                return ScriptStepReport {
-                    execution: report,
-                    disposition: ScriptStepDisposition::Ended,
+                        .unwrap_or(SCRIPT_INT_PARAMETER_ERROR)
                 };
+                tracing::trace!(
+                    script_id = self.script_id,
+                    command_point,
+                    legacy_return,
+                    "сценарий завершён командой return"
+                );
+                return ScriptStepDisposition::Ended;
             }
             if name.eq_ignore_ascii_case(b"<begin>")
                 || name.eq_ignore_ascii_case(b"<end>")
@@ -483,40 +463,29 @@ impl<'a> CScript<'a> {
                             .filter(|value| !value.is_empty())
                     });
                 let Some(condition) = condition else {
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "отсутствует условие if");
                     break;
                 };
                 let Some(condition) = self.evaluate_integer(game, runtime, condition) else {
                     if let Some(function_id) = self.pending_yield.take() {
                         self.point = command_point;
-                        return ScriptStepReport {
-                            execution: report,
-                            disposition: ScriptStepDisposition::WaitingFunction {
-                                function_id,
-                                replay_command: true,
-                            },
+                        return ScriptStepDisposition::WaitingFunction {
+                            function_id,
+                            replay_command: true,
                         };
                     }
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "не вычислено условие if");
                     break;
                 };
                 if condition == 0 && !self.skip_next_block(true) {
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "не найден блок после if");
                     break;
                 }
                 continue;
             }
             if name.eq_ignore_ascii_case(b"else") {
                 if !self.skip_next_block(false) {
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "не найден блок после else");
                     break;
                 }
                 continue;
@@ -527,15 +496,11 @@ impl<'a> CScript<'a> {
                     .map(unquote)
                     .filter(|value| !value.is_empty())
                 else {
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "отсутствует цель goto");
                     break;
                 };
                 if !self.jump_to(target) {
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "не найдена цель goto");
                     break;
                 }
                 continue;
@@ -545,21 +510,14 @@ impl<'a> CScript<'a> {
                     .and_then(|values| values.first().copied())
                     .and_then(|value| self.evaluate_string(game, runtime, value))
                 else {
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "не вычислен путь call");
                     break;
                 };
                 if game.script_file_data(&path).is_none() {
-                    report
-                        .outcomes
-                        .push(ScriptCommandOutcome::InvalidExpression);
+                    self.trace_invalid_command(command_point, "не найден файл call");
                     break;
                 }
-                return ScriptStepReport {
-                    execution: report,
-                    disposition: ScriptStepDisposition::YieldedCall { path },
-                };
+                return ScriptStepDisposition::YieldedCall { path };
             }
             if let Some(assigned) = self.run_assignment(game, runtime, command) {
                 if assigned {
@@ -567,17 +525,12 @@ impl<'a> CScript<'a> {
                 }
                 if let Some(function_id) = self.pending_yield.take() {
                     self.point = command_point;
-                    return ScriptStepReport {
-                        execution: report,
-                        disposition: ScriptStepDisposition::WaitingFunction {
-                            function_id,
-                            replay_command: true,
-                        },
+                    return ScriptStepDisposition::WaitingFunction {
+                        function_id,
+                        replay_command: true,
                     };
                 }
-                report
-                    .outcomes
-                    .push(ScriptCommandOutcome::InvalidExpression);
+                self.trace_invalid_command(command_point, "не вычислено присваивание");
                 break;
             }
             match self.run_function(game, runtime, command) {
@@ -585,19 +538,17 @@ impl<'a> CScript<'a> {
                     function_id,
                     legacy_return,
                 } => {
-                    report.function_calls += 1;
-                    report.last_return = legacy_return;
-                    report.outcomes.push(ScriptCommandOutcome::Handled {
+                    tracing::trace!(
+                        script_id = self.script_id,
+                        command_point,
                         function_id,
                         legacy_return,
-                    });
+                        "сценарная функция выполнена"
+                    );
                     if self.runtime_wait.is_some() {
-                        return ScriptStepReport {
-                            execution: report,
-                            disposition: ScriptStepDisposition::WaitingRuntime {
-                                countdown_seconds: None,
-                                expired_path: None,
-                            },
+                        return ScriptStepDisposition::WaitingRuntime {
+                            countdown_seconds: None,
+                            expired_path: None,
                         };
                     }
                 }
@@ -605,45 +556,51 @@ impl<'a> CScript<'a> {
                     function_id,
                     legacy_return,
                 } => {
-                    report.function_calls += 1;
-                    report.last_return = legacy_return;
-                    report.outcomes.push(ScriptCommandOutcome::Yielded {
+                    tracing::trace!(
+                        script_id = self.script_id,
+                        command_point,
                         function_id,
                         legacy_return,
-                    });
-                    return ScriptStepReport {
-                        execution: report,
-                        disposition: ScriptStepDisposition::WaitingFunction {
-                            function_id,
-                            replay_command: false,
-                        },
+                        "сценарная функция ожидает продолжения"
+                    );
+                    return ScriptStepDisposition::WaitingFunction {
+                        function_id,
+                        replay_command: false,
                     };
                 }
                 ScriptCommandOutcome::Terminated {
                     function_id,
                     legacy_return,
                 } => {
-                    report.function_calls += 1;
-                    report.last_return = legacy_return;
-                    report.outcomes.push(ScriptCommandOutcome::Terminated {
+                    tracing::trace!(
+                        script_id = self.script_id,
+                        command_point,
                         function_id,
                         legacy_return,
-                    });
-                    return ScriptStepReport {
-                        execution: report,
-                        disposition: ScriptStepDisposition::Ended,
-                    };
+                        "сценарная функция завершила сценарий"
+                    );
+                    return ScriptStepDisposition::Ended;
                 }
-                outcome => {
-                    report.outcomes.push(outcome);
+                ScriptCommandOutcome::UnknownFunction => {
+                    self.trace_invalid_command(command_point, "неизвестная сценарная функция");
+                    break;
+                }
+                ScriptCommandOutcome::InvalidExpression => {
+                    self.trace_invalid_command(command_point, "не вычислены аргументы функции");
                     break;
                 }
             }
         }
-        ScriptStepReport {
-            execution: report,
-            disposition: ScriptStepDisposition::Ended,
-        }
+        ScriptStepDisposition::Ended
+    }
+
+    fn trace_invalid_command(&self, command_point: usize, reason: &'static str) {
+        tracing::debug!(
+            script_id = self.script_id,
+            command_point,
+            reason,
+            "исполнение сценария остановлено на некорректной команде"
+        );
     }
 
     fn run_function<Runtime: ScriptFunctionRuntime>(

@@ -14945,8 +14945,7 @@ impl CGame {
                 trace!(target: "miracle_server::gameserver::script", script_id, "сценарий завершён: владелец-игрок отсутствует");
                 continue;
             }
-            let step = script.run_step(self, runtime);
-            let disposition = step.disposition.clone();
+            let disposition = script.run_step(self, runtime);
             match disposition {
                 ScriptStepDisposition::Ended => {
                     trace!(target: "miracle_server::gameserver::script", script_id, "сценарий завершён");
