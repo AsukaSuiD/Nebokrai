@@ -7180,12 +7180,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let Some(trade_name) = string_arguments[0].filter(|name| !name.is_empty()) else {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             };
-            let report = game.open_script_npc_shop(
+            let outcome = game.open_script_npc_shop(
                 player_id,
                 script_npc_id.expect("живой NPC проверен до открытия магазина"),
                 trade_name,
             );
-            Some(if report.outcome == ScriptNpcShopOpenOutcome::Opened {
+            Some(if outcome == ScriptNpcShopOpenOutcome::Opened {
                 ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
             } else {
                 ScriptFunctionDispatchOutcome::Invalid
@@ -7195,8 +7195,8 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             if argument_count != 0 || script_player_id.is_none() {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }
-            let report = game.open_script_depot(player_id);
-            Some(if report.outcome == ScriptDepotOpenOutcome::Opened {
+            let outcome = game.open_script_depot(player_id);
+            Some(if outcome == ScriptDepotOpenOutcome::Opened {
                 ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 }
             } else {
                 ScriptFunctionDispatchOutcome::Invalid

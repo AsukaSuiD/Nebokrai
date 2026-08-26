@@ -1535,15 +1535,6 @@ pub(crate) enum ScriptNpcShopOpenOutcome {
     Opened,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptNpcShopOpenReport {
-    pub(crate) player_id: i32,
-    pub(crate) npc_id: i32,
-    pub(crate) outcome: ScriptNpcShopOpenOutcome,
-    pub(crate) delivery: Option<i32>,
-    pub(crate) transition: Option<GoodsSessionPlayerRelease>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ScriptDepotOpenOutcome {
     MissingPlayer,
@@ -1552,24 +1543,6 @@ pub(crate) enum ScriptDepotOpenOutcome {
     InvalidGoods,
     SendFailed,
     Opened,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptDepotOpenReport {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: ScriptDepotOpenOutcome,
-    pub(crate) password_required: bool,
-    pub(crate) goods_amount: u32,
-    pub(crate) delivery: Option<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptGoodsDropReport {
-    pub(crate) requested: u32,
-    pub(crate) created: usize,
-    pub(crate) placed: Vec<ShapeIdentity>,
-    pub(crate) player_deliveries: Vec<i32>,
-    pub(crate) around_deliveries: Vec<Option<Result<i32, ShapeCoordinateBlock>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17126,28 +17099,22 @@ impl CGame {
         player_id: i32,
         npc_id: i32,
         trade_name: &[u8],
-    ) -> ScriptNpcShopOpenReport {
-        let mut report = ScriptNpcShopOpenReport {
-            player_id,
-            npc_id,
-            outcome: ScriptNpcShopOpenOutcome::MissingContext,
-            delivery: None,
-            transition: None,
-        };
+    ) -> ScriptNpcShopOpenOutcome {
         let Some(player) = self.find_player(player_id) else {
-            return report;
+            tracing::trace!(player_id, npc_id, "игрок сценарного магазина не найден");
+            return ScriptNpcShopOpenOutcome::MissingContext;
         };
         if player.current_progress() != PlayerProgress::None {
-            report.outcome = ScriptNpcShopOpenOutcome::Busy;
-            return report;
+            tracing::trace!(player_id, npc_id, "игрок занят при открытии сценарного магазина");
+            return ScriptNpcShopOpenOutcome::Busy;
         }
         let Some(trade) = self.trade_list.get_trade(trade_name) else {
-            report.outcome = ScriptNpcShopOpenOutcome::MissingTrade;
-            return report;
+            tracing::trace!(player_id, npc_id, "торговый список сценарного магазина не найден");
+            return ScriptNpcShopOpenOutcome::MissingTrade;
         };
         let Ok(goods_count) = i32::try_from(trade.goods().len()) else {
-            report.outcome = ScriptNpcShopOpenOutcome::InvalidTradeGoods;
-            return report;
+            tracing::warn!(player_id, npc_id, "торговый список сценарного магазина не помещается в wire-счётчик");
+            return ScriptNpcShopOpenOutcome::InvalidTradeGoods;
         };
         let mut message = CMessage::new(0x000b_fa01);
         message.add_long(npc_id);
@@ -17157,16 +17124,16 @@ impl CGame {
                 .goods_factory
                 .query_goods_base_properties(goods.goods_id)
             else {
-                report.outcome = ScriptNpcShopOpenOutcome::InvalidTradeGoods;
-                return report;
+                tracing::warn!(player_id, npc_id, goods_id = goods.goods_id, "базовые свойства товара сценарного магазина не найдены");
+                return ScriptNpcShopOpenOutcome::InvalidTradeGoods;
             };
             if goods.page >= 4
                 || goods.position_x >= 8
                 || goods.position_y >= 11
                 || goods.amount == 0
             {
-                report.outcome = ScriptNpcShopOpenOutcome::InvalidTradeGoods;
-                return report;
+                tracing::warn!(player_id, npc_id, goods_id = goods.goods_id, "товар сценарного магазина имеет недопустимые координаты или количество");
+                return ScriptNpcShopOpenOutcome::InvalidTradeGoods;
             }
             message.add_byte(goods.page);
             message.add_byte(goods.position_x);
@@ -17176,45 +17143,36 @@ impl CGame {
             message.add_ulong(properties.weight());
             message.add_ulong(goods.goods_id);
         }
-        report.transition = self
+        let transition = self
             .find_player_mut(player_id)
             .map(|player| player.begin_equipment_session(PlayerProgress::Shopping, true));
         let delivery = message.send_to_player(self.net_server(), player_id);
-        report.delivery = Some(delivery);
         if delivery == 0 {
-            report.outcome = ScriptNpcShopOpenOutcome::SendFailed;
-            if let Some(player) = self.find_player_mut(player_id) {
-                let _ = player.release_goods_session_state();
-            }
-            return report;
+            let rollback = self
+                .find_player_mut(player_id)
+                .map(|player| player.release_goods_session_state());
+            tracing::warn!(player_id, npc_id, delivery, ?transition, ?rollback, "отправка открытия сценарного магазина завершилась ошибкой");
+            return ScriptNpcShopOpenOutcome::SendFailed;
         }
-        report.outcome = ScriptNpcShopOpenOutcome::Opened;
-        report
+        tracing::trace!(player_id, npc_id, delivery, ?transition, "сценарный магазин открыт");
+        ScriptNpcShopOpenOutcome::Opened
     }
 
-    pub(crate) fn open_script_depot(&mut self, player_id: i32) -> ScriptDepotOpenReport {
-        let mut report = ScriptDepotOpenReport {
-            player_id,
-            outcome: ScriptDepotOpenOutcome::MissingPlayer,
-            password_required: false,
-            goods_amount: 0,
-            delivery: None,
-        };
+    pub(crate) fn open_script_depot(&mut self, player_id: i32) -> ScriptDepotOpenOutcome {
         let Some(player) = self.find_player(player_id) else {
-            return report;
+            tracing::trace!(player_id, "игрок сценарного склада не найден");
+            return ScriptDepotOpenOutcome::MissingPlayer;
         };
         if player.current_progress() != PlayerProgress::None {
-            report.outcome = ScriptDepotOpenOutcome::Busy;
-            return report;
+            tracing::trace!(player_id, "игрок занят при открытии сценарного склада");
+            return ScriptDepotOpenOutcome::Busy;
         }
         let goods_amount = player.depot().goods_amount(&self.goods_factory);
-        report.goods_amount = goods_amount;
         if goods_amount > 96 {
-            report.outcome = ScriptDepotOpenOutcome::TooManyGoods;
-            return report;
+            tracing::warn!(player_id, goods_amount, "число товаров сценарного склада превышает wire-предел");
+            return ScriptDepotOpenOutcome::TooManyGoods;
         }
         let password_required = !player.depot_password().is_empty();
-        report.password_required = password_required;
         self.find_player_mut(player_id)
             .expect("игрок проверен до подготовки склада")
             .prepare_depot_storage(password_required);
@@ -17249,23 +17207,23 @@ impl CGame {
                 self.find_player_mut(player_id)
                     .expect("игрок сохраняется при отказе снимка склада")
                     .close_depot_storage();
-                report.outcome = ScriptDepotOpenOutcome::InvalidGoods;
-                return report;
+                tracing::warn!(player_id, goods_amount, "базовые свойства товара сценарного склада не найдены");
+                return ScriptDepotOpenOutcome::InvalidGoods;
             };
             if goods.amount() == 0 || goods.amount() > u16::MAX as u32 || position >= 96 {
                 self.find_player_mut(player_id)
                     .expect("игрок сохраняется при отказе снимка склада")
                     .close_depot_storage();
-                report.outcome = ScriptDepotOpenOutcome::InvalidGoods;
-                return report;
+                tracing::warn!(player_id, goods_amount, position, amount = goods.amount(), "товар сценарного склада не помещается в wire-поля");
+                return ScriptDepotOpenOutcome::InvalidGoods;
             }
             let mut payload = Vec::new();
             if !goods.serialize_for_old_client(&mut payload, &self.goods_factory, true) {
                 self.find_player_mut(player_id)
                     .expect("игрок сохраняется при отказе снимка склада")
                     .close_depot_storage();
-                report.outcome = ScriptDepotOpenOutcome::InvalidGoods;
-                return report;
+                tracing::warn!(player_id, goods_amount, position, "товар сценарного склада не сериализован для старого клиента");
+                return ScriptDepotOpenOutcome::InvalidGoods;
             }
             message.add_byte(u8::from(properties.goods_type() == GOODS_TYPE_EQUIPMENT));
             message.add_short(goods.amount() as i16);
@@ -17276,16 +17234,15 @@ impl CGame {
             .expect("игрок сохраняется перед открытием склада")
             .set_current_progress_snapshot(PlayerProgress::Banking);
         let delivery = message.send_to_player(self.net_server(), player_id);
-        report.delivery = Some(delivery);
         if delivery == 0 {
             self.find_player_mut(player_id)
                 .expect("игрок сохраняется при откате открытия склада")
                 .close_depot_storage();
-            report.outcome = ScriptDepotOpenOutcome::SendFailed;
-            return report;
+            tracing::warn!(player_id, password_required, goods_amount, delivery, "отправка открытия сценарного склада завершилась ошибкой");
+            return ScriptDepotOpenOutcome::SendFailed;
         }
-        report.outcome = ScriptDepotOpenOutcome::Opened;
-        report
+        tracing::trace!(player_id, password_required, goods_amount, delivery, "сценарный склад открыт");
+        ScriptDepotOpenOutcome::Opened
     }
 
     pub(crate) fn open_equipment_session(
@@ -29004,18 +28961,13 @@ impl CGame {
         origin_x: i32,
         origin_y: i32,
         runtime: &mut Runtime,
-    ) -> ScriptGoodsDropReport {
+    ) {
         let goods_index = self
             .goods_factory
             .query_goods_id_by_original_name(Some(original_name));
         let mut created = self.create_goods_batch(goods_index, amount);
-        let mut report = ScriptGoodsDropReport {
-            requested: amount,
-            created: created.len(),
-            placed: Vec::new(),
-            player_deliveries: Vec::new(),
-            around_deliveries: Vec::new(),
-        };
+        let created_amount = created.len();
+        let mut placed_amount = 0usize;
         for goods in created.drain(..) {
             let old_client_payload = runtime.encode_goods_for_old_client(&goods);
             let item_amount = goods.amount();
@@ -29052,15 +29004,12 @@ impl CGame {
             appeared.set_destination_object_amount(item_amount);
             appeared.set_object_stream(old_client_payload);
             let around = appeared.message();
-            report
-                .player_deliveries
-                .push(appeared.send_to_player(self, player_id));
-            report
-                .around_deliveries
-                .push(self.send_player_shape_around(player_id, None, &around));
-            report.placed.push(identity);
+            let player_delivery = appeared.send_to_player(self, player_id);
+            let around_delivery = self.send_player_shape_around(player_id, None, &around);
+            placed_amount += 1;
+            tracing::trace!(player_id, region_id, goods_id = identity.id, goods_ex_id = ?identity.ex_id, player_delivery, ?around_delivery, "сценарный товар размещён в регионе");
         }
-        report
+        tracing::trace!(player_id, region_id, requested = amount, created = created_amount, placed = placed_amount, "сценарное выпадение товаров завершено");
     }
 
     /// Точная сценарная функция `3306 / DeleteMonster` не запускает владельца
