@@ -1352,29 +1352,12 @@ pub(crate) enum GameNetworkInitializationError {
     Host(ServerHostError),
 }
 
-#[derive(Debug)]
-pub(crate) struct GameInitializationThroughBillingReport {
-    pub(crate) setup: GameRuntimeSetupReport,
-    pub(crate) world: GameClientInitialization,
-    pub(crate) sequence_elements: usize,
-    pub(crate) billing: GameClientInitialization,
-}
-
-#[derive(Debug)]
-pub(crate) struct GameInitializationReport {
-    pub(crate) through_billing: GameInitializationThroughBillingReport,
-    pub(crate) move_check_cells: usize,
-    pub(crate) player_ranks_initialized: bool,
-    pub(crate) goods_war_request: Result<i32, SendMessageError>,
-}
-
 #[derive(Debug, Error)]
 pub(crate) enum GameInitializationThroughBillingError {
     #[error(transparent)]
     Setup(#[from] GameRuntimeSetupError),
     #[error("GameServer не подключился к обязательному WorldServer")]
     WorldUnavailable {
-        setup: GameRuntimeSetupReport,
         connection: GameClientInitialization,
     },
     #[error(transparent)]
@@ -4700,143 +4683,6 @@ impl<Runtime: GameMainLoopRuntime> AreaAiContext for GameAreaAiContext<'_, Runti
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameReleaseExternalOwner {
-    SocketRuntime,
-    PkSystem,
-    BaseMessageRuntime,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameReleaseDebug {
-    ServerExiting,
-    PlayerSaveFailed {
-        player_id: i32,
-        processed: usize,
-        total: usize,
-    },
-    PlayersSaved {
-        processed: usize,
-        total: usize,
-    },
-    CityRegionSaved,
-    PlayersAndRegionsCleared,
-    ProxyRegionsCleared,
-    ScriptDataCleared,
-    ServerExited,
-}
-
-fn publish_game_release_debug(message: &GameReleaseDebug) {
-    match message {
-        GameReleaseDebug::ServerExiting => eprintln!("GameServer: завершение сервера"),
-        GameReleaseDebug::PlayerSaveFailed {
-            player_id,
-            processed,
-            total,
-        } => {
-            eprintln!("GameServer: не удалось сохранить игрока {player_id} [{processed} / {total}]")
-        }
-        GameReleaseDebug::PlayersSaved { processed, total } => {
-            eprintln!("GameServer: данные игроков отправлены [{processed} / {total}]")
-        }
-        GameReleaseDebug::CityRegionSaved => {
-            eprintln!("GameServer: городские регионы сохранены")
-        }
-        GameReleaseDebug::PlayersAndRegionsCleared => {
-            eprintln!("GameServer: игроки и регионы очищены")
-        }
-        GameReleaseDebug::ProxyRegionsCleared => {
-            eprintln!("GameServer: proxy-регионы очищены")
-        }
-        GameReleaseDebug::ScriptDataCleared => {
-            eprintln!("GameServer: script-данные очищены")
-        }
-        GameReleaseDebug::ServerExited => eprintln!("GameServer: сервер завершён"),
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameReleaseEvent {
-    Debug(GameReleaseDebug),
-    ReconnectTasksStopped,
-    PlayerSave {
-        player_id: i32,
-        encoded: bool,
-        delivery: Option<Result<i32, SendMessageError>>,
-        saved: bool,
-    },
-    CityRegionSaved,
-    PlayersCleared {
-        count: usize,
-    },
-    RegionsCleared {
-        count: usize,
-    },
-    ProxyRegionsCleared {
-        count: usize,
-    },
-    ScriptDataCleared {
-        function_list: bool,
-        variable_list: bool,
-        files: usize,
-        active_scripts: usize,
-        function_registry: usize,
-        general_variables: usize,
-    },
-    TechnicalReplacement(GameReleaseExternalOwner),
-    SkillFactoryCleared,
-    GoodsFactoryReleased,
-    NetworkServerWorkerStopped {
-        present: bool,
-    },
-    WorldClientReleased {
-        present: bool,
-    },
-    BillingClientReleased {
-        present: bool,
-    },
-    NetworkServerReleased {
-        present: bool,
-    },
-    NetSessionsReleased {
-        count: usize,
-    },
-    IncrementShopReleased,
-    QuestSystemReleased,
-    SequenceRegistryCleared {
-        count: usize,
-    },
-    LoginValidationCleared {
-        sequences: usize,
-        validate_times: usize,
-    },
-    PlayerRanksReleased {
-        present: bool,
-    },
-    WordsFilterReleased,
-    HonorRanksReleased,
-    GoodsWarReleased {
-        present: bool,
-    },
-    CountryHandlerReleased,
-    CountryParamReleased,
-    AttackCitySystemReleased {
-        schedules: usize,
-    },
-    VillageWarSystemReleased {
-        schedules: usize,
-    },
-}
-
-#[must_use = "Release report сохраняет полный достигнутый teardown ordering"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameReleaseReport {
-    pub(crate) events: Vec<GameReleaseEvent>,
-    /// `Release` объявлен как int, но достигнутый tail возвращает результат
-    /// security-cookie thunk; gameplay caller значение игнорирует.
-    pub(crate) legacy_return: Option<i32>,
-}
-
 pub(crate) trait GameReleaseRuntime {
     fn save_city_region(&mut self, game: &CGame, region_id: i32);
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
@@ -4844,15 +4690,6 @@ pub(crate) trait GameReleaseRuntime {
 
 pub(crate) trait GameThreadRuntime: GameMainLoopRuntime + GameReleaseRuntime {
     fn runtime_paths(&self) -> GameRuntimePaths;
-}
-
-#[must_use = "GameThread report сохраняет Init/MainLoop/Release lifecycle"]
-#[derive(Debug)]
-pub(crate) struct GameThreadReport {
-    pub(crate) initialization:
-        Result<GameInitializationReport, GameInitializationThroughBillingError>,
-    pub(crate) main_loop_calls: usize,
-    pub(crate) release: GameReleaseReport,
 }
 
 impl ServerRegionOwner {
@@ -5769,17 +5606,17 @@ impl CGame {
     }
 
     /// Выполняет достигнутый `Init` от первого RNG seed до Billing-попытки.
-    /// World failure завершает цепочку; Billing failure только остаётся в
-    /// отчёте, как исходное предупреждение с последующим продолжением.
+    /// Ошибка World завершает цепочку; ошибка Billing остаётся исходным
+    /// предупреждением с последующим продолжением и публикуется через `tracing`.
     pub(crate) async fn init_through_billing(
         &mut self,
         paths: &GameRuntimePaths,
         wall_time_seconds: u32,
         sequence_seed_ms: u32,
-    ) -> Result<GameInitializationThroughBillingReport, GameInitializationThroughBillingError> {
-        // C++ constructor запоминал `_time` при создании process singleton-а.
-        // Safe owner получает первый доказанный wall-clock на входе `Init`;
-        // пока state=false, эта разница ненаблюдаема, а true-ветвь всегда
+    ) -> Result<(), GameInitializationThroughBillingError> {
+        // Конструктор C++ запоминал `_time` при создании одиночного владельца процесса.
+        // Безопасный владелец получает первое подтверждённое системное время на входе `Init`;
+        // пока состояние ложно, эта разница ненаблюдаема, а истинная ветвь всегда
         // перезаписывает timestamp через exact `SetAuctionState`.
         self.auction_last_check_seconds = wall_time_seconds;
         self.random_state = wall_time_seconds;
@@ -5791,7 +5628,6 @@ impl CGame {
         let world = self.init_world_client().await;
         if matches!(&world, GameClientInitialization::Failed { .. }) {
             return Err(GameInitializationThroughBillingError::WorldUnavailable {
-                setup,
                 connection: world,
             });
         }
@@ -5805,12 +5641,14 @@ impl CGame {
         let sequence_elements = self.sequence_registry.len();
 
         let billing = self.init_billing_client().await;
-        Ok(GameInitializationThroughBillingReport {
-            setup,
-            world,
+        tracing::debug!(
+            setup = ?setup,
+            world = ?world,
             sequence_elements,
-            billing,
-        })
+            billing = ?billing,
+            "завершена инициализация внешних владельцев GameServer"
+        );
+        Ok(())
     }
 
     /// Завершает точный хвост `CGame::Init` после Billing-попытки.
@@ -5819,9 +5657,8 @@ impl CGame {
         paths: &GameRuntimePaths,
         wall_time_seconds: u32,
         sequence_seed_ms: u32,
-    ) -> Result<GameInitializationReport, GameInitializationThroughBillingError> {
-        let through_billing = self
-            .init_through_billing(paths, wall_time_seconds, sequence_seed_ms)
+    ) -> Result<(), GameInitializationThroughBillingError> {
+        self.init_through_billing(paths, wall_time_seconds, sequence_seed_ms)
             .await?;
 
         self.dupli_region_setup = Some(CDupliRegionSetup::default());
@@ -5836,12 +5673,13 @@ impl CGame {
         let goods_war_request = goods_war.request_initial_state(self);
         self.goods_war = Some(goods_war);
 
-        Ok(GameInitializationReport {
-            through_billing,
+        tracing::debug!(
             move_check_cells,
             player_ranks_initialized,
-            goods_war_request,
-        })
+            goods_war_request = ?goods_war_request,
+            "завершена инициализация внутренних владельцев GameServer"
+        );
+        Ok(())
     }
 
     pub(crate) fn net_server(&self) -> &CMyNetServer {
@@ -26174,22 +26012,18 @@ impl CGame {
         stop_reconnect_task(&mut self.billing_reconnect_task).await;
     }
 
-    /// Полный достигнутый `Release` teardown. Manual deletes заменены Drop и
-    /// `take/clear`; технически заменённые process-global CMySocket/CPKSys/
-    /// CBaseMessage отмечаются в report без фиктивного callback-а. Неизвестный
-    /// legacy int не выдумывается.
+    /// Полное достигнутое освобождение `Release`. Ручные удаления заменены на
+    /// `Drop` и `take/clear`; порядок владельцев и внешних отправок сохранён.
+    /// Диагностика публикуется в точке действия и не повторяет teardown в
+    /// возвращаемом дереве.
     pub(crate) async fn release<Runtime: GameThreadRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> GameReleaseReport {
-        let mut events = Vec::new();
-
-        let debug = GameReleaseDebug::ServerExiting;
-        publish_game_release_debug(&debug);
-        events.push(GameReleaseEvent::Debug(debug));
+    ) {
+        tracing::info!("GameServer начинает завершение");
 
         self.stop_reconnect_tasks().await;
-        events.push(GameReleaseEvent::ReconnectTasksStopped);
+        tracing::debug!("остановлены задачи переподключения GameServer");
 
         let player_ids: Vec<i32> = self.players.keys().copied().collect();
         let total_players = player_ids.len();
@@ -26210,55 +26044,37 @@ impl CGame {
             // уже отсутствующем World owner-е не становится codec exception.
             let saved = encoded && delivery.as_ref().is_some_and(Result::is_ok);
             if !saved {
-                let debug = GameReleaseDebug::PlayerSaveFailed {
+                tracing::warn!(
                     player_id,
-                    processed: index,
-                    total: total_players,
-                };
-                publish_game_release_debug(&debug);
-                events.push(GameReleaseEvent::Debug(debug));
+                    processed = index,
+                    total = total_players,
+                    encoded,
+                    delivery = ?delivery,
+                    "не удалось сохранить игрока при завершении GameServer"
+                );
                 // Safe Result-граница заменяет native exception catch, который
                 // немедленно erase-ил проблемный map node и продолжал обход.
                 self.players.remove(&player_id);
             }
-            events.push(GameReleaseEvent::PlayerSave {
-                player_id,
-                encoded,
-                delivery,
-                saved,
-            });
         }
-        let debug = GameReleaseDebug::PlayersSaved {
-            processed: total_players,
-            total: total_players,
-        };
-        publish_game_release_debug(&debug);
-        events.push(GameReleaseEvent::Debug(debug));
+        tracing::debug!(
+            processed = total_players,
+            total = total_players,
+            "завершена отправка данных игроков"
+        );
 
         runtime.save_city_region(self, 0);
-        events.push(GameReleaseEvent::CityRegionSaved);
-        let debug = GameReleaseDebug::CityRegionSaved;
-        publish_game_release_debug(&debug);
-        events.push(GameReleaseEvent::Debug(debug));
+        tracing::debug!(region_id = 0, "сохранён городской регион");
 
         let players = self.players.len();
         self.players.clear();
-        events.push(GameReleaseEvent::PlayersCleared { count: players });
         let regions = self.regions.len();
         self.regions.clear();
-        events.push(GameReleaseEvent::RegionsCleared { count: regions });
-        let debug = GameReleaseDebug::PlayersAndRegionsCleared;
-        publish_game_release_debug(&debug);
-        events.push(GameReleaseEvent::Debug(debug));
+        tracing::debug!(players, regions, "очищены игроки и регионы");
 
         let proxy_regions = self.proxy_regions.len();
         self.proxy_regions.clear();
-        events.push(GameReleaseEvent::ProxyRegionsCleared {
-            count: proxy_regions,
-        });
-        let debug = GameReleaseDebug::ProxyRegionsCleared;
-        publish_game_release_debug(&debug);
-        events.push(GameReleaseEvent::Debug(debug));
+        tracing::debug!(proxy_regions, "очищены proxy-регионы");
 
         let function_list = self.function_list_file_data.take().is_some();
         let variable_list = self.variable_list_file_data.take().is_some();
@@ -26268,30 +26084,25 @@ impl CGame {
         self.active_scripts.clear();
         let function_registry = self.script_functions.release();
         let general_variables = self.general_variables.release();
-        events.push(GameReleaseEvent::ScriptDataCleared {
+        tracing::debug!(
             function_list,
             variable_list,
-            files: script_files,
+            files = script_files,
             active_scripts,
             function_registry,
             general_variables,
-        });
-        let debug = GameReleaseDebug::ScriptDataCleared;
-        publish_game_release_debug(&debug);
-        events.push(GameReleaseEvent::Debug(debug));
+            "очищены script-данные"
+        );
 
         self.skill_factory.clear_skill_cache();
-        events.push(GameReleaseEvent::SkillFactoryCleared);
         self.goods_factory.release();
-        events.push(GameReleaseEvent::GoodsFactoryReleased);
+        tracing::debug!("очищены фабрики навыков и предметов");
 
         let network_server_present = self.net_server.is_some();
         if let Some(server) = self.net_server.as_mut() {
             runtime.exit_network_server_worker(server);
         }
-        events.push(GameReleaseEvent::NetworkServerWorkerStopped {
-            present: network_server_present,
-        });
+        tracing::debug!(network_server_present, "остановлен сетевой worker GameServer");
 
         let world_client_present = self.world_client.is_some();
         if let Some(client) = self.world_client.as_mut() {
@@ -26304,85 +26115,56 @@ impl CGame {
             let _legacy_result = client.close();
         }
         self.world_client = None;
-        events.push(GameReleaseEvent::WorldClientReleased {
-            present: world_client_present,
-        });
         self.billing_client = None;
-        events.push(GameReleaseEvent::BillingClientReleased {
-            present: billing_client_present,
-        });
         let network_server_present = self.net_server.take().is_some();
-        events.push(GameReleaseEvent::NetworkServerReleased {
-            present: network_server_present,
-        });
+        tracing::debug!(
+            world_client_present,
+            billing_client_present,
+            network_server_present,
+            "освобождены сетевые владельцы GameServer"
+        );
 
-        events.push(GameReleaseEvent::TechnicalReplacement(
-            GameReleaseExternalOwner::SocketRuntime,
-        ));
         let released_net_sessions = self.net_session_manager.release();
-        events.push(GameReleaseEvent::NetSessionsReleased {
-            count: released_net_sessions,
-        });
 
         self.increment_shop_list.release();
-        events.push(GameReleaseEvent::IncrementShopReleased);
-        events.push(GameReleaseEvent::TechnicalReplacement(
-            GameReleaseExternalOwner::PkSystem,
-        ));
         self.quest_system = CQuestSystem::default();
-        events.push(GameReleaseEvent::QuestSystemReleased);
-        events.push(GameReleaseEvent::TechnicalReplacement(
-            GameReleaseExternalOwner::BaseMessageRuntime,
-        ));
+        tracing::debug!(
+            released_net_sessions,
+            "освобождены сессии, магазин улучшений и система заданий"
+        );
 
         let login_sequences = self.login_sequences.len();
         let login_validate_times = self.login_validate_times.len();
         self.login_sequences.clear();
         self.login_validate_times.clear();
-        events.push(GameReleaseEvent::LoginValidationCleared {
-            sequences: login_sequences,
-            validate_times: login_validate_times,
-        });
         let sequence_count = self.sequence_registry.len();
         self.sequence_registry.clear();
-        events.push(GameReleaseEvent::SequenceRegistryCleared {
-            count: sequence_count,
-        });
         let player_ranks_present = self.player_ranks.take().is_some();
-        events.push(GameReleaseEvent::PlayerRanksReleased {
-            present: player_ranks_present,
-        });
         self.words_filter.clear();
-        events.push(GameReleaseEvent::WordsFilterReleased);
         self.honor_ranks = CHonorRanks::default();
-        events.push(GameReleaseEvent::HonorRanksReleased);
         let goods_war_present = self.goods_war.take().is_some();
-        events.push(GameReleaseEvent::GoodsWarReleased {
-            present: goods_war_present,
-        });
         self.country_handler = CCountryHandler::default();
-        events.push(GameReleaseEvent::CountryHandlerReleased);
         self.country_param = CCountryParam::default();
-        events.push(GameReleaseEvent::CountryParamReleased);
+        tracing::debug!(
+            login_sequences,
+            login_validate_times,
+            sequence_count,
+            player_ranks_present,
+            goods_war_present,
+            "освобождены реестры и глобальные игровые владельцы"
+        );
 
         let attack_city_schedules = self.attack_city_sys.attacks.len();
         self.attack_city_sys = CAttackCitySys::default();
-        events.push(GameReleaseEvent::AttackCitySystemReleased {
-            schedules: attack_city_schedules,
-        });
         let village_war_schedules = self.village_war_sys.village_wars.len();
         self.village_war_sys = CVillageWarSys::default();
-        events.push(GameReleaseEvent::VillageWarSystemReleased {
-            schedules: village_war_schedules,
-        });
+        tracing::debug!(
+            attack_city_schedules,
+            village_war_schedules,
+            "освобождены расписания войн"
+        );
 
-        let debug = GameReleaseDebug::ServerExited;
-        publish_game_release_debug(&debug);
-        events.push(GameReleaseEvent::Debug(debug));
-        GameReleaseReport {
-            events,
-            legacy_return: None,
-        }
+        tracing::info!("GameServer завершён");
     }
 
     /// Выполняет один awaitable I/O шаг текущего World направления.
@@ -39262,15 +39044,16 @@ fn trace_region_ai_pass(
     );
 }
 
-/// Safe process-owned замена `GameThreadFunc`: wall-clock и sequence
-/// seed берутся из общих system/wrapping clock owners, а `CGame` всегда
-/// проходит Release даже после неуспешного Init, как исходный ненулевой
-/// singleton `GetGame`. COM не нужен Rust network/DB owner-ам; Win32 exit-event и
-/// `WM_CLOSE` заменены прямым await/возвратом этой функции после Release.
+/// Безопасная принадлежащая процессу замена `GameThreadFunc`: системное время
+/// и начальное значение последовательностей берутся у общих владельцев часов,
+/// а `CGame` всегда проходит `Release` даже после неуспешного `Init`, как
+/// исходный ненулевой одиночный владелец `GetGame`. COM не нужен сетевым и
+/// DB-владельцам Rust; событие выхода Win32 и `WM_CLOSE` заменены прямым
+/// ожиданием и возвратом этой функции после `Release`.
 pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> GameThreadReport {
+) -> Result<(), GameInitializationThroughBillingError> {
     let paths = runtime.runtime_paths();
     let wall_time_seconds = game_wall_time_seconds() as u32;
     let sequence_seed_ms = runtime.now_milliseconds();
@@ -39287,12 +39070,9 @@ pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
         }
     }
 
-    let release = game.release(runtime).await;
-    GameThreadReport {
-        initialization,
-        main_loop_calls,
-        release,
-    }
+    game.release(runtime).await;
+    tracing::debug!(main_loop_calls, "завершён поток GameServer");
+    initialization
 }
 
 impl Default for CGame {
