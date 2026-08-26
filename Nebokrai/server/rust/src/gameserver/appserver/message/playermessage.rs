@@ -1,44 +1,25 @@
-//! Player-message dispatcher GameServer.
+//! Диспетчер сообщений игрока GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/message/playermessage.cpp`. Материализован friend lifecycle
-//! `0x8FA0D..0x8FA0F`: byte-exact names, 40-entry ordered state, reciprocal
-//! accept mutation, addressed `0xBF719/71A/71B` и WorldServer
-//! `0x60501/0x60502`. Public identity `0x8FA11/17/18` замыкает headpiece
-//! state/around publication, honor-country-appellation snapshot и attempt ID
-//! до server-trusted change-appellation script boundary. Client timing
-//! `0x8FA12/13/1A` замыкает quest countdown, heartbeat acknowledgement и exact
-//! 16-byte Windows `SYSTEMTIME`; wall-clock берётся из общего process owner-а,
-//! а local Windows calendar/CRT conversion остаётся runtime-границей.
-//! Player item-use `0x8FA04` замыкает outer progress/death guard, packet slot,
-//! region forbidden goods и `CanUseItem`, mount/change-body ветви, полный
-//! consumable-addon loop, skill/player combat mutations и recall/state runtime
-//! boundaries. ChangeBody restriction/check читают live state и конфигурацию
-//! прямо из `CGame`; goods-script входит в `CGame::run_script_file` с GUID
-//! исходного packet item и выполняет state side effects через тот же owner.
-//! Terminal расход публикует `0xBF709/0xC0101/0xC0102`.
-//! Общий outer guard сохраняет исходный запрет player-message во время смены
-//! сервера или региона; `0x8FA02` вызывает полный достигнутый
-//! `CPlayer::OnRelive(0)` через владельца возрождения в `CGame` со всеми
-//! изменениями состояния, региона и сетевыми эффектами.
-//! LeiTing claim `0x8FA19` сохраняет packet-space gate, exact thresholds,
-//! `BF73E -> 5FD10 -> reward script` ordering; `0x8FA10` использует тот же
-//! server-trusted script runtime для help script.
-//! Player trade `0x8FA06/07/0B/0C` замыкает invitation/answer guards,
-//! normal session с двумя trader plug-ами, ready toggle, синхронный commit,
-//! Billing-pending YuanBao tail и terminal End/Abort публикации.
-//! Stat allocation `0x8FA01` сохраняет no-point/no-read guard, legacy STR gate,
-//! occupation/sex HP/MP increments, virtual property recompute и exact
-//! `0xBF702 = m_Property[0x9c] + base max HP/MP` response.
-//! NPC interaction `0x8FA03` замыкает player/region/death/progress guards,
-//! around-area и figure-aware distance, `GS0057` и контекстный RunScript
-//! request; reached `CGame::run_script_file` строит concrete player/NPC/region
-//! context и исполняет поддержанные `CScript::RunFunction` selector-ы.
-//! PvP permissions `0x8FA05` декодируют оба signed char до selector switch и
-//! меняют один из пяти live player flags без дополнительной публикации.
-//! Equipment-state refresh `0x8FA16` сохраняет packed local-time decode,
-//! strict grace-minute comparison, addon mutation и around `0xBF928`.
-//! Остальные opcode ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Источник — точная пара `gameserver.exe + GameServer.pdb`, владелец
+//! `appserver/message/playermessage.cpp`. Реализованы распределение
+//! характеристик, возрождение, взаимодействие с NPC, использование предметов,
+//! разрешения PvP, обмен, дружба, отображение снаряжения, время, титулы и
+//! награды LeiTing. Имена, размеры полей, коды сообщений и порядок отправок
+//! клиенту и WorldServer сохранены побайтово.
+//!
+//! Мутации игрока, контейнеров, сессий и состояния выполняются синхронно в
+//! исходных точках. Отложенных эффектов у этого владельца нет, поэтому он не
+//! записывает их в `GameEffectJournal`. Результаты отправок не влияют на
+//! дальнейшее управление; причины отказов и диагностические значения
+//! публикуются через `tracing`, а не возвращаются деревом отчётов.
+//!
+//! `CGame::run_script_file` получает фактический контекст игрока, NPC и региона.
+//! `0x8FA04` сохраняет порядок проверок, проход свойств предмета, мутации
+//! навыков и состояний, а затем расход и публикации `0xBF709/0xC0101/0xC0102`.
+//! `0x8FA06/07/0B/0C` сохраняют границы частичных изменений сессии обмена.
+//! `0x8FA19` сохраняет порядок `0xBF73E -> 0x5FD10 -> reward script`.
+//! Преобразование времени снаряжения остаётся границей местного CRT.
+//! Остальные коды ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
@@ -49,15 +30,12 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_MOUNT_TYPE, GAP_SKILL_ID, GAP_SKILL_LEVEL, GAP_UNLIMITED_ACCESS, GOODS_TYPE_CONSUMABLE,
 };
 use crate::gameserver::appserver::player::{
-    CiQingPacketConsumption, PlayerFriendAddOutcome, PlayerPkPermissionMutation, PlayerProgress,
-    PlayerStatAllocationMutation,
+    CiQingPacketConsumption, PlayerFriendAddOutcome, PlayerProgress,
 };
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
-use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, PlayerReliveContext, PlayerReliveReport,
-    PlayerTradeAbortReport, PlayerTradeReadyReport, colored_player_notice_message,
+    CGame, GameContainerMessageRuntime, PlayerReliveContext, colored_player_notice_message,
     format_legacy_text_fields, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
@@ -187,89 +165,6 @@ pub(crate) enum GamePlayerMessageError {
     MissingField(&'static str),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GamePlayerMessageOutcome {
-    MissingContext,
-    ChangingLocation,
-    TargetMissing,
-    StatPointUnavailable,
-    StatPointAllocated,
-    NpcInteractionRegionMissing,
-    NpcInteractionBlocked,
-    NpcInteractionTargetMissing,
-    NpcInteractionTooFar,
-    NpcInteractionScriptSuppressed,
-    NpcInteractionScriptRequested,
-    ItemUseBlocked,
-    ItemUseRejected,
-    ItemUsed,
-    PkPermissionSet,
-    Relived,
-    PlayerScriptRun,
-    TradeRequested,
-    TradeAnswered,
-    TradeStateChanged,
-    TradeAborted,
-    FriendRequested,
-    FriendAnswered,
-    FriendMissing,
-    FriendDeleted,
-    DisplayHeadPieceChanged,
-    QuestTimeSent,
-    HeartbeatAcknowledged,
-    HonorIdentitySent,
-    AppellationChangeRequested,
-    ExpiredEquipmentMissing,
-    ExpiredEquipmentStateIgnored,
-    ExpiredEquipmentTimeInvalid,
-    ExpiredEquipmentStillActive,
-    ExpiredEquipmentPublished,
-    LocalTimeSent,
-    LeiTingInvalidReward,
-    LeiTingPacketFull,
-    LeiTingRewardUnavailable,
-    LeiTingRewardClaimed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GamePlayerMessageDelivery {
-    Player(i32),
-    Around(Option<Result<i32, ShapeCoordinateBlock>>),
-    World(Result<i32, SendMessageError>),
-}
-
-#[must_use = "player-message report сохраняет friend state и network effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerMessageReport {
-    pub(crate) message_type: u32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) target_player_id: Option<i32>,
-    pub(crate) npc_id: Option<i32>,
-    pub(crate) npc_distance: Option<i32>,
-    pub(crate) npc_script_file: Vec<u8>,
-    pub(crate) npc_script_data_present: Option<bool>,
-    pub(crate) item_slot: Option<u8>,
-    pub(crate) item_goods_id: Option<CGuid>,
-    pub(crate) item_can_use_result: Option<i32>,
-    pub(crate) item_consumption: Option<CiQingPacketConsumption>,
-    pub(crate) item_effects: Vec<i32>,
-    pub(crate) pk_permission: Option<PlayerPkPermissionMutation>,
-    pub(crate) friend_name: Vec<u8>,
-    pub(crate) lei_ting_reward: Option<u16>,
-    pub(crate) equipment_goods_id: Option<CGuid>,
-    pub(crate) equipment_source: Option<i8>,
-    pub(crate) equipment_source_position: Option<i32>,
-    pub(crate) equipment_elapsed_seconds: Option<i32>,
-    pub(crate) equipment_state_mutated: Option<bool>,
-    pub(crate) outcome: GamePlayerMessageOutcome,
-    pub(crate) stat_allocation: Option<PlayerStatAllocationMutation>,
-    pub(crate) relive: Option<PlayerReliveReport>,
-    pub(crate) trade_session: Option<(i32, i32, i32)>,
-    pub(crate) trade_ready: Option<PlayerTradeReadyReport>,
-    pub(crate) trade_abort: Option<PlayerTradeAbortReport>,
-    pub(crate) deliveries: Vec<GamePlayerMessageDelivery>,
-}
-
 fn add_c_string(message: &mut CMessage, value: &[u8]) {
     let value = value.split(|byte| *byte == 0).next().unwrap_or_default();
     message.base_mut().add(value);
@@ -330,15 +225,12 @@ fn publish_packet_item_consumption(
     goods_id: CGuid,
     identity_type: i32,
     base_index: u32,
-    deliveries: &mut Vec<GamePlayerMessageDelivery>,
 ) -> Option<CiQingPacketConsumption> {
     let mut used = CMessage::new(0x000b_f709);
     used.add_byte(b'3');
     used.add_long(player_id);
     used.add_ulong(base_index);
-    deliveries.push(GamePlayerMessageDelivery::Around(
-        game.send_player_shape_around(player_id, None, &used),
-    ));
+    let _ = game.send_player_shape_around(player_id, None, &used);
     let consumption = game
         .find_player_mut(player_id)?
         .remove_packet_goods_by_id(goods_id, 1)?;
@@ -348,18 +240,14 @@ fn publish_packet_item_consumption(
         deleted.set_source_container(400, player_id, u32::from(slot));
         deleted.set_source_container_extend_id(1);
         deleted.set_source_object(identity_type, goods_id, 0);
-        deliveries.push(GamePlayerMessageDelivery::Player(
-            deleted.send_to_player(game, player_id),
-        ));
+        let _ = deleted.send_to_player(game, player_id);
     } else {
         let mut changed = CS2CContainerObjectAmountChange::default();
         changed.set_source_container(400, player_id, u32::from(slot));
         changed.set_source_container_extend_id(1);
         changed.set_object(identity_type, goods_id);
         changed.set_object_amount(consumption.remaining_amount);
-        deliveries.push(GamePlayerMessageDelivery::Player(
-            changed.send_to_player(game, player_id),
-        ));
+        let _ = changed.send_to_player(game, player_id);
     }
     Some(consumption)
 }
@@ -388,24 +276,18 @@ fn publish_friend_delete(
     message.send(game, false)
 }
 
-fn publish_lei_ting_update(
-    game: &CGame,
-    player_id: i32,
-    deliveries: &mut Vec<GamePlayerMessageDelivery>,
-) {
+fn publish_lei_ting_update(game: &CGame, player_id: i32) {
     let payload = game
         .find_player(player_id)
         .expect("LeiTing player сохранён после flag mutation")
         .encode_lei_ting();
     let mut client = CMessage::new(0x000b_f73e);
     client.base_mut().add(&payload);
-    deliveries.push(GamePlayerMessageDelivery::Player(
-        client.send_to_player(game.net_server(), player_id),
-    ));
+    let _ = client.send_to_player(game.net_server(), player_id);
     let mut world = CMessage::new(0x0005_fd10);
     world.add_long(player_id);
     world.base_mut().add(&payload);
-    deliveries.push(GamePlayerMessageDelivery::World(world.send(game, false)));
+    let _ = world.send(game, false);
 }
 
 fn decode_equipment_state_local_time(packed: i32) -> PlayerPackedLocalTime {
@@ -446,7 +328,6 @@ fn apply_friend_add(
     owner_id: i32,
     friend_name: &[u8],
     online_friend_id: Option<i32>,
-    deliveries: &mut Vec<GamePlayerMessageDelivery>,
 ) {
     let Some(outcome) = game
         .find_player_mut(owner_id)
@@ -457,26 +338,31 @@ fn apply_friend_add(
     match outcome {
         PlayerFriendAddOutcome::Added => {
             if let Some(friend_id) = online_friend_id {
-                deliveries.push(GamePlayerMessageDelivery::World(publish_friend_add(
-                    game, owner_id, friend_id,
-                )));
+                let _ = publish_friend_add(game, owner_id, friend_id);
             }
         }
         PlayerFriendAddOutcome::AlreadyPresent => {}
         PlayerFriendAddOutcome::LimitReached => {
-            let delivery =
-                colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0155"))
-                    .send_to_player(game.net_server(), owner_id);
-            deliveries.push(GamePlayerMessageDelivery::Player(delivery));
+            let _ = colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0155"))
+                .send_to_player(game.net_server(), owner_id);
         }
     }
+}
+
+fn trace_player_message_outcome(message_type: u32, player_id: Option<i32>, outcome: &'static str) {
+    tracing::trace!(
+        message_type,
+        player_id,
+        outcome,
+        "обработано сообщение игрока"
+    );
 }
 
 pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GamePlayerMessageReport, GamePlayerMessageError>> {
+) -> Option<Result<(), GamePlayerMessageError>> {
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
@@ -506,44 +392,16 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     }
     message.resolve_player_context(game);
     let player_id = message.player_id();
-    let mut report = GamePlayerMessageReport {
-        message_type,
-        player_id,
-        target_player_id: None,
-        npc_id: None,
-        npc_distance: None,
-        npc_script_file: Vec::new(),
-        npc_script_data_present: None,
-        item_slot: None,
-        item_goods_id: None,
-        item_can_use_result: None,
-        item_consumption: None,
-        item_effects: Vec::new(),
-        pk_permission: None,
-        friend_name: Vec::new(),
-        lei_ting_reward: None,
-        equipment_goods_id: None,
-        equipment_source: None,
-        equipment_source_position: None,
-        equipment_elapsed_seconds: None,
-        equipment_state_mutated: None,
-        outcome: GamePlayerMessageOutcome::MissingContext,
-        stat_allocation: None,
-        relive: None,
-        trade_session: None,
-        trade_ready: None,
-        trade_abort: None,
-        deliveries: Vec::new(),
-    };
     let Some(player_id) = player_id else {
-        return Some(Ok(report));
+        trace_player_message_outcome(message_type, None, "нет контекста игрока");
+        return Some(Ok(()));
     };
     if game
         .find_player(player_id)
         .is_some_and(|player| player.in_changing_server() || player.in_changing_region())
     {
-        report.outcome = GamePlayerMessageOutcome::ChangingLocation;
-        return Some(Ok(report));
+        trace_player_message_outcome(message_type, Some(player_id), "игрок меняет локацию");
+        return Some(Ok(()));
     }
 
     match message_type {
@@ -552,11 +410,15 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .find_player(player_id)
                 .map(|player| player.stat_allocation_state())
             else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             if state.remain_point == 0 {
-                report.outcome = GamePlayerMessageOutcome::StatPointUnavailable;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "нет очков характеристик",
+                );
+                return Some(Ok(()));
             }
             let Some(selector) = message.base_mut().get_char() else {
                 return Some(Err(GamePlayerMessageError::MissingField("stat selector")));
@@ -573,7 +435,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             } else {
                 (0, 0)
             };
-            report.stat_allocation = game
+            let _ = game
                 .find_player_mut(player_id)
                 .expect("stat-allocation player сохранён после context lookup")
                 .allocate_stat_point(selector as u8, constitution_hp, intelligence_mp);
@@ -597,34 +459,49 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             response.base_mut().add(&wire);
             response.base_mut().add_ulong(base_maximum_hp);
             response.base_mut().add_ulong(base_maximum_mp);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                response.send_to_player(game.net_server(), player_id),
-            ));
-            report.outcome = GamePlayerMessageOutcome::StatPointAllocated;
+            let _ = response.send_to_player(game.net_server(), player_id);
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "очки характеристик распределены",
+            );
         }
         REQUEST_RELIVE => {
-            report.relive = Some(game.relive_player(player_id, 0, runtime));
-            report.outcome = GamePlayerMessageOutcome::Relived;
+            let _ = game.relive_player(player_id, 0, runtime);
+            trace_player_message_outcome(message_type, Some(player_id), "игрок возрождён");
         }
         INTERACT_WITH_NPC => {
             let Some(region_id) = message
                 .region_id()
                 .filter(|region_id| game.find_region(*region_id).is_some())
             else {
-                report.outcome = GamePlayerMessageOutcome::NpcInteractionRegionMissing;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "регион взаимодействия с NPC отсутствует",
+                );
+                return Some(Ok(()));
             };
             let Some(player) = game.find_player(player_id) else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             if player.is_dead() || player.current_progress() != PlayerProgress::None {
-                report.outcome = GamePlayerMessageOutcome::NpcInteractionBlocked;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "взаимодействие с NPC заблокировано",
+                );
+                return Some(Ok(()));
             }
             let Some(npc_id) = message.base_mut().get_long() else {
                 return Some(Err(GamePlayerMessageError::MissingField("NPC id")));
             };
-            report.npc_id = Some(npc_id);
+            tracing::trace!(
+                message_type,
+                player_id,
+                npc_id,
+                "проверяется взаимодействие с NPC"
+            );
             let target = game.find_region(region_id).and_then(|region| {
                 let player = game.find_player(player_id)?;
                 let npc = region.base().find_npc_by_id(npc_id)?;
@@ -638,25 +515,34 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 Some((distance, npc.script_file().to_vec()))
             });
             let Some((distance, script_file)) = target else {
-                report.outcome = GamePlayerMessageOutcome::NpcInteractionTargetMissing;
-                return Some(Ok(report));
+                trace_player_message_outcome(message_type, Some(player_id), "цель NPC отсутствует");
+                return Some(Ok(()));
             };
-            report.npc_distance = Some(distance);
-            report.npc_script_file.clone_from(&script_file);
+            tracing::trace!(
+                message_type,
+                player_id,
+                npc_id,
+                distance,
+                "найден NPC для взаимодействия"
+            );
             if distance >= 9 {
                 let notification =
                     colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0057"));
-                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                    notification.send_to_player(game.net_server(), player_id),
-                ));
-                report.outcome = GamePlayerMessageOutcome::NpcInteractionTooFar;
-                return Some(Ok(report));
+                let _ = notification.send_to_player(game.net_server(), player_id);
+                trace_player_message_outcome(message_type, Some(player_id), "NPC слишком далеко");
+                return Some(Ok(()));
             }
             if script_file.first() == Some(&b'0') {
-                report.outcome = GamePlayerMessageOutcome::NpcInteractionScriptSuppressed;
-                return Some(Ok(report));
+                trace_player_message_outcome(message_type, Some(player_id), "скрипт NPC подавлен");
+                return Some(Ok(()));
             }
-            report.npc_script_data_present = Some(game.script_file_data(&script_file).is_some());
+            tracing::trace!(
+                message_type,
+                player_id,
+                npc_id,
+                script_data_present = game.script_file_data(&script_file).is_some(),
+                "передан скрипт NPC"
+            );
             let _ = game.run_script_file(
                 &script_file,
                 ScriptExecutionContext {
@@ -667,11 +553,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 },
                 runtime,
             );
-            report.outcome = GamePlayerMessageOutcome::NpcInteractionScriptRequested;
+            trace_player_message_outcome(message_type, Some(player_id), "скрипт NPC запущен");
         }
         USE_PACKET_ITEM => {
             let Some(player) = game.find_player(player_id) else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             if player.is_dead()
                 || matches!(
@@ -683,8 +569,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                         | PlayerProgress::Synthesis
                 )
             {
-                report.outcome = GamePlayerMessageOutcome::ItemUseBlocked;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета заблокировано",
+                );
+                return Some(Ok(()));
             }
             let mut facts = runtime.player_item_use_facts(game, player_id);
             if let Some(player) = game.find_player(player_id) {
@@ -693,17 +583,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 facts.state_110000_exists |= player.script_move_state_count(110000) != 0;
             }
             if facts.blocking_skill_state {
-                report
-                    .deliveries
-                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
-                        game,
-                        player_id,
-                        b"GS0146",
-                        &[],
-                        0,
-                    )));
-                report.outcome = GamePlayerMessageOutcome::ItemUseBlocked;
-                return Some(Ok(report));
+                let _ = send_item_notice(game, player_id, b"GS0146", &[], 0);
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета заблокировано",
+                );
+                return Some(Ok(()));
             }
             if facts.state_110000_exists {
                 if !game.end_script_auto_protect_state(player_id) {
@@ -720,53 +606,79 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 )));
             };
             let slot = slot as u8;
-            report.item_slot = Some(slot);
+            tracing::trace!(
+                message_type,
+                player_id,
+                slot,
+                "проверяется предмет в рюкзаке"
+            );
             let Some(goods) = game
                 .find_player(player_id)
                 .and_then(|player| player.packet().get_goods(u32::from(slot)))
                 .cloned()
             else {
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             };
             let goods_id = goods.identity().ex_id;
             let identity_type = goods.identity().object_type;
             let base_index = goods.base_properties_index();
-            report.item_goods_id = Some(goods_id);
+            tracing::trace!(
+                message_type,
+                player_id,
+                ?goods_id,
+                "найден предмет в рюкзаке"
+            );
             if game.change_body_item_conflicts(player_id, base_index) {
-                report
-                    .deliveries
-                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
-                        game,
-                        player_id,
-                        b"GSN0337",
-                        &[goods.name()],
-                        0,
-                    )));
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                let _ = send_item_notice(game, player_id, b"GSN0337", &[goods.name()], 0);
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             }
             let Some(region_id) = game
                 .find_player(player_id)
                 .and_then(|player| player.server_region_id())
             else {
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             };
             let Some(base_properties) =
                 game.goods_factory().query_goods_base_properties(base_index)
             else {
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             };
             if base_properties.goods_type() != GOODS_TYPE_CONSUMABLE {
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             }
             let original_name = base_properties.original_name().to_vec();
             let Some(region) = game.find_region(region_id) else {
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             };
             let region_country = region.base().country;
             let forbidden = region.base().find_forbid_good(&original_name);
@@ -777,38 +689,41 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     .expect("item-use player сохранён")
                     .can_use_item(&goods, game.goods_factory())
             };
-            report.item_can_use_result = Some(can_use);
+            tracing::trace!(
+                message_type,
+                player_id,
+                can_use,
+                "получен результат проверки предмета"
+            );
             if can_use != 9 {
                 let mut failure = CMessage::new(0x000b_f709);
                 failure.add_byte(b'4');
                 failure.add_byte(can_use as u8);
-                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                    failure.send_to_player(game.net_server(), player_id),
-                ));
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                let _ = failure.send_to_player(game.net_server(), player_id);
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             }
             if goods.amount() == 0 {
-                report.item_consumption = game
+                let _ = game
                     .find_player_mut(player_id)
                     .and_then(|player| player.remove_packet_goods_by_id(goods_id, 1));
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             }
             if game
                 .find_player(player_id)
                 .is_some_and(|player| player.contend_state())
                 && facts.contend_use_forbidden
             {
-                report
-                    .deliveries
-                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
-                        game,
-                        player_id,
-                        b"GS0147",
-                        &[],
-                        0xffff_0000,
-                    )));
+                let _ = send_item_notice(game, player_id, b"GS0147", &[], 0xffff_0000);
             }
 
             let mut consume = true;
@@ -816,17 +731,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let change_body_type =
                 goods.addon_property_value(game.goods_factory(), GAP_CHANGEBODY_TYPE, 1);
             if change_body_type != 0 && game.script_change_body_check(player_id, false) == 0 {
-                report
-                    .deliveries
-                    .push(GamePlayerMessageDelivery::Player(send_item_notice(
-                        game,
-                        player_id,
-                        b"GSN1063",
-                        &[],
-                        0,
-                    )));
-                report.outcome = GamePlayerMessageOutcome::ItemUseRejected;
-                return Some(Ok(report));
+                let _ = send_item_notice(game, player_id, b"GSN1063", &[], 0);
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "использование предмета отклонено",
+                );
+                return Some(Ok(()));
             }
 
             let mount_type = goods.addon_property_value(game.goods_factory(), GAP_MOUNT_TYPE, 1);
@@ -870,7 +781,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             } else {
                 let goods_factory = game.goods_factory().clone();
                 for property in goods.enabled_addon_properties(&goods_factory) {
-                    report.item_effects.push(property);
+                    tracing::trace!(
+                        message_type,
+                        player_id,
+                        property,
+                        "применяется свойство предмета"
+                    );
                     let value =
                         |value_id| goods.addon_property_value(&goods_factory, property, value_id);
                     match property {
@@ -951,14 +867,10 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 .item_skill_level(skill_id);
                             if requested_level <= current_level {
                                 consume = false;
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(game, player_id, b"GS0148", &[], 0),
-                                ));
+                                let _ = send_item_notice(game, player_id, b"GS0148", &[], 0);
                             } else if requested_level.wrapping_sub(current_level) != 1 {
                                 consume = false;
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(game, player_id, b"GS0149", &[], 0),
-                                ));
+                                let _ = send_item_notice(game, player_id, b"GS0149", &[], 0);
                             } else {
                                 let skill_factory = game.skill_factory().clone();
                                 let added = game
@@ -972,17 +884,15 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                         PlayerItemRuntimeEffect::SkillWire { skill_id },
                                     );
                                     if let Some(wire) = result.skill_wire {
-                                        report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                            send_item_skill_wire(
-                                                game,
-                                                player_id,
-                                                0x000b_f71d,
-                                                None,
-                                                skill_id,
-                                                requested_level,
-                                                wire,
-                                            ),
-                                        ));
+                                        let _ = send_item_skill_wire(
+                                            game,
+                                            player_id,
+                                            0x000b_f71d,
+                                            None,
+                                            skill_id,
+                                            requested_level,
+                                            wire,
+                                        );
                                     }
                                 }
                             }
@@ -996,9 +906,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                         .country()
                             {
                                 consume = false;
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(game, player_id, b"GS0150", &[], 0),
-                                ));
+                                let _ = send_item_notice(game, player_id, b"GS0150", &[], 0);
                             } else if game.find_player(player_id).is_some_and(|player| {
                                 player.current_progress() == PlayerProgress::Synthesis
                             }) {
@@ -1013,9 +921,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 return_after_use = true;
                             } else {
                                 consume = false;
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(game, player_id, b"GS0151", &[], 0),
-                                ));
+                                let _ = send_item_notice(game, player_id, b"GS0151", &[], 0);
                             }
                         }
                         0x2e => {
@@ -1026,16 +932,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                     .country()
                             {
                                 consume = false;
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(game, player_id, b"GS0152", &[], 0),
-                                ));
+                                let _ = send_item_notice(game, player_id, b"GS0152", &[], 0);
                             } else if game.find_player(player_id).is_some_and(|player| {
                                 player.current_progress() == PlayerProgress::Synthesis
                             }) {
                                 consume = false;
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(game, player_id, b"GS1041", &[], 0),
-                                ));
+                                let _ = send_item_notice(game, player_id, b"GS1041", &[], 0);
                             } else if i32::from(
                                 game.find_player(player_id)
                                     .expect("random recall player")
@@ -1044,9 +946,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 && 0 < facts.fight_state_count
                             {
                                 consume = false;
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(game, player_id, b"GS0153", &[], 0),
-                                ));
+                                let _ = send_item_notice(game, player_id, b"GS0153", &[], 0);
                             } else {
                                 let _recalled = runtime.apply_player_item_runtime_effect(
                                     game,
@@ -1096,9 +996,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             } else {
                                 update.add_long(resulting);
                             }
-                            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                update.send_to_player(game.net_server(), player_id),
-                            ));
+                            let _ = update.send_to_player(game.net_server(), player_id);
                         }
                         0x85 => {
                             consume = false;
@@ -1135,29 +1033,25 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 });
                                 if let Some(result) = result {
                                     if let Some(wire) = result.skill_wire {
-                                        report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                            send_item_skill_wire(
-                                                game,
-                                                player_id,
-                                                0x000b_fe07,
-                                                Some(0x55),
-                                                skill_id,
-                                                skill_level,
-                                                wire,
-                                            ),
-                                        ));
+                                        let _ = send_item_skill_wire(
+                                            game,
+                                            player_id,
+                                            0x000b_fe07,
+                                            Some(0x55),
+                                            skill_id,
+                                            skill_level,
+                                            wire,
+                                        );
                                     }
                                 }
                             } else {
-                                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                                    send_item_notice(
-                                        game,
-                                        player_id,
-                                        b"GS1178",
-                                        &[goods.name()],
-                                        0,
-                                    ),
-                                ));
+                                let _ = send_item_notice(
+                                    game,
+                                    player_id,
+                                    b"GS1178",
+                                    &[goods.name()],
+                                    0,
+                                );
                             }
                         }
                         _ => {}
@@ -1165,14 +1059,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 }
             }
             if consume {
-                report.item_consumption = publish_packet_item_consumption(
+                let _ = publish_packet_item_consumption(
                     game,
                     player_id,
                     slot,
                     goods_id,
                     identity_type,
                     base_index,
-                    &mut report.deliveries,
                 );
             }
             if return_after_use {
@@ -1182,11 +1075,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     PlayerItemRuntimeEffect::RecallToReturnPoint,
                 );
             }
-            report.outcome = GamePlayerMessageOutcome::ItemUsed;
+            trace_player_message_outcome(message_type, Some(player_id), "предмет использован");
         }
         SET_PK_PERMISSION => {
             if game.find_player(player_id).is_none() {
-                return Some(Ok(report));
+                return Some(Ok(()));
             }
             let Some(selector) = message.base_mut().get_char() else {
                 return Some(Err(GamePlayerMessageError::MissingField(
@@ -1198,12 +1091,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     "PK permission value",
                 )));
             };
-            report.pk_permission = Some(
-                game.find_player_mut(player_id)
-                    .expect("PK-permission player сохранён после context lookup")
-                    .set_pk_permission(selector, value != 0),
-            );
-            report.outcome = GamePlayerMessageOutcome::PkPermissionSet;
+            let _ = game
+                .find_player_mut(player_id)
+                .expect("PK-permission player сохранён после context lookup")
+                .set_pk_permission(selector, value != 0);
+            trace_player_message_outcome(message_type, Some(player_id), "разрешение PvP изменено");
         }
         RUN_HELP_SCRIPT => {
             let _ = game.run_script_file(
@@ -1214,7 +1106,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 },
                 runtime,
             );
-            report.outcome = GamePlayerMessageOutcome::PlayerScriptRun;
+            trace_player_message_outcome(message_type, Some(player_id), "скрипт игрока запущен");
         }
         REQUEST_TRADE => {
             let Some(target_id) = message.base_mut().get_long() else {
@@ -1222,9 +1114,14 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     "trade target player id",
                 )));
             };
-            report.target_player_id = Some(target_id);
+            tracing::trace!(
+                message_type,
+                player_id,
+                target_id,
+                "проверяется предложение обмена"
+            );
             let Some(requester) = game.find_player(player_id) else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             let notice = if requester.is_dead() {
                 Some(b"GS0065".as_slice())
@@ -1251,25 +1148,15 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 }
             };
             if let Some(string_id) = notice {
-                report
-                    .deliveries
-                    .push(GamePlayerMessageDelivery::Player(send_trade_notice(
-                        game, player_id, string_id,
-                    )));
-                report.outcome = GamePlayerMessageOutcome::TradeRequested;
-                return Some(Ok(report));
+                let _ = send_trade_notice(game, player_id, string_id);
+                trace_player_message_outcome(message_type, Some(player_id), "обмен предложен");
+                return Some(Ok(()));
             }
             let mut invitation = CMessage::new(0x000b_f70f);
             invitation.add_long(player_id);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                invitation.send_to_player(game.net_server(), target_id),
-            ));
-            report
-                .deliveries
-                .push(GamePlayerMessageDelivery::Player(send_trade_notice(
-                    game, player_id, b"GS0060",
-                )));
-            report.outcome = GamePlayerMessageOutcome::TradeRequested;
+            let _ = invitation.send_to_player(game.net_server(), target_id);
+            let _ = send_trade_notice(game, player_id, b"GS0060");
+            trace_player_message_outcome(message_type, Some(player_id), "обмен предложен");
         }
         ANSWER_TRADE => {
             let Some(inviter_id) = message.base_mut().get_long() else {
@@ -1280,22 +1167,31 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let Some(accepted) = message.base_mut().get_char() else {
                 return Some(Err(GamePlayerMessageError::MissingField("trade answer")));
             };
-            report.target_player_id = Some(inviter_id);
+            tracing::trace!(
+                message_type,
+                player_id,
+                inviter_id,
+                "проверяется ответ на обмен"
+            );
             if inviter_id == player_id {
-                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "ответ на обмен обработан",
+                );
+                return Some(Ok(()));
             }
             let Some(answerer) = game.find_player(player_id) else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             if answerer.is_dead() {
-                report
-                    .deliveries
-                    .push(GamePlayerMessageDelivery::Player(send_trade_notice(
-                        game, player_id, b"GS0065",
-                    )));
-                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
-                return Some(Ok(report));
+                let _ = send_trade_notice(game, player_id, b"GS0065");
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "ответ на обмен обработан",
+                );
+                return Some(Ok(()));
             }
             let inviter_exists = game.find_player(inviter_id).is_some();
             if answerer.current_progress() != PlayerProgress::None {
@@ -1303,23 +1199,23 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     .into_iter()
                     .take(if inviter_exists { 2 } else { 1 })
                 {
-                    report
-                        .deliveries
-                        .push(GamePlayerMessageDelivery::Player(send_trade_notice(
-                            game, player_id, string_id,
-                        )));
+                    let _ = send_trade_notice(game, player_id, string_id);
                 }
-                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "ответ на обмен обработан",
+                );
+                return Some(Ok(()));
             }
             let Some(inviter) = game.find_player(inviter_id) else {
-                report
-                    .deliveries
-                    .push(GamePlayerMessageDelivery::Player(send_trade_notice(
-                        game, player_id, b"GS0070",
-                    )));
-                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
-                return Some(Ok(report));
+                let _ = send_trade_notice(game, player_id, b"GS0070");
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "ответ на обмен обработан",
+                );
+                return Some(Ok(()));
             };
             let notices: &[&[u8]] = if inviter.is_dead() {
                 &[b"GS0069", b"GS0065"]
@@ -1338,14 +1234,14 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             };
             if !notices.is_empty() {
                 for string_id in notices {
-                    report
-                        .deliveries
-                        .push(GamePlayerMessageDelivery::Player(send_trade_notice(
-                            game, player_id, string_id,
-                        )));
+                    let _ = send_trade_notice(game, player_id, string_id);
                 }
-                report.outcome = GamePlayerMessageOutcome::TradeAnswered;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "ответ на обмен обработан",
+                );
+                return Some(Ok(()));
             }
             game.find_player_mut(player_id)
                 .expect("trade answerer проверен")
@@ -1354,7 +1250,6 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .expect("trade inviter проверен")
                 .set_current_progress_snapshot(PlayerProgress::Trading);
             let session = game.create_player_trade_session(inviter_id, player_id);
-            report.trade_session = session;
             if let Some((session_id, inviter_plug_id, answerer_plug_id)) = session {
                 let mut opened = CMessage::new(0x000b_f710);
                 opened.add_long(session_id);
@@ -1363,12 +1258,10 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 opened.add_long(player_id);
                 opened.add_long(answerer_plug_id);
                 for owner_id in [inviter_id, player_id] {
-                    report.deliveries.push(GamePlayerMessageDelivery::Player(
-                        opened.send_to_player(game.net_server(), owner_id),
-                    ));
+                    let _ = opened.send_to_player(game.net_server(), owner_id);
                 }
             }
-            report.outcome = GamePlayerMessageOutcome::TradeAnswered;
+            trace_player_message_outcome(message_type, Some(player_id), "ответ на обмен обработан");
         }
         TOGGLE_TRADE_READY => {
             let Some(session_id) = message.base_mut().get_long() else {
@@ -1379,9 +1272,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let Some(plug_id) = message.base_mut().get_long() else {
                 return Some(Err(GamePlayerMessageError::MissingField("trade plug id")));
             };
-            report.trade_ready =
-                Some(game.toggle_player_trade_ready(player_id, session_id, plug_id, runtime));
-            report.outcome = GamePlayerMessageOutcome::TradeStateChanged;
+            let _ = game.toggle_player_trade_ready(player_id, session_id, plug_id, runtime);
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "состояние обмена изменено",
+            );
         }
         ABORT_TRADE => {
             let Some(session_id) = message.base_mut().get_long() else {
@@ -1392,8 +1288,8 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let Some(plug_id) = message.base_mut().get_long() else {
                 return Some(Err(GamePlayerMessageError::MissingField("trade plug id")));
             };
-            report.trade_abort = Some(game.abort_player_trade(player_id, session_id, plug_id));
-            report.outcome = GamePlayerMessageOutcome::TradeAborted;
+            let _ = game.abort_player_trade(player_id, session_id, plug_id);
+            trace_player_message_outcome(message_type, Some(player_id), "обмен прерван");
         }
         REQUEST_FRIEND => {
             let Some(target_id) = message.base_mut().get_long() else {
@@ -1401,46 +1297,55 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     "target player id",
                 )));
             };
-            report.target_player_id = Some(target_id);
+            tracing::trace!(
+                message_type,
+                player_id,
+                target_id,
+                "проверяется запрос дружбы"
+            );
             let Some(requester_name) = game
                 .find_player(player_id)
                 .map(|player| player.player_name().to_vec())
             else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             if game.find_player(target_id).is_none() {
-                report.outcome = GamePlayerMessageOutcome::TargetMissing;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "целевой игрок отсутствует",
+                );
+                return Some(Ok(()));
             }
             let mut response = CMessage::new(0x000b_f719);
             add_c_string(&mut response, &requester_name);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                response.send_to_player(game.net_server(), target_id),
-            ));
-            report.outcome = GamePlayerMessageOutcome::FriendRequested;
+            let _ = response.send_to_player(game.net_server(), target_id);
+            trace_player_message_outcome(message_type, Some(player_id), "запрос дружбы отправлен");
         }
         ANSWER_FRIEND => {
             let friend_name = message.base_mut().get_str_bytes(0x32).unwrap_or_default();
             let Some(accepted) = message.base_mut().get_char() else {
                 return Some(Err(GamePlayerMessageError::MissingField("friend answer")));
             };
-            report.friend_name.clone_from(&friend_name);
             let target_id = game
                 .find_player_by_name(&friend_name)
                 .map(|player| player.player_id());
-            report.target_player_id = target_id;
+            tracing::trace!(
+                message_type,
+                player_id,
+                target_id,
+                "проверяется ответ на дружбу"
+            );
             if accepted == 1 {
-                apply_friend_add(
-                    game,
-                    player_id,
-                    &friend_name,
-                    target_id,
-                    &mut report.deliveries,
-                );
+                apply_friend_add(game, player_id, &friend_name, target_id);
             }
             let Some(target_id) = target_id else {
-                report.outcome = GamePlayerMessageOutcome::TargetMissing;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "целевой игрок отсутствует",
+                );
+                return Some(Ok(()));
             };
             let requester_name = game
                 .find_player(player_id)
@@ -1453,59 +1358,49 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .player_name()
                 .to_vec();
             if accepted == 1 {
-                apply_friend_add(
-                    game,
-                    target_id,
-                    &requester_name,
-                    Some(player_id),
-                    &mut report.deliveries,
-                );
+                apply_friend_add(game, target_id, &requester_name, Some(player_id));
             }
             let mut to_target = CMessage::new(0x000b_f71a);
             add_c_string(&mut to_target, &requester_name);
             to_target.base_mut().add_byte(accepted as u8);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                to_target.send_to_player(game.net_server(), target_id),
-            ));
+            let _ = to_target.send_to_player(game.net_server(), target_id);
             let mut to_requester = CMessage::new(0x000b_f71a);
             add_c_string(&mut to_requester, &target_name);
             to_requester.base_mut().add_byte(accepted as u8);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                to_requester.send_to_player(game.net_server(), player_id),
-            ));
-            report.outcome = GamePlayerMessageOutcome::FriendAnswered;
+            let _ = to_requester.send_to_player(game.net_server(), player_id);
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "ответ на дружбу обработан",
+            );
         }
         DELETE_FRIEND => {
             let friend_name = message.base_mut().get_str_bytes(0x32).unwrap_or_default();
-            report.friend_name.clone_from(&friend_name);
             let online_friend_id = game
                 .find_player_by_name(&friend_name)
                 .map(|player| player.player_id());
-            report.target_player_id = online_friend_id;
+            tracing::trace!(
+                message_type,
+                player_id,
+                online_friend_id,
+                "проверяется удаление друга"
+            );
             let exists = game
                 .find_player(player_id)
                 .is_some_and(|player| player.has_friend(&friend_name));
             if !exists {
-                report.outcome = GamePlayerMessageOutcome::FriendMissing;
-                return Some(Ok(report));
+                trace_player_message_outcome(message_type, Some(player_id), "друг отсутствует");
+                return Some(Ok(()));
             }
-            report
-                .deliveries
-                .push(GamePlayerMessageDelivery::World(publish_friend_delete(
-                    game,
-                    player_id,
-                    online_friend_id.unwrap_or(0),
-                    &friend_name,
-                )));
+            let _ =
+                publish_friend_delete(game, player_id, online_friend_id.unwrap_or(0), &friend_name);
             game.find_player_mut(player_id)
                 .expect("friend owner сохранён после existence lookup")
                 .delete_friend_state(&friend_name);
             let mut response = CMessage::new(0x000b_f71b);
             add_c_string(&mut response, &friend_name);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                response.send_to_player(game.net_server(), player_id),
-            ));
-            report.outcome = GamePlayerMessageOutcome::FriendDeleted;
+            let _ = response.send_to_player(game.net_server(), player_id);
+            trace_player_message_outcome(message_type, Some(player_id), "друг удалён");
         }
         SET_DISPLAY_HEAD_PIECE => {
             let Some(display) = message.base_mut().get_char() else {
@@ -1520,10 +1415,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let mut response = CMessage::new(0x000b_f722);
             response.add_long(player_id);
             response.base_mut().add_byte(u8::from(display));
-            report.deliveries.push(GamePlayerMessageDelivery::Around(
-                game.send_player_shape_around(player_id, Some(player_id), &response),
-            ));
-            report.outcome = GamePlayerMessageOutcome::DisplayHeadPieceChanged;
+            let _ = game.send_player_shape_around(player_id, Some(player_id), &response);
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "отображение головного предмета изменено",
+            );
         }
         QUERY_QUEST_TIME => {
             let remaining = game
@@ -1532,16 +1429,14 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .quest_time_remaining(game_wall_time_seconds() as i32);
             let mut response = CMessage::new(0x000b_f72b);
             response.add_long(remaining);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                response.send_to_player(game.net_server(), player_id),
-            ));
-            report.outcome = GamePlayerMessageOutcome::QuestTimeSent;
+            let _ = response.send_to_player(game.net_server(), player_id);
+            trace_player_message_outcome(message_type, Some(player_id), "время задания отправлено");
         }
         ACKNOWLEDGE_HEARTBEAT => {
             game.find_player_mut(player_id)
                 .expect("heartbeat player сохранён после context lookup")
                 .acknowledge_heartbeat();
-            report.outcome = GamePlayerMessageOutcome::HeartbeatAcknowledged;
+            trace_player_message_outcome(message_type, Some(player_id), "heartbeat подтверждён");
         }
         REFRESH_EXPIRED_EQUIPMENT_STATE => {
             let Some(goods_id) = message.base_mut().get_guid() else {
@@ -1549,7 +1444,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     "expired equipment guid",
                 )));
             };
-            report.equipment_goods_id = Some(goods_id);
+            tracing::trace!(
+                message_type,
+                player_id,
+                ?goods_id,
+                "проверяется состояние снаряжения"
+            );
             let Some((state, packed_time)) = game.find_player(player_id).and_then(|player| {
                 player.get_goods_by_id(goods_id).map(|goods| {
                     (
@@ -1558,45 +1458,54 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     )
                 })
             }) else {
-                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentMissing;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "истёкшее снаряжение отсутствует",
+                );
+                return Some(Ok(()));
             };
             if state != 2 || packed_time == 0 {
-                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentStateIgnored;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "состояние снаряжения не требует обновления",
+                );
+                return Some(Ok(()));
             }
             let Some(source) = message.base_mut().get_char() else {
                 return Some(Err(GamePlayerMessageError::MissingField(
                     "expired equipment source",
                 )));
             };
-            report.equipment_source = Some(source);
-            report.equipment_source_position = game.find_player(player_id).map(|player| {
-                if source != 0 {
-                    return -1;
-                }
-                player
-                    .packet()
-                    .query_goods_position(goods_id)
-                    .map(|position| position as i32)
-                    .unwrap_or_else(|| {
-                        player
-                            .equipment()
-                            .query_goods_position_by_id(goods_id)
-                            .map(|position| position.position())
-                            .unwrap_or(u32::MAX)
-                            .wrapping_add(2) as i32
-                    })
-            });
+            tracing::trace!(
+                message_type,
+                player_id,
+                source,
+                "получен источник снаряжения"
+            );
             let Some(elapsed_seconds) = equipment_state_elapsed_seconds(packed_time) else {
-                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentTimeInvalid;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "время снаряжения некорректно",
+                );
+                return Some(Ok(()));
             };
             let elapsed_seconds = elapsed_seconds.round() as i32;
-            report.equipment_elapsed_seconds = Some(elapsed_seconds);
+            tracing::trace!(
+                message_type,
+                player_id,
+                elapsed_seconds,
+                "вычислен срок состояния снаряжения"
+            );
             if elapsed_seconds / 60 <= 0x275f {
-                report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentStillActive;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "снаряжение ещё действует",
+                );
+                return Some(Ok(()));
             }
             let (identity, payload, mutated) = {
                 let goods = game
@@ -1611,16 +1520,23 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     mutated,
                 )
             };
-            report.equipment_state_mutated = Some(mutated);
+            tracing::trace!(
+                message_type,
+                player_id,
+                mutated,
+                "изменено состояние снаряжения"
+            );
             let mut response = CMessage::new(0x000b_f928);
             response.add_long(player_id);
             response.base_mut().add_guid(identity.ex_id);
             response.base_mut().add_ulong(payload.len() as u32);
             response.base_mut().add(&payload);
-            report.deliveries.push(GamePlayerMessageDelivery::Around(
-                game.send_player_shape_around(player_id, None, &response),
-            ));
-            report.outcome = GamePlayerMessageOutcome::ExpiredEquipmentPublished;
+            let _ = game.send_player_shape_around(player_id, None, &response);
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "состояние снаряжения опубликовано",
+            );
         }
         QUERY_HONOR_IDENTITY => {
             let country_identity = game.player_country_identity(player_id);
@@ -1636,10 +1552,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             response.base_mut().add_ulong(honor.weeks_eliminate);
             response.base_mut().add_ulong(honor.months_eliminate);
             response.base_mut().add_ulong(honor.total_eliminate);
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                response.send_to_player(game.net_server(), player_id),
-            ));
-            report.outcome = GamePlayerMessageOutcome::HonorIdentitySent;
+            let _ = response.send_to_player(game.net_server(), player_id);
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "почётная идентичность отправлена",
+            );
         }
         REQUEST_CHANGE_APPELLATION => {
             let Some(appellation_id) = message.base_mut().get_long() else {
@@ -1661,7 +1579,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 },
                 runtime,
             );
-            report.outcome = GamePlayerMessageOutcome::AppellationChangeRequested;
+            trace_player_message_outcome(message_type, Some(player_id), "смена титула запрошена");
         }
         QUERY_LOCAL_TIME => {
             let system_time = TagTime::local_now().fields();
@@ -1669,10 +1587,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             for field in system_time {
                 response.base_mut().add(&field.to_le_bytes());
             }
-            report.deliveries.push(GamePlayerMessageDelivery::Player(
-                response.send_to_player(game.net_server(), player_id),
-            ));
-            report.outcome = GamePlayerMessageOutcome::LocalTimeSent;
+            let _ = response.send_to_player(game.net_server(), player_id);
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "локальное время отправлено",
+            );
         }
         CLAIM_LEI_TING_REWARD => {
             let Some(reward) = message.base_mut().get_word() else {
@@ -1680,10 +1600,19 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     "LeiTing reward index",
                 )));
             };
-            report.lei_ting_reward = Some(reward);
+            tracing::trace!(
+                message_type,
+                player_id,
+                reward,
+                "проверяется награда LeiTing"
+            );
             let Some(script) = LEI_TING_REWARD_SCRIPTS.get(usize::from(reward)) else {
-                report.outcome = GamePlayerMessageOutcome::LeiTingInvalidReward;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "награда LeiTing некорректна",
+                );
+                return Some(Ok(()));
             };
             if !game
                 .find_player(player_id)
@@ -1693,21 +1622,27 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             {
                 let notice =
                     colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"E19681"));
-                report.deliveries.push(GamePlayerMessageDelivery::Player(
-                    notice.send_to_player(game.net_server(), player_id),
-                ));
-                report.outcome = GamePlayerMessageOutcome::LeiTingPacketFull;
-                return Some(Ok(report));
+                let _ = notice.send_to_player(game.net_server(), player_id);
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "рюкзак для награды LeiTing заполнен",
+                );
+                return Some(Ok(()));
             }
             if !game
                 .find_player_mut(player_id)
                 .expect("LeiTing player сохранён после packet-space lookup")
                 .change_fy_energy_flag(reward)
             {
-                report.outcome = GamePlayerMessageOutcome::LeiTingRewardUnavailable;
-                return Some(Ok(report));
+                trace_player_message_outcome(
+                    message_type,
+                    Some(player_id),
+                    "награда LeiTing недоступна",
+                );
+                return Some(Ok(()));
             }
-            publish_lei_ting_update(game, player_id, &mut report.deliveries);
+            publish_lei_ting_update(game, player_id);
             let _ = game.run_script_file(
                 script,
                 ScriptExecutionContext {
@@ -1716,11 +1651,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 },
                 runtime,
             );
-            report.outcome = GamePlayerMessageOutcome::LeiTingRewardClaimed;
+            trace_player_message_outcome(message_type, Some(player_id), "награда LeiTing получена");
         }
         _ => unreachable!("player opcode отфильтрован до decode"),
     }
-    Some(Ok(report))
+    Some(Ok(()))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
