@@ -15120,16 +15120,18 @@ impl CGame {
         &mut self,
         name: &[u8],
         value: i32,
-    ) -> GameVariableMutationOutcome {
-        self.general_variables.set_integer(name, 0, value)
+    ) {
+        let outcome = self.general_variables.set_integer(name, 0, value);
+        tracing::trace!(name_bytes = name.len(), value, ?outcome, "целая общая переменная изменена");
     }
 
     pub(crate) fn set_general_variable_string(
         &mut self,
         name: &[u8],
         value: &[u8],
-    ) -> GameVariableMutationOutcome {
-        self.general_variables.set_string(name, value)
+    ) {
+        let outcome = self.general_variables.set_string(name, value);
+        tracing::trace!(name_bytes = name.len(), value_bytes = value.len(), ?outcome, "строковая общая переменная изменена");
     }
 
     /// Reached `SetMe` для DWORD-полей восстановительного script-а. До записи
@@ -34879,7 +34881,7 @@ impl CGame {
             let maximum = self.country_param.max_exploit().unwrap_or_default();
             if let Some(murderer) = self.find_player_mut(murderer_id) {
                 let requested = murderer.exploit().wrapping_add(increment as u32);
-                let applied = murderer.set_exploit(requested, maximum).applied;
+                let applied = murderer.set_exploit(requested, maximum);
                 let mut update = CMessage::new(0x000b_f72e);
                 update.add_ulong(applied);
                 record_client_delivery!(update.send_to_player(self.net_server(), murderer_id));
@@ -34921,10 +34923,10 @@ impl CGame {
         let mut pk_count = None;
         if disposition == KillPkDisposition::ReportMurderer {
             let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
-            let confirmed = self
+            let confirmed_pk_count = self
                 .find_player_mut(murderer_id)?
                 .report_murderer(pk_count_per_kill, || runtime.now_milliseconds());
-            pk_count = Some(confirmed.pk_count);
+            pk_count = Some(confirmed_pk_count);
         }
         let mut jjc = None;
         if self

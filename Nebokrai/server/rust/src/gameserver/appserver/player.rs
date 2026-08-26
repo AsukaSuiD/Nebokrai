@@ -1264,14 +1264,6 @@ pub(crate) enum PlayerFriendAddOutcome {
     LimitReached,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerConfirmedKillReport {
-    pub(crate) player_id: i32,
-    pub(crate) pk_count: u16,
-    pub(crate) kill_count: u32,
-    pub(crate) murderer_timestamp_started: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerDeathGoodsCandidate {
     pub(crate) location: PlayerGoodsAiLocation,
@@ -1393,14 +1385,6 @@ pub(crate) struct PlayerHonorEliminateMutation {
     pub(crate) player_id: i32,
     pub(crate) previous: [u32; 4],
     pub(crate) current: [u32; 4],
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlayerExploitMutationReport {
-    pub(crate) player_id: i32,
-    pub(crate) previous: u32,
-    pub(crate) requested: u32,
-    pub(crate) applied: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -4961,16 +4945,12 @@ impl CPlayer {
         &mut self,
         requested: u32,
         maximum: i32,
-    ) -> PlayerExploitMutationReport {
+    ) -> u32 {
         let previous = self.base_properties.exploit;
         let applied = requested.min(maximum as u32);
         self.base_properties.exploit = applied;
-        PlayerExploitMutationReport {
-            player_id: self.player_id(),
-            previous,
-            requested,
-            applied,
-        }
+        tracing::trace!(player_id = self.player_id(), previous, requested, applied, "подвиг игрока изменён");
+        applied
     }
 
     /// Exact `SetValue("dwExploit", value)` из region reward path:
@@ -4978,15 +4958,10 @@ impl CPlayer {
     pub(crate) fn set_exploit_property_value(
         &mut self,
         requested: u32,
-    ) -> PlayerExploitMutationReport {
+    ) {
         let previous = self.base_properties.exploit;
         self.base_properties.exploit = requested;
-        PlayerExploitMutationReport {
-            player_id: self.player_id(),
-            previous,
-            requested,
-            applied: requested,
-        }
+        tracing::trace!(player_id = self.player_id(), previous, requested, "свойство подвига игрока изменено напрямую");
     }
 
     /// `OnPlayerTimgingStart` отсеивает action `ACT_DIED == 6`
@@ -7252,7 +7227,7 @@ impl CPlayer {
         &mut self,
         pk_count_per_kill: u32,
         now_ms: impl FnOnce() -> u32,
-    ) -> PlayerConfirmedKillReport {
+    ) -> u16 {
         self.base_properties.pk_count = u32::from(self.base_properties.pk_count)
             .saturating_add(pk_count_per_kill)
             .min(u32::from(u16::MAX)) as u16;
@@ -7261,12 +7236,8 @@ impl CPlayer {
         if murderer_timestamp_started {
             self.murderer_time_stamp_ms = now_ms();
         }
-        PlayerConfirmedKillReport {
-            player_id: self.player_id(),
-            pk_count: self.base_properties.pk_count,
-            kill_count: self.base_properties.kill_count,
-            murderer_timestamp_started,
-        }
+        tracing::trace!(player_id = self.player_id(), pk_count = self.base_properties.pk_count, kill_count = self.base_properties.kill_count, murderer_timestamp_started, "убийца зарегистрирован");
+        self.base_properties.pk_count
     }
 
     pub(crate) fn is_badman(&self, pk_count_per_kill: u32) -> bool {
@@ -7303,7 +7274,7 @@ impl CPlayer {
         &mut self,
         pk_count_per_kill: u32,
         now_ms: impl FnOnce() -> u32,
-    ) -> PlayerConfirmedKillReport {
+    ) -> (u16, u32) {
         self.base_properties.pk_count = u32::from(self.base_properties.pk_count)
             .saturating_add(pk_count_per_kill)
             .min(u32::from(u16::MAX)) as u16;
@@ -7315,12 +7286,8 @@ impl CPlayer {
         } else if murderer_timestamp_started {
             self.murderer_time_stamp_ms = now_ms();
         }
-        PlayerConfirmedKillReport {
-            player_id: self.player_id(),
-            pk_count: self.base_properties.pk_count,
-            kill_count: self.base_properties.kill_count,
-            murderer_timestamp_started,
-        }
+        tracing::trace!(player_id = self.player_id(), pk_count = self.base_properties.pk_count, kill_count = self.base_properties.kill_count, murderer_timestamp_started, "подтверждённое убийство применено");
+        (self.base_properties.pk_count, self.base_properties.kill_count)
     }
 
     /// Exact `OnDecreaseMurdererSign`: timer идёт только у живого murderer-а,

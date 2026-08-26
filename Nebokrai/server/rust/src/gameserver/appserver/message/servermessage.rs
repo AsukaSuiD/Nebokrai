@@ -980,14 +980,14 @@ where
             tracing::warn!(?ignored_prefix, player_id, ?world_delivery, "обновление убийцы возвращено World: игрок отсутствует");
         } else {
             let pk_count_per_kill = game.globe_setup().pk_count_per_kill();
-            let mutation = game
+            let (pk_count, kill_count) = game
                 .find_player_mut(player_id)
                 .expect("player existence проверен перед synchronous mutation")
                 .apply_confirmed_kill(pk_count_per_kill, || now_ms(script_context));
             let mut around = CMessage::new(0x000B_F70E);
             around.add_long(player_id);
-            around.base_mut().add_word(mutation.pk_count);
-            around.add_ulong(mutation.kill_count);
+            around.base_mut().add_word(pk_count);
+            around.add_ulong(kill_count);
             let around_runtime = GameServerAroundRuntime::new(
                 game,
                 game.session_factory(),
@@ -1002,7 +1002,7 @@ where
                     .map(ServerRegionOwner::base);
                 Some(around.send_to_around(region, player.shape(), None, &around_runtime))
             });
-            tracing::trace!(?ignored_prefix, player_id, ?mutation, ?around_delivery, "счётчики убийцы обновлены");
+            tracing::trace!(?ignored_prefix, player_id, pk_count, kill_count, ?around_delivery, "счётчики убийцы обновлены");
         }
         return Some(Ok(()));
     }
@@ -1090,16 +1090,16 @@ where
                         },
                     ));
                 };
-                let mutation = game.set_general_variable_integer(&name, value);
-                tracing::trace!(value_tag, name_bytes = name.len(), value, ?mutation, "целая общая переменная обновлена");
+                game.set_general_variable_integer(&name, value);
+                tracing::trace!(value_tag, name_bytes = name.len(), value, "целая общая переменная обновлена");
             }
             3 => {
                 let value = message
                     .base_mut()
                     .get_str_bytes(0x100)
                     .expect("0x100 не достигает zero-size GetStr boundary");
-                let mutation = game.set_general_variable_string(&name, &value);
-                tracing::trace!(value_tag, name_bytes = name.len(), value_bytes = value.len(), ?mutation, "строковая общая переменная обновлена");
+                game.set_general_variable_string(&name, &value);
+                tracing::trace!(value_tag, name_bytes = name.len(), value_bytes = value.len(), "строковая общая переменная обновлена");
             }
             _ => tracing::debug!(value_tag, name_bytes = name.len(), "неизвестный вид общей переменной проигнорирован"),
         }

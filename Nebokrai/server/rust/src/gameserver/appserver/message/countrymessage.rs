@@ -771,7 +771,7 @@ fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
         player.set_exploit(player.exploit().wrapping_add(increment as u32), maximum)
     };
     let mut exploit_message = CMessage::new(0x000b_f72e);
-    exploit_message.add_ulong(exploit.applied);
+    exploit_message.add_ulong(exploit);
     let exploit_delivery = exploit_message.send_to_player(game.net_server(), player_id);
 
     let notice = format_country_war_exploit_notice(game.get_string_by_id(b"GS0024"), increment);
@@ -788,7 +788,7 @@ fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
         camp,
         ?position,
         ?region_change,
-        ?exploit,
+        exploit,
         exploit_delivery,
         notice_delivery,
         "вход в войну стран завершён"

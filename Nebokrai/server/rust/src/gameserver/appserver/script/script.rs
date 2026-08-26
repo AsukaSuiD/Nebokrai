@@ -1218,7 +1218,7 @@ impl<'a> CScript<'a> {
                     return Some(true);
                 }
             }
-            let _ = game.set_general_variable_integer(name, value);
+            game.set_general_variable_integer(name, value);
             return Some(true);
         }
         if name.starts_with(b"#") {
@@ -1243,7 +1243,7 @@ impl<'a> CScript<'a> {
                     return Some(true);
                 }
             }
-            let _ = game.set_general_variable_string(name, &value);
+            game.set_general_variable_string(name, &value);
             return Some(true);
         }
         None

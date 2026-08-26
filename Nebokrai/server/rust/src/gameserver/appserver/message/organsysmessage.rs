@@ -1080,7 +1080,7 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
             property.base_mut().add_str(Some(c"dwExploit"));
             property.base_mut().add_ulong(advertised_exploit);
             let exploit_property_delivery = property.send_to_player(game.net_server(), player_id);
-            let mutation = {
+            let applied_exploit = {
                 let player = game
                     .find_player_mut(player_id)
                     .expect("player проверен до exact exploit mutation");
@@ -1103,7 +1103,7 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                 notice.base_mut().add_str(Some(&text));
                 notice.send_to_player(game.net_server(), player_id)
             });
-            trace!(player_id, increment, advertised_exploit, ?mutation, exploit_property_delivery, combat_property_delivery, tao_zhuang_ran, ?notice_delivery, "Обновлён подвиг FourNation");
+            trace!(player_id, increment, advertised_exploit, applied_exploit, exploit_property_delivery, combat_property_delivery, tao_zhuang_ran, ?notice_delivery, "Обновлён подвиг FourNation");
             Ok(())
         }
         0x7fe47 => {
@@ -1865,13 +1865,13 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
                 property.base_mut().add_ulong(advertised_exploit);
                 let _property_delivery =
                     property.send_to_player(self.game.net_server(), award.player_id);
-                let _mutation = {
+                {
                     let player = self
                         .game
                         .find_player_mut(award.player_id)
                         .expect("online award player проверен до mutation");
                     player.set_exploit_property_value(advertised_exploit)
-                };
+                }
                 let _property_update = self
                     .game
                     .update_player_properties(award.player_id, self.runtime)
