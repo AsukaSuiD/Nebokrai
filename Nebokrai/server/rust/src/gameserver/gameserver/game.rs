@@ -21106,6 +21106,67 @@ impl CGame {
         Some(result)
     }
 
+    /// Точный проход `ModifyGoodsTime`: временная регистрация `GoodsAI`
+    /// снимается до изменения полей и восстанавливается после него. Для
+    /// предмета, находящегося в своей ячейке экипировки, типы 2 и 4 начинают
+    /// отсчёт заново с текущего серверного времени.
+    pub(crate) fn modify_script_selected_goods_time<Context: OldClientGoodsCodec>(
+        &mut self,
+        player_id: i32,
+        lifetime: u32,
+        time_type: Option<u32>,
+        context: &mut Context,
+    ) {
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return;
+        };
+        let update = (|| {
+            let goods_id = player.enhancement_selected_goods_id()?;
+            let now_seconds = game_wall_time_seconds();
+            let _ = player.unregister_goods_ai_by_id(goods_id, &self.goods_factory, now_seconds);
+
+            let (identity, resolved_time_type, equip_place) = {
+                let goods = player.get_goods_by_id_mut(goods_id)?;
+                goods.set_goods_lifetime(lifetime);
+                if let Some(time_type) = time_type {
+                    goods.set_goods_time_type(time_type);
+                }
+                let resolved_time_type = goods.goods_time_type(&self.goods_factory);
+                let equip_place = self
+                    .goods_factory
+                    .query_goods_base_properties(goods.base_properties_index())
+                    .map(|base| base.equip_place());
+                (goods.identity(), resolved_time_type, equip_place)
+            };
+
+            let is_equipped = equip_place
+                .and_then(|position| u32::try_from(position).ok())
+                .and_then(|position| player.equipment().get_goods(position))
+                .is_some_and(|goods| goods.identity().ex_id == goods_id);
+            if matches!(resolved_time_type, 2 | 4)
+                && is_equipped
+                && let Some(goods) = player.get_goods_by_id_mut(goods_id)
+            {
+                goods.set_start_point(now_seconds);
+            }
+            let _ = player.register_goods_ai_by_id(goods_id, &self.goods_factory, now_seconds);
+            let payload = player
+                .get_goods_by_id(goods_id)
+                .map(|goods| context.encode_goods_for_old_client(goods))?;
+            Some((identity, payload))
+        })();
+        self.players.insert(player_id, player);
+
+        if let Some((identity, payload)) = update {
+            let mut message = CMessage::new(0x000b_f918);
+            message.add_long(player_id);
+            message.base_mut().add_guid(identity.ex_id);
+            message.add_ulong(payload.len() as u32);
+            message.base_mut().add(&payload);
+            let _ = message.send_to_player(self.net_server(), player_id);
+        }
+    }
+
     pub(crate) fn upgrade_script_selected_equipment<Context: OldClientGoodsCodec>(
         &mut self,
         player_id: i32,

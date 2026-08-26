@@ -463,6 +463,7 @@ pub(crate) const SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY: i32 = 9351;
 pub(crate) const SCRIPT_FUNCTION_OPEN_DA_KONG: i32 = 9350;
 pub(crate) const SCRIPT_FUNCTION_DA_KONG_MODIFY: i32 = 9352;
 pub(crate) const SCRIPT_FUNCTION_DA_KONG_DELUX_MODIFY: i32 = 9353;
+pub(crate) const SCRIPT_FUNCTION_MODIFY_GOODS_TIME: i32 = 9509;
 pub(crate) const SCRIPT_FUNCTION_OPEN_CI_QING_PAGE: i32 = 9628;
 pub(crate) const SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING: i32 = 9629;
 pub(crate) const SCRIPT_FUNCTION_OPEN_EQUIPMENT_COMPOSE: i32 = 9354;
@@ -3531,7 +3532,7 @@ pub(crate) fn run_equipment_session_script_function(
     EquipmentSessionScriptFunctionOutcome::Opened(game.open_equipment_session(player_id, kind))
 }
 
-#[must_use = "script dispatch отличает чужой ID от handled no-op и выполненного gameplay"]
+#[must_use = "диспетчер сценариев отличает чужой идентификатор от обработанного вызова"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentDaKongScriptFunctionOutcome {
     DifferentFunction,
@@ -4279,6 +4280,10 @@ pub(crate) fn script_function_parameter_kind(
             _ => Unused,
         },
         SCRIPT_FUNCTION_ACTIVITY_LOG => Unused,
+        SCRIPT_FUNCTION_MODIFY_GOODS_TIME => match index {
+            0 | 1 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_DELETE_USED_GOODS
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_1
         | SCRIPT_FUNCTION_GET_USED_GOODS_PROPERTY_2
@@ -7521,6 +7526,24 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: (red | green << 8 | blue << 16) as i32,
             })
+        }
+        SCRIPT_FUNCTION_MODIFY_GOODS_TIME => {
+            let lifetime = integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+            if lifetime == SCRIPT_INT_PARAMETER_ERROR {
+                return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
+            }
+            if let Some(player_id) = script_player_id {
+                let time_type = integer_arguments[1]
+                    .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
+                    .map(|value| value as u32);
+                game.modify_script_selected_goods_time(
+                    player_id,
+                    lifetime as u32,
+                    time_type,
+                    runtime,
+                );
+            }
+            Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_ACTIVITY_LOG => {
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })

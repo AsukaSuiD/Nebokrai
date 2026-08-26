@@ -1167,8 +1167,8 @@ impl CGoods {
         true
     }
 
-    /// Exact `QueryEnchanseColor`: считает цвет catalog gem-а в семи
-    /// сохранённых socket index-ах, включая непоследовательные отверстия.
+    /// Точный `QueryEnchanseColor`: считает цвет камня из каталога в семи
+    /// сохранённых индексах отверстий, включая непоследовательные отверстия.
     pub(crate) fn query_enchanse_color(&self, factory: &CGoodsFactory, color: i32) -> i32 {
         (0..7).fold(0i32, |count, offset| {
             let gem_index = self.addon_property_value(factory, GAP_DAKONG_1 + offset, 2) as u32;
@@ -1193,15 +1193,24 @@ impl CGoods {
         self.addon_property_value(factory, GAP_GOODS_LIFE_TYPE, 1) as u32
     }
 
+    pub(crate) fn set_goods_lifetime(&mut self, lifetime: u32) {
+        let _ = self.set_addon_property_value_core(GAP_GOODS_LIFE_TYPE, 1, lifetime as i32);
+    }
+
+    pub(crate) fn set_goods_time_type(&mut self, time_type: u32) {
+        let _ = self.set_addon_property_value_core(GAP_GOODS_LIFE_TYPE, 2, time_type as i32);
+    }
+
     pub(crate) fn start_point(&self, factory: &CGoodsFactory) -> u64 {
         let high = self.addon_property_value(factory, GAP_GOODS_START_POINT, 1) as u32;
         let low = self.addon_property_value(factory, GAP_GOODS_START_POINT, 2) as u32;
         (u64::from(high) << 32) | u64::from(low)
     }
 
-    /// Legacy setter последовательно пишет low, затем high. На повреждённой
-    /// addon-схеме первая запись может состояться без второй, что намеренно не
-    /// сворачивается в атомарную замену.
+    /// Исходный метод последовательно пишет младшую, затем старшую часть. При
+    /// повреждённой схеме дополнительных свойств первая запись может
+    /// состояться без второй; это намеренно не сворачивается в атомарную
+    /// замену.
     pub(crate) fn set_start_point(&mut self, start_point: u64) {
         let _ =
             self.set_addon_property_value_core(GAP_GOODS_START_POINT, 2, start_point as u32 as i32);
@@ -1212,8 +1221,9 @@ impl CGoods {
         );
     }
 
-    /// Timed-prefix `CEquipmentContainer::Add`: типы 2/4 получают текущую
-    /// точку только при нулевом старте. Возвращает факт попытки legacy setter-а.
+    /// Начальная ветвь `CEquipmentContainer::Add` для временных предметов:
+    /// типы 2 и 4 получают текущую точку только при нулевом старте. Возвращает
+    /// факт попытки исходного метода записи.
     pub(crate) fn initialize_equipment_start_point(
         &mut self,
         factory: &CGoodsFactory,

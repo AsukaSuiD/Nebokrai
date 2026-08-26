@@ -135,48 +135,55 @@
 //! Gear add/remove теперь через `CGame` действительно исполняет ordered
 //! `0xBF721/0xBF918`; remove сохраняет две одинаково обязательные публикации
 //! old-client payload после успешного `BFPropertyAdd(-1)`.
-//! Upgrade `0x8FC28` замыкает validation, owned wallet goods, общий RNG,
-//! factory level/growth mutation, target failure outcome, positional расход
-//! gem-ов и ordered client/audit effects. Снимки target/gems/player сохраняют
-//! World audit после необратимого удаления, а `CGame` публикует concrete
+//! Улучшение `0x8FC28` замыкает проверки, принадлежащие кошельку предметы,
+//! общий генератор случайных чисел, изменение уровня и роста на фабрике,
+//! результат ошибки цели, позиционный расход камней и упорядоченные клиентские
+//! и контрольные последствия. Снимки цели, камней и игрока сохраняют контрольную
+//! запись мира после необратимого удаления, а `CGame` публикует точные
 //! `0xC0101/0xC0102`, `0xBF918` и `0x60202/0x60203` в исходном порядке.
-//! `ResetPotential` использует owned packet `CVolumeLimitGoodsContainer` 8×12:
-//! первый `ZHQLS01` расходуется до addon/player mutation, семь tracked-вкладов
-//! возвращаются в общий potential и публикуется один итоговый `0xBF918`.
-//! `ResetSkill` соединяет equipment headgear, optional packet-reset item,
-//! общий Game RNG, exact несовместимые пары, полный detach/attach девяти
-//! war-soul skills и подтверждения `0xBF71D/0xBF918`.
-//! Goods-message `0x8FC29` использует отдельный script reset: player owner
-//! сохраняет native detach/attach девяти addon skills вокруг live script,
-//! не подменяя его внутренней random-веткой `ResetSkill`.
-//! `GetGoodsById` теперь сохраняет exact hand→packet→equipment→auction lookup;
-//! hand и auction являются owned containers и участвуют в owner refresh.
-//! Однослотовый `m_cEnhancementContainer` хранит shadow выбранного исходного
-//! goods и даёт script ID 9351 тот же живой предмет без копии. Входящий
-//! `0x90301` проверяет packet/equipment position, GUID, amount и stackability,
-//! затем записывает shadow без смены ownership исходного goods и сохраняет
-//! native last-operated source для последующих container-переходов.
-//! Script `2249` использует тот же live owner; ripe replacement добавляется
-//! напрямую в packet даже пока script progress занят.
-//! Двусторонний auction-listing route использует те же owned packet/equipment
-//! containers: обратный ход считает exact equipment+packet+hand burden,
-//! сохраняет last-operated только после успешного destination add и оставляет
-//! temporary auction/fairy/session goods вне весовой суммы, как исходный owner.
-//! CiQing unlocked base-index set хранится ordered `BTreeSet`; его query не
-//! создаёт постоянные goods, а только передаёт snapshot CGame factory owner-у;
-//! make считает/удаляет packet stack-и в container order и сохраняет
-//! new-object/stack ownership; `CGame` публикует concrete `0xC0101/02` и
-//! World audit `0x60218`. Owned CiQing containers имеют exact volumes `8/3`;
-//! compose slots удаляются по позиции.
-//! Основной CiQing delete сохраняет partial-amount семантику `DeleteGoods`.
-//! Hand mount читает exact addon `243/244`; hand consumption также сохраняет
-//! partial amount и не выдаёт reached `CGoods` projection за полный Clone.
-//! CiQing property owner хранит ordered обычные/TaoZhuang map-ы и set ID.
-//! `UpdateCiQingProperty` сопоставляет равные по размеру ordered снимки и
-//! насыщает отрицательную разницу нулём; merge для клиента сохраняет unsigned
-//! wrapping addition. Other-person snapshot читает это состояние и те же
-//! восемь owned CiQing slots без копий. Универсальные equipment/addon формулы
-//! остаются обязательной runtime-границей до materialization всех combat scalar-ов.
+//! `ResetPotential` использует принадлежащий игроку рюкзак `CVolumeLimitGoodsContainer` 8×12:
+//! первый `ZHQLS01` расходуется до изменения дополнительных свойств и игрока,
+//! семь учтённых вкладов возвращаются в общий потенциал, после чего публикуется
+//! один итоговый `0xBF918`.
+//! `ResetSkill` связывает головной предмет экипировки, необязательный предмет
+//! сброса из рюкзака, общий генератор случайных чисел игры, точные несовместимые
+//! пары, полное снятие и установку девяти навыков боевой феи и подтверждения
+//! `0xBF71D/0xBF918`.
+//! Сообщение предмета `0x8FC29` использует отдельный сценарный сброс: владелец
+//! игрока сохраняет исходное снятие и установку девяти навыков дополнительных
+//! свойств вокруг живого сценария, не подменяя его внутренней случайной ветвью
+//! `ResetSkill`.
+//! `GetGoodsById` сохраняет точный поиск по руке, рюкзаку, экипировке и аукциону;
+//! рука и аукцион являются владеющими контейнерами и участвуют в обновлении.
+//! Однослотовый `m_cEnhancementContainer` хранит теневые данные выбранного
+//! исходного предмета и даёт сценарию 9351 тот же живой предмет без копии.
+//! Входящий `0x90301` проверяет контейнер, позицию, `GUID`, количество и
+//! возможность складывания, затем записывает тень без смены владельца исходного
+//! предмета и сохраняет исходный источник последней операции.
+//! Сценарий `2249` использует того же живого владельца; созревшая замена
+//! добавляется прямо в рюкзак, даже пока выполняется другой сценарий.
+//! Двусторонний путь аукционного объявления использует те же рюкзак и
+//! экипировку: обратный ход считает точную нагрузку экипировки, рюкзака и руки,
+//! сохраняет последнюю операцию только после успешного добавления в назначение
+//! и не включает временные предметы аукциона, феи и сессий в сумму веса.
+//! Набор открытых базовых индексов `CiQing` хранится в упорядоченном `BTreeSet`;
+//! запрос не создаёт постоянные предметы, а передаёт снимок владельцу фабрики
+//! `CGame`; создание считает и удаляет стопки рюкзака в порядке контейнера и
+//! сохраняет владение новым предметом или стопкой. `CGame` публикует точные
+//! `0xC0101/02` и контрольную запись мира `0x60218`. Владеющие контейнеры
+//! `CiQing` имеют точные объёмы `8/3`; ячейки сборки удаляются по позиции.
+//! Основное удаление `CiQing` сохраняет семантику частичного количества
+//! `DeleteGoods`. Установка в руку читает точные дополнительные свойства
+//! `243/244`; расход из руки также сохраняет частичное количество и не выдаёт
+//! полученную ссылку на `CGoods` за полную копию.
+//! Владелец свойств `CiQing` хранит упорядоченные обычные карты, карты
+//! `TaoZhuang` и идентификатор набора. `UpdateCiQingProperty` сопоставляет
+//! равные по размеру упорядоченные снимки и насыщает отрицательную разницу
+//! нулём; объединение для клиента сохраняет беззнаковое сложение с
+//! переполнением. Снимок другого игрока читает это состояние и те же
+//! восемь принадлежащих `CiQing` ячеек без копий. Универсальные формулы
+//! экипировки и дополнительных свойств остаются обязательной границей среды
+//! выполнения до материализации всех боевых величин.
 //! TaoZhuang теперь сохраняет constructor flags, unique original-name set,
 //! ordered set counts/threshold-prefix, max-level skills и раздельные обычные/
 //! CiQing property maps. `CGame` исполняет полный `DoneTaoZhuang`, поэтому эти
@@ -8955,6 +8962,52 @@ impl CPlayer {
             return false;
         };
         self.record_goods_ai_registration(ticket, goods_id);
+        true
+    }
+
+    /// Выполняет `CPlayer::DelItemFromGoodsAiTree` для предмета, который
+    /// остаётся в принадлежащем игроку контейнере. Это позволяет сценарному
+    /// владельцу изменить временные поля между удалением и повторной
+    /// регистрацией, не перемещая сам предмет.
+    pub(crate) fn unregister_goods_ai_by_id(
+        &mut self,
+        goods_id: CGuid,
+        factory: &CGoodsFactory,
+        now_seconds: u64,
+    ) -> bool {
+        let Some(ticket) = self.get_goods_by_id(goods_id).map(CGoods::add_ticket) else {
+            return false;
+        };
+        if ticket == 0 {
+            return false;
+        }
+        let Some(bucket) = self.goods_ai_tree.get_mut(&ticket) else {
+            return false;
+        };
+        let _ = bucket.remove(&goods_id);
+        if bucket.is_empty() {
+            self.goods_ai_tree.remove(&ticket);
+        }
+
+        let Some(goods) = self.get_goods_by_id_mut(goods_id) else {
+            return false;
+        };
+        let start = goods.start_point(factory);
+        let elapsed = if start < now_seconds {
+            (now_seconds as u32).wrapping_sub(start as u32)
+        } else {
+            0
+        };
+        let lifetime = goods.goods_lifetime(factory);
+        if elapsed.wrapping_add(5) >= lifetime {
+            goods.set_goods_lifetime(0);
+            self.goods_ai_delete_queue
+                .push_back(BTreeSet::from([goods_id]));
+            return true;
+        }
+        goods.set_goods_lifetime(lifetime.wrapping_sub(elapsed));
+        goods.set_start_point(0);
+        goods.set_add_ticket(0);
         true
     }
 
