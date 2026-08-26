@@ -2170,39 +2170,45 @@ fn decode_runtime_configuration_startup(
 ) -> Option<Result<(), GameRuntimeConfigurationStartupError>> {
     match selector {
         GLOBE_SETUP_SELECTOR => {
-            let decoded = {
+            {
                 let (globe_setup, region_router) = game.globe_setup_and_region_router_mut();
                 match globe_setup.decord_from_byte_array(region_router, source, cursor) {
-                    Ok(decoded) => decoded,
+                    Ok(()) => {}
                     Err(error) => {
                         return Some(Err(GameRuntimeConfigurationStartupError::GlobeSetup(error)));
                     }
                 }
-            };
-            game.da_kong_xiang_qian_mut().set_key(decoded.da_kong_key);
+            }
+            let da_kong_key = game.globe_setup().da_kong_key();
+            let goods_ai_enabled = game.globe_setup().goods_ai_enabled();
+            let auction_enabled = game.globe_setup().auction_enabled();
+            let area_width = game.globe_setup().area_width();
+            let area_height = game.globe_setup().area_height();
+            game.da_kong_xiang_qian_mut().set_key(da_kong_key);
             let mut notice = CMessage::new(0x000B_F736);
-            notice.add_byte(u8::from(decoded.goods_ai_enabled));
+            notice.add_byte(u8::from(goods_ai_enabled));
             let goods_ai_broadcast = notice.send_all(game.current_net_server());
-            let auction_forced_disabled = !decoded.auction_enabled;
+            let auction_forced_disabled = !auction_enabled;
             if auction_forced_disabled {
                 game.force_auction_disabled();
             }
-            game.set_area_dimensions(decoded.area_width, decoded.area_height);
+            game.set_area_dimensions(area_width, area_height);
             add_log_text(b"Initial SI_GLOBESETUP...OK!");
-            tracing::trace!(?decoded, ?goods_ai_broadcast, auction_forced_disabled, "глобальные настройки загружены");
+            tracing::trace!(da_kong_key, goods_ai_enabled, auction_enabled, area_width, area_height, ?goods_ai_broadcast, auction_forced_disabled, "глобальные настройки загружены");
             Some(Ok(()))
         }
         LOG_SYSTEM_SELECTOR => {
-            let report = match game.log_system_mut().decord_from_byte_array(source, cursor) {
-                Ok(report) => report,
+            match game.log_system_mut().decord_from_byte_array(source, cursor) {
+                Ok(()) => {}
                 Err(error) => {
                     return Some(Err(GameRuntimeConfigurationStartupError::LogSystem(error)));
                 }
-            };
+            }
+            let da_kong_log = game.log_system().da_kong_log_enabled();
             game.da_kong_xiang_qian_mut()
-                .set_log_key(report.da_kong_log);
+                .set_log_key(da_kong_log);
             add_log_text(b"Initial SI_LOGSYSTEM...OK!");
-            tracing::trace!(entries = report.items, da_kong_log = report.da_kong_log, "настройки журналирования загружены");
+            tracing::trace!(da_kong_log, "настройки журналирования загружены");
             Some(Ok(()))
         }
         GM_LIST_SELECTOR => {

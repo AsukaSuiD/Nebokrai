@@ -656,7 +656,7 @@ use crate::gameserver::appserver::player::{
     PlayerDeathGoodsCandidate, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
-    PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
+    PlayerFightStateTransition, PlayerGameSaveCodecError,
     PlayerGoodsAiDeletion, PlayerLoginGoodsLocation, PlayerProgress,
     PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel,
     PlayerUncreatedCarriage,
@@ -5238,7 +5238,7 @@ impl CGame {
         source: &[u8],
         cursor: &mut usize,
         now_ms: u32,
-    ) -> Result<(CPlayer, PlayerGameSaveDecodeReport), PlayerGameSaveCodecError> {
+    ) -> Result<CPlayer, PlayerGameSaveCodecError> {
         let mut ordinary_threshold =
             |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level);
         let mut battle_threshold =

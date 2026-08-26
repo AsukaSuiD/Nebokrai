@@ -74,15 +74,6 @@ pub(crate) struct RegionRouterLoadReport {
     pub(crate) trailing_tokens: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct RegionRouterDecodeReport {
-    pub(crate) declared_regions: u32,
-    pub(crate) regions: usize,
-    pub(crate) transitions: usize,
-    pub(crate) duplicate_regions: usize,
-    pub(crate) duplicate_transitions: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RegionRouterDecodeField {
     RegionCount,
@@ -198,7 +189,7 @@ impl RegionRouter {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<RegionRouterDecodeReport, RegionRouterDecodeError> {
+    ) -> Result<(), RegionRouterDecodeError> {
         self.clear();
         let declared_regions = read_router_u32(
             source,
@@ -313,13 +304,8 @@ impl RegionRouter {
             }
         }
 
-        Ok(RegionRouterDecodeReport {
-            declared_regions,
-            regions: self.nodes.len(),
-            transitions: self.nodes.values().map(|node| node.next.len()).sum(),
-            duplicate_regions,
-            duplicate_transitions,
-        })
+        tracing::trace!(declared_regions, regions = self.nodes.len(), transitions = self.nodes.values().map(|node| node.next.len()).sum::<usize>(), duplicate_regions, duplicate_transitions, "маршрутизатор регионов декодирован");
+        Ok(())
     }
 
     pub(crate) fn load_router_setup(

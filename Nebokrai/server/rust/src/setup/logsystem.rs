@@ -89,6 +89,10 @@ impl CLogSystem {
         self.items.contains(&goods_id)
     }
 
+    pub(crate) fn da_kong_log_enabled(&self) -> bool {
+        self.setting(DA_KONG_LOG_OFFSET)
+    }
+
     pub(crate) fn from_settings(settings: [u8; LOG_SETTINGS_LENGTH]) -> Self {
         Self {
             settings,
@@ -328,24 +332,16 @@ impl CLogSystem {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<LogSystemDecodeReport, LogSystemDecodeError> {
+    ) -> Result<(), LogSystemDecodeError> {
         self.settings = read_wire_array(source, cursor)?;
         self.items.clear();
         let count = read_wire_i32(source, cursor)?;
         for _ in 0..count.max(0) {
             self.items.insert(read_wire_i32(source, cursor)?);
         }
-        Ok(LogSystemDecodeReport {
-            items: self.items.len(),
-            da_kong_log: self.setting(DA_KONG_LOG_OFFSET),
-        })
+        tracing::trace!(items = self.items.len(), da_kong_log = self.da_kong_log_enabled(), "настройки журналирования декодированы");
+        Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LogSystemDecodeReport {
-    pub(crate) items: usize,
-    pub(crate) da_kong_log: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

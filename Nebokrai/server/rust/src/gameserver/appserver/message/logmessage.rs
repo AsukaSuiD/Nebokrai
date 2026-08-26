@@ -191,7 +191,7 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         let _delivery = reject_player_login(game, player_id, true);
         return Err(GameLogMessageError::MissingTeamId);
     };
-    let (player, codec) = {
+    let player = {
         let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
         match game.decode_player_game_save(source, cursor, now_ms) {
             Ok(decoded) => decoded,
@@ -201,7 +201,6 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
             }
         }
     };
-    let decoded_bytes = codec.consumed_bytes;
     game
         .complete_world_player_login(player_id, player, captain, team_id, runtime)
         .map_err(|block| {
@@ -213,7 +212,6 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         status,
         captain,
         team_id,
-        decoded_bytes,
         "вход игрока завершён"
     );
     Ok(())

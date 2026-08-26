@@ -35,7 +35,7 @@
 //! `lDiedStateTime +0x56C` из того же snapshot.
 
 use crate::setup::regionrouter::{
-    RegionRouter, RegionRouterDecodeError, RegionRouterDecodeReport, RegionRouterSerializeError,
+    RegionRouter, RegionRouterDecodeError, RegionRouterSerializeError,
 };
 
 use std::error::Error;
@@ -214,17 +214,6 @@ pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) int_to_element: [f32; 3],
     pub(crate) int_to_max_mp: [f32; 3],
     pub(crate) int_to_resistant: [f32; 3],
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct GlobeSetupDecodeReport {
-    pub(crate) router: RegionRouterDecodeReport,
-    pub(crate) area_width: i32,
-    pub(crate) area_height: i32,
-    pub(crate) da_kong_key: bool,
-    pub(crate) synthesis_enabled: bool,
-    pub(crate) goods_ai_enabled: bool,
-    pub(crate) auction_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -421,7 +410,7 @@ impl GlobeSetupSnapshot {
         router: &mut RegionRouter,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<GlobeSetupDecodeReport, GlobeSetupDecodeError> {
+    ) -> Result<(), GlobeSetupDecodeError> {
         let offset = *cursor;
         let available = source.len().saturating_sub(offset);
         let Some(bytes) = source.get(offset..offset.saturating_add(GLOBE_SETUP_BLOB_LENGTH)) else {
@@ -434,18 +423,11 @@ impl GlobeSetupSnapshot {
         self.bytes.copy_from_slice(bytes);
         *cursor += GLOBE_SETUP_BLOB_LENGTH;
 
-        let router = router
+        router
             .decord_from_byte_array(source, cursor)
             .map_err(GlobeSetupDecodeError::RegionRouter)?;
-        Ok(GlobeSetupDecodeReport {
-            router,
-            area_width: self.area_width(),
-            area_height: self.area_height(),
-            da_kong_key: self.da_kong_key(),
-            synthesis_enabled: self.synthesis_enabled(),
-            goods_ai_enabled: self.goods_ai_enabled(),
-            auction_enabled: self.auction_enabled(),
-        })
+        tracing::trace!(area_width = self.area_width(), area_height = self.area_height(), da_kong_key = self.da_kong_key(), synthesis_enabled = self.synthesis_enabled(), goods_ai_enabled = self.goods_ai_enabled(), auction_enabled = self.auction_enabled(), "глобальные настройки декодированы");
+        Ok(())
     }
 
     /// Читает positional `setup/globesetup.ini` в точные PDB-offsets.

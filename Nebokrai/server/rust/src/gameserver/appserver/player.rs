@@ -1248,11 +1248,6 @@ pub(crate) enum PlayerGameSaveCodecError {
     },
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerGameSaveDecodeReport {
-    pub(crate) consumed_bytes: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerLoginGoodsLocation {
     Equipment,
@@ -2299,7 +2294,7 @@ impl CPlayer {
         pack_add_enabled: bool,
         ordinary_threshold: &mut dyn FnMut(u32, u32) -> u32,
         battle_threshold: &mut dyn FnMut(u32, u32) -> u32,
-    ) -> Result<(Self, PlayerGameSaveDecodeReport), PlayerGameSaveCodecError> {
+    ) -> Result<Self, PlayerGameSaveCodecError> {
         let start = *cursor;
         let mut move_shape = CMoveShape::default();
         move_shape
@@ -2621,12 +2616,9 @@ impl CPlayer {
         player.session_id = read_player_game_save_string(source, cursor, "m_strSessionID", 0x40)?;
         player.refresh_reached_container_owners(player.player_id());
 
-        Ok((
-            player,
-            PlayerGameSaveDecodeReport {
-                consumed_bytes: cursor.saturating_sub(start),
-            },
-        ))
+        let consumed_bytes = cursor.saturating_sub(start);
+        tracing::trace!(player_id = player.player_id(), consumed_bytes, "сохранение игрока декодировано");
+        Ok(player)
     }
 
     /// `AddGameSaveToByteArray`: тот же persisted layout без organization
