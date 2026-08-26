@@ -1,12 +1,15 @@
-//! Client pet-control dispatcher GameServer.
+//! Диспетчер клиентского управления питомцами GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/message/petmessage.cpp`. `0x90401/02` проходят canonical
-//! player/region/monster owners: AI mode, action/target, dismiss state,
-//! localized notices, `0xC0202` и around `0xBF504` сохраняют исходный порядок.
+//! `appserver/message/petmessage.cpp`. `0x90401/02` проходят через владельцев
+//! player, region и monster: режим AI, действие и цель, состояние отзыва,
+//! локализованные уведомления, `0xC0202` и рассылка вокруг `0xBF504`
+//! сохраняют исходный порядок. Выполненные отправки не дублируются в отчёте;
+//! сведения о результате публикуются через `tracing` на месте.
 
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
+use tracing::{debug, trace};
 
 const PET_MODE: u32 = 0x0009_0401;
 const PET_COMMAND: u32 = 0x0009_0402;
@@ -16,50 +19,27 @@ pub(crate) enum GamePetMessageError {
     MissingField,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GamePetMessageOutcome {
-    Mode,
-    Attack,
-    Follow,
-    Stay,
-    Dismiss,
-    Ignored,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePetMessageReport {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: GamePetMessageOutcome,
-    pub(crate) affected_pets: usize,
-    pub(crate) notice_delivery: Option<i32>,
-    pub(crate) mode_delivery: Option<i32>,
-    pub(crate) around_delivery: Option<i32>,
-}
-
-fn notify(game: &CGame, player_id: i32, string_id: &[u8]) -> i32 {
-    colored_player_notice_message(0xffff_0000, 0xffff_ffff, game.get_string_by_id(string_id))
-        .send_to_player(game.net_server(), player_id)
+fn notify(game: &CGame, player_id: i32, string_id: &[u8]) {
+    let _ = colored_player_notice_message(
+        0xffff_0000,
+        0xffff_ffff,
+        game.get_string_by_id(string_id),
+    )
+    .send_to_player(game.net_server(), player_id);
 }
 
 pub(crate) fn dispatch_game_pet_message(
     message: &mut CMessage,
     game: &mut CGame,
-) -> Option<Result<GamePetMessageReport, GamePetMessageError>> {
+) -> Option<Result<(), GamePetMessageError>> {
     let source_type = message.message_type() as u32;
     if !matches!(source_type, PET_MODE | PET_COMMAND) {
         return None;
     }
     let player_id = message.map_id();
-    let mut report = GamePetMessageReport {
-        player_id,
-        outcome: GamePetMessageOutcome::Ignored,
-        affected_pets: 0,
-        notice_delivery: None,
-        mode_delivery: None,
-        around_delivery: None,
-    };
     let Some(player) = game.find_player(player_id) else {
-        return Some(Ok(report));
+        trace!(player_id, "pet-команда пропущена: игрок не найден");
+        return Some(Ok(()));
     };
     if player.in_changing_server()
         || player.in_changing_region()
@@ -68,7 +48,8 @@ pub(crate) fn dispatch_game_pet_message(
             .and_then(|region_id| game.find_region(region_id))
             .is_none()
     {
-        return Some(Ok(report));
+        trace!(player_id, "pet-команда пропущена: контекст игрока меняется");
+        return Some(Ok(()));
     }
     if source_type == PET_MODE {
         let Some(mode) = message.base_mut().get_long() else {
@@ -76,11 +57,9 @@ pub(crate) fn dispatch_game_pet_message(
         };
         if (0..=2).contains(&mode) {
             let Some(affected) = game.set_player_pet_mode(player_id, mode) else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
-            report.outcome = GamePetMessageOutcome::Mode;
-            report.affected_pets = affected;
-            report.notice_delivery = Some(notify(
+            notify(
                 game,
                 player_id,
                 match mode {
@@ -88,15 +67,16 @@ pub(crate) fn dispatch_game_pet_message(
                     1 => b"GS0051",
                     _ => b"GS0052",
                 },
-            ));
+            );
+            debug!(player_id, mode, affected_pets = affected, "изменён режим питомцев");
         }
         let mode = game
             .find_player(player_id)
             .map_or(0, |player| player.current_pets_mode());
         let mut response = CMessage::new(0x000c_0202);
         response.add_long(mode);
-        report.mode_delivery = Some(response.send_to_player(game.net_server(), player_id));
-        return Some(Ok(report));
+        let _ = response.send_to_player(game.net_server(), player_id);
+        return Some(Ok(()));
     }
 
     let Some(command) = message.base_mut().get_long() else {
@@ -112,27 +92,21 @@ pub(crate) fn dispatch_game_pet_message(
             };
             let Some(affected) = game.set_player_pets_target(player_id, target_type, target_id)
             else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
-            report.outcome = GamePetMessageOutcome::Attack;
-            report.affected_pets = affected;
-            report.notice_delivery = Some(notify(game, player_id, b"GS0053"));
+            notify(game, player_id, b"GS0053");
+            debug!(player_id, target_type, target_id, affected_pets = affected, "питомцам назначена цель");
         }
         1 | 2 => {
             let Some(affected) = game.set_player_pets_action(player_id, command) else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
-            report.outcome = if command == 1 {
-                GamePetMessageOutcome::Follow
-            } else {
-                GamePetMessageOutcome::Stay
-            };
-            report.affected_pets = affected;
-            report.notice_delivery = Some(notify(
+            notify(
                 game,
                 player_id,
                 if command == 1 { b"GS0054" } else { b"GS0055" },
-            ));
+            );
+            debug!(player_id, command, affected_pets = affected, "изменено действие питомцев");
         }
         3 => {
             let Some(pet_type) = message.base_mut().get_long() else {
@@ -141,17 +115,15 @@ pub(crate) fn dispatch_game_pet_message(
             let Some(pet_id) = message.base_mut().get_long() else {
                 return Some(Err(GamePetMessageError::MissingField));
             };
-            let Some(delivery) = game.dismiss_player_pet(player_id, pet_type, pet_id) else {
-                return Some(Ok(report));
+            let Some(_delivery) = game.dismiss_player_pet(player_id, pet_type, pet_id) else {
+                return Some(Ok(()));
             };
-            report.outcome = GamePetMessageOutcome::Dismiss;
-            report.affected_pets = 1;
-            report.around_delivery = Some(delivery);
-            report.notice_delivery = Some(notify(game, player_id, b"GS0056"));
+            notify(game, player_id, b"GS0056");
+            debug!(player_id, pet_type, pet_id, "питомец отозван");
         }
         _ => {}
     }
-    Some(Ok(report))
+    Some(Ok(()))
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

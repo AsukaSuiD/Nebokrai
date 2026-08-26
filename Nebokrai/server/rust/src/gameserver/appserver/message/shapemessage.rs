@@ -1,22 +1,26 @@
 //! Входные shape-команды GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
-//! `appserver/message/shapemessage.cpp`. Материализован весь handler
-//! `0x8F901..0x8F905`: exact fixed-width decode, direction/emotion player
-//! state, region lookup, around/addressed wire и ordering внешних AI/spatial/
-//! serialization owners. Base/city `SymbolIsAttackAble` virtual разрешается
-//! canonical region owner-ом. Player `SetTileXY` проходит concrete region/area/
-//! block mutation и post-move `GS0163`. Quest movement замыкает attack guard,
-//! rotation correction, addressed `OnCannotMove`, emotion reset и canonical
-//! player-owned `CPlayerAI` destination FIFO. Client position gate читается
-//! из live `CGlobeSetup::bAllowClientChangePos`; native gate/lookup/payload
-//! ordering сохранён. Non-player polymorphic `SetTileXY` и полные
-//! player/goods/shape serializers остаются runtime-границами.
+//! `appserver/message/shapemessage.cpp`. Материализован весь обработчик
+//! `0x8F901..0x8F905`: точное декодирование полей фиксированной ширины,
+//! направление и эмоция игрока, поиск региона, адресная и круговая wire-
+//! рассылка, а также порядок внешних владельцев AI, пространства и
+//! сериализации. Виртуальный `SymbolIsAttackAble` базового и городского
+//! регионов разрешается каноническим владельцем региона. `SetTileXY` игрока
+//! проходит конкретные изменения региона, области и блока, затем `GS0163`.
+//! Движение к заданию сохраняет защиту атаки, исправление поворота, адресный
+//! `OnCannotMove`, сброс эмоции и FIFO назначения в принадлежащем игроку
+//! `CPlayerAI`. Разрешение клиентской позиции читается из действующего
+//! `CGlobeSetup::bAllowClientChangePos`; исходный порядок проверки, поиска и
+//! payload сохранён. Полиморфный `SetTileXY` не-игрока и полные сериализаторы
+//! player/goods/shape остаются границами исполнения. Синхронные отправки не
+//! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
+use tracing::{debug, trace};
 
 const MOVE_DIRECTION: u32 = 0x0008_f901;
 const CHANGE_POSITION: u32 = 0x0008_f902;
@@ -94,46 +98,9 @@ pub(crate) enum GameShapeMessageError {
     Coordinate(ShapeCoordinateBlock),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameShapeMessageOutcome {
-    MissingContext,
-    DirectionChanged,
-    PositionFeatureDisabled,
-    PositionTargetMissing,
-    PositionMutationBlocked,
-    PositionChanged,
-    QuestMoveBlocked,
-    QuestMoveIgnoredDead,
-    QuestMoveQueued,
-    SnapshotTargetMissing,
-    SnapshotSerializationFailed,
-    SnapshotSent,
-    EmotionTargetMismatch,
-    EmotionRejected,
-    EmotionSent,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameShapeMessageDelivery {
-    Around(Option<Result<i32, ShapeCoordinateBlock>>),
-    AroundPosition(Option<i32>),
-    Player(i32),
-}
-
-#[must_use = "shape-message report содержит state, spatial и network effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameShapeMessageReport {
-    pub(crate) message_type: u32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) outcome: GameShapeMessageOutcome,
-    pub(crate) target: Option<ShapeIdentity>,
-    pub(crate) deliveries: Vec<GameShapeMessageDelivery>,
-}
-
-fn send_player_cannot_move(game: &CGame, player_id: i32) -> Result<i32, GameShapeMessageError> {
+fn send_player_cannot_move(game: &CGame, player_id: i32) -> Result<(), GameShapeMessageError> {
     let Some(player) = game.find_player(player_id) else {
-        return Ok(0);
+        return Ok(());
     };
     let tile_x = player
         .shape()
@@ -148,14 +115,15 @@ fn send_player_cannot_move(game: &CGame, player_id: i32) -> Result<i32, GameShap
     response.add_long(0);
     response.add_long(tile_x);
     response.add_long(tile_y);
-    Ok(response.send_to_player(game.net_server(), player_id))
+    let _ = response.send_to_player(game.net_server(), player_id);
+    Ok(())
 }
 
 pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<Result<GameShapeMessageReport, GameShapeMessageError>> {
+) -> Option<Result<(), GameShapeMessageError>> {
     let message_type = message.message_type() as u32;
     if !matches!(
         message_type,
@@ -182,16 +150,9 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
     message.resolve_player_context(game);
     let player_id = message.player_id();
     let region_id = message.region_id();
-    let mut report = GameShapeMessageReport {
-        message_type,
-        player_id,
-        region_id,
-        outcome: GameShapeMessageOutcome::MissingContext,
-        target: None,
-        deliveries: Vec::new(),
-    };
     let (Some(player_id), Some(region_id)) = (player_id, region_id) else {
-        return Some(Ok(report));
+        trace!(message_type, ?player_id, ?region_id, "shape-команда пропущена: нет контекста");
+        return Some(Ok(()));
     };
     let read_long = |message: &mut CMessage, field| {
         message
@@ -210,15 +171,13 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 player.apply_client_direction(direction);
                 (player.shape().identity(), player.contend_state())
             }) else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             let mut changed = CMessage::new(0x000b_f601);
             changed.add_byte(direction);
             changed.add_long(identity.object_type);
             changed.add_long(identity.id);
-            report.deliveries.push(GameShapeMessageDelivery::Around(
-                game.send_player_shape_around(player_id, Some(player_id), &changed),
-            ));
+            let _ = game.send_player_shape_around(player_id, Some(player_id), &changed);
             game.find_player_mut(player_id)
                 .expect("shape player сохранён до ClearEmotion")
                 .clear_emotion_state();
@@ -226,26 +185,21 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             cleared.add_long(identity.object_type);
             cleared.add_long(identity.id);
             cleared.add_long(0);
-            report.deliveries.push(GameShapeMessageDelivery::Around(
-                game.send_player_shape_around(player_id, Some(player_id), &cleared),
-            ));
+            let _ = game.send_player_shape_around(player_id, Some(player_id), &cleared);
             if contend_state && game.region_symbol_attackable(region_id) {
-                let delivery = colored_player_notice_message(
+                let _ = colored_player_notice_message(
                     0xffff_ffff,
                     0xffff_0000,
                     game.get_string_by_id(b"GS0331"),
                 )
                 .send_to_player(game.net_server(), player_id);
-                report
-                    .deliveries
-                    .push(GameShapeMessageDelivery::Player(delivery));
             }
-            report.outcome = GameShapeMessageOutcome::DirectionChanged;
+            debug!(player_id, region_id, direction, "изменено направление игрока");
         }
         CHANGE_POSITION => {
             if !game.allow_client_change_position() {
-                report.outcome = GameShapeMessageOutcome::PositionFeatureDisabled;
-                return Some(Ok(report));
+                trace!(player_id, region_id, "клиентское перемещение отключено");
+                return Some(Ok(()));
             }
             let target_fields = match (|| {
                 Ok((
@@ -261,13 +215,12 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 id: target_fields.1,
                 ex_id: CGuid::GUID_INVALID,
             };
-            report.target = Some(identity);
             let target = game
                 .find_shape_in_region(region_id, identity)
                 .or_else(|| runtime.resolve_external_shape_view(game, region_id, identity));
             let Some(target) = target else {
-                report.outcome = GameShapeMessageOutcome::PositionTargetMissing;
-                return Some(Ok(report));
+                trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "цель перемещения не найдена");
+                return Some(Ok(()));
             };
             let position_fields =
                 match (|| Ok((read_long(message, "tile x")?, read_long(message, "tile y")?)))() {
@@ -279,16 +232,12 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             relocation.add_long(target_fields.1);
             relocation.add_long(position_fields.0);
             relocation.add_long(position_fields.1);
-            report
-                .deliveries
-                .push(GameShapeMessageDelivery::AroundPosition(
-                    game.send_shape_position_around(
-                        region_id,
-                        target.tile_x,
-                        target.tile_y,
-                        &relocation,
-                    ),
-                ));
+            let _ = game.send_shape_position_around(
+                region_id,
+                target.tile_x,
+                target.tile_y,
+                &relocation,
+            );
             if identity.object_type == PLAYER_TYPE && game.find_player(identity.id).is_some() {
                 match game.relocate_player_shape(
                     identity.id,
@@ -298,27 +247,23 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 ) {
                     Some(Ok(())) => {}
                     Some(Err(_)) => {
-                        report.outcome = GameShapeMessageOutcome::PositionMutationBlocked;
-                        return Some(Ok(report));
+                        trace!(player_id, region_id, target_id = identity.id, "перемещение заблокировано координатами");
+                        return Some(Ok(()));
                     }
                     None => {
-                        report.outcome = GameShapeMessageOutcome::PositionTargetMissing;
-                        return Some(Ok(report));
+                        return Some(Ok(()));
                     }
                 }
                 let contend_state = game
                     .find_player(identity.id)
                     .is_some_and(|player| player.contend_state());
                 if contend_state && game.region_symbol_attackable(region_id) {
-                    let delivery = colored_player_notice_message(
+                    let _ = colored_player_notice_message(
                         0xffff_ffff,
                         0xffff_0000,
                         game.get_string_by_id(b"GS0163"),
                     )
                     .send_to_player(game.net_server(), identity.id);
-                    report
-                        .deliveries
-                        .push(GameShapeMessageDelivery::Player(delivery));
                 }
             } else {
                 runtime.relocate_external_shape(
@@ -329,7 +274,7 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     position_fields.1,
                 );
             }
-            report.outcome = GameShapeMessageOutcome::PositionChanged;
+            debug!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, tile_x = position_fields.0, tile_y = position_fields.1, "изменена позиция shape");
         }
         QUEST_MOVE_STEP => {
             let move_mode = message
@@ -352,45 +297,37 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             };
             let facts = runtime.shape_quest_move_facts(game, player_id, region_id);
             if facts.blocked_by_breakable_attack {
-                let delivery = match send_player_cannot_move(game, player_id) {
-                    Ok(delivery) => delivery,
+                match send_player_cannot_move(game, player_id) {
+                    Ok(()) => {}
                     Err(error) => return Some(Err(error)),
-                };
-                report
-                    .deliveries
-                    .push(GameShapeMessageDelivery::Player(delivery));
-                report.outcome = GameShapeMessageOutcome::QuestMoveBlocked;
-                return Some(Ok(report));
+                }
+                trace!(player_id, region_id, "шаг движения заблокирован атакой");
+                return Some(Ok(()));
             }
             if client_rotation != facts.server_rotation {
                 let mut response = CMessage::new(0x000b_f738);
                 response.add_byte(facts.server_rotation);
-                report.deliveries.push(GameShapeMessageDelivery::Player(
-                    response.send_to_player(game.net_server(), player_id),
-                ));
+                let _ = response.send_to_player(game.net_server(), player_id);
             }
             if game
                 .find_player(player_id)
                 .is_some_and(|player| player.is_dead())
             {
-                report.outcome = GameShapeMessageOutcome::QuestMoveIgnoredDead;
-                return Some(Ok(report));
+                trace!(player_id, region_id, "шаг движения мёртвого игрока пропущен");
+                return Some(Ok(()));
             }
             game.find_player_mut(player_id)
                 .expect("quest-move player сохранён после dead guard")
                 .clear_emotion_state();
             if !game.queue_player_ai_destination(player_id, i32::from(direction), move_mode != 2) {
-                let delivery = match send_player_cannot_move(game, player_id) {
-                    Ok(delivery) => delivery,
+                match send_player_cannot_move(game, player_id) {
+                    Ok(()) => {}
                     Err(error) => return Some(Err(error)),
-                };
-                report
-                    .deliveries
-                    .push(GameShapeMessageDelivery::Player(delivery));
-                report.outcome = GameShapeMessageOutcome::QuestMoveBlocked;
-                return Some(Ok(report));
+                }
+                trace!(player_id, region_id, "очередь шага движения отклонила цель");
+                return Some(Ok(()));
             }
-            report.outcome = GameShapeMessageOutcome::QuestMoveQueued;
+            debug!(player_id, region_id, direction, move_mode, "шаг движения поставлен в AI-очередь");
         }
         QUERY_SHAPE_SNAPSHOT => {
             let identity = match (|| {
@@ -403,13 +340,12 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            report.target = Some(identity);
             let snapshot = match game.find_shape_in_region(region_id, identity) {
                 Some(shape) => {
                     let Some(snapshot) = runtime.serialize_shape_snapshot(game, region_id, shape)
                     else {
-                        report.outcome = GameShapeMessageOutcome::SnapshotSerializationFailed;
-                        return Some(Ok(report));
+                        trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок shape не сериализован");
+                        return Some(Ok(()));
                     };
                     snapshot
                 }
@@ -417,15 +353,15 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     let Some(snapshot) =
                         runtime.resolve_external_shape_snapshot(game, region_id, identity)
                     else {
-                        report.outcome = GameShapeMessageOutcome::SnapshotTargetMissing;
-                        return Some(Ok(report));
+                        trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "цель снимка shape не найдена");
+                        return Some(Ok(()));
                     };
                     snapshot
                 }
             };
             let Ok(size) = i32::try_from(snapshot.payload.len()) else {
-                report.outcome = GameShapeMessageOutcome::SnapshotSerializationFailed;
-                return Some(Ok(report));
+                trace!(player_id, region_id, payload_len = snapshot.payload.len(), "размер снимка shape не представим в wire-формате");
+                return Some(Ok(()));
             };
             let mut response = CMessage::new(0x000b_f502);
             response.add_long(snapshot.identity.object_type);
@@ -434,10 +370,8 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             response.add_long(size);
             response.base_mut().add(&snapshot.payload);
             response.base_mut().add_char(0);
-            report.deliveries.push(GameShapeMessageDelivery::Player(
-                response.send_to_player(game.net_server(), player_id),
-            ));
-            report.outcome = GameShapeMessageOutcome::SnapshotSent;
+            let _ = response.send_to_player(game.net_server(), player_id);
+            debug!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, payload_len = snapshot.payload.len(), "снимок shape отправлен");
         }
         PERFORM_EMOTION => {
             let fields = match (|| {
@@ -450,30 +384,21 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            let identity = ShapeIdentity {
-                object_type: fields.0,
-                id: fields.1,
-                ex_id: CGuid::GUID_INVALID,
-            };
-            report.target = Some(identity);
             let Some(player_identity) = game
                 .find_player(player_id)
                 .map(|player| player.shape().identity())
             else {
-                return Some(Ok(report));
+                return Some(Ok(()));
             };
             let facts = runtime.shape_emotion_facts(game, player_id, region_id, fields.2);
             if facts.blocked_state {
-                let delivery =
+                let _ =
                     colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS1038"))
                         .send_to_player(game.net_server(), player_id);
-                report
-                    .deliveries
-                    .push(GameShapeMessageDelivery::Player(delivery));
             }
             if player_identity.object_type != fields.0 || player_identity.id != fields.1 {
-                report.outcome = GameShapeMessageOutcome::EmotionTargetMismatch;
-                return Some(Ok(report));
+                trace!(player_id, region_id, target_type = fields.0, target_id = fields.1, "цель эмоции не совпадает с игроком");
+                return Some(Ok(()));
             }
             let repeated = game.emotion_repeated(fields.2);
             let publish = game
@@ -487,21 +412,19 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     facts.ai_has_target,
                 );
             if !publish {
-                report.outcome = GameShapeMessageOutcome::EmotionRejected;
-                return Some(Ok(report));
+                trace!(player_id, region_id, emotion_id = fields.2, "эмоция отклонена состоянием игрока");
+                return Some(Ok(()));
             }
             let mut response = CMessage::new(0x000b_f611);
             response.add_long(player_identity.object_type);
             response.add_long(player_identity.id);
             response.add_long(fields.2);
-            report.deliveries.push(GameShapeMessageDelivery::Around(
-                game.send_player_shape_around(player_id, Some(player_id), &response),
-            ));
-            report.outcome = GameShapeMessageOutcome::EmotionSent;
+            let _ = game.send_player_shape_around(player_id, Some(player_id), &response);
+            debug!(player_id, region_id, emotion_id = fields.2, "эмоция опубликована вокруг игрока");
         }
         _ => unreachable!("shape command отфильтрована до decode"),
     }
-    Some(Ok(report))
+    Some(Ok(()))
 }
 
 // COMPONENT_VARIANT_END: GameServer

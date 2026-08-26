@@ -1,22 +1,23 @@
-//! Владелец region-message dispatcher-а GameServer.
+//! Владелец диспетчера сообщений региона GameServer.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/message/regionmessage.cpp`. Достигнутый `0x8F801` завершает
-//! локальный `CPlayer::ChangeRegion`: проверяет live player/region context,
-//! снимает `m_bInChangingRegion`, переносит client IP, добавляет player в
-//! destination spatial registry и лишь затем передаёт serialization/weather/
-//! state tail runtime-owner-у. `0x8F805` проверяет direct edge canonical
-//! `RegionRouter`, transition range и `CS_CHANGEREGION`, после чего входит в
-//! тот же полный `CPlayer::ChangeRegion` owner с business/state/spatial и
-//! local/World wire effects.
+//! локальный `CPlayer::ChangeRegion`: проверяет действующий контекст игрока и
+//! региона, снимает `m_bInChangingRegion`, переносит IP клиента, добавляет
+//! игрока в пространственный реестр назначения и лишь затем передаёт хвост
+//! сериализации, погоды и состояния владельцу исполнения. `0x8F805` проверяет
+//! прямое ребро канонического `RegionRouter`, диапазон перехода и
+//! `CS_CHANGEREGION`, после чего входит в тот же полный владелец
+//! `CPlayer::ChangeRegion` с игровыми, пространственными и локальными/World
+//! wire-эффектами. Диагностический исход публикуется через `tracing` после
+//! синхронного выполнения эффектов.
 
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
-use crate::gameserver::appserver::shape::{SHAPE_CHANGE_REGION, ShapeCoordinateBlock};
-use crate::gameserver::gameserver::game::{
-    CGame, GameRegionEnterContext, GameRegionEnterReport, PlayerRegionChangeReport,
-};
+use crate::gameserver::appserver::shape::SHAPE_CHANGE_REGION;
+use crate::gameserver::gameserver::game::{CGame, GameRegionEnterContext};
 use crate::nets::netserver::message::CMessage;
 use crate::setup::regionrouter::RegionRoutePoint;
+use tracing::{debug, trace};
 
 const ENTER_CHANGED_REGION: u32 = 0x0008_f801;
 const CHANGE_CONNECTED_REGION: u32 = 0x0008_f805;
@@ -27,42 +28,13 @@ pub(crate) enum GameRegionMessageError {
     MissingArgument,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRegionMessageReport {
-    pub(crate) message_type: u32,
-    pub(crate) player_id: Option<i32>,
-    pub(crate) region_id: Option<i32>,
-    pub(crate) entry: Option<GameRegionEnterReport>,
-    pub(crate) connected_change: Option<GameConnectedRegionChangeReport>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameConnectedRegionChangeOutcome {
-    MissingContext,
-    CoordinateBlocked(ShapeCoordinateBlock),
-    NotConnected,
-    AlreadyChanging,
-    Dispatched,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameConnectedRegionChangeReport {
-    pub(crate) player_id: Option<i32>,
-    pub(crate) source_region_id: Option<i32>,
-    pub(crate) target_region_id: i32,
-    pub(crate) current: Option<RegionRoutePoint>,
-    pub(crate) destination: Option<RegionRoutePoint>,
-    pub(crate) outcome: GameConnectedRegionChangeOutcome,
-    pub(crate) change: Option<PlayerRegionChangeReport>,
-}
-
 pub(crate) fn dispatch_game_region_message<
     Context: GameRegionEnterContext + ScriptFunctionRuntime,
 >(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
-) -> Option<Result<GameRegionMessageReport, GameRegionMessageError>> {
+) -> Option<Result<(), GameRegionMessageError>> {
     let message_type = message.message_type() as u32;
     if !matches!(message_type, ENTER_CHANGED_REGION | CHANGE_CONNECTED_REGION) {
         return None;
@@ -84,8 +56,8 @@ pub(crate) fn dispatch_game_region_message<
     let Some(argument) = message.base_mut().get_long() else {
         return Some(Err(GameRegionMessageError::MissingArgument));
     };
-    let (entry, connected_change) = if message_type == ENTER_CHANGED_REGION {
-        let entry = match (player_id, region_id) {
+    if message_type == ENTER_CHANGED_REGION {
+        let applied = match (player_id, region_id) {
             (Some(player_id), Some(region_id)) => game.enter_changed_player_region(
                 player_id,
                 region_id,
@@ -95,19 +67,11 @@ pub(crate) fn dispatch_game_region_message<
                 context,
             ),
             _ => None,
-        };
-        (entry, None)
+        }
+        .is_some();
+        debug!(?player_id, ?region_id, applied, "завершён вход игрока в сменённый регион");
     } else {
         let target_region_id = argument;
-        let mut report = GameConnectedRegionChangeReport {
-            player_id,
-            source_region_id: None,
-            target_region_id,
-            current: None,
-            destination: None,
-            outcome: GameConnectedRegionChangeOutcome::MissingContext,
-            change: None,
-        };
         if let Some(player_id) = player_id {
             let player_facts = game.find_player(player_id).map(|player| {
                 (
@@ -119,23 +83,21 @@ pub(crate) fn dispatch_game_region_message<
                 )
             });
             if let Some((Some(source_region_id), x, y, direction, change_state)) = player_facts {
-                report.source_region_id = Some(source_region_id);
                 match x.and_then(|x| y.map(|y| RegionRoutePoint { x, y })) {
                     Err(block) => {
-                        report.outcome = GameConnectedRegionChangeOutcome::CoordinateBlocked(block);
+                        trace!(player_id, source_region_id, target_region_id, ?block, "смена связанного региона отклонена координатами");
                     }
                     Ok(current) => {
-                        report.current = Some(current);
-                        report.destination = game.region_router().connected_region_destination(
+                        let destination = game.region_router().connected_region_destination(
                             source_region_id,
                             target_region_id,
                             current,
                         );
-                        if let Some(destination) = report.destination {
+                        if let Some(destination) = destination {
                             if change_state == SHAPE_CHANGE_REGION {
-                                report.outcome = GameConnectedRegionChangeOutcome::AlreadyChanging;
+                                trace!(player_id, source_region_id, target_region_id, "игрок уже меняет регион");
                             } else {
-                                report.change = Some(game.change_player_region(
+                                let _ = game.change_player_region(
                                     player_id,
                                     target_region_id,
                                     destination.x,
@@ -145,25 +107,18 @@ pub(crate) fn dispatch_game_region_message<
                                     0,
                                     0,
                                     context,
-                                ));
-                                report.outcome = GameConnectedRegionChangeOutcome::Dispatched;
+                                );
+                                debug!(player_id, source_region_id, target_region_id, destination_x = destination.x, destination_y = destination.y, "запущена смена связанного региона");
                             }
                         } else {
-                            report.outcome = GameConnectedRegionChangeOutcome::NotConnected;
+                            trace!(player_id, source_region_id, target_region_id, "между регионами нет прямого перехода");
                         }
                     }
                 }
             }
         }
-        (None, Some(report))
-    };
-    Some(Ok(GameRegionMessageReport {
-        message_type,
-        player_id,
-        region_id,
-        entry,
-        connected_change,
-    }))
+    }
+    Some(Ok(()))
 }
 
 // IMPLEMENTED: `CServerRegion::OnMessage` opcodes `0x8F801/0x8F805`
