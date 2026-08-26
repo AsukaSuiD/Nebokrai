@@ -1,145 +1,20 @@
-//! Владелец входного GameServer dispatcher-а `OnServerMessage`.
+//! Диспетчер сообщений WorldServer, BillingServer и ресурсов запуска.
 //!
-//! Весь dispatcher RVA `0x0009D300` остаётся `UNKNOWN` (исследовательский декомпилят хранится локально), кроме цепочек
-//! сообщения `0x7F801` для достигнутых typed startup snapshots, runtime
-//! general-variable echo `0x7F805`,
-//! AttackCity/Village и terminal selector `0x3B`, а также полных typed World
-//! disconnect/reconnect `0x6F901/902`, Billing disconnect/reconnect
-//! `0x6F903/904` и ответа перехода `0x7F802`; они имеют статус
-//! `IMPLEMENTED`. Точная пара
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходник
-//! `e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\servermessage.cpp`.
+//! Источник: `gameserver.exe`, `GameServer.pdb` и исходный владелец
+//! `appserver/message/servermessage.cpp`. Реализованные ветви сохраняют точное
+//! чтение селекторов и полей, порядок применения ресурсов, число и порядок
+//! вызовов генератора случайных чисел, жизненный цикл соединений и игроков, а
+//! также последовательность client, World и Billing-отправок.
 //!
-//! Оба case передают текущий payload cursor парному decoder-у, затем всегда на
-//! успешном legacy payload вызывают initial region-state owner и только после
-//! него пишут точный startup log. Decoder-result оригинал игнорировал, но exact
-//! EXE доказал его безусловный `true`. Safe short-buffer не достигает init/log:
-//! старый безразмерный pointer имел неизвестный UB, которому Rust не назначает
-//! побочные эффекты. Остальные selector-ы возвращаются caller-у как `false` и
-//! этим helper-ом не интерпретируются; полный switch не имитируется. Billing
-//! handoff закрывает старый owner, публикует новый, приоритетно ставит
-//! регистрацию и только затем включает control-send. `0x7F802` снимает оба
-//! changing-флага при отказе; при успехе адресно публикует `0xBF506`, а затем
-//! вызывает общий reached `CPlayer::OnLost`: sequence/validation, scripts, JJC,
-//! `OnExit(true)`, spatial и client map-ID замыкаются одним owner-ом. Полный GameSave
-//! decode выполняет парный World owner. `0x6F901` пишет исходный log, очищает
-//! JJC match state и запускает owned retry worker; success-event `0x6F902`
-//! заменяет transport и публикует полный `0x5FA01` player snapshot.
-//! `0x6F903` тем же lifecycle запускает primary→backup Billing retry; typed
-//! `0x6F904` replacement затем регистрирует новый transport до control-send.
-//! HonorEliminate `0x26` отдельно сохраняет оба подтверждённых sink-а:
-//! `AddLogText` и `PutStringToFile("HonorCompositior", ...)`; payload проверен
-//! по exact EXE и runtime-логам.
-//! Honor ranks `0x27..0x2A` публикуют четыре country snapshots; total branch
-//! после decode сбрасывает player counters в canonical ID-order и возвращает
-//! точный `AdjustHonorRank` script-effect для ненулевого nobility rank.
-//! GodsBattle `0x39` перед финальным startup log сохраняет decoder-local GBK
-//! warning и `PutStringToFile("godsbattleLog", ...)` в их исходных позициях.
-//! GlobeSetup `0x07` сохраняет вложенный router decode, DaKong key, byte
-//! broadcast `0xBF736`, conditional auction disable и только затем глобальные
-//! area dimensions с финальным startup log.
-//! Вместе с LogSystem `0x08` и GM-list `0x09` он входит в общий живой
-//! runtime-configuration pass, сохраняя state/network/log ordering всей группы.
-//! QuestSystem `0x16` сохраняет exact scalar/script/map mutation order и
-//! публикует runtime lookup-owner до финального startup log.
-//! Вместе с Game ID `0x12`, hit-level `0x14` и emotion `0x15` он входит в
-//! живую player-rule resource family. Player ranks `0x17` проходит соседним
-//! FIFO owner-ом, сохраняя missing-init и исходный allocation error.
-//! CountryParam `0x18` сохраняет scalar prefix, пять ordered maps и известные
-//! technology wire-quirks до точного startup log.
-//! CountryHandler `0x19` заменяет прежние country owners, декодирует byte-count
-//! minister records и публикует ordered lookup до финального startup log.
-//! Оба country state selector-а `0x18/0x19` входят в один FIFO pass, чтобы
-//! параметры и canonical country owners сохраняли согласованный startup цикл.
-//! Пространственные owners `0x0F/0x10/0x11/0x1A` также проходят один FIFO
-//! pass: proxy публикуется только после полного decode, reload сохраняет
-//! ранний region miss, а region-level и duplicate registries — исходные
-//! replacement/partial-decode и success-log границы.
-//! Prison и PreciousBox `0x1D/0x1E` публикуют environment-конфигурацию одним
-//! FIFO pass, сохраняя clear-before-decode, partial owners и точные success
-//! logs; PreciousBox allocation failure не теряет исходный `TryReserveError`.
-//! Mutation rules `0x21..0x24` тем же FIFO pass публикуют synthesis recipes,
-//! new-skill monster groups, destruction filters и change-body restrictions;
-//! их partial registries, decode reports, allocation sources и logs сохранены.
-//! Lookup/filter resources `0x2B/0x31/0x32` публикуют DaKong tables,
-//! WordsFilter additions и JJC level map одним FIFO pass с исходными
-//! clear/append, partial decode и success-log контрактами.
-//! Equipment enhancements `0x34/0x35` тем же FIFO pass публикуют TaoZhuang и
-//! парные CiQing/LingBao owners, повторно сериализуют client payload и
-//! сохраняют исходный broadcast/log ordering.
-//! World-event setup `0x36/0x39` публикует Leiting things и GodsBattle manager
-//! одним FIFO pass; dynamic log, decoder-local warning, file audit и финальный
-//! startup log остаются на исходных позициях.
-//! Runtime GodsBattle response `0x7F80F` тем же живым FIFO декодирует оба
-//! faction top-ten списка до terminal marker и адресно публикует `0xBF740`
-//! последнему requester-у manager-а. Соседний `0x7F80E` применяет оба XYD
-//! slot-а и публикует изменившийся `dwXYD` только участникам соответствующей
-//! faction во всех зарегистрированных GodsBattle regions.
-//! Runtime general-variable echo `0x7F805` читает tag/name/value в исходном
-//! порядке и меняет первый ASCII-case-insensitive owner в принадлежащем `CGame`
-//! списке; неизвестный tag после имени остаётся no-op без чтения value.
-//! World reconnect request `0x7F808` публикует begin/player/finish кадры
-//! `0x5FA09` в signed порядке `s_mapPlayer`: каждый player-кадр содержит полный
-//! GameSave с живым pet/carriage context, затем отдельный `m_dwClientIP` и
-//! обновлённую длину. Ошибка codec сохраняет уже записанный partial snapshot,
-//! как игнорируемый virtual result оригинала, и не прерывает оставшиеся send-ы.
-//! World save notify `0x7F803` тем же GameSave owner-ом публикует отдельный
-//! `0x5FA03` batch на игрока с `m_lIDIndex/1/1/player ID`, а затем terminal
-//! `0xFF/map size`; парный World owner считает terminal-ответы и запускает
-//! существующий generate/cleanup/save-thread проход после всех GameServer.
-//! Player notice response `0x7F804` сохраняет World offline/online wire,
-//! локализует exact `"GS0332 "` либо формирует `source:text`, bounded заменяет
-//! небезопасный `sprintf` и адресно шлёт client `0xBF806` с исходными colors.
-//! Kill confirmation `0x7F806` сохраняет три ignored long и player ID; missing
-//! player переиспользует вход как World `0x5FA06`, success мутирует murderer
-//! state и публикует around `0xBF70E` через concrete region/session owners.
-//! Runtime spawn `0x7F80A` полностью читает monster/NPC wire, сохраняет лишний
-//! первый monster RNG-вызов, concrete membership/enter effects, script и NPC
-//! lifetime. Единственный безопасный отход: неинициализированный legacy
-//! `tagNpc::bShowList` детерминированно заменён нулём вместо stack garbage.
-//! CEmotion `0x15` накладывает signed ID/value records без очистки общего map и
-//! публикует runtime repeated-emotion lookup до финального startup log.
-//! Goods list `0x00` заменяет ID/original-name/name registry из парного
-//! WorldServer wire и только после полного decode пишет точный startup log.
-//! Monster list `0x02` аналогично заменяет monster/drop registries, пишет log
-//! и лишь затем запускает refresh уже живых monster base-property ссылок.
-//! Skill list `0x06` очищает и заново публикует composite-key registry из
-//! парного WorldServer wire, затем пишет точный startup log.
-//! Goods/monster/skill registry family `0x00/0x02/0x06` входит в живой FIFO
-//! одним selector-pass; monster success после log обновляет lookup-связность
-//! уже опубликованных region monster owners, как исходный dispatcher.
-//! Player/economy catalogs `0x01/0x03/0x04/0x05` тем же путём публикуют
-//! player templates, trade, increment-shop и contribution owners; каждый
-//! сохраняет собственный clear/partial-decode и exact success-log контракт.
-//! Proxy region `0x0F` создаёт отдельный owner, полностью декодирует короткий
-//! proxy wire и map-assignment-ом публикует его до точного startup log.
-//! Region selector `0x0E` проходит реальный FIFO через runtime factory-
-//! контекст: все шесть concrete subtype-ов используют общий base decoder,
-//! ordered display-list effect предшествует публикации `CGame` owner-а, а
-//! startup totals из region-owned monotonic spawn counters и GodsBattle
-//! region-set обновляются только после log effect.
-//! Runtime selector `0x10` ищет concrete owner по ID и перечитывает только его
-//! setup/forbid-goods tail; miss не читает tail и не пишет log.
-//! FourNationWar `0x25` декодирует exact 196-byte setup records и пять rects,
-//! затем проецирует war state и relive rectangles в доступные nation regions.
-//! Script resources `0x0A..0x0D` сохраняют signed lengths, bounded path,
-//! function/general parser callbacks и разные duplicate-owner контракты.
-//! Они проходят реальный FIFO через `GameMainLoopRuntime`, уже владеющий
-//! Script stage; function/general callbacks исполняются в исходных позициях.
-//! Game ID selector `0x12` сохраняет raw byte для старшего байта team ID.
-//! Language table selector `0x2F` и runtime refresh `0x7F807` используют один
-//! clear/decode/log/cursor контракт `CGame::CreateStringTable`.
-//! Battle-fairy resource family `0x20/0x2C/0x2D/0x30` входит в реальный
-//! server FIFO через общий selector owner: обе exp-таблицы, combine recipes и
-//! equipment-compose maps публикуются с исходными partial decode и log order.
-//! Honor ranks `0x27..0x2A` декодируют четыре country-list, а total branch
-//! перед финальным log передаёт точную player-reset семантику context-owner-у.
+//! Синхронно выполненные мутации и отправки диагностируются через `tracing` в
+//! месте возникновения. Диспетчер возвращает только успех либо типизированную
+//! ошибку; списки кадров игроков, результатов порождения и деревья startup-
+//! отчётов до верхнего цикла не передаются. Декодирующие результаты сохраняются
+//! локально только там, где следующий шаг использует их для настройки владельца.
 //!
-//! Terminal selector сначала вызывает `InitNetServer`, затем читает login и
-//! world ID и присваивает их даже после ошибки Host. Rust сохраняет этот
-//! partial-effect порядок: malformed хвост возвращается отдельно, не откатывая
-//! уже выполненный network init и не подставляя нулевые identity. Dialog/log
-//! вызовы возвращаются ordered typed effects на внешней runtime-границе.
+//! Для обрезанных legacy-буферов сохраняется безопасный отказ без назначения
+//! побочных эффектов неопределённому чтению исходной программы. Не реализованные
+//! коды и селекторы этот диспетчер не интерпретирует.
 
 use std::sync::Arc;
 use thiserror::Error;
@@ -168,11 +43,10 @@ use crate::gameserver::appserver::goods::cgoodsfactory::{
     GoodsFactoryDecodeError, GoodsFactoryDecodeReport,
 };
 use crate::gameserver::appserver::legacycodec::LegacyReader;
-use crate::gameserver::appserver::player::{PlayerConfirmedKillReport, PlayerHonorResetReport};
+use crate::gameserver::appserver::player::PlayerHonorResetReport;
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
-use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
 use crate::gameserver::appserver::script::variablelist::{
-    GameVariableMutationOutcome, GameVariableSnapshotError, GameVariableSnapshotReport,
+    GameVariableSnapshotError, GameVariableSnapshotReport,
 };
 use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityRegionDecodeContext, CityRegionDecodeError,
@@ -181,22 +55,20 @@ use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryRegionDecodeContext, CountryRegionDecodeError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
-    CServerGodsBattleRegion, GodsBattleTopTenDecodeError, GodsBattleTopTenEntry,
+    CServerGodsBattleRegion, GodsBattleTopTenDecodeError,
 };
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionMembershipBlock, ServerRegionDecodeError, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionSetupDecodeError,
+    CServerRegion, ServerRegionDecodeError, ServerRegionNpcSetup, ServerRegionSetupDecodeError,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
-use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::appserver::skills::skillfactory::{
     SkillFactoryDecodeError, SkillFactoryDecodeReport,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GameNetworkInitializationError, GameReconnectTaskStartError,
-    GameSingleFilePublication, GodsBattleXydApplyReport, MonsterBasePropertyRefreshReport,
+    CGame, GameMainLoopRuntime, GameNetworkInitializationError, GameSingleFilePublication,
+    MonsterBasePropertyRefreshReport,
     ServerRegionOwner, colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::gameserver::gameserver::honorranks::{HonorRanksDecodeError, HonorRanksDecodeReport};
@@ -209,7 +81,7 @@ use crate::public::dupliregionsetup::DupliRegionDecodeError;
 use crate::public::equipmentcomposelist::{
     EquipmentComposeDecodeError, EquipmentComposeDecodeReport,
 };
-use crate::public::mystringtable::{MyStringTableDecodeError, MyStringTableDecodeReport};
+use crate::public::mystringtable::MyStringTableDecodeError;
 use crate::public::taozhuangsetup::{TaoZhuangDecodeError, TaoZhuangSerializationBlock};
 use crate::public::tools::add_game_log_text;
 use crate::public::wordsfilter::{WordsFilterDecodeError, WordsFilterDecodeReport};
@@ -357,66 +229,6 @@ pub(crate) enum GameStringTableSource {
     RuntimeRefresh,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameStringTableMessageReport {
-    pub(crate) source: GameStringTableSource,
-    pub(crate) decoded: MyStringTableDecodeReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GamePlayerCountResponseKind {
-    WorldConnected,
-    Unconditional,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GamePlayerCountResponseOutcome {
-    MissingWorldClient,
-    Sent(Result<i32, SendMessageError>),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerCountResponseReport {
-    pub(crate) kind: GamePlayerCountResponseKind,
-    pub(crate) player_count: Option<u32>,
-    pub(crate) outcome: GamePlayerCountResponseOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerDataSnapshotFrame {
-    pub(crate) player_id: i32,
-    pub(crate) encoded: bool,
-    pub(crate) snapshot_bytes: usize,
-    pub(crate) client_ip: u32,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerDataSnapshotReport {
-    pub(crate) declared_players: u32,
-    pub(crate) begin_delivery: Result<i32, SendMessageError>,
-    pub(crate) frames: Vec<GamePlayerDataSnapshotFrame>,
-    pub(crate) sent_players: u32,
-    pub(crate) finish_delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerSaveFrame {
-    pub(crate) player_id: i32,
-    pub(crate) encoded: bool,
-    pub(crate) snapshot_bytes: usize,
-    pub(crate) delivery: Result<i32, SendMessageError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerSaveReport {
-    pub(crate) id_index: u8,
-    pub(crate) frames: Vec<GamePlayerSaveFrame>,
-    pub(crate) advertised_players: u32,
-    pub(crate) terminal_delivery: Result<i32, SendMessageError>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameBattleFairyStartupReport {
     FairyExp(BattleFairyExpDecodeReport),
@@ -433,16 +245,13 @@ pub(crate) enum GameBattleFairyStartupError {
     EquipmentCompose(EquipmentComposeDecodeError),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameBattleFairyStartupMessageReport {
-    pub(crate) decoded: GameBattleFairyStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameCombatRegistryStartupReport {
     Goods(GoodsFactoryDecodeReport),
-    Monsters(MonsterListStartupReport),
+    Monsters {
+        decoded: MonsterListDecodeReport,
+        refreshed: MonsterBasePropertyRefreshReport,
+    },
     Skills(SkillFactoryDecodeReport),
 }
 
@@ -451,12 +260,6 @@ pub(crate) enum GameCombatRegistryStartupError {
     Goods(GoodsFactoryDecodeError),
     Monsters(MonsterListDecodeError),
     Skills(SkillFactoryDecodeError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameCombatRegistryStartupMessageReport {
-    pub(crate) decoded: GameCombatRegistryStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -473,12 +276,6 @@ pub(crate) enum GamePlayerEconomyStartupError {
     TradeList(TradeListDecodeError),
     IncrementShop(IncrementShopDecodeError),
     ContributionItems(ContributeSetupDecodeError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerEconomyStartupMessageReport {
-    pub(crate) decoded: GamePlayerEconomyStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -502,12 +299,6 @@ pub(crate) enum GameRuntimeConfigurationStartupError {
     GmList(GmListDecodeError),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRuntimeConfigurationStartupMessageReport {
-    pub(crate) decoded: GameRuntimeConfigurationStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerRuleStartupReport {
     IdIndex { value: u8 },
@@ -524,12 +315,6 @@ pub(crate) enum GamePlayerRuleStartupError {
     QuestSystem(QuestSystemDecodeError),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerRuleStartupMessageReport {
-    pub(crate) decoded: GamePlayerRuleStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameCountryStateStartupReport {
     Parameters(CountryParamDecodeReport),
@@ -542,16 +327,10 @@ pub(crate) enum GameCountryStateStartupError {
     Countries(CountryHandlerDecodeError),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameCountryStateStartupMessageReport {
-    pub(crate) decoded: GameCountryStateStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameSpatialStartupReport {
     ProxyRegion { region_id: i32, replaced: bool },
-    RegionReload(RegionSetupReloadReport),
+    RegionReload { region_id: i32, found: bool },
     RegionSetup { entries: usize },
     DupliRegions { entries: usize },
 }
@@ -611,12 +390,6 @@ fn dupli_region_decode_errors_equal(
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameSpatialStartupMessageReport {
-    pub(crate) decoded: GameSpatialStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameEnvironmentConfigurationStartupReport {
     Prison { entries: usize },
@@ -674,12 +447,6 @@ fn precious_box_decode_errors_equal(
         ) => left_field == right_field,
         _ => false,
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameEnvironmentConfigurationStartupMessageReport {
-    pub(crate) decoded: GameEnvironmentConfigurationStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -877,12 +644,6 @@ fn change_body_decode_errors_equal(
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameMutationRulesStartupMessageReport {
-    pub(crate) decoded: GameMutationRulesStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameLookupFilterStartupReport {
     DaKong(DaKongDecodeReport),
@@ -895,12 +656,6 @@ pub(crate) enum GameLookupFilterStartupError {
     DaKong(DaKongDecodeError),
     WordsFilter(WordsFilterDecodeError),
     JjcRegionLevels(JjcRegionLevelDecodeError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameLookupFilterStartupMessageReport {
-    pub(crate) decoded: GameLookupFilterStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -926,12 +681,6 @@ pub(crate) enum GameEquipmentEnhancementStartupError {
     CiQingSerialize(CiQingSerializationBlock),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameEquipmentEnhancementStartupMessageReport {
-    pub(crate) decoded: GameEquipmentEnhancementStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameWorldEventStartupReport {
     Things { entries: usize },
@@ -942,13 +691,6 @@ pub(crate) enum GameWorldEventStartupReport {
 pub(crate) enum GameWorldEventStartupError {
     Things(ThingSetupCodecError),
     GodsBattle(GodsBattleDecodeError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameWorldEventStartupMessageReport {
-    pub(crate) decoded: GameWorldEventStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-    pub(crate) file_effects: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -972,13 +714,6 @@ pub(crate) enum GameHonorStartupReport {
 pub(crate) enum GameHonorStartupError {
     EliminateConfiguration(HonorEliminateDecodeError),
     Ranks(HonorRankStartupError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameHonorStartupMessageReport {
-    pub(crate) decoded: GameHonorStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-    pub(crate) file_effects: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1006,31 +741,6 @@ pub(crate) enum GameScriptStartupReport {
 pub(crate) enum GameScriptStartupError {
     Resource(GameScriptResourceDecodeError),
     GeneralVariables(GameVariableSnapshotError),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameScriptStartupMessageReport {
-    pub(crate) decoded: GameScriptStartupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameInitialRegionListEffect {
-    pub(crate) name: Vec<u8>,
-    pub(crate) region_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameInitialRegionStartupMessageReport {
-    pub(crate) decoded: InitialRegionStartupReport,
-    pub(crate) region_list_effects: Vec<GameInitialRegionListEffect>,
-    pub(crate) log_effects: Vec<Vec<u8>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameWarStartupMessageReport {
-    pub(crate) decoded: WarScheduleSetupReport,
-    pub(crate) log_effects: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1091,187 +801,6 @@ fn player_ranks_decode_errors_equal(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameServerMessageReport {
-    WorldDisconnected(GameWorldDisconnectReport),
-    BillingDisconnected(GameBillingDisconnectReport),
-    ClientServerStart(GameClientServerStartReport),
-    RegionChange(GameRegionChangeResponseReport),
-    StringTable(GameStringTableMessageReport),
-    PlayerCount(GamePlayerCountResponseReport),
-    PlayerDataSnapshot(GamePlayerDataSnapshotReport),
-    PlayerSave(GamePlayerSaveReport),
-    GodsBattleTopTen(GameGodsBattleTopTenReport),
-    GodsBattleXyd(GameGodsBattleXydReport),
-    GeneralVariableUpdate(GameGeneralVariableUpdateReport),
-    WorldPlayerNotice(GameWorldPlayerNoticeReport),
-    MurdererUpdate(GameMurdererUpdateReport),
-    RuntimeSpawn(GameRuntimeSpawnReport),
-    BattleFairyStartup(GameBattleFairyStartupMessageReport),
-    CombatRegistryStartup(GameCombatRegistryStartupMessageReport),
-    PlayerEconomyStartup(GamePlayerEconomyStartupMessageReport),
-    RuntimeConfigurationStartup(GameRuntimeConfigurationStartupMessageReport),
-    PlayerRuleStartup(GamePlayerRuleStartupMessageReport),
-    CountryStateStartup(GameCountryStateStartupMessageReport),
-    SpatialStartup(GameSpatialStartupMessageReport),
-    EnvironmentConfigurationStartup(GameEnvironmentConfigurationStartupMessageReport),
-    MutationRulesStartup(GameMutationRulesStartupMessageReport),
-    LookupFilterStartup(GameLookupFilterStartupMessageReport),
-    EquipmentEnhancementStartup(GameEquipmentEnhancementStartupMessageReport),
-    WorldEventStartup(GameWorldEventStartupMessageReport),
-    PlayerRanksStartup(GamePlayerRanksStartupReport),
-    HonorStartup(GameHonorStartupMessageReport),
-    ScriptStartup(GameScriptStartupMessageReport),
-    InitialRegionStartup(GameInitialRegionStartupMessageReport),
-    WarStartup(GameWarStartupMessageReport),
-}
-
-#[must_use = "World disconnect report сохраняет JJC cleanup и reconnect start"]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameWorldDisconnectReport {
-    pub(crate) reconnect: Result<(), GameReconnectTaskStartError>,
-}
-
-#[must_use = "Billing disconnect report сохраняет reconnect start"]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameBillingDisconnectReport {
-    pub(crate) reconnect: Result<(), GameReconnectTaskStartError>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameRegionChangeResponseOutcome {
-    MissingPlayer,
-    Rejected {
-        previous_changing_server: bool,
-        previous_changing_region: bool,
-    },
-    Accepted {
-        address: Vec<u8>,
-        port: u32,
-        captain: bool,
-        team_id: i32,
-        client_delivery: i32,
-    },
-}
-
-#[must_use = "response report сохраняет World decision и terminal player lifecycle"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRegionChangeResponseReport {
-    pub(crate) accepted: bool,
-    pub(crate) player_id: i32,
-    pub(crate) outcome: GameRegionChangeResponseOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameGeneralVariableUpdateValue {
-    Integer {
-        value: i32,
-        mutation: GameVariableMutationOutcome,
-    },
-    String {
-        value: Vec<u8>,
-        mutation: GameVariableMutationOutcome,
-    },
-    IgnoredTag,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameGeneralVariableUpdateReport {
-    pub(crate) value_tag: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) value: GameGeneralVariableUpdateValue,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameWorldPlayerNoticeReport {
-    TargetOffline {
-        target_name: Vec<u8>,
-        source_player_id: i32,
-        text: Vec<u8>,
-        delivery: i32,
-    },
-    TargetOnline {
-        target_player_id: i32,
-        source_name: Vec<u8>,
-        text: Vec<u8>,
-        color: i32,
-        message_type: i32,
-        formatted: Vec<u8>,
-        delivery: i32,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameMurdererUpdateOutcome {
-    MissingPlayer {
-        world_delivery: Result<i32, SendMessageError>,
-    },
-    Updated {
-        mutation: PlayerConfirmedKillReport,
-        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameMurdererUpdateReport {
-    pub(crate) ignored_prefix: [i32; 3],
-    pub(crate) player_id: i32,
-    pub(crate) outcome: GameMurdererUpdateOutcome,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameRuntimeMonsterSpawnOutcome {
-    MissingProperty {
-        position: RegionRandomPosition,
-    },
-    SpawnBlocked {
-        position: RegionRandomPosition,
-        block: RegionMembershipBlock,
-    },
-    Spawned {
-        position: RegionRandomPosition,
-        monster_id: i32,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRuntimeMonsterSpawnReport {
-    pub(crate) region_id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) requested_count: i32,
-    pub(crate) script: Vec<u8>,
-    pub(crate) initial_position: Result<RegionRandomPosition, RegionCellAccessBlock>,
-    pub(crate) spawns: Vec<Result<GameRuntimeMonsterSpawnOutcome, RegionCellAccessBlock>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRuntimeNpcSpawnReport {
-    pub(crate) region_id: i32,
-    pub(crate) setup: ServerRegionNpcSetup,
-    pub(crate) spawn: Result<ServerRegionNpcSpawnReport, ServerRegionNpcSpawnBlock>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameRuntimeSpawnReport {
-    IgnoredKind { kind: i8 },
-    RegionMissing { kind: i8, region_id: i32 },
-    Monster(GameRuntimeMonsterSpawnReport),
-    Npc(GameRuntimeNpcSpawnReport),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameGodsBattleTopTenReport {
-    pub(crate) player_id: i32,
-    pub(crate) entries: Vec<GodsBattleTopTenEntry>,
-    pub(crate) delivery: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameGodsBattleXydReport {
-    pub(crate) marker: i8,
-    pub(crate) apply: Option<GodsBattleXydApplyReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
@@ -1309,7 +838,7 @@ pub(crate) fn dispatch_server_message<Context>(
     game: &mut CGame,
     script_context: &mut Context,
     mut now_ms: impl FnMut(&mut Context) -> u32,
-) -> Option<Result<GameServerMessageReport, GameServerMessageError<Context::RuntimeError>>>
+) -> Option<Result<(), GameServerMessageError<Context::RuntimeError>>>
 where
     Context: GameMainLoopRuntime,
 {
@@ -1317,23 +846,20 @@ where
         add_game_log_text(b"WorldServer closed");
         let reconnect = game.schedule_world_reconnect_task();
         game.jjc_on_world_closed();
-        return Some(Ok(GameServerMessageReport::WorldDisconnected(
-            GameWorldDisconnectReport { reconnect },
-        )));
+        tracing::warn!(?reconnect, "соединение с WorldServer закрыто");
+        return Some(Ok(()));
     }
     if message.message_type() == BILLING_SERVER_CLOSED {
         add_game_log_text(
             b"[WARNNING] BillingServer closed : Billing Function CANNOT Start NOW!!!!",
         );
         let reconnect = game.schedule_billing_reconnect_task();
-        return Some(Ok(GameServerMessageReport::BillingDisconnected(
-            GameBillingDisconnectReport { reconnect },
-        )));
+        tracing::warn!(?reconnect, "соединение с BillingServer закрыто");
+        return Some(Ok(()));
     }
     if message.message_type() == WORLD_PLAYER_SAVE_REQUEST {
         let id_index = game.id_index();
         let advertised_players = game.player_count();
-        let mut frames = Vec::with_capacity(advertised_players as usize);
         for player_id in game.ordered_player_ids() {
             let Some(player) = game.find_player(player_id) else {
                 continue;
@@ -1350,26 +876,15 @@ where
             frame.base_mut().add(&snapshot);
             frame.base_mut().update();
             let delivery = frame.send(game, false);
-            frames.push(GamePlayerSaveFrame {
-                player_id,
-                encoded,
-                snapshot_bytes,
-                delivery,
-            });
+            tracing::trace!(player_id, encoded, snapshot_bytes, ?delivery, "снимок игрока отправлен World при сохранении");
         }
 
         let mut terminal = CMessage::new(WORLD_PLAYER_SAVE_RESPONSE);
         terminal.add_byte(u8::MAX);
         terminal.add_long(advertised_players as i32);
         let terminal_delivery = terminal.send(game, false);
-        return Some(Ok(GameServerMessageReport::PlayerSave(
-            GamePlayerSaveReport {
-                id_index,
-                frames,
-                advertised_players,
-                terminal_delivery,
-            },
-        )));
+        tracing::trace!(id_index, advertised_players, ?terminal_delivery, "сохранение игроков завершено");
+        return Some(Ok(()));
     }
     if message.message_type() == WORLD_REGION_CHANGE_RESPONSE {
         let Some(accepted) = message.base_mut().get_char() else {
@@ -1383,13 +898,8 @@ where
             }));
         };
         if game.find_player(player_id).is_none() {
-            return Some(Ok(GameServerMessageReport::RegionChange(
-                GameRegionChangeResponseReport {
-                    accepted: accepted != 0,
-                    player_id,
-                    outcome: GameRegionChangeResponseOutcome::MissingPlayer,
-                },
-            )));
+            tracing::warn!(player_id, accepted, "ответ смены региона получен для отсутствующего игрока");
+            return Some(Ok(()));
         }
         if accepted == 0 {
             let player = game
@@ -1398,16 +908,8 @@ where
             let previous_changing_server = player.in_changing_server();
             let previous_changing_region = player.in_changing_region();
             player.cancel_server_region_change();
-            return Some(Ok(GameServerMessageReport::RegionChange(
-                GameRegionChangeResponseReport {
-                    accepted: false,
-                    player_id,
-                    outcome: GameRegionChangeResponseOutcome::Rejected {
-                        previous_changing_server,
-                        previous_changing_region,
-                    },
-                },
-            )));
+            tracing::debug!(player_id, previous_changing_server, previous_changing_region, "смена региона отклонена World");
+            return Some(Ok(()));
         }
         let address = message
             .base_mut()
@@ -1432,19 +934,8 @@ where
         response.add_long(team_id);
         let client_delivery = response.send_to_player(game.net_server(), player_id);
         game.on_player_lost(player_id, script_context);
-        return Some(Ok(GameServerMessageReport::RegionChange(
-            GameRegionChangeResponseReport {
-                accepted: true,
-                player_id,
-                outcome: GameRegionChangeResponseOutcome::Accepted {
-                    address,
-                    port,
-                    captain,
-                    team_id,
-                    client_delivery,
-                },
-            },
-        )));
+        tracing::trace!(player_id, address_bytes = address.len(), port, captain, team_id, client_delivery, "смена региона подтверждена World");
+        return Some(Ok(()));
     }
     if message.message_type() == RUNTIME_SPAWN_RESPONSE {
         let Some(kind) = message.base_mut().get_char() else {
@@ -1453,9 +944,8 @@ where
             }));
         };
         if kind != 0 && kind != 1 {
-            return Some(Ok(GameServerMessageReport::RuntimeSpawn(
-                GameRuntimeSpawnReport::IgnoredKind { kind },
-            )));
+            tracing::debug!(kind, "неизвестный вид runtime-создания проигнорирован");
+            return Some(Ok(()));
         }
         let Some(region_id) = message.base_mut().get_long() else {
             return Some(Err(GameServerMessageError::RuntimeSpawnUnexpectedEnd {
@@ -1507,9 +997,8 @@ where
                 Vec::new()
             };
             let Some(mut owner) = game.take_region_owner(region_id) else {
-                return Some(Ok(GameServerMessageReport::RuntimeSpawn(
-                    GameRuntimeSpawnReport::RegionMissing { kind, region_id },
-                )));
+                tracing::warn!(kind, region_id, "runtime-создание монстров пропущено: регион отсутствует");
+                return Some(Ok(()));
             };
             let range_width = right.wrapping_sub(left);
             let range_height = bottom.wrapping_sub(top);
@@ -1523,7 +1012,7 @@ where
                 script_context,
             );
             let (area_width, area_height) = game.area_dimensions();
-            let mut spawns = Vec::new();
+            let mut completed = 0_i32;
             if initial_position.is_ok() {
                 let mut remaining = requested_count;
                 while remaining > 0 {
@@ -1536,12 +1025,12 @@ where
                     ) {
                         Ok(position) => position,
                         Err(block) => {
-                            spawns.push(Err(block));
+                            tracing::warn!(kind, region_id, requested_count, completed, ?block, "runtime-создание монстров остановлено: позиция недоступна");
                             break;
                         }
                     };
-                    let outcome = match script_context.monster_property(&name) {
-                        None => GameRuntimeMonsterSpawnOutcome::MissingProperty { position },
+                    match script_context.monster_property(&name) {
+                        None => tracing::warn!(kind, region_id, ?position, name_bytes = name.len(), "runtime-создание монстра пропущено: свойства отсутствуют"),
                         Some(property) => match owner.base_mut().add_monster(
                             &property,
                             position.x,
@@ -1560,31 +1049,20 @@ where
                                     .find_monster_by_id_mut(monster_id)
                                     .expect("успешный AddMonster публикует owned monster")
                                     .set_script_file(&script);
-                                GameRuntimeMonsterSpawnOutcome::Spawned {
-                                    position,
-                                    monster_id,
-                                }
+                                tracing::trace!(kind, region_id, ?position, monster_id, "runtime-монстр создан");
                             }
                             Err(block) => {
-                                GameRuntimeMonsterSpawnOutcome::SpawnBlocked { position, block }
+                                tracing::warn!(kind, region_id, ?position, ?block, "runtime-монстр не создан");
                             }
                         },
-                    };
-                    spawns.push(Ok(outcome));
+                    }
+                    completed = completed.wrapping_add(1);
                     remaining = remaining.wrapping_sub(1);
                 }
             }
             game.restore_region_owner(owner);
-            return Some(Ok(GameServerMessageReport::RuntimeSpawn(
-                GameRuntimeSpawnReport::Monster(GameRuntimeMonsterSpawnReport {
-                    region_id,
-                    name,
-                    requested_count,
-                    script,
-                    initial_position,
-                    spawns,
-                }),
-            )));
+            tracing::trace!(kind, region_id, requested_count, completed, ?initial_position, name_bytes = name.len(), script_bytes = script.len(), "runtime-создание монстров обработано");
+            return Some(Ok(()));
         }
 
         let name = message
@@ -1643,9 +1121,8 @@ where
             script,
         };
         let Some(mut owner) = game.take_region_owner(region_id) else {
-            return Some(Ok(GameServerMessageReport::RuntimeSpawn(
-                GameRuntimeSpawnReport::RegionMissing { kind, region_id },
-            )));
+            tracing::warn!(kind, region_id, "runtime-создание NPC пропущено: регион отсутствует");
+            return Some(Ok(()));
         };
         let (area_width, area_height) = game.area_dimensions();
         let spawn = owner.base_mut().add_npc_with_clock(
@@ -1658,13 +1135,8 @@ where
             |context| now_ms(context),
         );
         game.restore_region_owner(owner);
-        return Some(Ok(GameServerMessageReport::RuntimeSpawn(
-            GameRuntimeSpawnReport::Npc(GameRuntimeNpcSpawnReport {
-                region_id,
-                setup,
-                spawn,
-            }),
-        )));
+        tracing::trace!(kind, region_id, ?setup, ?spawn, "runtime-создание NPC обработано");
+        return Some(Ok(()));
     }
     if message.message_type() == MURDERER_UPDATE_RESPONSE {
         let mut ignored_prefix = [0_i32; 3];
@@ -1683,11 +1155,10 @@ where
                 field: "player id",
             }));
         };
-        let outcome = if game.find_player(player_id).is_none() {
+        if game.find_player(player_id).is_none() {
             message.set_message_type(0x0005_FA06);
-            GameMurdererUpdateOutcome::MissingPlayer {
-                world_delivery: message.send(game, false),
-            }
+            let world_delivery = message.send(game, false);
+            tracing::warn!(?ignored_prefix, player_id, ?world_delivery, "обновление убийцы возвращено World: игрок отсутствует");
         } else {
             let pk_count_per_kill = game.globe_setup().pk_count_per_kill();
             let mutation = game
@@ -1712,18 +1183,9 @@ where
                     .map(ServerRegionOwner::base);
                 Some(around.send_to_around(region, player.shape(), None, &around_runtime))
             });
-            GameMurdererUpdateOutcome::Updated {
-                mutation,
-                around_delivery,
-            }
-        };
-        return Some(Ok(GameServerMessageReport::MurdererUpdate(
-            GameMurdererUpdateReport {
-                ignored_prefix,
-                player_id,
-                outcome,
-            },
-        )));
+            tracing::trace!(?ignored_prefix, player_id, ?mutation, ?around_delivery, "счётчики убийцы обновлены");
+        }
+        return Some(Ok(()));
     }
     if message.message_type() == WORLD_PLAYER_NOTICE_RESPONSE {
         let Some(target_or_mode) = message.base_mut().get_long() else {
@@ -1733,7 +1195,7 @@ where
                 },
             ));
         };
-        let report = if target_or_mode == 0 {
+        if target_or_mode == 0 {
             let target_name = message
                 .base_mut()
                 .get_str_bytes(0x18)
@@ -1749,12 +1211,7 @@ where
                 format_legacy_text_fields(game.get_string_by_id(b"GS0332 "), &[&target_name], 0xff);
             let delivery = colored_player_notice_message(0xffff_ffff, 0, &text)
                 .send_to_player(game.net_server(), source_player_id);
-            GameWorldPlayerNoticeReport::TargetOffline {
-                target_name,
-                source_player_id,
-                text,
-                delivery,
-            }
+            tracing::trace!(source_player_id, target_name_bytes = target_name.len(), text_bytes = text.len(), delivery, "уведомление об отсутствующей цели отправлено");
         } else {
             let text = message
                 .base_mut()
@@ -1791,17 +1248,9 @@ where
             let delivery =
                 colored_player_notice_message(color as u32, message_type as u32, &formatted)
                     .send_to_player(game.net_server(), target_or_mode);
-            GameWorldPlayerNoticeReport::TargetOnline {
-                target_player_id: target_or_mode,
-                source_name,
-                text,
-                color,
-                message_type,
-                formatted,
-                delivery,
-            }
-        };
-        return Some(Ok(GameServerMessageReport::WorldPlayerNotice(report)));
+            tracing::trace!(target_player_id = target_or_mode, source_name_bytes = source_name.len(), text_bytes = text.len(), color, message_type, formatted_bytes = formatted.len(), delivery, "уведомление World отправлено игроку");
+        }
+        return Some(Ok(()));
     }
     if message.message_type() == GENERAL_VARIABLE_UPDATE_RESPONSE {
         let Some(value_tag) = message.base_mut().get_long() else {
@@ -1813,7 +1262,7 @@ where
             .base_mut()
             .get_str_bytes(0x100)
             .expect("0x100 не достигает zero-size GetStr boundary");
-        let value = match value_tag {
+        match value_tag {
             1 => {
                 let Some(value) = message.base_mut().get_long() else {
                     return Some(Err(
@@ -1823,7 +1272,7 @@ where
                     ));
                 };
                 let mutation = game.set_general_variable_integer(&name, value);
-                GameGeneralVariableUpdateValue::Integer { value, mutation }
+                tracing::trace!(value_tag, name_bytes = name.len(), value, ?mutation, "целая общая переменная обновлена");
             }
             3 => {
                 let value = message
@@ -1831,17 +1280,11 @@ where
                     .get_str_bytes(0x100)
                     .expect("0x100 не достигает zero-size GetStr boundary");
                 let mutation = game.set_general_variable_string(&name, &value);
-                GameGeneralVariableUpdateValue::String { value, mutation }
+                tracing::trace!(value_tag, name_bytes = name.len(), value_bytes = value.len(), ?mutation, "строковая общая переменная обновлена");
             }
-            _ => GameGeneralVariableUpdateValue::IgnoredTag,
-        };
-        return Some(Ok(GameServerMessageReport::GeneralVariableUpdate(
-            GameGeneralVariableUpdateReport {
-                value_tag,
-                name,
-                value,
-            },
-        )));
+            _ => tracing::debug!(value_tag, name_bytes = name.len(), "неизвестный вид общей переменной проигнорирован"),
+        }
+        return Some(Ok(()));
     }
     if message.message_type() == STRING_TABLE_REFRESH_MESSAGE {
         return Some(dispatch_string_table_message(
@@ -1857,7 +1300,7 @@ where
         begin.add_long(declared_players as i32);
         let begin_delivery = begin.send(game, false);
 
-        let mut frames = Vec::with_capacity(declared_players as usize);
+        let mut sent_players = 0_u32;
         for player_id in game.ordered_player_ids() {
             let Some(player) = game.find_player(player_id) else {
                 continue;
@@ -1874,33 +1317,19 @@ where
             frame.add_ulong(client_ip);
             frame.base_mut().update();
             let delivery = frame.send(game, false);
-            frames.push(GamePlayerDataSnapshotFrame {
-                player_id,
-                encoded,
-                snapshot_bytes,
-                client_ip,
-                delivery,
-            });
+            sent_players = sent_players.wrapping_add(1);
+            tracing::trace!(player_id, encoded, snapshot_bytes, client_ip, ?delivery, "снимок данных игрока отправлен World");
         }
 
-        let sent_players = u32::try_from(frames.len())
-            .expect("x86 player snapshot count не может превысить DWORD");
         let mut finish = CMessage::new(WORLD_PLAYER_DATA_RESPONSE);
         finish.add_byte(2);
         finish.add_long(sent_players as i32);
         let finish_delivery = finish.send(game, false);
-        return Some(Ok(GameServerMessageReport::PlayerDataSnapshot(
-            GamePlayerDataSnapshotReport {
-                declared_players,
-                begin_delivery,
-                frames,
-                sent_players,
-                finish_delivery,
-            },
-        )));
+        tracing::trace!(declared_players, ?begin_delivery, sent_players, ?finish_delivery, "снимок данных игроков завершён");
+        return Some(Ok(()));
     }
-    if let Some(report) = dispatch_player_count_message(message.message_type(), game) {
-        return Some(Ok(GameServerMessageReport::PlayerCount(report)));
+    if dispatch_player_count_message(message.message_type(), game).is_some() {
+        return Some(Ok(()));
     }
     if message.message_type() == GODS_BATTLE_XYD_RESPONSE {
         let Some(marker) = message.base_mut().get_char() else {
@@ -1923,9 +1352,8 @@ where
         } else {
             None
         };
-        return Some(Ok(GameServerMessageReport::GodsBattleXyd(
-            GameGodsBattleXydReport { marker, apply },
-        )));
+        tracing::trace!(marker, ?apply, "значения XYD битвы богов обработаны");
+        return Some(Ok(()));
     }
     if message.message_type() == GODS_BATTLE_TOP_TEN_RESPONSE {
         let entries = {
@@ -1948,13 +1376,8 @@ where
             response.add_ulong(entry.level);
         }
         let delivery = response.send_to_player(game.net_server(), player_id);
-        return Some(Ok(GameServerMessageReport::GodsBattleTopTen(
-            GameGodsBattleTopTenReport {
-                player_id,
-                entries,
-                delivery,
-            },
-        )));
+        tracing::trace!(player_id, entries = entries.len(), delivery, "десятка битвы богов отправлена игроку");
+        return Some(Ok(()));
     }
     if message.message_type() != SERVER_STARTUP_MESSAGE {
         return None;
@@ -1975,15 +1398,15 @@ where
                 .base_mut()
                 .get_long()
                 .expect("terminal selector проверен без изменения cursor");
-            Some(Ok(GameServerMessageReport::ClientServerStart(
-                dispatch_client_server_start(
-                    consumed_selector,
-                    message,
-                    game,
-                    now_ms(script_context),
-                )
-                .expect("selector 0x3B проверен outer dispatcher-ом"),
-            )))
+            let report = dispatch_client_server_start(
+                consumed_selector,
+                message,
+                game,
+                now_ms(script_context),
+            )
+            .expect("selector 0x3B проверен outer dispatcher-ом");
+            tracing::trace!(selector = consumed_selector, ?report, "сетевой запуск GameServer обработан");
+            Some(Ok(()))
         }
         STRING_TABLE_SELECTOR => {
             let consumed_selector = message
@@ -2005,48 +1428,32 @@ where
                 .base_mut()
                 .get_long()
                 .expect("battle-fairy selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_battle_fairy_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_battle_fairy_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("battle-fairy selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::BattleFairyStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::BattleFairyStartup(
-                GameBattleFairyStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         GOODS_LIST_SELECTOR | MONSTER_LIST_SELECTOR | SKILL_LIST_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("combat-registry selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_combat_registry_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_combat_registry_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("combat-registry selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::CombatRegistryStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::CombatRegistryStartup(
-                GameCombatRegistryStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         PLAYER_LIST_SELECTOR
         | TRADE_LIST_SELECTOR
@@ -2056,31 +1463,22 @@ where
                 .base_mut()
                 .get_long()
                 .expect("player/economy selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_player_economy_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_player_economy_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("player/economy selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::PlayerEconomyStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::PlayerEconomyStartup(
-                GamePlayerEconomyStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         GLOBE_SETUP_SELECTOR | LOG_SYSTEM_SELECTOR | GM_LIST_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("runtime-configuration selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                 decode_runtime_configuration_startup(
@@ -2088,7 +1486,7 @@ where
                     wire,
                     cursor,
                     game,
-                    |text| log_effects.push(text.to_vec()),
+                    |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
                 )
                 .expect("runtime-configuration selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::RuntimeConfigurationStartup)
@@ -2096,80 +1494,52 @@ where
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::RuntimeConfigurationStartup(
-                GameRuntimeConfigurationStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         ID_INDEX_SELECTOR | HIT_LEVEL_SELECTOR | EMOTION_SELECTOR | QUEST_SYSTEM_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("player-rule selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_player_rule_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_player_rule_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("player-rule selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::PlayerRuleStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::PlayerRuleStartup(
-                GamePlayerRuleStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         COUNTRY_PARAM_SELECTOR | COUNTRY_HANDLER_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("country-state selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_country_state_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_country_state_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("country-state selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::CountryStateStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::CountryStateStartup(
-                GameCountryStateStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         REGION_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("region selector проверен без изменения cursor");
-            let mut region_list_effects = Vec::new();
-            let mut log_effects = Vec::new();
             let decoded = match dispatch_initial_region_startup(
                 consumed_selector,
                 message,
                 game,
                 script_context,
-                |name, region_id| {
-                    region_list_effects.push(GameInitialRegionListEffect {
-                        name: name.to_vec(),
-                        region_id,
-                    });
-                },
-                |text| log_effects.push(text.to_vec()),
+                |name, region_id| tracing::trace!(name = %String::from_utf8_lossy(name), region_id, "регион добавлен в список запуска"),
+                |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
             )
             .expect("region selector проверен outer dispatcher-ом")
             .map_err(GameServerMessageError::InitialRegionStartup)
@@ -2177,13 +1547,7 @@ where
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::InitialRegionStartup(
-                GameInitialRegionStartupMessageReport {
-                    decoded,
-                    region_list_effects,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         ATTACK_CITY_SELECTOR
         | VILLAGE_WAR_SELECTOR
@@ -2194,7 +1558,6 @@ where
                 .get_long()
                 .expect("war selector проверен без изменения cursor");
             let mut owners = game.take_war_startup_owners();
-            let mut log_effects = Vec::new();
             let decoded = {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                 dispatch_war_startup_setup(
@@ -2206,18 +1569,13 @@ where
                     &mut owners.country,
                     &mut owners.four_nation,
                     game,
-                    |text| log_effects.push(text.as_bytes().to_vec()),
+                    |text| tracing::info!(text, "сообщение загрузки GameServer"),
                 )
                 .expect("war selector проверен outer dispatcher-ом")
             };
             game.restore_war_startup_owners(owners);
             match decoded {
-                Ok(decoded) => Some(Ok(GameServerMessageReport::WarStartup(
-                    GameWarStartupMessageReport {
-                        decoded,
-                        log_effects,
-                    },
-                ))),
+                Ok(decoded) => { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) },
                 Err(error) => Some(Err(GameServerMessageError::WarStartup(error))),
             }
         }
@@ -2229,31 +1587,22 @@ where
                 .base_mut()
                 .get_long()
                 .expect("spatial selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_spatial_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_spatial_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("spatial selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::SpatialStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::SpatialStartup(
-                GameSpatialStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         PRISON_CONF_SELECTOR | PRECIOUS_BOX_CONF_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("environment-configuration selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                 decode_environment_configuration_startup(
@@ -2261,7 +1610,7 @@ where
                     wire,
                     cursor,
                     game,
-                    |text| log_effects.push(text.to_vec()),
+                    |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
                 )
                 .expect("environment-configuration selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::EnvironmentConfigurationStartup)
@@ -2269,14 +1618,8 @@ where
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(
-                GameServerMessageReport::EnvironmentConfigurationStartup(
-                    GameEnvironmentConfigurationStartupMessageReport {
-                        decoded,
-                        log_effects,
-                    },
-                ),
-            ))
+            tracing::trace!(selector = consumed_selector, ?decoded, "настройки окружения GameServer применены");
+            Some(Ok(()))
         }
         SYNTHESIS_SELECTOR
         | NEW_SKILL_MONSTER_SELECTOR
@@ -2286,55 +1629,38 @@ where
                 .base_mut()
                 .get_long()
                 .expect("mutation-rules selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_mutation_rules_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_mutation_rules_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("mutation-rules selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::MutationRulesStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::MutationRulesStartup(
-                GameMutationRulesStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         DA_KONG_SELECTOR | WORDS_FILTER_SELECTOR | JJC_REGION_LEVEL_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("lookup/filter selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_lookup_filter_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_lookup_filter_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("lookup/filter selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::LookupFilterStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::LookupFilterStartup(
-                GameLookupFilterStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         TAO_ZHUANG_SELECTOR | CI_QING_LING_BAO_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("equipment-enhancement selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                 decode_equipment_enhancement_startup(
@@ -2342,7 +1668,7 @@ where
                     wire,
                     cursor,
                     game,
-                    |text| log_effects.push(text.to_vec()),
+                    |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
                 )
                 .expect("equipment-enhancement selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::EquipmentEnhancementStartup)
@@ -2350,20 +1676,13 @@ where
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::EquipmentEnhancementStartup(
-                GameEquipmentEnhancementStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         THING_SETUP_SELECTOR | GODS_BATTLE_SELECTOR => {
             let consumed_selector = message
                 .base_mut()
                 .get_long()
                 .expect("world-event selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
-            let mut file_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                 decode_world_event_startup(
@@ -2371,8 +1690,8 @@ where
                     wire,
                     cursor,
                     game,
-                    |text| log_effects.push(text.to_vec()),
-                    |path, text| file_effects.push((path.to_owned(), text.to_vec())),
+                    |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
+                    |path, text| tracing::info!(path, text = %String::from_utf8_lossy(text), "файловое сообщение загрузки GameServer"),
                 )
                 .expect("world-event selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::WorldEventStartup)
@@ -2380,13 +1699,7 @@ where
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::WorldEventStartup(
-                GameWorldEventStartupMessageReport {
-                    decoded,
-                    log_effects,
-                    file_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         PLAYER_RANKS_SELECTOR => {
             let consumed_selector = message
@@ -2402,7 +1715,8 @@ where
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::PlayerRanksStartup(decoded)))
+            tracing::trace!(selector = consumed_selector, ?decoded, "рейтинги игроков применены");
+            Some(Ok(()))
         }
         HONOR_ELIMINATE_SELECTOR
         | DAYS_HONOR_RANK_SELECTOR
@@ -2413,8 +1727,6 @@ where
                 .base_mut()
                 .get_long()
                 .expect("honor selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
-            let mut file_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
                 decode_honor_startup(
@@ -2422,8 +1734,8 @@ where
                     wire,
                     cursor,
                     game,
-                    |text| log_effects.push(text.to_vec()),
-                    |path, text| file_effects.push((path.to_owned(), text.to_vec())),
+                    |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
+                    |path, text| tracing::info!(path, text = %String::from_utf8_lossy(text), "файловое сообщение загрузки GameServer"),
                 )
                 .expect("honor selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::HonorStartup)
@@ -2431,13 +1743,7 @@ where
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::HonorStartup(
-                GameHonorStartupMessageReport {
-                    decoded,
-                    log_effects,
-                    file_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         FUNCTION_LIST_SELECTOR
         | VARIABLE_LIST_SELECTOR
@@ -2447,24 +1753,16 @@ where
                 .base_mut()
                 .get_long()
                 .expect("script-resource selector проверен без изменения cursor");
-            let mut log_effects = Vec::new();
             let decoded = match {
                 let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-                decode_script_startup(consumed_selector, wire, cursor, game, |text| {
-                    log_effects.push(text.to_vec())
-                })
+                decode_script_startup(consumed_selector, wire, cursor, game, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
                 .expect("script-resource selector проверен outer dispatcher-ом")
                 .map_err(GameServerMessageError::ScriptStartup)
             } {
                 Ok(decoded) => decoded,
                 Err(error) => return Some(Err(error)),
             };
-            Some(Ok(GameServerMessageReport::ScriptStartup(
-                GameScriptStartupMessageReport {
-                    decoded,
-                    log_effects,
-                },
-            )))
+            { tracing::trace!(selector = consumed_selector, ?decoded, "ресурс запуска GameServer применён"); Some(Ok(())) }
         }
         _ => None,
     }
@@ -2949,12 +2247,10 @@ fn decode_spatial_startup(
                 }
             };
             let Some(region) = game.find_region_mut(region_id) else {
-                return Some(Ok(GameSpatialStartupReport::RegionReload(
-                    RegionSetupReloadReport {
-                        region_id,
-                        found: false,
-                    },
-                )));
+                return Some(Ok(GameSpatialStartupReport::RegionReload {
+                    region_id,
+                    found: false,
+                }));
             };
             if let Err(error) = region
                 .base_mut()
@@ -2965,12 +2261,10 @@ fn decode_spatial_startup(
                 )));
             }
             add_log_text(b"Reload Region : (%d)%s Setup...OK!");
-            Some(Ok(GameSpatialStartupReport::RegionReload(
-                RegionSetupReloadReport {
-                    region_id,
-                    found: true,
-                },
-            )))
+            Some(Ok(GameSpatialStartupReport::RegionReload {
+                region_id,
+                found: true,
+            }))
         }
         REGION_SETUP_SELECTOR => {
             let entries = match game
@@ -3218,9 +2512,10 @@ fn decode_combat_registry_startup(
             };
             add_log_text(b"Initial SI_MONSTERLIST...OK!");
             let refreshed = game.refresh_all_monster_base_property();
-            Some(Ok(GameCombatRegistryStartupReport::Monsters(
-                MonsterListStartupReport { decoded, refreshed },
-            )))
+            Some(Ok(GameCombatRegistryStartupReport::Monsters {
+                decoded,
+                refreshed,
+            }))
         }
         SKILL_LIST_SELECTOR => {
             let report = game
@@ -3287,56 +2582,45 @@ fn decode_battle_fairy_startup(
 fn dispatch_player_count_message(
     message_type: i32,
     game: &CGame,
-) -> Option<GamePlayerCountResponseReport> {
+) -> Option<()> {
     let (kind, response_type, requires_world_client) = match message_type {
         PLAYER_COUNT_IF_WORLD_CONNECTED_MESSAGE => (
-            GamePlayerCountResponseKind::WorldConnected,
+            "при подключённом WorldServer",
             PLAYER_COUNT_IF_WORLD_CONNECTED_RESPONSE,
             true,
         ),
         PLAYER_COUNT_MESSAGE => (
-            GamePlayerCountResponseKind::Unconditional,
+            "безусловный",
             PLAYER_COUNT_RESPONSE,
             false,
         ),
         _ => return None,
     };
     if requires_world_client && game.world_client().is_none() {
-        return Some(GamePlayerCountResponseReport {
-            kind,
-            player_count: None,
-            outcome: GamePlayerCountResponseOutcome::MissingWorldClient,
-        });
+        tracing::debug!(kind, "число игроков не отправлено: WorldServer не подключён");
+        return Some(());
     }
 
     let player_count = game.player_count();
     let mut response = CMessage::new(response_type);
     response.add_ulong(player_count);
-    Some(GamePlayerCountResponseReport {
-        kind,
-        player_count: Some(player_count),
-        outcome: GamePlayerCountResponseOutcome::Sent(response.send(game, false)),
-    })
+    let delivery = response.send(game, false);
+    tracing::trace!(kind, player_count, ?delivery, "число игроков отправлено World");
+    Some(())
 }
 
 fn dispatch_string_table_message<RegionRuntimeError>(
     message: &mut CMessage,
     game: &mut CGame,
     source: GameStringTableSource,
-) -> Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>> {
-    let mut log_effects = Vec::new();
+) -> Result<(), GameServerMessageError<RegionRuntimeError>> {
     let decoded = {
         let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-        game.create_string_table(wire, cursor, |text| log_effects.push(text.to_vec()))
+        game.create_string_table(wire, cursor, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
             .map_err(GameServerMessageError::StringTable)?
     };
-    Ok(GameServerMessageReport::StringTable(
-        GameStringTableMessageReport {
-            source,
-            decoded,
-            log_effects,
-        },
-    ))
+    tracing::trace!(?source, ?decoded, "таблица строк GameServer применена");
+    Ok(())
 }
 
 /// Выполняет terminal startup selector `0x3B` в исходном порядке side effects.
@@ -3585,62 +2869,6 @@ pub(crate) enum RegionSetupReloadError {
     Setup(ServerRegionSetupDecodeError),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RegionSetupReloadReport {
-    pub(crate) region_id: i32,
-    pub(crate) found: bool,
-}
-
-pub(crate) fn dispatch_region_setup_reload(
-    selector: i32,
-    message: &mut CMessage,
-    game: &mut CGame,
-    mut add_log_text: impl FnMut(&[u8]),
-) -> Option<Result<RegionSetupReloadReport, RegionSetupReloadError>> {
-    if selector != REGION_RELOAD_SELECTOR {
-        return None;
-    }
-
-    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    Some(
-        match decode_spatial_startup(selector, source, cursor, game, &mut add_log_text)
-            .expect("region-reload selector проверен dispatcher-ом")
-        {
-            Ok(GameSpatialStartupReport::RegionReload(report)) => Ok(report),
-            Err(GameSpatialStartupError::RegionReload(error)) => Err(error),
-            _ => unreachable!("selector 0x10 возвращает только region-reload variant"),
-        },
-    )
-}
-
-pub(crate) fn dispatch_monster_list_startup(
-    selector: i32,
-    message: &mut CMessage,
-    game: &mut CGame,
-    mut add_log_text: impl FnMut(&[u8]),
-) -> Option<Result<MonsterListStartupReport, MonsterListDecodeError>> {
-    if selector != MONSTER_LIST_SELECTOR {
-        return None;
-    }
-
-    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    Some(
-        match decode_combat_registry_startup(selector, source, cursor, game, &mut add_log_text)
-            .expect("monster-list selector проверен dispatcher-ом")
-        {
-            Ok(GameCombatRegistryStartupReport::Monsters(report)) => Ok(report),
-            Err(GameCombatRegistryStartupError::Monsters(error)) => Err(error),
-            Ok(_) | Err(_) => unreachable!("selector 0x02 возвращает только monster-list variant"),
-        },
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MonsterListStartupReport {
-    pub(crate) decoded: MonsterListDecodeReport,
-    pub(crate) refreshed: MonsterBasePropertyRefreshReport,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GameScriptResourceDecodeError {
     #[error("script resource обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
@@ -3662,666 +2890,6 @@ pub(crate) enum GameScriptResourceDecodeError {
 pub(crate) struct GameIdIndexDecodeError {
     pub(crate) offset: usize,
     pub(crate) available: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameOwnedStartupSnapshotReport {
-    GoodsList(GoodsFactoryDecodeReport),
-    PlayerList(PlayerListDecodeReport),
-    TradeList {
-        entries: usize,
-    },
-    IncrementShop {
-        entries: usize,
-    },
-    ContributeSetup {
-        entries: usize,
-    },
-    SkillList(SkillFactoryDecodeReport),
-    GlobeSetup {
-        decoded: GlobeSetupDecodeReport,
-        goods_ai_broadcast: Result<i32, SendMessageError>,
-        auction_forced_disabled: bool,
-    },
-    LogSystem {
-        entries: usize,
-        da_kong_log: bool,
-    },
-    GmList(GmListDecodeReport),
-    FunctionList {
-        declared_length: i32,
-        publication: GameSingleFilePublication,
-    },
-    VariableList {
-        declared_length: i32,
-        publication: GameSingleFilePublication,
-    },
-    GeneralVariable {
-        start_offset: usize,
-        snapshot: GameVariableSnapshotReport,
-    },
-    ScriptFile {
-        path_bytes: usize,
-        declared_length: i32,
-        replaced: bool,
-    },
-    ProxyRegion {
-        region_id: i32,
-        replaced: bool,
-    },
-    RegionSetup {
-        entries: usize,
-    },
-    IdIndex {
-        value: u8,
-    },
-    HitLevel {
-        entries: usize,
-    },
-    Emotion(EmotionDecodeReport),
-    QuestSystem(QuestSystemDecodeReport),
-    PlayerRanks {
-        entries: usize,
-    },
-    CountryParam(CountryParamDecodeReport),
-    CountryHandler(CountryHandlerDecodeReport),
-    DupliRegions {
-        entries: usize,
-    },
-    PrisonConf {
-        entries: usize,
-    },
-    PreciousBoxConf {
-        entries: usize,
-    },
-    FairyExp(BattleFairyExpDecodeReport),
-    Synthesis(SynthesisDecodeReport),
-    NewSkillMonster(NewSkillMonsterDecodeReport),
-    GoodsDestroy(GoodsDestroyDecodeReport),
-    ChangeBody {
-        entries: usize,
-    },
-    HonorEliminate {
-        level_difference: i32,
-        minimum_level: i32,
-    },
-    DaKong(DaKongDecodeReport),
-    BattleFairyExp(BattleFairyExpDecodeReport),
-    BattleFairyCombine {
-        entries: usize,
-    },
-    StringTable(MyStringTableDecodeReport),
-    EquipmentCompose(EquipmentComposeDecodeReport),
-    WordsFilter(WordsFilterDecodeReport),
-    JjcRegionLevel {
-        entries: usize,
-    },
-    TaoZhuang {
-        skill_ids: usize,
-        items: usize,
-        broadcast: Result<i32, SendMessageError>,
-    },
-    CiQingLingBao {
-        ci_qing: CiQingDecodeReport,
-        ling_bao: LingBaoDecodeReport,
-        broadcast: Result<i32, SendMessageError>,
-    },
-    ThingSetup {
-        entries: usize,
-    },
-    GodsBattle(GodsBattleDecodeReport),
-}
-
-#[derive(Debug, Error)]
-pub(crate) enum GameOwnedStartupSnapshotError {
-    #[error("startup owner selector {selector:#x} ещё не создан CGame::Init")]
-    OwnerUnavailable { selector: i32 },
-    #[error(transparent)]
-    GoodsList(GoodsFactoryDecodeError),
-    #[error(transparent)]
-    PlayerList(PlayerListDecodeError),
-    #[error(transparent)]
-    TradeList(TradeListDecodeError),
-    #[error(transparent)]
-    IncrementShop(IncrementShopDecodeError),
-    #[error(transparent)]
-    ContributeSetup(ContributeSetupDecodeError),
-    #[error(transparent)]
-    SkillList(SkillFactoryDecodeError),
-    #[error(transparent)]
-    GlobeSetup(GlobeSetupDecodeError),
-    #[error(transparent)]
-    LogSystem(LogSystemDecodeError),
-    #[error(transparent)]
-    GmList(GmListDecodeError),
-    #[error(transparent)]
-    ScriptResource(GameScriptResourceDecodeError),
-    #[error("{0:?}")]
-    GeneralVariables(GameVariableSnapshotError),
-    #[error(transparent)]
-    ProxyRegion(ProxyRegionDecodeError),
-    #[error(transparent)]
-    RegionSetup(RegionSetupDecodeError),
-    #[error(transparent)]
-    IdIndex(GameIdIndexDecodeError),
-    #[error(transparent)]
-    HitLevel(HitLevelDecodeError),
-    #[error(transparent)]
-    Emotion(EmotionDecodeError),
-    #[error(transparent)]
-    QuestSystem(QuestSystemDecodeError),
-    #[error(transparent)]
-    PlayerRanks(PlayerRanksDecodeError),
-    #[error(transparent)]
-    CountryParam(CountryParamInputBlock),
-    #[error(transparent)]
-    CountryHandler(CountryHandlerDecodeError),
-    #[error(transparent)]
-    DupliRegions(DupliRegionDecodeError),
-    #[error(transparent)]
-    PrisonConf(PrisonConfDecodeError),
-    #[error(transparent)]
-    PreciousBoxConf(PreciousBoxDecodeError),
-    #[error(transparent)]
-    FairyExp(BattleFairyExpDecodeError),
-    #[error(transparent)]
-    Synthesis(SynthesisDecodeError),
-    #[error(transparent)]
-    NewSkillMonster(NewSkillMonsterDecodeError),
-    #[error(transparent)]
-    GoodsDestroy(GoodsDestroyDecodeError),
-    #[error(transparent)]
-    ChangeBody(ChangeBodyDecodeError),
-    #[error(transparent)]
-    HonorEliminate(HonorEliminateDecodeError),
-    #[error(transparent)]
-    DaKong(DaKongDecodeError),
-    #[error(transparent)]
-    BattleFairyExp(BattleFairyExpDecodeError),
-    #[error(transparent)]
-    BattleFairyCombine(BattleFairyComposeDecodeError),
-    #[error(transparent)]
-    StringTable(MyStringTableDecodeError),
-    #[error(transparent)]
-    EquipmentCompose(EquipmentComposeDecodeError),
-    #[error(transparent)]
-    WordsFilter(WordsFilterDecodeError),
-    #[error(transparent)]
-    JjcRegionLevel(JjcRegionLevelDecodeError),
-    #[error(transparent)]
-    TaoZhuang(TaoZhuangDecodeError),
-    #[error(transparent)]
-    TaoZhuangSerialize(TaoZhuangSerializationBlock),
-    #[error(transparent)]
-    CiQing(CiQingDecodeError),
-    #[error(transparent)]
-    LingBao(LingBaoDecodeError),
-    #[error(transparent)]
-    CiQingSerialize(CiQingSerializationBlock),
-    #[error(transparent)]
-    ThingSetup(ThingSetupCodecError),
-    #[error(transparent)]
-    GodsBattle(GodsBattleDecodeError),
-}
-
-/// Декодирует startup snapshots, чьи state owners уже принадлежат `CGame`.
-pub(crate) fn dispatch_game_owned_startup_snapshot(
-    selector: i32,
-    message: &mut CMessage,
-    game: &mut CGame,
-    mut add_log_text: impl FnMut(&[u8]),
-    mut put_string_to_file: impl FnMut(&str, &[u8]),
-) -> Option<Result<GameOwnedStartupSnapshotReport, GameOwnedStartupSnapshotError>> {
-    let (source, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
-    if let Some(result) = decode_script_startup(selector, source, cursor, game, &mut add_log_text) {
-        return Some(match result {
-            Ok(GameScriptStartupReport::FunctionList {
-                declared_length,
-                publication,
-            }) => Ok(GameOwnedStartupSnapshotReport::FunctionList {
-                declared_length,
-                publication,
-            }),
-            Ok(GameScriptStartupReport::VariableList {
-                declared_length,
-                publication,
-            }) => Ok(GameOwnedStartupSnapshotReport::VariableList {
-                declared_length,
-                publication,
-            }),
-            Ok(GameScriptStartupReport::GeneralVariables {
-                start_offset,
-                snapshot,
-            }) => Ok(GameOwnedStartupSnapshotReport::GeneralVariable {
-                start_offset,
-                snapshot,
-            }),
-            Ok(GameScriptStartupReport::ScriptFile {
-                path_bytes,
-                declared_length,
-                replaced,
-            }) => Ok(GameOwnedStartupSnapshotReport::ScriptFile {
-                path_bytes,
-                declared_length,
-                replaced,
-            }),
-            Err(GameScriptStartupError::Resource(error)) => {
-                Err(GameOwnedStartupSnapshotError::ScriptResource(error))
-            }
-            Err(GameScriptStartupError::GeneralVariables(error)) => {
-                Err(GameOwnedStartupSnapshotError::GeneralVariables(error))
-            }
-        });
-    }
-    if selector == HONOR_ELIMINATE_SELECTOR
-        && let Some(result) = decode_honor_startup(
-            selector,
-            source,
-            cursor,
-            game,
-            &mut add_log_text,
-            &mut put_string_to_file,
-        )
-    {
-        return Some(match result {
-            Ok(GameHonorStartupReport::EliminateConfiguration {
-                level_difference,
-                minimum_level,
-            }) => Ok(GameOwnedStartupSnapshotReport::HonorEliminate {
-                level_difference,
-                minimum_level,
-            }),
-            Err(GameHonorStartupError::EliminateConfiguration(error)) => {
-                Err(GameOwnedStartupSnapshotError::HonorEliminate(error))
-            }
-            Ok(GameHonorStartupReport::Ranks { .. }) | Err(GameHonorStartupError::Ranks(_)) => {
-                unreachable!("selector 0x26 не возвращает honor-ranks variant")
-            }
-        });
-    }
-    if let Some(result) = decode_player_ranks_startup(selector, source, cursor, game) {
-        return Some(match result {
-            Ok(GamePlayerRanksStartupReport { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::PlayerRanks { entries })
-            }
-            Err(GamePlayerRanksStartupError::OwnerUnavailable { selector }) => {
-                Err(GameOwnedStartupSnapshotError::OwnerUnavailable { selector })
-            }
-            Err(GamePlayerRanksStartupError::Decode(error)) => {
-                Err(GameOwnedStartupSnapshotError::PlayerRanks(
-                    Arc::try_unwrap(error)
-                        .expect("PlayerRanks decode error ещё не разделён между reports"),
-                ))
-            }
-        });
-    }
-    if let Some(result) = decode_world_event_startup(
-        selector,
-        source,
-        cursor,
-        game,
-        &mut add_log_text,
-        &mut put_string_to_file,
-    ) {
-        return Some(match result {
-            Ok(GameWorldEventStartupReport::Things { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::ThingSetup { entries })
-            }
-            Ok(GameWorldEventStartupReport::GodsBattle(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::GodsBattle(report))
-            }
-            Err(GameWorldEventStartupError::Things(error)) => {
-                Err(GameOwnedStartupSnapshotError::ThingSetup(error))
-            }
-            Err(GameWorldEventStartupError::GodsBattle(error)) => {
-                Err(GameOwnedStartupSnapshotError::GodsBattle(error))
-            }
-        });
-    }
-    if let Some(result) =
-        decode_equipment_enhancement_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameEquipmentEnhancementStartupReport::TaoZhuang {
-                skill_ids,
-                items,
-                broadcast,
-            }) => Ok(GameOwnedStartupSnapshotReport::TaoZhuang {
-                skill_ids,
-                items,
-                broadcast,
-            }),
-            Ok(GameEquipmentEnhancementStartupReport::CiQingLingBao {
-                ci_qing,
-                ling_bao,
-                broadcast,
-            }) => Ok(GameOwnedStartupSnapshotReport::CiQingLingBao {
-                ci_qing,
-                ling_bao,
-                broadcast,
-            }),
-            Err(GameEquipmentEnhancementStartupError::TaoZhuangDecode(error)) => {
-                Err(GameOwnedStartupSnapshotError::TaoZhuang(error))
-            }
-            Err(GameEquipmentEnhancementStartupError::TaoZhuangSerialize(error)) => {
-                Err(GameOwnedStartupSnapshotError::TaoZhuangSerialize(error))
-            }
-            Err(GameEquipmentEnhancementStartupError::CiQingDecode(error)) => {
-                Err(GameOwnedStartupSnapshotError::CiQing(error))
-            }
-            Err(GameEquipmentEnhancementStartupError::LingBaoDecode(error)) => {
-                Err(GameOwnedStartupSnapshotError::LingBao(error))
-            }
-            Err(GameEquipmentEnhancementStartupError::CiQingSerialize(error)) => {
-                Err(GameOwnedStartupSnapshotError::CiQingSerialize(error))
-            }
-        });
-    }
-    if let Some(result) =
-        decode_lookup_filter_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameLookupFilterStartupReport::DaKong(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::DaKong(report))
-            }
-            Ok(GameLookupFilterStartupReport::WordsFilter(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::WordsFilter(report))
-            }
-            Ok(GameLookupFilterStartupReport::JjcRegionLevels { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::JjcRegionLevel { entries })
-            }
-            Err(GameLookupFilterStartupError::DaKong(error)) => {
-                Err(GameOwnedStartupSnapshotError::DaKong(error))
-            }
-            Err(GameLookupFilterStartupError::WordsFilter(error)) => {
-                Err(GameOwnedStartupSnapshotError::WordsFilter(error))
-            }
-            Err(GameLookupFilterStartupError::JjcRegionLevels(error)) => {
-                Err(GameOwnedStartupSnapshotError::JjcRegionLevel(error))
-            }
-        });
-    }
-    if let Some(result) =
-        decode_mutation_rules_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameMutationRulesStartupReport::Synthesis(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::Synthesis(report))
-            }
-            Ok(GameMutationRulesStartupReport::NewSkillMonsters(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::NewSkillMonster(report))
-            }
-            Ok(GameMutationRulesStartupReport::GoodsDestruction(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::GoodsDestroy(report))
-            }
-            Ok(GameMutationRulesStartupReport::ChangeBody { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::ChangeBody { entries })
-            }
-            Err(GameMutationRulesStartupError::Synthesis(error)) => {
-                Err(GameOwnedStartupSnapshotError::Synthesis(
-                    Arc::try_unwrap(error)
-                        .expect("Synthesis decode error ещё не разделён между reports"),
-                ))
-            }
-            Err(GameMutationRulesStartupError::NewSkillMonsters(error)) => {
-                Err(GameOwnedStartupSnapshotError::NewSkillMonster(
-                    Arc::try_unwrap(error)
-                        .expect("NewSkillMonster decode error ещё не разделён между reports"),
-                ))
-            }
-            Err(GameMutationRulesStartupError::GoodsDestruction(error)) => {
-                Err(GameOwnedStartupSnapshotError::GoodsDestroy(
-                    Arc::try_unwrap(error)
-                        .expect("GoodsDestroy decode error ещё не разделён между reports"),
-                ))
-            }
-            Err(GameMutationRulesStartupError::ChangeBody(error)) => {
-                Err(GameOwnedStartupSnapshotError::ChangeBody(
-                    Arc::try_unwrap(error)
-                        .expect("ChangeBody decode error ещё не разделён между reports"),
-                ))
-            }
-        });
-    }
-    if let Some(result) =
-        decode_environment_configuration_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameEnvironmentConfigurationStartupReport::Prison { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::PrisonConf { entries })
-            }
-            Ok(GameEnvironmentConfigurationStartupReport::PreciousBoxes { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::PreciousBoxConf { entries })
-            }
-            Err(GameEnvironmentConfigurationStartupError::Prison(error)) => {
-                Err(GameOwnedStartupSnapshotError::PrisonConf(error))
-            }
-            Err(GameEnvironmentConfigurationStartupError::PreciousBoxes(error)) => {
-                Err(GameOwnedStartupSnapshotError::PreciousBoxConf(
-                    Arc::try_unwrap(error)
-                        .expect("PreciousBox decode error ещё не разделён между reports"),
-                ))
-            }
-        });
-    }
-    if matches!(
-        selector,
-        PROXY_REGION_SELECTOR | REGION_SETUP_SELECTOR | DUPLI_REGION_SELECTOR
-    ) && let Some(result) =
-        decode_spatial_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameSpatialStartupReport::ProxyRegion {
-                region_id,
-                replaced,
-            }) => Ok(GameOwnedStartupSnapshotReport::ProxyRegion {
-                region_id,
-                replaced,
-            }),
-            Ok(GameSpatialStartupReport::RegionSetup { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::RegionSetup { entries })
-            }
-            Ok(GameSpatialStartupReport::DupliRegions { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::DupliRegions { entries })
-            }
-            Err(GameSpatialStartupError::ProxyRegion(error)) => {
-                Err(GameOwnedStartupSnapshotError::ProxyRegion(error))
-            }
-            Err(GameSpatialStartupError::RegionSetup(error)) => {
-                Err(GameOwnedStartupSnapshotError::RegionSetup(error))
-            }
-            Err(GameSpatialStartupError::OwnerUnavailable { selector }) => {
-                Err(GameOwnedStartupSnapshotError::OwnerUnavailable { selector })
-            }
-            Err(GameSpatialStartupError::DupliRegions(error)) => {
-                Err(GameOwnedStartupSnapshotError::DupliRegions(
-                    Arc::try_unwrap(error)
-                        .expect("dupli decode error ещё не разделён между reports"),
-                ))
-            }
-            Ok(GameSpatialStartupReport::RegionReload(_))
-            | Err(GameSpatialStartupError::RegionReload(_)) => {
-                unreachable!("selector 0x0F/0x11/0x1A не возвращает reload variant")
-            }
-        });
-    }
-    if let Some(result) =
-        decode_country_state_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameCountryStateStartupReport::Parameters(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::CountryParam(report))
-            }
-            Ok(GameCountryStateStartupReport::Countries(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::CountryHandler(report))
-            }
-            Err(GameCountryStateStartupError::Parameters(error)) => {
-                Err(GameOwnedStartupSnapshotError::CountryParam(error))
-            }
-            Err(GameCountryStateStartupError::Countries(error)) => {
-                Err(GameOwnedStartupSnapshotError::CountryHandler(error))
-            }
-        });
-    }
-    if let Some(result) =
-        decode_player_rule_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GamePlayerRuleStartupReport::IdIndex { value }) => {
-                Ok(GameOwnedStartupSnapshotReport::IdIndex { value })
-            }
-            Ok(GamePlayerRuleStartupReport::HitLevel { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::HitLevel { entries })
-            }
-            Ok(GamePlayerRuleStartupReport::Emotion(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::Emotion(report))
-            }
-            Ok(GamePlayerRuleStartupReport::QuestSystem(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::QuestSystem(report))
-            }
-            Err(GamePlayerRuleStartupError::IdIndex(error)) => {
-                Err(GameOwnedStartupSnapshotError::IdIndex(error))
-            }
-            Err(GamePlayerRuleStartupError::HitLevel(error)) => {
-                Err(GameOwnedStartupSnapshotError::HitLevel(error))
-            }
-            Err(GamePlayerRuleStartupError::Emotion(error)) => {
-                Err(GameOwnedStartupSnapshotError::Emotion(error))
-            }
-            Err(GamePlayerRuleStartupError::QuestSystem(error)) => {
-                Err(GameOwnedStartupSnapshotError::QuestSystem(error))
-            }
-        });
-    }
-    if let Some(result) =
-        decode_runtime_configuration_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameRuntimeConfigurationStartupReport::GlobeSetup {
-                decoded,
-                goods_ai_broadcast,
-                auction_forced_disabled,
-            }) => Ok(GameOwnedStartupSnapshotReport::GlobeSetup {
-                decoded,
-                goods_ai_broadcast,
-                auction_forced_disabled,
-            }),
-            Ok(GameRuntimeConfigurationStartupReport::LogSystem {
-                entries,
-                da_kong_log,
-            }) => Ok(GameOwnedStartupSnapshotReport::LogSystem {
-                entries,
-                da_kong_log,
-            }),
-            Ok(GameRuntimeConfigurationStartupReport::GmList(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::GmList(report))
-            }
-            Err(GameRuntimeConfigurationStartupError::GlobeSetup(error)) => {
-                Err(GameOwnedStartupSnapshotError::GlobeSetup(error))
-            }
-            Err(GameRuntimeConfigurationStartupError::LogSystem(error)) => {
-                Err(GameOwnedStartupSnapshotError::LogSystem(error))
-            }
-            Err(GameRuntimeConfigurationStartupError::GmList(error)) => {
-                Err(GameOwnedStartupSnapshotError::GmList(error))
-            }
-        });
-    }
-    if let Some(result) =
-        decode_player_economy_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GamePlayerEconomyStartupReport::PlayerTemplates(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::PlayerList(report))
-            }
-            Ok(GamePlayerEconomyStartupReport::TradeList { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::TradeList { entries })
-            }
-            Ok(GamePlayerEconomyStartupReport::IncrementShop { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::IncrementShop { entries })
-            }
-            Ok(GamePlayerEconomyStartupReport::ContributionItems { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::ContributeSetup { entries })
-            }
-            Err(GamePlayerEconomyStartupError::PlayerTemplates(error)) => {
-                Err(GameOwnedStartupSnapshotError::PlayerList(error))
-            }
-            Err(GamePlayerEconomyStartupError::TradeList(error)) => {
-                Err(GameOwnedStartupSnapshotError::TradeList(error))
-            }
-            Err(GamePlayerEconomyStartupError::IncrementShop(error)) => {
-                Err(GameOwnedStartupSnapshotError::IncrementShop(error))
-            }
-            Err(GamePlayerEconomyStartupError::ContributionItems(error)) => {
-                Err(GameOwnedStartupSnapshotError::ContributeSetup(error))
-            }
-        });
-    }
-    if matches!(selector, GOODS_LIST_SELECTOR | SKILL_LIST_SELECTOR)
-        && let Some(result) =
-            decode_combat_registry_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameCombatRegistryStartupReport::Goods(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::GoodsList(report))
-            }
-            Ok(GameCombatRegistryStartupReport::Skills(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::SkillList(report))
-            }
-            Err(GameCombatRegistryStartupError::Goods(error)) => {
-                Err(GameOwnedStartupSnapshotError::GoodsList(error))
-            }
-            Err(GameCombatRegistryStartupError::Skills(error)) => {
-                Err(GameOwnedStartupSnapshotError::SkillList(error))
-            }
-            Ok(GameCombatRegistryStartupReport::Monsters(_))
-            | Err(GameCombatRegistryStartupError::Monsters(_)) => {
-                unreachable!("selector 0x00/0x06 не возвращает monster-list variant")
-            }
-        });
-    }
-    if let Some(result) =
-        decode_battle_fairy_startup(selector, source, cursor, game, &mut add_log_text)
-    {
-        return Some(match result {
-            Ok(GameBattleFairyStartupReport::FairyExp(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::FairyExp(report))
-            }
-            Ok(GameBattleFairyStartupReport::BattleFairyExp(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::BattleFairyExp(report))
-            }
-            Ok(GameBattleFairyStartupReport::Combine { entries }) => {
-                Ok(GameOwnedStartupSnapshotReport::BattleFairyCombine { entries })
-            }
-            Ok(GameBattleFairyStartupReport::EquipmentCompose(report)) => {
-                Ok(GameOwnedStartupSnapshotReport::EquipmentCompose(report))
-            }
-            Err(GameBattleFairyStartupError::FairyExp(error)) => {
-                Err(GameOwnedStartupSnapshotError::FairyExp(error))
-            }
-            Err(GameBattleFairyStartupError::BattleFairyExp(error)) => {
-                Err(GameOwnedStartupSnapshotError::BattleFairyExp(error))
-            }
-            Err(GameBattleFairyStartupError::Combine(error)) => {
-                Err(GameOwnedStartupSnapshotError::BattleFairyCombine(error))
-            }
-            Err(GameBattleFairyStartupError::EquipmentCompose(error)) => {
-                Err(GameOwnedStartupSnapshotError::EquipmentCompose(error))
-            }
-        });
-    }
-    match selector {
-        STRING_TABLE_SELECTOR => {
-            let report = match game.create_string_table(source, cursor, &mut add_log_text) {
-                Ok(report) => report,
-                Err(error) => {
-                    return Some(Err(GameOwnedStartupSnapshotError::StringTable(error)));
-                }
-            };
-            Some(Ok(GameOwnedStartupSnapshotReport::StringTable(report)))
-        }
-        _ => None,
-    }
 }
 
 pub(crate) trait HonorRankPlayerResetContext {
