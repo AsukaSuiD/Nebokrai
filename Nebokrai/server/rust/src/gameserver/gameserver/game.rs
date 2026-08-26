@@ -800,7 +800,7 @@ use crate::setup::leitingsetup::CThingSetup;
 use crate::setup::lingbao::CLingBaoSetup;
 use crate::setup::logsystem::CLogSystem;
 use crate::setup::monsterlist::{
-    MonsterDropRegistry, MonsterListDecodeError, MonsterListDecodeReport, MonsterProperties,
+    MonsterDropRegistry, MonsterListDecodeError, MonsterProperties,
     MonsterRegistry, decode_monster_list, get_monster_property_by_origin_index,
     get_monster_property_by_origin_name, get_monster_property_by_origin_name_mut,
 };
@@ -11408,7 +11408,7 @@ impl CGame {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<MonsterListDecodeReport, MonsterListDecodeError> {
+    ) -> Result<(), MonsterListDecodeError> {
         decode_monster_list(
             &mut self.monster_registry,
             &mut self.monster_drop_registry,

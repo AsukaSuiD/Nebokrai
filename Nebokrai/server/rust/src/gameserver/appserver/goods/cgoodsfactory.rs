@@ -63,14 +63,6 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::guid::CGuid;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GoodsFactoryDecodeReport {
-    pub(crate) declared_records: usize,
-    pub(crate) unique_goods: usize,
-    pub(crate) unique_original_names: usize,
-    pub(crate) unique_names: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum GoodsFactoryDecodeError {
     #[error("goods registry обрывается на {field} в {offset}: нужно 4, доступно {available}")]
@@ -769,7 +761,7 @@ impl CGoodsFactory {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<GoodsFactoryDecodeReport, GoodsFactoryDecodeError> {
+    ) -> Result<(), GoodsFactoryDecodeError> {
         self.release();
         let count = read_factory_u32(source, cursor, "goods count")?;
         for _ in 0..count {
@@ -783,12 +775,8 @@ impl CGoodsFactory {
             self.name_index.insert(properties.name().to_vec(), goods_id);
             self.goods.insert(goods_id, properties);
         }
-        Ok(GoodsFactoryDecodeReport {
-            declared_records: count as usize,
-            unique_goods: self.goods.len(),
-            unique_original_names: self.original_name_index.len(),
-            unique_names: self.name_index.len(),
-        })
+        tracing::trace!(declared_records = count, unique_goods = self.goods.len(), unique_original_names = self.original_name_index.len(), unique_names = self.name_index.len(), "реестр предметов декодирован");
+        Ok(())
     }
 
     pub(crate) const fn goods(&self) -> &BTreeMap<u32, CGoodsBaseProperties> {

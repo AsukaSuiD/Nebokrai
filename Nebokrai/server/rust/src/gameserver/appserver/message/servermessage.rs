@@ -2278,19 +2278,19 @@ fn decode_combat_registry_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_GOODSLIST...OK!");
             }
-            Some(report.map(|report| tracing::trace!(?report, "реестр предметов загружен")))
+            Some(report.map(|()| tracing::trace!("реестр предметов загружен")))
         }
         MONSTER_LIST_SELECTOR => {
-            let decoded = match game
+            match game
                 .decode_monster_list(source, cursor)
                 .map_err(GameCombatRegistryStartupError::Monsters)
             {
-                Ok(decoded) => decoded,
+                Ok(()) => {}
                 Err(error) => return Some(Err(error)),
-            };
+            }
             add_log_text(b"Initial SI_MONSTERLIST...OK!");
             game.refresh_all_monster_base_property();
-            tracing::trace!(?decoded, "реестр монстров загружен");
+            tracing::trace!("реестр монстров загружен");
             Some(Ok(()))
         }
         SKILL_LIST_SELECTOR => {
@@ -2301,7 +2301,7 @@ fn decode_combat_registry_startup(
             if report.is_ok() {
                 add_log_text(b"Initial SI_SKILLLIST...OK!");
             }
-            Some(report.map(|report| tracing::trace!(?report, "реестр навыков загружен")))
+            Some(report.map(|()| tracing::trace!("реестр навыков загружен")))
         }
         _ => None,
     }

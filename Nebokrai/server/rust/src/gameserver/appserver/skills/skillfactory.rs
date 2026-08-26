@@ -24,14 +24,6 @@ use super::super::legacycodec::LegacyReader;
 pub(crate) const UNKNOWN_SKILL_ID: u32 = 0x7fff_ffff;
 const MAX_SKILL_NAME_LENGTH: usize = 255;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SkillFactoryDecodeReport {
-    pub(crate) declared_slots: usize,
-    pub(crate) published_records: usize,
-    pub(crate) empty_slots: usize,
-    pub(crate) skipped_records: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum SkillFactoryDecodeError {
     #[error("skill snapshot обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
@@ -81,7 +73,7 @@ impl CSkillFactory {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<SkillFactoryDecodeReport, SkillFactoryDecodeError> {
+    ) -> Result<(), SkillFactoryDecodeError> {
         self.clear_skill_cache();
         let count = read_i32(source, cursor, "slot count")?;
         if count < 0 {
@@ -105,12 +97,8 @@ impl CSkillFactory {
             self.properties.insert(key, properties);
         }
 
-        Ok(SkillFactoryDecodeReport {
-            declared_slots,
-            published_records: self.properties.len(),
-            empty_slots,
-            skipped_records,
-        })
+        tracing::trace!(declared_slots, published_records = self.properties.len(), empty_slots, skipped_records, "реестр навыков декодирован");
+        Ok(())
     }
 
     pub(crate) fn query_skill_base_properties(

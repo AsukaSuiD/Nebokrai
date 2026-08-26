@@ -94,12 +94,6 @@ pub(crate) struct MonsterDropList {
 pub(crate) type MonsterRegistry = BTreeMap<Vec<u8>, MonsterProperties>;
 pub(crate) type MonsterDropRegistry = BTreeMap<Vec<u8>, MonsterDropList>;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct MonsterListDecodeReport {
-    pub(crate) monsters: usize,
-    pub(crate) drop_groups: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MonsterListDecodeError {
     UnexpectedEnd {
@@ -122,7 +116,7 @@ pub(crate) fn decode_monster_list(
     drop_goods: &mut MonsterDropRegistry,
     source: &[u8],
     cursor: &mut usize,
-) -> Result<MonsterListDecodeReport, MonsterListDecodeError> {
+) -> Result<(), MonsterListDecodeError> {
     monsters.clear();
     drop_goods.clear();
 
@@ -238,10 +232,8 @@ pub(crate) fn decode_monster_list(
         group_index = group_index.wrapping_add(1);
     }
 
-    Ok(MonsterListDecodeReport {
-        monsters: monsters.len(),
-        drop_groups: drop_goods.len(),
-    })
+    tracing::trace!(monsters = monsters.len(), drop_groups = drop_goods.len(), "реестр монстров декодирован");
+    Ok(())
 }
 
 fn read_decode_string(
