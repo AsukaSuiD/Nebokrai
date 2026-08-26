@@ -269,7 +269,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                         )));
                     }
                 };
-                let _ = game.update_fairy_hatch_state(player_id, slot, action, runtime);
+                game.update_fairy_hatch_state(player_id, slot, action, runtime);
             }
         }
         IMPLANT_FAIRY_EXPERIENCE => {
@@ -297,11 +297,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 } else {
                     0
                 };
-                let _ = game.implant_fairy_experience(
-                    player_id,
-                    requested_vigour,
-                    runtime,
-                );
+                game.implant_fairy_experience(player_id, requested_vigour, runtime);
             }
         }
         SYNCRETIZE_FAIRY => {
@@ -316,13 +312,12 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     Ok(_) => FairySyncreticProperty::GrowingRate,
                     Err(error) => return Some(Err(error)),
                 };
-                let _ = game
-                    .syncretize_fairy(player_id, property, runtime)
-                    .expect("enabled fairy player remains registered during dispatch");
+                game.syncretize_fairy(player_id, property, runtime)
+                    .expect("игрок с доступным контейнером феи остаётся зарегистрирован при обработке сообщения");
             }
         }
         QUERY_FAIRY_SETUP => {
-            let _ = game.query_fairy_setup(player_id);
+            game.query_fairy_setup(player_id);
         }
         OPEN_SYNTHESIS => {
             let _ = game

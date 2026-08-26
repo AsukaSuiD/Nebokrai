@@ -525,7 +525,7 @@ use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::U
 use crate::gameserver::appserver::container::cfairycontainer::{
     FairyContainerAddOutcome, FairyContainerAmountChange, FairyContainerGoodsUpdate,
     FairyContainerMoveOperation, FairyContainerRemoveOutcome, FairyHatcherEntry,
-    FairyImplantDelivery, FairyImplantReport, FairyIncubateLog, FairyStateChangeEffect,
+    FairyImplantDelivery, FairyIncubateLog, FairyStateChangeEffect,
     FairyStateChangeOutcome, FairySyncreticProperty, FairySyncretizeConfig,
     FairySyncretizeFragmentEffect, FairySyncretizeLog, FairySyncretizePlayer,
     FairySyncretizePlayerUpdate, FairySyncretizeRemoval, FairySyncretizeReport,
@@ -1545,24 +1545,6 @@ pub(crate) struct HotkeyChangeReport {
     pub(crate) delivery: Option<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FairyHatchOutcome {
-    Disabled,
-    InvalidSlot,
-    InvalidAction,
-    MissingGoods,
-    Unchanged,
-    Changed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FairyHatchReport {
-    pub(crate) slot: u32,
-    pub(crate) action: i8,
-    pub(crate) outcome: FairyHatchOutcome,
-    pub(crate) delivery: Option<i32>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FairyHatcherRunReport {
     pub(crate) player_id: i32,
@@ -1719,51 +1701,6 @@ pub(crate) struct PlayerFlashUpdateReport {
     pub(crate) player_id: i32,
     pub(crate) pairs: [(u32, u32); 17],
     pub(crate) delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FairyImplantOutcome {
-    Disabled,
-    MissingFairy,
-    MaximumLevel,
-    InvalidVigour,
-    InsufficientVigour,
-    InsufficientCrystal,
-    PropertyBlocked,
-    Completed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FairyImplantResultReport {
-    pub(crate) requested_vigour: u32,
-    pub(crate) consumed_vigour: u32,
-    pub(crate) crystal_amount: u32,
-    pub(crate) outcome: FairyImplantOutcome,
-    pub(crate) result_delivery: Option<i32>,
-    pub(crate) goods_update_delivery: Option<i32>,
-    pub(crate) state_effect_deliveries: Vec<Vec<i32>>,
-    pub(crate) packet_consumptions: Vec<CiQingPacketConsumption>,
-    pub(crate) packet_deliveries: Vec<Vec<i32>>,
-    pub(crate) property_delivery: Option<i32>,
-    pub(crate) world_deliveries: Vec<Vec<i32>>,
-    pub(crate) implantation: Option<FairyImplantReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FairySyncretizeResultReport {
-    pub(crate) report: FairySyncretizeReport,
-    pub(crate) state_effect_deliveries: Vec<Vec<i32>>,
-    pub(crate) amount_change_deliveries: Vec<Vec<i32>>,
-    pub(crate) money_deliveries: Vec<i32>,
-    pub(crate) player_update_deliveries: Vec<i32>,
-    pub(crate) world_deliveries: Vec<Vec<i32>>,
-    pub(crate) result_delivery: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FairySetupQueryReport {
-    pub(crate) enabled: bool,
-    pub(crate) delivery: Option<i32>,
 }
 
 pub(crate) trait EquipmentComposeContext: GameContainerMessageRuntime {}
@@ -24541,26 +24478,22 @@ impl CGame {
         slot: u32,
         action: i8,
         context: &mut Context,
-    ) -> FairyHatchReport {
-        let mut report = FairyHatchReport {
-            slot,
-            action,
-            outcome: FairyHatchOutcome::Disabled,
-            delivery: None,
-        };
+    ) {
         let Some(player) = self.find_player(player_id) else {
-            return report;
+            tracing::trace!(player_id, slot, action, "игрок для управления инкубатором не найден");
+            return;
         };
         if !player.fairy_container_enabled() {
-            return report;
+            tracing::trace!(player_id, slot, action, "контейнер феи отключён");
+            return;
         }
         if !(5..=9).contains(&slot) {
-            report.outcome = FairyHatchOutcome::InvalidSlot;
-            return report;
+            tracing::trace!(player_id, slot, action, "неверная позиция инкубатора");
+            return;
         }
         if action != b'b' as i8 && action != b's' as i8 {
-            report.outcome = FairyHatchOutcome::InvalidAction;
-            return report;
+            tracing::trace!(player_id, slot, action, "неверное действие инкубатора");
+            return;
         }
         let now = (action == b'b' as i8).then(|| context.now_milliseconds());
         let egg_max_level = self.globe_setup.fairy_egg_max_level();
@@ -24568,8 +24501,8 @@ impl CGame {
             .find_player_mut(player_id)
             .and_then(|player| player.fairy_container_mut().base_mut().get_goods_mut(slot))
         else {
-            report.outcome = FairyHatchOutcome::MissingGoods;
-            return report;
+            tracing::trace!(player_id, slot, action, "предмет в инкубаторе не найден");
+            return;
         };
         let changed = if let Some(now) = now {
             goods.hatch_begin(now, egg_max_level)
@@ -24577,8 +24510,8 @@ impl CGame {
             goods.hatch_stop()
         };
         if !changed {
-            report.outcome = FairyHatchOutcome::Unchanged;
-            return report;
+            tracing::trace!(player_id, slot, action, "состояние инкубатора не изменилось");
+            return;
         }
         let mut response = CMessage::new(0x0b_f91d);
         response.add_ulong(slot);
@@ -24586,9 +24519,8 @@ impl CGame {
         if action == b'b' as i8 {
             response.add_ulong(self.globe_setup.fairy_hatch_time());
         }
-        report.delivery = Some(response.send_to_player(self.net_server(), player_id));
-        report.outcome = FairyHatchOutcome::Changed;
-        report
+        let delivery = response.send_to_player(self.net_server(), player_id);
+        tracing::debug!(player_id, slot, action, delivery, "состояние инкубатора изменено");
     }
 
     /// Concrete `CPlayer::PeriodicalUpdate -> CFairyContainer::CheckHatcher`
@@ -24672,26 +24604,14 @@ impl CGame {
         player_id: i32,
         requested_vigour: u32,
         context: &mut Context,
-    ) -> FairyImplantResultReport {
-        let mut report = FairyImplantResultReport {
-            requested_vigour,
-            consumed_vigour: 0,
-            crystal_amount: 0,
-            outcome: FairyImplantOutcome::Disabled,
-            result_delivery: None,
-            goods_update_delivery: None,
-            state_effect_deliveries: Vec::new(),
-            packet_consumptions: Vec::new(),
-            packet_deliveries: Vec::new(),
-            property_delivery: None,
-            world_deliveries: Vec::new(),
-            implantation: None,
-        };
+    ) {
         let Some(player) = self.find_player(player_id) else {
-            return report;
+            tracing::trace!(player_id, requested_vigour, "игрок для имплантации опыта феи не найден");
+            return;
         };
         if !player.fairy_container_enabled() {
-            return report;
+            tracing::trace!(player_id, requested_vigour, "контейнер феи отключён");
+            return;
         }
         let Some(fairy) = player
             .fairy_container()
@@ -24699,25 +24619,25 @@ impl CGame {
             .get_goods(0)
             .and_then(CGoods::fairy_properties)
         else {
-            report.outcome = FairyImplantOutcome::MissingFairy;
-            report.result_delivery = Some(send_fairy_long(self, player_id, 0x0b_f91e, 1));
-            return report;
+            let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 1);
+            tracing::trace!(player_id, requested_vigour, delivery, "фея для имплантации не найдена");
+            return;
         };
         if (fairy.fairy_state == 0 && self.globe_setup.fairy_egg_max_level() <= fairy.level)
             || fairy.ripe_max_level <= fairy.level
         {
-            report.outcome = FairyImplantOutcome::MaximumLevel;
-            report.result_delivery = Some(send_fairy_long(self, player_id, 0x0b_f91e, 2));
-            return report;
+            let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 2);
+            tracing::trace!(player_id, requested_vigour, delivery, "фея достигла максимального уровня");
+            return;
         }
         if requested_vigour == 0 || 0x98_9681 <= requested_vigour {
-            report.outcome = FairyImplantOutcome::InvalidVigour;
-            return report;
+            tracing::trace!(player_id, requested_vigour, "неверное количество энергии для имплантации");
+            return;
         }
         if player.vigour() < requested_vigour {
-            report.outcome = FairyImplantOutcome::InsufficientVigour;
-            report.result_delivery = Some(send_fairy_long(self, player_id, 0x0b_f91e, 3));
-            return report;
+            let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 3);
+            tracing::trace!(player_id, requested_vigour, delivery, "недостаточно энергии для имплантации");
+            return;
         }
         let crystal_scale = self.globe_setup.fairy_vigour_crystal_scale();
         let exp_scale = self.globe_setup.fairy_exp_vigour_scale();
@@ -24726,9 +24646,9 @@ impl CGame {
             .goods_factory
             .query_goods_id_by_original_name(Some(b"FZ0965"));
         if crystal_index == 0 || player.check_item_in_packet(crystal_index) < initial_crystals {
-            report.outcome = FairyImplantOutcome::InsufficientCrystal;
-            report.result_delivery = Some(send_fairy_long(self, player_id, 0x0b_f91e, 4));
-            return report;
+            let delivery = send_fairy_long(self, player_id, 0x0b_f91e, 4);
+            tracing::trace!(player_id, requested_vigour, crystal_index, initial_crystals, delivery, "недостаточно кристаллов для имплантации");
+            return;
         }
 
         let experience = round_fairy_value(requested_vigour as f32 * exp_scale);
@@ -24777,14 +24697,17 @@ impl CGame {
             )
         };
         let Ok(Some(implantation)) = implantation else {
-            report.outcome = FairyImplantOutcome::PropertyBlocked;
-            return report;
+            tracing::trace!(player_id, requested_vigour, "имплантация заблокирована свойствами феи");
+            return;
         };
         for log in &implantation.exp.grow_logs {
-            report.world_deliveries.push(self.send_fairy_grow_log(log));
+            let deliveries = self.send_fairy_grow_log(log);
+            tracing::trace!(player_id, ?deliveries, "журнал роста феи отправлен");
         }
         if let FairyImplantDelivery::StateChanged(transition) = &implantation.delivery {
-            deliver_fairy_state_change(transition, self, &mut report.state_effect_deliveries);
+            let mut deliveries = Vec::new();
+            deliver_fairy_state_change(transition, self, &mut deliveries);
+            tracing::trace!(player_id, ?deliveries, "эффекты смены состояния феи отправлены");
         }
         if implantation_log_enabled {
             let log = FairyImplantationLog {
@@ -24795,9 +24718,8 @@ impl CGame {
                 resulting_level: implantation.resulting_level,
                 crystal_amount: initial_crystals,
             };
-            report
-                .world_deliveries
-                .push(self.send_fairy_implantation_log(&log));
+            let deliveries = self.send_fairy_implantation_log(&log);
+            tracing::trace!(player_id, ?deliveries, "журнал имплантации опыта феи отправлен");
         }
         let consumed_vigour = if implantation.exp.remaining_experience != 0 && exp_scale != 0.0 {
             requested_vigour.wrapping_sub(round_fairy_value(
@@ -24811,15 +24733,13 @@ impl CGame {
         } else {
             round_fairy_value(consumed_vigour as f32 * crystal_scale + 1.0)
         };
-        report.consumed_vigour = consumed_vigour;
-        report.crystal_amount = crystal_amount;
         {
             let player = self
                 .find_player_mut(player_id)
                 .expect("implantation player остаётся зарегистрирован");
             player.set_vigour(player.vigour().wrapping_sub(consumed_vigour));
         }
-        report.property_delivery = self
+        let property_delivery = self
             .find_player(player_id)
             .map(|player| self.send_player_properties_changed(player));
         let consumptions = self
@@ -24827,12 +24747,10 @@ impl CGame {
             .expect("implantation player остаётся зарегистрирован")
             .remove_item_in_packet(crystal_index, crystal_amount);
         for consumption in consumptions {
-            report
-                .packet_deliveries
-                .push(self.send_player_packet_consumption(&consumption));
-            report.packet_consumptions.push(consumption);
+            let deliveries = self.send_player_packet_consumption(&consumption);
+            tracing::trace!(player_id, ?deliveries, "расход кристаллов имплантации отправлен");
         }
-        report.goods_update_delivery = Some(send_fairy_goods_update(
+        let goods_update_delivery = send_fairy_goods_update(
             self,
             &FairyContainerGoodsUpdate {
                 message_type: 0x0b_f918,
@@ -24840,11 +24758,9 @@ impl CGame {
                 goods: implantation.goods,
                 old_client_payload: implantation.old_client_payload.clone(),
             },
-        ));
-        report.result_delivery = Some(send_fairy_long(self, player_id, 0x0b_f91e, 5));
-        report.outcome = FairyImplantOutcome::Completed;
-        report.implantation = Some(implantation);
-        report
+        );
+        let result_delivery = send_fairy_long(self, player_id, 0x0b_f91e, 5);
+        tracing::debug!(player_id, requested_vigour, consumed_vigour, crystal_amount, ?property_delivery, goods_update_delivery, result_delivery, "имплантация опыта феи завершена");
     }
 
     pub(crate) fn syncretize_fairy<Context: FairyContext>(
@@ -24852,7 +24768,7 @@ impl CGame {
         player_id: i32,
         property: FairySyncreticProperty,
         context: &mut Context,
-    ) -> Option<FairySyncretizeResultReport> {
+    ) -> Option<()> {
         let (experience, money, vigour) = {
             let player = self.find_player(player_id)?;
             if !player.fairy_container_enabled() {
@@ -24942,6 +24858,7 @@ impl CGame {
             &mut state_effect_deliveries,
             &mut amount_change_deliveries,
         );
+        tracing::trace!(player_id, ?state_effect_deliveries, ?amount_change_deliveries, "эффекты соединения фей отправлены");
         let money_deliveries = money_change
             .as_ref()
             .map(|change| self.send_player_money_decrease(player_id, &change.outcome))
@@ -24956,22 +24873,15 @@ impl CGame {
             .map(|log| vec![self.send_fairy_syncretize_log(log)])
             .unwrap_or_default();
         let result_delivery = send_fairy_long(self, player_id, 0x0b_f91f, report.result as u32);
-        Some(FairySyncretizeResultReport {
-            report,
-            state_effect_deliveries,
-            amount_change_deliveries,
-            money_deliveries,
-            player_update_deliveries,
-            world_deliveries,
-            result_delivery,
-        })
+        tracing::debug!(player_id, ?property, ?report.result, ?money_deliveries, ?player_update_deliveries, ?world_deliveries, result_delivery, "соединение фей завершено");
+        Some(())
     }
 
-    pub(crate) fn query_fairy_setup(&self, player_id: i32) -> FairySetupQueryReport {
+    pub(crate) fn query_fairy_setup(&self, player_id: i32) {
         let enabled = self
             .find_player(player_id)
             .is_some_and(CPlayer::fairy_container_enabled);
-        let delivery = enabled.then(|| {
+        if enabled {
             let mut response = CMessage::new(0x0b_f920);
             response.add_ulong(self.globe_setup.fairy_vigour_crystal_scale().to_bits());
             response.add_ulong(self.globe_setup.fairy_exp_vigour_scale().to_bits());
@@ -24980,9 +24890,11 @@ impl CGame {
             response.add_ulong(self.globe_setup.fairy_syncretic_needed_money());
             response.add_ulong(self.globe_setup.fairy_syncretic_rate_n().to_bits());
             response.add_ulong(self.globe_setup.fairy_syncretic_rate_y().to_bits());
-            response.send_to_player(self.net_server(), player_id)
-        });
-        FairySetupQueryReport { enabled, delivery }
+            let delivery = response.send_to_player(self.net_server(), player_id);
+            tracing::trace!(player_id, delivery, "настройки феи отправлены");
+        } else {
+            tracing::trace!(player_id, "настройки феи не отправлены: контейнер отключён");
+        }
     }
 
     pub(crate) fn open_synthesis(&mut self, player_id: i32) -> Option<SynthesisOpenReport> {
