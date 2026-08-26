@@ -2086,12 +2086,12 @@ fn decode_country_state_startup(
         COUNTRY_PARAM_SELECTOR => game
             .country_param_mut()
             .decord_from_byte_array(source, cursor)
-            .map(|report| tracing::trace!(?report, "параметры стран загружены"))
+            .map(|()| tracing::trace!("параметры стран загружены"))
             .map_err(GameCountryStateStartupError::Parameters),
         COUNTRY_HANDLER_SELECTOR => game
             .country_handler_mut()
             .decord_from_byte_array(source, cursor)
-            .map(|report| tracing::trace!(?report, "состояния стран загружены"))
+            .map(|()| tracing::trace!("состояния стран загружены"))
             .map_err(GameCountryStateStartupError::Countries),
         _ => return None,
     };

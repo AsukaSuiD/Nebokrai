@@ -20,14 +20,6 @@ pub(crate) struct CCountryHandler {
     countries: BTreeMap<u8, CCountry>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryHandlerDecodeReport {
-    pub(crate) declared: i32,
-    pub(crate) decoded: usize,
-    pub(crate) retained: usize,
-    pub(crate) replaced_duplicates: usize,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum CountryHandlerDecodeError {
     #[error("CountryHandler snapshot обрывается на count в {offset}: нужно 4, доступно {available}")]
@@ -48,7 +40,7 @@ impl CCountryHandler {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<CountryHandlerDecodeReport, CountryHandlerDecodeError> {
+    ) -> Result<(), CountryHandlerDecodeError> {
         self.countries.clear();
         let offset = *cursor;
         let available = source.len().saturating_sub(offset);
@@ -79,12 +71,8 @@ impl CCountryHandler {
             decoded += 1;
         }
 
-        Ok(CountryHandlerDecodeReport {
-            declared,
-            decoded,
-            retained: self.countries.len(),
-            replaced_duplicates,
-        })
+        tracing::trace!(declared, decoded, retained = self.countries.len(), replaced_duplicates, "снимок стран декодирован");
+        Ok(())
     }
 
     pub(crate) fn country(&self, country_id: u8) -> Option<&CCountry> {

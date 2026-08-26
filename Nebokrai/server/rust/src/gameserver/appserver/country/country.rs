@@ -57,13 +57,6 @@ pub(crate) struct CCountry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryDecodeReport {
-    pub(crate) country_id: u8,
-    pub(crate) declared_ministers: u8,
-    pub(crate) country_information_entries: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CountryInformationMutationReport {
     pub(crate) country_id: u8,
     pub(crate) job: u8,
@@ -130,7 +123,7 @@ impl CCountry {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<CountryDecodeReport, CountryDecodeError> {
+    ) -> Result<(), CountryDecodeError> {
         self.country_id = read_country_u8(source, cursor, "country ID")?;
         self.treasury = read_country_i32(source, cursor, "treasury")?;
         self.power = read_country_i32(source, cursor, "power")?;
@@ -153,11 +146,8 @@ impl CCountry {
             self.country_information.insert(job, player_id);
         }
 
-        Ok(CountryDecodeReport {
-            country_id: self.country_id,
-            declared_ministers,
-            country_information_entries: self.country_information.len(),
-        })
+        tracing::trace!(country_id = self.country_id, declared_ministers, country_information_entries = self.country_information.len(), "состояние страны декодировано");
+        Ok(())
     }
 
     pub(crate) const fn country_id(&self) -> u8 {

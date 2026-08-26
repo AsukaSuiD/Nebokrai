@@ -106,15 +106,6 @@ pub(crate) struct CountryMainReturnPoint {
     pub(crate) direction: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryParamDecodeReport {
-    pub(crate) main_regions: usize,
-    pub(crate) main_rects: usize,
-    pub(crate) main_directions: usize,
-    pub(crate) technology_levels: usize,
-    pub(crate) exile_rects: usize,
-}
-
 /// Старый decoder не получал размер buffer-а; safe Rust останавливается в
 /// точной достигнутой позиции вместо чтения за границей.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -155,7 +146,7 @@ impl CCountryParam {
         &mut self,
         source: &[u8],
         cursor: &mut usize,
-    ) -> Result<CountryParamDecodeReport, CountryParamInputBlock> {
+    ) -> Result<(), CountryParamInputBlock> {
         for (index, field) in COUNTRY_PARAMETER_FIELDS.into_iter().enumerate() {
             self.parameters[index] = Some(read_country_i32(source, cursor, field)?);
         }
@@ -211,13 +202,8 @@ impl CCountryParam {
             self.exile_rects.entry(country).or_insert(rect);
         }
 
-        Ok(CountryParamDecodeReport {
-            main_regions: self.main_regions.len(),
-            main_rects: self.main_rects.len(),
-            main_directions: self.main_directions.len(),
-            technology_levels: self.country_tech_levels.len(),
-            exile_rects: self.exile_rects.len(),
-        })
+        tracing::trace!(main_regions = self.main_regions.len(), main_rects = self.main_rects.len(), main_directions = self.main_directions.len(), technology_levels = self.country_tech_levels.len(), exile_rects = self.exile_rects.len(), "параметры стран декодированы");
+        Ok(())
     }
 
     pub(crate) fn parameter(&self, index: usize) -> Option<i32> {
