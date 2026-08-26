@@ -46,6 +46,7 @@ pub(crate) mod appserver {
         pub(crate) mod countrywarsys;
     }
     pub(crate) mod goodswarmember;
+    pub(crate) mod gameeffectjournal;
     pub(crate) mod jjcsystem;
     pub(crate) mod masterinfo;
     pub(crate) mod goods {

@@ -216,13 +216,6 @@ pub(crate) struct ScriptStepReport {
     pub(crate) disposition: ScriptStepDisposition,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ScriptLoopReport {
-    pub(crate) steps: Vec<(i32, ScriptStepReport)>,
-    pub(crate) started_scripts: Vec<i32>,
-    pub(crate) ended_scripts: Vec<i32>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ActiveScript {
     pub(crate) id: i32,

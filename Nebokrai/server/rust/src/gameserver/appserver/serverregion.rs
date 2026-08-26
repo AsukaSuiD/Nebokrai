@@ -130,17 +130,18 @@
 //! Оставшиеся отдельные `std::basic_streambuf`/`Unwind@` экспорты сняты общей
 //! технической классификацией; domain lifecycle и callbacks не затрагивались.
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Двухфазные налоговые callback-и передают ещё не применённые действия через
+//! общий типизированный `GameEffectJournal`; FIFO между prompt и result
+//! сохраняется, а уже выполненные действия в журнал не копируются.
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use encoding_rs::WINDOWS_1251;
-use parking_lot::Mutex;
 
 use super::area::{AreaAiContext, AreaAiReport, AreaWokenMonsterClass, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
+use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
 use super::goods::cgoods::CGoods;
 use super::monster::CMonster;
 use super::moveshape::{
@@ -277,26 +278,6 @@ pub(crate) struct RegionTaxSessionBegin {
     pub(crate) max_tax_rate: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RegionTaxSessionEffect {
-    Prompt {
-        kind: RegionTaxSessionKind,
-        player_id: i32,
-        session_id: i64,
-        password: i32,
-        first_value: u32,
-        second_value: Option<u32>,
-    },
-    Result {
-        kind: RegionTaxSessionKind,
-        player_id: i32,
-        region_id: i32,
-        value: i32,
-    },
-}
-
-pub(crate) type RegionTaxSessionEffects = Arc<Mutex<Vec<RegionTaxSessionEffect>>>;
-
 /// Совмещает исходные владельцы `IAsyncCaller` и `IAsyncCallback` налогового
 /// диалога. Очередь переносит сетевой и игровой результат обратно в `CGame`,
 /// которому принадлежат игроки, регионы и соединения.
@@ -304,7 +285,8 @@ pub(crate) struct RegionTaxSessionEndpoint {
     kind: RegionTaxSessionKind,
     player_id: i32,
     region_id: i32,
-    effects: RegionTaxSessionEffects,
+    begin: RegionTaxSessionBegin,
+    effects: SharedGameEffectJournal,
 }
 
 impl RegionTaxSessionEndpoint {
@@ -312,22 +294,22 @@ impl RegionTaxSessionEndpoint {
         kind: RegionTaxSessionKind,
         player_id: i32,
         region_id: i32,
-        effects: RegionTaxSessionEffects,
+        begin: RegionTaxSessionBegin,
+        effects: SharedGameEffectJournal,
     ) -> Self {
         Self {
             kind,
             player_id,
             region_id,
+            begin,
             effects,
         }
     }
 }
 
 impl NetSessionEndpoint for RegionTaxSessionEndpoint {
-    fn do_async_call(&self, session_id: i64, password: i32, payload: &dyn Any) {
-        let Some(begin) = payload.downcast_ref::<RegionTaxSessionBegin>() else {
-            return;
-        };
+    fn do_async_call(&self, session_id: i64, password: i32) {
+        let begin = self.begin;
         let (first_value, second_value) = match self.kind {
             RegionTaxSessionKind::ObtainPayment => {
                 let capacity = 999_999_999_u32.wrapping_sub(begin.player_money);
@@ -338,7 +320,7 @@ impl NetSessionEndpoint for RegionTaxSessionEndpoint {
                 Some(begin.max_tax_rate as u32),
             ),
         };
-        self.effects.lock().push(RegionTaxSessionEffect::Prompt {
+        self.effects.push(GameEffect::RegionTaxPrompt {
             kind: self.kind,
             player_id: begin.player_id,
             session_id,
@@ -348,21 +330,18 @@ impl NetSessionEndpoint for RegionTaxSessionEndpoint {
         });
     }
 
-    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+    fn on_async_callback(&self, result: NetSessionAsyncResult) {
         if result.kind != NetSessionAsyncResultKind::Result {
             return;
         }
-        let Some(value) = result
-            .payload
-            .and_then(|payload| payload.downcast_ref::<i32>())
-        else {
+        let Some(value) = result.value else {
             return;
         };
-        self.effects.lock().push(RegionTaxSessionEffect::Result {
+        self.effects.push(GameEffect::RegionTaxResult {
             kind: self.kind,
             player_id: self.player_id,
             region_id: self.region_id,
-            value: *value,
+            value,
         });
     }
 }

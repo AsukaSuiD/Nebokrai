@@ -7,7 +7,6 @@
 //! `Arc<dyn NetSessionEndpoint>` заменяет два interface-subobject и удерживает
 //! lifetime после снятия manager lock без изменения session semantics.
 
-use std::any::Any;
 use std::sync::Arc;
 
 /// Точная пара двух signed Windows `long`, которой защищён callback.
@@ -25,19 +24,20 @@ pub(crate) enum NetSessionAsyncResultKind {
     TimeOut = 2,
 }
 
-/// Безопасная проекция `tagAsyncResult { long type; char *args; }`.
-pub(crate) struct NetSessionAsyncResult<'payload> {
+/// Типизированная проекция достигнутых callback-результатов. Все подключённые
+/// владельцы передают один Windows `long`; timeout не несёт значения.
+pub(crate) struct NetSessionAsyncResult {
     pub(crate) kind: NetSessionAsyncResultKind,
-    pub(crate) payload: Option<&'payload dyn Any>,
+    pub(crate) value: Option<i32>,
 }
 
 /// Совмещённые действующие контракты старых `IAsyncCaller/IAsyncCallback`.
 pub(crate) trait NetSessionEndpoint: Send + Sync {
  /// Выполняет исходный `DoAsyncCall(id, cookie.second, args)`.
-    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any);
+    fn do_async_call(&self, session_id: i64, cookie_second: i32);
 
- /// Получает один оригинал result-tag и его typed-erased payload.
-    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>);
+ /// Получает один исходный result-tag и типизированное значение.
+    fn on_async_callback(&self, result: NetSessionAsyncResult);
 }
 
 /// Повторный setter, для которого исходник терял прежний owner.
@@ -60,9 +60,9 @@ pub(crate) struct NetSessionBeginDispatch {
 
 impl NetSessionBeginDispatch {
  /// Синхронно вызывает старый `IAsyncCaller::DoAsyncCall`.
-    pub(crate) fn dispatch(self, payload: &dyn Any) {
+    pub(crate) fn dispatch(self) {
         self.endpoint
-            .do_async_call(self.session_id, self.cookie_second, payload);
+            .do_async_call(self.session_id, self.cookie_second);
     }
 }
 
@@ -113,12 +113,8 @@ impl CNetSession {
     }
 
  /// Ставит timeout и синхронно вызывает `DoAsyncCall`.
-    pub(crate) fn beging(
-        &mut self,
-        timeout: u32,
-        payload: &dyn Any,
-    ) -> Result<(), NetSessionBeginBlock> {
-        self.prepare_beging(timeout)?.dispatch(payload);
+    pub(crate) fn beging(&mut self, timeout: u32) -> Result<(), NetSessionBeginBlock> {
+        self.prepare_beging(timeout)?.dispatch();
         Ok(())
     }
 
@@ -139,13 +135,13 @@ impl CNetSession {
     }
 
  /// Доставляет GameServer-only tag `0` без изменения timeout.
-    pub(crate) fn on_do(&self, payload: &dyn Any) -> bool {
-        self.deliver(NetSessionAsyncResultKind::Do, Some(payload))
+    pub(crate) fn on_do(&self, value: i32) -> bool {
+        self.deliver(NetSessionAsyncResultKind::Do, Some(value))
     }
 
  /// Доставляет terminal tag `1`; удаление session выполняет manager.
-    pub(crate) fn on_result(&self, payload: &dyn Any) -> bool {
-        self.deliver(NetSessionAsyncResultKind::Result, Some(payload))
+    pub(crate) fn on_result(&self, value: i32) -> bool {
+        self.deliver(NetSessionAsyncResultKind::Result, Some(value))
     }
 
  /// Доставляет tag `2` без чтения неинициализированного старого pointer-а.
@@ -172,11 +168,11 @@ impl CNetSession {
         self.endpoint.clone()
     }
 
-    fn deliver(&self, kind: NetSessionAsyncResultKind, payload: Option<&dyn Any>) -> bool {
+    fn deliver(&self, kind: NetSessionAsyncResultKind, value: Option<i32>) -> bool {
         let Some(endpoint) = self.endpoint.as_ref() else {
             return false;
         };
-        endpoint.on_async_callback(NetSessionAsyncResult { kind, payload });
+        endpoint.on_async_callback(NetSessionAsyncResult { kind, value });
         true
     }
 }

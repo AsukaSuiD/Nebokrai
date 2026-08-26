@@ -101,6 +101,13 @@ impl<T> CMsgQueue<T> {
     pub(crate) fn take_all(&self) -> VecDeque<T> {
         mem::take(&mut *self.messages.lock())
     }
+
+    /// Добавляет последовательность в хвост одной атомарной операцией. Это
+    /// сохраняет относительный порядок повторно отложенных эффектов и не даёт
+    /// другим producer-ам вклиниться внутрь возвращаемой группы.
+    pub(crate) fn extend(&self, messages: impl IntoIterator<Item = T>) {
+        self.messages.lock().extend(messages);
+    }
 }
 
 impl<T> Default for CMsgQueue<T> {

@@ -8,7 +8,6 @@
 //! заменяют MSVC map, critical section и static counter, сохраняя key-order,
 //! duplicate behavior и lifecycle.
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -130,7 +129,6 @@ impl CNetSessionManager {
         &self,
         session_id: i64,
         timeout: u32,
-        payload: &dyn Any,
     ) -> Result<(), NetSessionManagerBeginBlock> {
         let dispatch = {
             let mut sessions = self.sessions.lock();
@@ -141,7 +139,7 @@ impl CNetSessionManager {
                 .prepare_beging(timeout)
                 .map_err(NetSessionManagerBeginBlock::Session)?
         };
-        dispatch.dispatch(payload);
+        dispatch.dispatch();
         Ok(())
     }
 
@@ -151,7 +149,7 @@ impl CNetSessionManager {
         session_id: i64,
         cookie_first: i32,
         cookie_second: i32,
-        payload: &dyn Any,
+        value: i32,
     ) -> NetSessionCallbackOutcome {
         if self.variant != NetSessionManagerVariant::GameServer {
             return NetSessionCallbackOutcome::UnsupportedVariant;
@@ -172,7 +170,7 @@ impl CNetSessionManager {
         };
         endpoint.on_async_callback(NetSessionAsyncResult {
             kind: NetSessionAsyncResultKind::Do,
-            payload: Some(payload),
+            value: Some(value),
         });
         NetSessionCallbackOutcome::Delivered
     }
@@ -183,7 +181,7 @@ impl CNetSessionManager {
         session_id: i64,
         cookie_first: i32,
         cookie_second: i32,
-        payload: &dyn Any,
+        value: i32,
     ) -> NetSessionCallbackOutcome {
         let Some((cookie, endpoint)) = self.callback_snapshot(session_id) else {
             return NetSessionCallbackOutcome::SessionNotFound;
@@ -203,7 +201,7 @@ impl CNetSessionManager {
         };
         endpoint.on_async_callback(NetSessionAsyncResult {
             kind: NetSessionAsyncResultKind::Result,
-            payload: Some(payload),
+            value: Some(value),
         });
         let removed = self.sessions.lock().remove(&session_id);
         drop(removed);

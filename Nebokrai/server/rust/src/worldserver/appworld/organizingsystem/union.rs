@@ -17,7 +17,6 @@
 //! но не меняют wire/DB/gameplay semantics. Malformed fixed strings и null map
 //! entries останавливаются typed-границей до UB.
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
@@ -395,34 +394,22 @@ pub(crate) trait UnionApplicationSessionRuntime: Send + Sync {
 }
 
 pub(crate) struct PlayerApplyForJoinConfeder {
-    union_id: i32,
-    applicant_faction_id: i32,
+    request: UnionApplicationSessionRequest,
     runtime: Arc<dyn UnionApplicationSessionRuntime>,
 }
 
 impl PlayerApplyForJoinConfeder {
     pub(crate) fn new(
-        union_id: i32,
-        applicant_faction_id: i32,
+        request: UnionApplicationSessionRequest,
         runtime: Arc<dyn UnionApplicationSessionRuntime>,
     ) -> Self {
-        Self {
-            union_id,
-            applicant_faction_id,
-            runtime,
-        }
+        Self { request, runtime }
     }
 }
 
 impl NetSessionEndpoint for PlayerApplyForJoinConfeder {
-    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
-        let Some(request) = payload.downcast_ref::<UnionApplicationSessionRequest>() else {
-            self.runtime.block_union_application_endpoint(
-                UnionApplicationEndpointBlock::BeginPayloadType,
-            );
-            return;
-        };
-
+    fn do_async_call(&self, session_id: i64, cookie_second: i32) {
+        let request = &self.request;
         let mut message = CMessage::new(UNION_APPLICATION_CONFIRMATION_MESSAGE_TYPE);
         message.base_mut().add_long(request.recipient_player_id);
         message.base_mut().add_long(request.confirmation_kind);
@@ -436,18 +423,12 @@ impl NetSessionEndpoint for PlayerApplyForJoinConfeder {
             .send_union_application_confirmation(request.recipient_player_id, &message);
     }
 
-    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+    fn on_async_callback(&self, result: NetSessionAsyncResult) {
         let terminal = if result.kind == NetSessionAsyncResultKind::Result {
-            let Some(decision) = result
-                .payload
-                .and_then(|payload| payload.downcast_ref::<i32>())
-            else {
-                self.runtime.block_union_application_endpoint(
-                    UnionApplicationEndpointBlock::ResultPayloadType,
-                );
+            let Some(decision) = result.value else {
                 return;
             };
-            if *decision == 1 {
+            if decision == 1 {
                 UnionApplicationTerminal::Approved
             } else {
                 UnionApplicationTerminal::Denied
@@ -456,8 +437,8 @@ impl NetSessionEndpoint for PlayerApplyForJoinConfeder {
             UnionApplicationTerminal::NonResult { kind: result.kind }
         };
         self.runtime.finish_union_application(
-            self.union_id,
-            self.applicant_faction_id,
+            self.request.union_id,
+            self.request.applicant_faction_id,
             terminal,
         );
     }
@@ -517,16 +498,13 @@ pub(crate) fn begin_union_application_session(
             random,
         )
         .map_err(UnionApplicationSessionBlock::Create)?;
-    let endpoint = Box::new(PlayerApplyForJoinConfeder::new(
-        request.union_id,
-        request.applicant_faction_id,
-        runtime,
-    ));
+    let timeout_ticks = request.timeout_ticks;
+    let endpoint = Box::new(PlayerApplyForJoinConfeder::new(request, runtime));
     manager
         .set_callback_handle(session.id, endpoint)
         .map_err(|source| UnionApplicationSessionBlock::SetCallback { session, source })?;
     manager
-        .beging(session.id, request.timeout_ticks, &request)
+        .beging(session.id, timeout_ticks)
         .map_err(|source| UnionApplicationSessionBlock::Begin { session, source })?;
     Ok(UnionApplicationSessionReport { session })
 }
@@ -575,21 +553,13 @@ pub(crate) trait UnionInvitationSessionRuntime: Send + Sync {
 }
 
 pub(crate) struct InviteJoinConfeder {
-    union_id: i32,
-    inviter_faction_id: i32,
-    invited_faction_id: i32,
+    request: UnionInvitationSessionRequest,
     runtime: Arc<dyn UnionInvitationSessionRuntime>,
 }
 
 impl NetSessionEndpoint for InviteJoinConfeder {
-    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
-        let Some(request) = payload.downcast_ref::<UnionInvitationSessionRequest>() else {
-            self.runtime.block_union_invitation_endpoint(
-                UnionApplicationEndpointBlock::BeginPayloadType,
-            );
-            return;
-        };
-
+    fn do_async_call(&self, session_id: i64, cookie_second: i32) {
+        let request = &self.request;
         let mut message = CMessage::new(UNION_APPLICATION_CONFIRMATION_MESSAGE_TYPE);
         message.base_mut().add_long(request.recipient_player_id);
         message.base_mut().add_long(1);
@@ -603,18 +573,12 @@ impl NetSessionEndpoint for InviteJoinConfeder {
             .send_union_invitation_confirmation(request.recipient_player_id, &message);
     }
 
-    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+    fn on_async_callback(&self, result: NetSessionAsyncResult) {
         let terminal = if result.kind == NetSessionAsyncResultKind::Result {
-            let Some(decision) = result
-                .payload
-                .and_then(|payload| payload.downcast_ref::<i32>())
-            else {
-                self.runtime.block_union_invitation_endpoint(
-                    UnionApplicationEndpointBlock::ResultPayloadType,
-                );
+            let Some(decision) = result.value else {
                 return;
             };
-            if *decision == 1 {
+            if decision == 1 {
                 UnionApplicationTerminal::Approved
             } else {
                 UnionApplicationTerminal::Denied
@@ -623,9 +587,9 @@ impl NetSessionEndpoint for InviteJoinConfeder {
             UnionApplicationTerminal::NonResult { kind: result.kind }
         };
         self.runtime.finish_union_invitation(
-            self.union_id,
-            self.inviter_faction_id,
-            self.invited_faction_id,
+            self.request.union_id,
+            self.request.inviter_faction_id,
+            self.request.invited_faction_id,
             terminal,
         );
     }
@@ -644,17 +608,13 @@ pub(crate) fn begin_union_invitation_session(
             random,
         )
         .map_err(UnionApplicationSessionBlock::Create)?;
-    let endpoint = Box::new(InviteJoinConfeder {
-        union_id: request.union_id,
-        inviter_faction_id: request.inviter_faction_id,
-        invited_faction_id: request.invited_faction_id,
-        runtime,
-    });
+    let timeout_ticks = request.timeout_ticks;
+    let endpoint = Box::new(InviteJoinConfeder { request, runtime });
     manager
         .set_callback_handle(session.id, endpoint)
         .map_err(|source| UnionApplicationSessionBlock::SetCallback { session, source })?;
     manager
-        .beging(session.id, request.timeout_ticks, &request)
+        .beging(session.id, timeout_ticks)
         .map_err(|source| UnionApplicationSessionBlock::Begin { session, source })?;
     Ok(UnionApplicationSessionReport { session })
 }

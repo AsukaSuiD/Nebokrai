@@ -11,7 +11,6 @@
 //! success codes и повторные notifications. Стандартные коллекции, traits и
 //! owned actions заменяют STL/RTTI/raw pointers без изменения identity и БД.
 
-use std::any::Any;
 use std::cell::Cell;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, VecDeque};
@@ -1590,23 +1589,13 @@ pub(crate) trait ConfederationCreationSessionRuntime: Send + Sync {
 }
 
 pub(crate) struct CreateConfederationEndpoint {
-    first_player_id: i32,
-    second_player_id: i32,
-    first_faction_id: i32,
-    second_faction_id: i32,
-    union_name: Vec<u8>,
+    request: ConfederationCreationSessionRequest,
     runtime: Arc<dyn ConfederationCreationSessionRuntime>,
 }
 
 impl NetSessionEndpoint for CreateConfederationEndpoint {
-    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
-        let Some(request) = payload.downcast_ref::<ConfederationCreationSessionRequest>() else {
-            self.runtime.block_confederation_creation_endpoint(
-                ConfederationCreationEndpointBlock::BeginPayloadType,
-            );
-            return;
-        };
-
+    fn do_async_call(&self, session_id: i64, cookie_second: i32) {
+        let request = &self.request;
         let mut message = CMessage::new(CONFEDERATION_CREATION_CONFIRMATION_MESSAGE_TYPE);
         message.base_mut().add_long(request.second_player_id);
         message.base_mut().add_long(request.first_player_id);
@@ -1622,18 +1611,12 @@ impl NetSessionEndpoint for CreateConfederationEndpoint {
         );
     }
 
-    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+    fn on_async_callback(&self, result: NetSessionAsyncResult) {
         let terminal = if result.kind == NetSessionAsyncResultKind::Result {
-            let Some(decision) = result
-                .payload
-                .and_then(|payload| payload.downcast_ref::<i32>())
-            else {
-                self.runtime.block_confederation_creation_endpoint(
-                    ConfederationCreationEndpointBlock::ResultPayloadType,
-                );
+            let Some(decision) = result.value else {
                 return;
             };
-            if *decision == 1 {
+            if decision == 1 {
                 ConfederationCreationTerminal::Approved
             } else {
                 ConfederationCreationTerminal::Denied
@@ -1642,11 +1625,11 @@ impl NetSessionEndpoint for CreateConfederationEndpoint {
             ConfederationCreationTerminal::NonResult { kind: result.kind }
         };
         self.runtime.finish_confederation_creation(
-            self.first_player_id,
-            self.second_player_id,
-            self.first_faction_id,
-            self.second_faction_id,
-            &self.union_name,
+            self.request.first_player_id,
+            self.request.second_player_id,
+            self.request.first_faction_id,
+            self.request.second_faction_id,
+            &self.request.union_name,
             terminal,
         );
     }
@@ -1706,19 +1689,13 @@ pub(crate) fn begin_confederation_creation_session(
             random,
         )
         .map_err(ConfederationCreationSessionBlock::Create)?;
-    let endpoint = Box::new(CreateConfederationEndpoint {
-        first_player_id: request.first_player_id,
-        second_player_id: request.second_player_id,
-        first_faction_id: request.first_faction_id,
-        second_faction_id: request.second_faction_id,
-        union_name: request.union_name.clone(),
-        runtime,
-    });
+    let timeout_ticks = request.timeout_ticks;
+    let endpoint = Box::new(CreateConfederationEndpoint { request, runtime });
     manager
         .set_callback_handle(session.id, endpoint)
         .map_err(|source| ConfederationCreationSessionBlock::SetCallback { session, source })?;
     manager
-        .beging(session.id, request.timeout_ticks, &request)
+        .beging(session.id, timeout_ticks)
         .map_err(|source| ConfederationCreationSessionBlock::Begin { session, source })?;
     Ok(ConfederationCreationSessionReport { session })
 }
@@ -1943,21 +1920,13 @@ pub(crate) trait CityTransferSessionRuntime: Send + Sync {
 }
 
 pub(crate) struct PlayerTransferOwnerCity {
-    source_faction_id: i32,
-    target_faction_id: i32,
-    region_id: i32,
-    region_name: Vec<u8>,
+    request: CityTransferSessionRequest,
     runtime: Arc<dyn CityTransferSessionRuntime>,
 }
 
 impl NetSessionEndpoint for PlayerTransferOwnerCity {
-    fn do_async_call(&self, session_id: i64, cookie_second: i32, payload: &dyn Any) {
-        let Some(request) = payload.downcast_ref::<CityTransferSessionRequest>() else {
-            self.runtime
-                .block_city_transfer_endpoint(CityTransferEndpointBlock::BeginPayloadType);
-            return;
-        };
-
+    fn do_async_call(&self, session_id: i64, cookie_second: i32) {
+        let request = &self.request;
         let mut message = CMessage::new(CITY_TRANSFER_CONFIRMATION_MESSAGE_TYPE);
         message.base_mut().add_long(request.target_master_player_id);
         message
@@ -1974,17 +1943,12 @@ impl NetSessionEndpoint for PlayerTransferOwnerCity {
             .send_city_transfer_confirmation(request.target_master_player_id, &message);
     }
 
-    fn on_async_callback(&self, result: NetSessionAsyncResult<'_>) {
+    fn on_async_callback(&self, result: NetSessionAsyncResult) {
         let terminal = if result.kind == NetSessionAsyncResultKind::Result {
-            let Some(decision) = result
-                .payload
-                .and_then(|payload| payload.downcast_ref::<i32>())
-            else {
-                self.runtime
-                    .block_city_transfer_endpoint(CityTransferEndpointBlock::ResultPayloadType);
+            let Some(decision) = result.value else {
                 return;
             };
-            if *decision == 1 {
+            if decision == 1 {
                 CityTransferTerminal::Approved
             } else {
                 CityTransferTerminal::Denied
@@ -1993,10 +1957,10 @@ impl NetSessionEndpoint for PlayerTransferOwnerCity {
             CityTransferTerminal::NonResult { kind: result.kind }
         };
         self.runtime.finish_city_transfer(
-            self.source_faction_id,
-            self.target_faction_id,
-            self.region_id,
-            &self.region_name,
+            self.request.source_faction_id,
+            self.request.target_faction_id,
+            self.request.region_id,
+            &self.request.region_name,
             terminal,
         );
     }
@@ -2056,18 +2020,13 @@ pub(crate) fn begin_city_transfer_session(
             random,
         )
         .map_err(CityTransferSessionBlock::Create)?;
-    let endpoint = Box::new(PlayerTransferOwnerCity {
-        source_faction_id: request.source_faction_id,
-        target_faction_id: request.target_faction_id,
-        region_id: request.region_id,
-        region_name: request.region_name.clone(),
-        runtime,
-    });
+    let timeout_ticks = request.timeout_ticks;
+    let endpoint = Box::new(PlayerTransferOwnerCity { request, runtime });
     manager
         .set_callback_handle(session.id, endpoint)
         .map_err(|source| CityTransferSessionBlock::SetCallback { session, source })?;
     manager
-        .beging(session.id, request.timeout_ticks, &request)
+        .beging(session.id, timeout_ticks)
         .map_err(|source| CityTransferSessionBlock::Begin { session, source })?;
     Ok(CityTransferSessionReport { session })
 }

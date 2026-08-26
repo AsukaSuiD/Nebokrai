@@ -477,6 +477,10 @@
 //! saved records создают region monsters с master/progress/Globe factors и
 //! `0xC0201`; client `0x90401/02` меняет mode/action/target либо выполняет
 //! dismiss с player ref и around `0xBF504`, а save снова читает live monsters.
+//! Диагностические сведения игрового цикла и входящих сообщений публикуются
+//! структурированными событиями `tracing`; подписчик остаётся ответственностью
+//! будущего процесса GameServer. Межвладельческие действия налоговых сессий
+//! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -493,6 +497,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustix::system::uname;
 use rustix::time::{ClockId, clock_gettime};
+use tracing::{debug, info, trace, warn};
 
 use crate::gameserver::appserver::ai::playerai::{
     CPlayerAI, PlayerAutoProgress, PlayerEnergyRegeneration,
@@ -558,8 +563,10 @@ use crate::gameserver::appserver::goods::fairyproperties::{
     FairyExpRuntime, FairyExpUpResult, FairyGrowLog,
 };
 use crate::gameserver::appserver::goodswarmember::{
-    CGoodsWarMember, GameGoodsWarMessageError, GameGoodsWarMessageReport,
-    dispatch_game_goods_war_message,
+    CGoodsWarMember, dispatch_game_goods_war_message,
+};
+use crate::gameserver::appserver::gameeffectjournal::{
+    GameEffect, GameEffectJournal, SharedGameEffectJournal,
 };
 use crate::gameserver::appserver::jjcsystem::{CJJcSystem, JjcInfo};
 use crate::gameserver::appserver::message::containermessage::{
@@ -568,86 +575,54 @@ use crate::gameserver::appserver::message::containermessage::{
     AuctionListingWithdrawalRemoval, AuctionListingWithdrawalReport, EnhancementTransferAddition,
     EnhancementTransferBlock, EnhancementTransferOutcome, EnhancementTransferRemoval,
     EnhancementTransferReport, EquipmentSessionClearBlock, EquipmentSessionSelectionBlock,
-    EquipmentSessionSelectionReport, GameContainerMessageError, GameContainerMessageReport,
-    PersonalShopClearBlock, PersonalShopSelectionBlock, PersonalShopSelectionReport,
+    EquipmentSessionSelectionReport, PersonalShopClearBlock, PersonalShopSelectionBlock,
+    PersonalShopSelectionReport,
     dispatch_game_container_message, send_enhancement_goods_collected,
     send_enhancement_shadow_deleted,
 };
 use crate::gameserver::appserver::message::countrymessage::{
-    CountryWarMessageDispatchError, GameCountryWarMessageReport, GameCountryWarRuntime,
-    dispatch_game_country_war_message,
+    GameCountryWarRuntime, dispatch_game_country_war_message,
 };
-use crate::gameserver::appserver::message::depotmessage::{
-    DepotMessageReport, dispatch_depot_message,
-};
-use crate::gameserver::appserver::message::gmamessage::{
-    GmaMessageError, GmaMessageReport, dispatch_gma_message,
-};
-use crate::gameserver::appserver::message::gmmessage::{
-    GmMessageError, GmMessageReport, dispatch_gm_message,
-};
+use crate::gameserver::appserver::message::depotmessage::dispatch_depot_message;
+use crate::gameserver::appserver::message::gmamessage::dispatch_gma_message;
+use crate::gameserver::appserver::message::gmmessage::dispatch_gm_message;
 use crate::gameserver::appserver::message::goodsmessage::{
-    GameGoodsMessageError, GameGoodsMessageReport, GameGoodsMessageRuntime,
-    dispatch_game_goods_message,
+    GameGoodsMessageRuntime, dispatch_game_goods_message,
 };
-use crate::gameserver::appserver::message::incrementshopmessage::{
-    GameIncrementShopMessageError, GameIncrementShopMessageReport, dispatch_increment_shop_message,
-};
-use crate::gameserver::appserver::message::jjcsystemmessage::{
-    GameJjcSystemMessageError, GameJjcSystemMessageReport, dispatch_game_jjc_system_message,
-};
+use crate::gameserver::appserver::message::incrementshopmessage::dispatch_increment_shop_message;
+use crate::gameserver::appserver::message::jjcsystemmessage::dispatch_game_jjc_system_message;
 use crate::gameserver::appserver::message::logmessage::{
-    GameLogMessageError, GameLogMessageReport, GamePlayerLostDisposition,
-    GamePlayerLostParticularGoodsDrop, GamePlayerLostReport, dispatch_game_log_message,
+    GamePlayerLostDisposition, GamePlayerLostParticularGoodsDrop, GamePlayerLostReport,
+    dispatch_game_log_message,
 };
 use crate::gameserver::appserver::message::onmsg_c2s_auction::dispatch_client_auction_message;
-use crate::gameserver::appserver::message::onmsg_w2s_auction::{
-    WorldAuctionMessageError, WorldAuctionMessageReport, dispatch_world_auction_message,
-};
+use crate::gameserver::appserver::message::onmsg_w2s_auction::dispatch_world_auction_message;
 use crate::gameserver::appserver::message::organsysmessage::{
-    GameOrganizingMessageError, GameOrganizingMessageReport, GameOrganizingWarRuntime,
-    dispatch_game_organizing_message,
+    GameOrganizingWarRuntime, dispatch_game_organizing_message,
 };
-use crate::gameserver::appserver::message::othermessage::{
-    GameOtherMessageError, GameOtherMessageReport, dispatch_game_other_message,
-};
-use crate::gameserver::appserver::message::petmessage::{
-    GamePetMessageError, GamePetMessageReport, dispatch_game_pet_message,
-};
+use crate::gameserver::appserver::message::othermessage::dispatch_game_other_message;
+use crate::gameserver::appserver::message::petmessage::dispatch_game_pet_message;
 use crate::gameserver::appserver::message::playermessage::{
-    GamePlayerMessageError, GamePlayerMessageReport, GamePlayerMessageRuntime,
-    dispatch_game_player_message, equipment_state_elapsed_seconds,
+    GamePlayerMessageRuntime, dispatch_game_player_message, equipment_state_elapsed_seconds,
 };
-use crate::gameserver::appserver::message::playershopmessage::{
-    PlayerShopMessageError, PlayerShopMessageReport, dispatch_player_shop_message,
-};
+use crate::gameserver::appserver::message::playershopmessage::dispatch_player_shop_message;
 use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
 use crate::gameserver::appserver::message::sequencestring::{
     CSequenceRegistry, CSequenceString, SequenceRegistryInitializationError, SequenceSerializeError,
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
-    GameServerMessageError, GameServerMessageReport, InitialRegionStartupContext,
-    WarScheduleSetupContext, dispatch_server_message,
+    InitialRegionStartupContext, WarScheduleSetupContext, dispatch_server_message,
 };
 use crate::gameserver::appserver::message::shapemessage::{
-    GameShapeMessageError, GameShapeMessageReport, GameShapeMessageRuntime,
-    dispatch_game_shape_message,
+    GameShapeMessageRuntime, dispatch_game_shape_message,
 };
-use crate::gameserver::appserver::message::shopmessage::{
-    ShopMessageError, ShopMessageReport, dispatch_shop_message,
-};
+use crate::gameserver::appserver::message::shopmessage::dispatch_shop_message;
 use crate::gameserver::appserver::message::skillmessage::{
-    GameSkillMessageError, GameSkillMessageReport, GameSkillMessageRuntime,
-    dispatch_game_skill_message,
+    GameSkillMessageRuntime, dispatch_game_skill_message,
 };
-use crate::gameserver::appserver::message::teammessage::{
-    GameTeamMessageError, GameTeamMessageReport, dispatch_game_team_message,
-};
-use crate::gameserver::appserver::message::unibillmessage::{
-    IncrementShopBillingMessageError, IncrementShopBillingReport,
-    dispatch_increment_shop_billing_message,
-};
+use crate::gameserver::appserver::message::teammessage::dispatch_game_team_message;
+use crate::gameserver::appserver::message::unibillmessage::dispatch_increment_shop_billing_message;
 use crate::gameserver::appserver::monster::{
     CMonster, MonsterKillingAttack, PetLifecycleFacts, PetLifecycleNotice,
 };
@@ -703,8 +678,7 @@ use crate::gameserver::appserver::region::{
 use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::{
-    ActiveScript, CScriptFunctionRegistry, ScriptExecutionContext, ScriptLoopReport,
-    ScriptStepDisposition,
+    ActiveScript, CScriptFunctionRegistry, ScriptExecutionContext, ScriptStepDisposition,
 };
 use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
@@ -715,8 +689,8 @@ use crate::gameserver::appserver::servercityregion::{
     CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
-    CServerCountryRegion, CountryBattleStateBlock, CountryContendContext,
-    CountryContendEntryContext, CountryContendPlayer, CountryRegionAiError,
+    CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
+    CountryRegionAiError,
     CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
@@ -730,8 +704,8 @@ use crate::gameserver::appserver::servernationregion::{
 };
 use crate::gameserver::appserver::serverregion::{
     AreaTransitionBlock, CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin,
-    RegionTaxSessionEffect, RegionTaxSessionEffects, RegionTaxSessionEndpoint,
-    RegionTaxSessionKind, ServerRegionAreaTransitionContext, ServerRegionClearPlayerTick,
+    RegionTaxSessionEndpoint, RegionTaxSessionKind, ServerRegionAreaTransitionContext,
+    ServerRegionClearPlayerTick,
     ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
     ServerRegionMonsterRefreshReport, ServerRegionNpcContext, ServerRegionNpcSetup,
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnReport, ServerRegionWeather,
@@ -798,7 +772,7 @@ use crate::gameserver::gameserver::playerranks::{
 use crate::nets::clients::ClientConnectError;
 use crate::nets::mysocket::legacy_ipv4_word;
 use crate::nets::netserver::message::{
-    CMessage, GameMessageRoute, GameServerAroundRuntime, SendMessageError,
+    CMessage, GameServerAroundRuntime, SendMessageError,
 };
 use crate::nets::netserver::mynetclient::{
     CMyNetClient, GameClientIoError, GameClientIoStep, ServerType,
@@ -818,7 +792,7 @@ use crate::public::mystringtable::{
     MyStringTable, MyStringTableDecodeError, MyStringTableDecodeReport,
 };
 use crate::public::netsessionmanager::{
-    CNetSessionManager, NetSessionCallbackOutcome, NetSessionManagerVariant, NetSessionRunReport,
+    CNetSessionManager, NetSessionCallbackOutcome, NetSessionManagerVariant,
 };
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::public::tools::{
@@ -4122,74 +4096,9 @@ struct GameMainLoopProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum GameMainLoopRuntimeLog {
-    Compact {
-        elapsed_ms: u32,
-        ai_calls: i32,
-    },
-    Profiled {
-        elapsed_ms: u32,
-        ai_calls: i32,
-        profile: GameMainLoopProfile,
-    },
-}
-
-fn report_main_loop_runtime(log: GameMainLoopRuntimeLog) {
-    let text = match log {
-        GameMainLoopRuntimeLog::Compact {
-            elapsed_ms,
-            ai_calls,
-        } => format!("{elapsed_ms} Sec. {ai_calls} AI"),
-        GameMainLoopRuntimeLog::Profiled {
-            elapsed_ms,
-            ai_calls,
-            profile,
-        } => format!(
-            "{elapsed_ms} Sec. {ai_calls} AI\r\nScript:{}\r\nAI:{}\r\nMessage:{}\r\nSession:{}\r\nNetSession:{}",
-            profile.script_ms,
-            profile.ai_ms,
-            profile.message_ms,
-            profile.session_ms,
-            profile.net_session_ms
-        ),
-    };
-    add_game_log_text(text.as_bytes());
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameMainLoopStage {
-    RefreshInfo,
-    RuntimeLog,
-    Script,
-    Ai,
-    Message,
-    Session,
-    NetSession,
-    Auction,
-    Wait { duration_ms: u32 },
-    LagWarning { resync_tick_ms: u32 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameMainLoopOutcome {
     Continue,
     ExitRequested,
-}
-
-#[must_use = "MainLoop report сохраняет ordering, pacing и legacy return"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameMainLoopReport<RegionRuntimeError> {
-    pub(crate) outcome: GameMainLoopOutcome,
-    pub(crate) return_value: i32,
-    pub(crate) sampled_tick_ms: u32,
-    pub(crate) ai_tick: i32,
-    pub(crate) stages: Vec<GameMainLoopStage>,
-    pub(crate) next_deadline_ms: Option<u32>,
-    pub(crate) signed_lag_ms: Option<i32>,
-    pub(crate) ai: Option<GameAiReport>,
-    pub(crate) messages: Option<GameProcessMessagesReport<RegionRuntimeError>>,
-    pub(crate) net_sessions: Option<NetSessionRunReport>,
-    pub(crate) auction: Option<GameAuctionRunReport>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4199,59 +4108,6 @@ pub(crate) enum GameReturnPointBlock {
     City(CityReturnPointError),
     Country(CountryReturnPointError),
     GodsBattleMissing,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameReturnedRegionPlayer {
-    pub(crate) player_id: i32,
-    pub(crate) point: Result<RegionReturnPoint, GameReturnPointBlock>,
-    pub(crate) destination: Option<(i32, i32)>,
-    pub(crate) random_block: Option<RegionCellAccessBlock>,
-    pub(crate) changed_region: Option<bool>,
-    pub(crate) region_change: Option<PlayerRegionChangeReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameRegionClearPlayerOutcome {
-    Waiting {
-        remaining_ms: i32,
-        elapsed_ms: u32,
-    },
-    Warning {
-        remaining_ms: i32,
-        seconds: i32,
-        delivery: i32,
-    },
-    Expired {
-        players: Vec<GameReturnedRegionPlayer>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRegionAiReport {
-    pub(crate) region_id: i32,
-    pub(crate) battle_fairy_deaths: Vec<BattleFairyDeathReport>,
-    pub(crate) periodical_updates: Vec<PlayerPeriodicalUpdateReport>,
-    pub(crate) player_abnormalities: Vec<GamePlayerAbnormalityReport>,
-    pub(crate) battle_fairy_follows: Vec<BattleFairyFollowReport>,
-    pub(crate) player_ai_tails: Vec<PlayerAiTailReport>,
-    pub(crate) player_skill_executions: Vec<GameQueuedSkillExecutionReport>,
-    pub(crate) player_energy_regenerations: Vec<PlayerEnergyRegenerationReport>,
-    pub(crate) player_auto_progress: Vec<PlayerAutoProgressReport>,
-    pub(crate) player_lost_timeouts: Vec<GamePlayerLostTimeoutReport>,
-    pub(crate) player_fight_states: Vec<GamePlayerFightStateReport>,
-    pub(crate) player_criminal_states: Vec<GamePlayerCriminalStateReport>,
-    pub(crate) base_region: Option<BaseRegionAiReport>,
-    pub(crate) nation_contend: Option<Result<NationContendAiReport, NationRegionAiError>>,
-    pub(crate) city_contend: Option<CityRegionAiReport>,
-    pub(crate) village_contend: Option<VillageRegionAiReport>,
-    pub(crate) country_contend: Option<CountryRegionAiReport>,
-    pub(crate) gods_battle: Option<Result<GodsBattleContendAiReport, GodsBattleRegionAiError>>,
-    pub(crate) deletions: Vec<GameRegionDeletionReport>,
-    pub(crate) removals: Vec<GameRegionRemovalReport>,
-    pub(crate) area_transitions: Vec<GameAreaTransitionReport>,
-    pub(crate) region_changes: Vec<GameLocalRegionChange>,
-    pub(crate) clear_player: Option<GameRegionClearPlayerOutcome>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5196,12 +5052,6 @@ pub(crate) struct GameLocalRegionChange {
     pub(crate) removal: Result<(), RegionMembershipBlock>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameAiReport {
-    pub(crate) legacy_return: i32,
-    pub(crate) regions: Vec<GameRegionAiReport>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GameRegionClearStarted {
     pub(crate) region_id: i32,
@@ -5240,24 +5090,6 @@ impl CityReturnPointContext for CityReturnPointFacts {
             .then_some(self.tile_x)
             .unwrap_or(0)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GameAuctionRunOutcome {
-    FeatureDisabled,
-    TickNotDue { elapsed_ms: u32 },
-    Processed { state_expired: bool },
-}
-
-#[must_use = "RunAuction report сохраняет time gates и оба World effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameAuctionRunReport {
-    pub(crate) outcome: GameAuctionRunOutcome,
-    pub(crate) sampled_tick_ms: Option<u32>,
-    pub(crate) sampled_wall_time_seconds: Option<u32>,
-    pub(crate) synchronized_goods: Vec<CGuid>,
-    pub(crate) goods_sync: Option<Result<i32, SendMessageError>>,
-    pub(crate) state_request: Option<Result<i32, SendMessageError>>,
 }
 
 #[must_use = "recollection сохраняет signed player order и каждый World send"]
@@ -5311,52 +5143,6 @@ pub(crate) struct PersonalShopTerminalReport {
     pub(crate) collected_plug_ids: Vec<i32>,
 }
 
-#[must_use = "ProcessMessage report сохраняет server и достигнутые gameplay effects"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameProcessMessagesReport<RegionRuntimeError> {
-    pub(crate) legacy_return: i32,
-    pub(crate) auction_messages: Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
-    pub(crate) player_shop_messages: Vec<Result<PlayerShopMessageReport, PlayerShopMessageError>>,
-    pub(crate) shop_messages: Vec<Result<ShopMessageReport, ShopMessageError>>,
-    pub(crate) gm_messages: Vec<Result<GmMessageReport, GmMessageError>>,
-    pub(crate) gma_messages: Vec<Result<GmaMessageReport, GmaMessageError>>,
-    pub(crate) depot_messages: Vec<DepotMessageReport>,
-    pub(crate) increment_shop_messages:
-        Vec<Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>>,
-    pub(crate) jjc_system_messages:
-        Vec<Result<GameJjcSystemMessageReport, GameJjcSystemMessageError>>,
-    pub(crate) increment_shop_billing_messages:
-        Vec<Result<IncrementShopBillingReport, IncrementShopBillingMessageError>>,
-    pub(crate) organizing_messages:
-        Vec<Result<GameOrganizingMessageReport, GameOrganizingMessageError>>,
-    pub(crate) country_war_messages: Vec<
-        Result<
-            GameCountryWarMessageReport,
-            CountryWarMessageDispatchError<CountryBattleStateBlock>,
-        >,
-    >,
-    pub(crate) goods_war_messages: Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
-    pub(crate) container_messages:
-        Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
-    pub(crate) goods_messages: Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
-    pub(crate) skill_messages: Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
-    pub(crate) team_messages: Vec<Result<GameTeamMessageReport, GameTeamMessageError>>,
-    pub(crate) shape_messages: Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
-    pub(crate) other_messages: Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
-    pub(crate) pet_messages: Vec<Result<GamePetMessageReport, GamePetMessageError>>,
-    pub(crate) player_messages: Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
-    pub(crate) log_messages: Vec<Result<GameLogMessageReport, GameLogMessageError>>,
-    pub(crate) server_messages:
-        Vec<Result<GameServerMessageReport, GameServerMessageError<RegionRuntimeError>>>,
-    pub(crate) world_reconnections: Vec<GameWorldReconnectReport>,
-    pub(crate) unresolved_routes: Vec<GameUnresolvedMessageRoute>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameUnresolvedMessageRoute {
-    pub(crate) message_type: i32,
-    pub(crate) route: Option<GameMessageRoute>,
-}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GameJjcMutationReport {
@@ -6061,7 +5847,7 @@ pub(crate) struct CGame {
     world_reconnect_task: Option<GameReconnectTask>,
     billing_reconnect_task: Option<GameReconnectTask>,
     net_session_manager: CNetSessionManager,
-    region_tax_session_effects: RegionTaxSessionEffects,
+    effect_journal: SharedGameEffectJournal,
     session_factory: CSessionFactory,
     players: BTreeMap<i32, CPlayer>,
     regions: BTreeMap<i32, ServerRegionOwner>,
@@ -6684,7 +6470,7 @@ impl CGame {
             world_reconnect_task: None,
             billing_reconnect_task: None,
             net_session_manager: CNetSessionManager::new(NetSessionManagerVariant::GameServer),
-            region_tax_session_effects: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            effect_journal: Arc::new(GameEffectJournal::default()),
             session_factory: CSessionFactory::default(),
             players: BTreeMap::new(),
             regions: BTreeMap::new(),
@@ -16868,8 +16654,7 @@ impl CGame {
     pub(crate) fn run_script_loop<Runtime: ScriptFunctionRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> ScriptLoopReport {
-        let mut report = ScriptLoopReport::default();
+    ) {
         let mut pending: Vec<i32> = self.active_scripts.keys().copied().collect();
         let mut position = 0usize;
         while let Some(script_id) = pending.get(position).copied() {
@@ -16881,19 +16666,20 @@ impl CGame {
                 .player_id()
                 .is_some_and(|player_id| self.find_player(player_id).is_some())
             {
-                report.ended_scripts.push(script_id);
+                trace!(target: "miracle_server::gameserver::script", script_id, "сценарий завершён: владелец-игрок отсутствует");
                 continue;
             }
             let step = script.run_step(self, runtime);
             let disposition = step.disposition.clone();
-            report.steps.push((script_id, step));
             match disposition {
-                ScriptStepDisposition::Ended => report.ended_scripts.push(script_id),
+                ScriptStepDisposition::Ended => {
+                    trace!(target: "miracle_server::gameserver::script", script_id, "сценарий завершён");
+                }
                 ScriptStepDisposition::YieldedCall { path } => {
                     let context = script.context();
                     self.active_scripts.insert(script_id, script);
                     if let Some(called_id) = self.run_script_file(&path, context, runtime) {
-                        report.started_scripts.push(called_id);
+                        trace!(target: "miracle_server::gameserver::script", script_id, called_id, "сценарий передал выполнение вложенному файлу");
                         pending.push(called_id);
                     }
                 }
@@ -16912,7 +16698,7 @@ impl CGame {
                     if let Some(path) = expired_path
                         && let Some(called_id) = self.run_script_file(&path, context, runtime)
                     {
-                        report.started_scripts.push(called_id);
+                        trace!(target: "miracle_server::gameserver::script", script_id, called_id, "по истечении ожидания запущен вложенный сценарий");
                         pending.push(called_id);
                     }
                     if let (Some(player_id), Some(seconds)) = (context.player_id, countdown_seconds)
@@ -16922,7 +16708,6 @@ impl CGame {
                 }
             }
         }
-        report
     }
 
     pub(crate) fn continue_player_script(
@@ -30899,7 +30684,8 @@ impl CGame {
             kind,
             player_id,
             region_id,
-            Arc::clone(&self.region_tax_session_effects),
+            begin,
+            Arc::clone(&self.effect_journal),
         ));
         if self
             .net_session_manager
@@ -30910,7 +30696,7 @@ impl CGame {
         }
         if self
             .net_session_manager
-            .beging(created.id, 2_000, &begin)
+            .beging(created.id, 2_000)
             .is_err()
         {
             return None;
@@ -30929,7 +30715,7 @@ impl CGame {
     ) -> NetSessionCallbackOutcome {
         let outcome = self
             .net_session_manager
-            .on_sync_callback_result(session_id, player_id, password, &value);
+            .on_sync_callback_result(session_id, player_id, password, value);
         self.apply_region_tax_session_effects(context);
         outcome
     }
@@ -30975,14 +30761,10 @@ impl CGame {
         true
     }
 
-    fn take_region_tax_session_effects(&self) -> Vec<RegionTaxSessionEffect> {
-        std::mem::take(&mut *self.region_tax_session_effects.lock())
-    }
-
     fn apply_region_tax_session_effects_no_result(&self) {
         let mut deferred = Vec::new();
-        for effect in self.take_region_tax_session_effects() {
-            let RegionTaxSessionEffect::Prompt {
+        for effect in self.effect_journal.take_all() {
+            let GameEffect::RegionTaxPrompt {
                 kind,
                 player_id,
                 session_id,
@@ -31003,7 +30785,7 @@ impl CGame {
                 second_value,
             );
         }
-        self.region_tax_session_effects.lock().extend(deferred);
+        self.effect_journal.extend(deferred);
     }
 
     fn send_region_tax_prompt(
@@ -31032,10 +30814,10 @@ impl CGame {
         &mut self,
         context: &mut Context,
     ) {
-        let effects = self.take_region_tax_session_effects();
+        let effects = self.effect_journal.take_all();
         for effect in effects {
             match effect {
-                RegionTaxSessionEffect::Prompt {
+                GameEffect::RegionTaxPrompt {
                     kind,
                     player_id,
                     session_id,
@@ -31050,13 +30832,13 @@ impl CGame {
                     first_value,
                     second_value,
                 ),
-                RegionTaxSessionEffect::Result {
+                GameEffect::RegionTaxResult {
                     kind: RegionTaxSessionKind::ObtainPayment,
                     player_id,
                     region_id,
                     value,
                 } => self.apply_region_tax_payment(player_id, region_id, value, context),
-                RegionTaxSessionEffect::Result {
+                GameEffect::RegionTaxResult {
                     kind: RegionTaxSessionKind::AdjustRate,
                     player_id,
                     region_id,
@@ -39579,29 +39361,15 @@ impl CGame {
     pub(crate) fn run_auction<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> GameAuctionRunReport {
+    ) {
         if !self.globe_setup.auction_enabled() {
-            return GameAuctionRunReport {
-                outcome: GameAuctionRunOutcome::FeatureDisabled,
-                sampled_tick_ms: None,
-                sampled_wall_time_seconds: None,
-                synchronized_goods: Vec::new(),
-                goods_sync: None,
-                state_request: None,
-            };
+            return;
         }
 
         let sampled_tick_ms = runtime.now_milliseconds();
         let elapsed_ms = sampled_tick_ms.wrapping_sub(self.auction_tick_ms);
         if elapsed_ms <= 999 {
-            return GameAuctionRunReport {
-                outcome: GameAuctionRunOutcome::TickNotDue { elapsed_ms },
-                sampled_tick_ms: Some(sampled_tick_ms),
-                sampled_wall_time_seconds: None,
-                synchronized_goods: Vec::new(),
-                goods_sync: None,
-                state_request: None,
-            };
+            return;
         }
         self.auction_tick_ms = sampled_tick_ms;
 
@@ -39610,16 +39378,20 @@ impl CGame {
         } else {
             Vec::new()
         };
-        let goods_sync = if self.auction_now {
+        if self.auction_now {
             let mut message = CMessage::new(GAME_AUCTION_GOODS_SYNC_MESSAGE);
             message.add_ulong(synchronized_goods.len() as u32);
             for guid in &synchronized_goods {
                 message.base_mut().add_guid(*guid);
             }
-            Some(message.send(self, false))
-        } else {
-            None
-        };
+            let delivery = message.send(self, false);
+            trace!(
+                target: "miracle_server::gameserver::auction",
+                goods_count = synchronized_goods.len(),
+                succeeded = delivery.is_ok(),
+                "снимок аукционных товаров отправлен World"
+            );
+        }
 
         let sampled_wall_time_seconds = game_wall_time_seconds() as u32;
         let state_expired =
@@ -39628,15 +39400,14 @@ impl CGame {
             self.auction_now = false;
         }
         let state_request = CMessage::new(GAME_AUCTION_STATE_REQUEST_MESSAGE).send(self, false);
-
-        GameAuctionRunReport {
-            outcome: GameAuctionRunOutcome::Processed { state_expired },
-            sampled_tick_ms: Some(sampled_tick_ms),
-            sampled_wall_time_seconds: Some(sampled_wall_time_seconds),
-            synchronized_goods,
-            goods_sync,
-            state_request: Some(state_request),
-        }
+        trace!(
+            target: "miracle_server::gameserver::auction",
+            sampled_tick_ms,
+            sampled_wall_time_seconds,
+            state_expired,
+            state_request_succeeded = state_request.is_ok(),
+            "завершён проход аукциона"
+        );
     }
 
     /// Exact `ReCollectBaiTanInGs`: signed player-map order, null-free owned
@@ -40090,19 +39861,15 @@ impl CGame {
     pub(crate) fn ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> GameAiReport {
+    ) {
         if self.net_server.is_none() {
-            return GameAiReport {
-                legacy_return: 1,
-                regions: Vec::new(),
-            };
+            return;
         }
         // MainLoop увеличивает legacy global tick непосредственно перед AI,
         // а owned state публикует после возврата из всего прохода.
         let ai_tick = self.main_loop_state.ai_tick.wrapping_add(1);
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         let region_ids: Vec<_> = self.regions.keys().copied().collect();
-        let mut regions = Vec::with_capacity(region_ids.len());
         for region_id in region_ids {
             // `CPlayer::AI` начинает reached pass с проверки HP боевой феи,
             // затем исполняет lost prefix. Legacy disconnect поля в этом EXE
@@ -40552,7 +40319,7 @@ impl CGame {
                     })
                 })
                 .collect();
-            let clear_player = if owner.base().kick_out_player {
+            if owner.base().kick_out_player {
                 let tick = owner
                     .base_mut()
                     .clear_player_ai_at(runtime.now_milliseconds());
@@ -40560,10 +40327,13 @@ impl CGame {
                     ServerRegionClearPlayerTick::Waiting {
                         remaining_ms,
                         elapsed_ms,
-                    } => Some(GameRegionClearPlayerOutcome::Waiting {
+                    } => trace!(
+                        target: "miracle_server::gameserver::ai",
+                        region_id,
                         remaining_ms,
                         elapsed_ms,
-                    }),
+                        "продолжается ожидание очистки игроков региона"
+                    ),
                     ServerRegionClearPlayerTick::Warning {
                         remaining_ms,
                         seconds,
@@ -40577,11 +40347,14 @@ impl CGame {
                         warning.base_mut().add_long(-1);
                         add_legacy_c_string(warning.base_mut(), &text);
                         let delivery = warning.send_to_region(Some(owner.base()), None, self);
-                        Some(GameRegionClearPlayerOutcome::Warning {
+                        trace!(
+                            target: "miracle_server::gameserver::ai",
+                            region_id,
                             remaining_ms,
                             seconds,
                             delivery,
-                        })
+                            "отправлено предупреждение об очистке игроков региона"
+                        );
                     }
                     ServerRegionClearPlayerTick::Expired => {
                         let player_ids = owner.base().registered_player_ids();
@@ -40589,76 +40362,68 @@ impl CGame {
                         for change in &region_changes {
                             self.change_body_after_region_transition(change.player_id, runtime);
                         }
-                        let players = player_ids
-                            .into_iter()
-                            .map(|player_id| {
-                                self.return_region_player(region_id, player_id, runtime)
-                            })
-                            .collect();
-                        regions.push(GameRegionAiReport {
+                        let returned_players = player_ids.len();
+                        for player_id in player_ids {
+                            let _ = self.return_region_player(region_id, player_id, runtime);
+                        }
+                        trace_region_ai_pass(
                             region_id,
-                            battle_fairy_deaths,
-                            periodical_updates,
-                            player_abnormalities,
-                            battle_fairy_follows,
-                            player_ai_tails,
-                            player_skill_executions,
-                            player_energy_regenerations,
-                            player_auto_progress,
-                            player_lost_timeouts,
-                            player_fight_states,
-                            player_criminal_states,
-                            base_region,
-                            nation_contend,
-                            city_contend,
-                            village_contend,
-                            country_contend,
-                            gods_battle,
-                            deletions,
-                            removals,
-                            area_transitions,
-                            region_changes,
-                            clear_player: Some(GameRegionClearPlayerOutcome::Expired { players }),
-                        });
+                            battle_fairy_deaths.len(),
+                            periodical_updates.len(),
+                            player_abnormalities.len(),
+                            battle_fairy_follows.len(),
+                            player_ai_tails.len(),
+                            player_skill_executions.len(),
+                            player_energy_regenerations.len(),
+                            player_auto_progress.len(),
+                            player_lost_timeouts.len(),
+                            player_fight_states.len(),
+                            player_criminal_states.len(),
+                            base_region.is_some(),
+                            nation_contend.is_some(),
+                            city_contend.is_some(),
+                            village_contend.is_some(),
+                            country_contend.is_some(),
+                            gods_battle.is_some(),
+                            deletions.len(),
+                            removals.len(),
+                            area_transitions.len(),
+                            region_changes.len(),
+                            returned_players,
+                        );
                         continue;
                     }
                 }
-            } else {
-                None
-            };
+            }
             self.restore_region_owner(owner);
             for change in &region_changes {
                 self.change_body_after_region_transition(change.player_id, runtime);
             }
-            regions.push(GameRegionAiReport {
+            trace_region_ai_pass(
                 region_id,
-                battle_fairy_deaths,
-                periodical_updates,
-                player_abnormalities,
-                battle_fairy_follows,
-                player_ai_tails,
-                player_skill_executions,
-                player_energy_regenerations,
-                player_auto_progress,
-                player_lost_timeouts,
-                player_fight_states,
-                player_criminal_states,
-                base_region,
-                nation_contend,
-                city_contend,
-                village_contend,
-                country_contend,
-                gods_battle,
-                deletions,
-                removals,
-                area_transitions,
-                region_changes,
-                clear_player,
-            });
-        }
-        GameAiReport {
-            legacy_return: 1,
-            regions,
+                battle_fairy_deaths.len(),
+                periodical_updates.len(),
+                player_abnormalities.len(),
+                battle_fairy_follows.len(),
+                player_ai_tails.len(),
+                player_skill_executions.len(),
+                player_energy_regenerations.len(),
+                player_auto_progress.len(),
+                player_lost_timeouts.len(),
+                player_fight_states.len(),
+                player_criminal_states.len(),
+                base_region.is_some(),
+                nation_contend.is_some(),
+                city_contend.is_some(),
+                village_contend.is_some(),
+                country_contend.is_some(),
+                gods_battle.is_some(),
+                deletions.len(),
+                removals.len(),
+                area_transitions.len(),
+                region_changes.len(),
+                0,
+            );
         }
     }
 
@@ -40667,16 +40432,10 @@ impl CGame {
         source_region_id: i32,
         player_id: i32,
         runtime: &mut Runtime,
-    ) -> GameReturnedRegionPlayer {
+    ) {
         let Some(player) = self.find_player(player_id) else {
-            return GameReturnedRegionPlayer {
-                player_id,
-                point: Err(GameReturnPointBlock::PlayerMissing),
-                destination: None,
-                random_block: None,
-                changed_region: None,
-                region_change: None,
-            };
+            warn!(target: "miracle_server::gameserver::ai", source_region_id, player_id, "невозможно вернуть отсутствующего игрока из региона");
+            return;
         };
         let direction = player.shape().get_direction();
         let source_is_gods_battle = self
@@ -40685,20 +40444,13 @@ impl CGame {
         let point =
             self.select_player_return_point(source_region_id, player_id, source_is_gods_battle);
         let Ok(point_value) = point else {
-            return GameReturnedRegionPlayer {
-                player_id,
-                point,
-                destination: None,
-                random_block: None,
-                changed_region: None,
-                region_change: None,
-            };
+            warn!(target: "miracle_server::gameserver::ai", source_region_id, player_id, "не найдена точка возврата игрока из региона");
+            return;
         };
         let width = point_value.right.wrapping_sub(point_value.left);
         let height = point_value.bottom.wrapping_sub(point_value.top);
         let mut x = point_value.left.wrapping_add(width / 2);
         let mut y = point_value.top.wrapping_add(height / 2);
-        let mut random_block = None;
         if width > 0 && height > 0 {
             if let Some(destination) = self.find_region(point_value.region_id) {
                 match destination.base().region.get_random_pos_in_range(
@@ -40712,7 +40464,13 @@ impl CGame {
                         x = position.x;
                         y = position.y;
                     }
-                    Err(block) => random_block = Some(block),
+                    Err(_) => warn!(
+                        target: "miracle_server::gameserver::ai",
+                        source_region_id,
+                        destination_region_id = point_value.region_id,
+                        player_id,
+                        "случайная точка возврата недоступна, используется центр области"
+                    ),
                 }
             }
         }
@@ -40728,14 +40486,16 @@ impl CGame {
             runtime,
         );
         let changed_region = Self::player_region_change_succeeded(&region_change);
-        GameReturnedRegionPlayer {
+        trace!(
+            target: "miracle_server::gameserver::ai",
+            source_region_id,
+            destination_region_id = point_value.region_id,
             player_id,
-            point: Ok(point_value),
-            destination: Some((x, y)),
-            random_block,
-            changed_region: Some(changed_region),
-            region_change: Some(region_change),
-        }
+            x,
+            y,
+            changed_region,
+            "завершён возврат игрока из региона"
+        );
     }
 
     /// Один exact `CGame::MainLoop` turn. Wrapping DWORD clocks, strict
@@ -40745,7 +40505,7 @@ impl CGame {
     pub(crate) fn main_loop<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> GameMainLoopReport<Runtime::RuntimeError> {
+    ) -> GameMainLoopOutcome {
         let mut state = self.main_loop_state;
         if !state.initialized {
             state.current_tick_ms = runtime.now_milliseconds();
@@ -40757,62 +40517,52 @@ impl CGame {
         state.current_tick_ms = runtime.now_milliseconds();
         self.expire_script_faction_sessions(state.current_tick_ms);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
-        let mut stages = Vec::new();
-
         let refresh_elapsed = state
             .current_tick_ms
             .wrapping_sub(state.refresh_info_tick_ms);
         if self.setup.refresh_info_time_ms < refresh_elapsed {
             state.refresh_info_tick_ms = state.current_tick_ms;
             self.publish_runtime_info();
-            stages.push(GameMainLoopStage::RefreshInfo);
+            trace!(target: "miracle_server::gameserver::main_loop", tick_ms = state.current_tick_ms, "обновлены сведения процесса GameServer");
         }
 
         let runtime_elapsed = state
             .current_tick_ms
             .wrapping_sub(state.runtime_log_tick_ms);
         if self.setup.watch_runtime_time_ms < runtime_elapsed {
-            let log = if self.setup.watch_runtime_info {
+            if self.setup.watch_runtime_info {
                 let profile = state.profile;
                 state.profile = GameMainLoopProfile::default();
-                GameMainLoopRuntimeLog::Profiled {
-                    elapsed_ms: runtime_elapsed,
-                    ai_calls: state.calls_since_runtime_log,
-                    profile,
-                }
+                info!(
+                    target: "miracle_server::gameserver::main_loop",
+                    elapsed_ms = runtime_elapsed,
+                    ai_calls = state.calls_since_runtime_log,
+                    script_ms = profile.script_ms,
+                    ai_ms = profile.ai_ms,
+                    message_ms = profile.message_ms,
+                    session_ms = profile.session_ms,
+                    net_session_ms = profile.net_session_ms,
+                    "сводка времени игрового цикла"
+                );
             } else {
-                GameMainLoopRuntimeLog::Compact {
-                    elapsed_ms: runtime_elapsed,
-                    ai_calls: state.calls_since_runtime_log,
-                }
-            };
-            report_main_loop_runtime(log);
-            stages.push(GameMainLoopStage::RuntimeLog);
+                info!(
+                    target: "miracle_server::gameserver::main_loop",
+                    elapsed_ms = runtime_elapsed,
+                    ai_calls = state.calls_since_runtime_log,
+                    "сводка игрового цикла"
+                );
+            }
             state.calls_since_runtime_log = 0;
             state.runtime_log_tick_ms = state.current_tick_ms;
         }
 
         if runtime.exit_requested() {
             self.main_loop_state = state;
-            return GameMainLoopReport {
-                outcome: GameMainLoopOutcome::ExitRequested,
-                return_value: 0,
-                sampled_tick_ms: state.current_tick_ms,
-                ai_tick: state.ai_tick,
-                stages,
-                next_deadline_ms: state.pacing_initialized.then_some(state.pacing_deadline_ms),
-                signed_lag_ms: None,
-                ai: None,
-                messages: None,
-                net_sessions: None,
-                auction: None,
-            };
+            debug!(target: "miracle_server::gameserver::main_loop", tick_ms = state.current_tick_ms, "получен запрос завершения GameServer");
+            return GameMainLoopOutcome::ExitRequested;
         }
 
         state.ai_tick = state.ai_tick.wrapping_add(1);
-        let ai;
-        let messages;
-        let net_sessions;
         if self.setup.watch_runtime_info {
             let started = runtime.now_milliseconds();
             let _scripts = self.run_script_loop(runtime);
@@ -40820,23 +40570,20 @@ impl CGame {
                 .profile
                 .script_ms
                 .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
-            stages.push(GameMainLoopStage::Script);
 
             let started = runtime.now_milliseconds();
-            ai = self.ai(runtime);
+            let _ = self.ai(runtime);
             state.profile.ai_ms = state
                 .profile
                 .ai_ms
                 .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
-            stages.push(GameMainLoopStage::Ai);
 
             let started = runtime.now_milliseconds();
-            messages = self.process_messages(runtime);
+            self.process_messages(runtime);
             state.profile.message_ms = state
                 .profile
                 .message_ms
                 .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
-            stages.push(GameMainLoopStage::Message);
 
             let started = runtime.now_milliseconds();
             let _team_snapshot_requests =
@@ -40849,35 +40596,27 @@ impl CGame {
                 .profile
                 .session_ms
                 .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
-            stages.push(GameMainLoopStage::Session);
 
             let started = runtime.now_milliseconds();
-            net_sessions = self.net_session_manager.run();
+            let _ = self.net_session_manager.run();
             state.profile.net_session_ms = state
                 .profile
                 .net_session_ms
                 .wrapping_add(runtime.now_milliseconds().wrapping_sub(started));
-            stages.push(GameMainLoopStage::NetSession);
         } else {
             let _scripts = self.run_script_loop(runtime);
-            stages.push(GameMainLoopStage::Script);
-            ai = self.ai(runtime);
-            stages.push(GameMainLoopStage::Ai);
-            messages = self.process_messages(runtime);
-            stages.push(GameMainLoopStage::Message);
+            let _ = self.ai(runtime);
+            self.process_messages(runtime);
             let _team_snapshot_requests =
                 self.run_team_snapshot_queries(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();
             self.detach_terminal_equipment_session_listeners(&terminal_equipment_sessions);
-            stages.push(GameMainLoopStage::Session);
-            net_sessions = self.net_session_manager.run();
-            stages.push(GameMainLoopStage::NetSession);
+            let _ = self.net_session_manager.run();
         }
 
-        let auction = self.run_auction(runtime);
-        stages.push(GameMainLoopStage::Auction);
+        let _ = self.run_auction(runtime);
 
         if !state.pacing_initialized {
             state.pacing_deadline_ms = runtime.now_milliseconds();
@@ -40892,96 +40631,38 @@ impl CGame {
                 .wrapping_sub(pacing_tick_ms)
                 .wrapping_add(interval_ms);
             std::thread::sleep(Duration::from_millis(u64::from(duration_ms)));
-            stages.push(GameMainLoopStage::Wait { duration_ms });
+            trace!(target: "miracle_server::gameserver::main_loop", duration_ms, "игровой цикл выдержал тактовую паузу");
         }
 
         state.pacing_deadline_ms = state.pacing_deadline_ms.wrapping_add(interval_ms);
         let signed_lag_ms = pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) as i32;
         if 1_000 < signed_lag_ms {
-            eprint!("warning!!! 1 second not call AI()\n");
             let resync_tick_ms = runtime.now_milliseconds();
             state.pacing_deadline_ms = resync_tick_ms;
-            stages.push(GameMainLoopStage::LagWarning { resync_tick_ms });
+            warn!(
+                target: "miracle_server::gameserver::main_loop",
+                signed_lag_ms,
+                resync_tick_ms,
+                "игровой цикл отстал более чем на одну секунду"
+            );
         }
 
         self.main_loop_state = state;
-        GameMainLoopReport {
-            outcome: GameMainLoopOutcome::Continue,
-            return_value: 1,
-            sampled_tick_ms: pacing_tick_ms,
-            ai_tick: state.ai_tick,
-            stages,
-            next_deadline_ms: Some(state.pacing_deadline_ms),
-            signed_lag_ms: Some(signed_lag_ms),
-            ai: Some(ai),
-            messages: Some(messages),
-            net_sessions: Some(net_sessions),
-            auction: Some(auction),
-        }
+        GameMainLoopOutcome::Continue
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
     pub(crate) fn process_messages<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
-    ) -> GameProcessMessagesReport<Runtime::RuntimeError> {
-        let mut auction_messages = Vec::new();
-        let mut player_shop_messages = Vec::new();
-        let mut shop_messages = Vec::new();
-        let mut gm_messages = Vec::new();
-        let mut gma_messages = Vec::new();
-        let mut depot_messages = Vec::new();
-        let mut increment_shop_messages = Vec::new();
-        let mut jjc_system_messages = Vec::new();
-        let mut increment_shop_billing_messages = Vec::new();
-        let mut organizing_messages = Vec::new();
-        let mut country_war_messages = Vec::new();
-        let mut goods_war_messages = Vec::new();
-        let mut container_messages = Vec::new();
-        let mut goods_messages = Vec::new();
-        let mut skill_messages = Vec::new();
-        let mut team_messages = Vec::new();
-        let mut shape_messages = Vec::new();
-        let mut other_messages = Vec::new();
-        let mut pet_messages = Vec::new();
-        let mut player_messages = Vec::new();
-        let mut log_messages = Vec::new();
-        let mut server_messages = Vec::new();
-        let mut world_reconnections = Vec::new();
-        let mut unresolved_routes = Vec::new();
+    ) {
         let world_messages = self
             .world_client
             .as_ref()
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in world_messages {
-            self.run_incoming_message(
-                &mut message,
-                runtime,
-                &mut auction_messages,
-                &mut player_shop_messages,
-                &mut shop_messages,
-                &mut gm_messages,
-                &mut gma_messages,
-                &mut depot_messages,
-                &mut increment_shop_messages,
-                &mut jjc_system_messages,
-                &mut increment_shop_billing_messages,
-                &mut organizing_messages,
-                &mut country_war_messages,
-                &mut goods_war_messages,
-                &mut container_messages,
-                &mut goods_messages,
-                &mut skill_messages,
-                &mut team_messages,
-                &mut shape_messages,
-                &mut other_messages,
-                &mut pet_messages,
-                &mut player_messages,
-                &mut log_messages,
-                &mut server_messages,
-                &mut unresolved_routes,
-            );
+            self.run_incoming_message(&mut message, runtime);
         }
         let billing_messages = self
             .billing_client
@@ -40989,33 +40670,7 @@ impl CGame {
             .map(CMyNetClient::take_all_messages)
             .unwrap_or_default();
         for mut message in billing_messages {
-            self.run_incoming_message(
-                &mut message,
-                runtime,
-                &mut auction_messages,
-                &mut player_shop_messages,
-                &mut shop_messages,
-                &mut gm_messages,
-                &mut gma_messages,
-                &mut depot_messages,
-                &mut increment_shop_messages,
-                &mut jjc_system_messages,
-                &mut increment_shop_billing_messages,
-                &mut organizing_messages,
-                &mut country_war_messages,
-                &mut goods_war_messages,
-                &mut container_messages,
-                &mut goods_messages,
-                &mut skill_messages,
-                &mut team_messages,
-                &mut shape_messages,
-                &mut other_messages,
-                &mut pet_messages,
-                &mut player_messages,
-                &mut log_messages,
-                &mut server_messages,
-                &mut unresolved_routes,
-            );
+            self.run_incoming_message(&mut message, runtime);
         }
         let server_events = self
             .net_server
@@ -41025,68 +40680,16 @@ impl CGame {
         for event in server_events {
             match event {
                 GameServerEvent::Message(mut message) => {
-                    self.run_incoming_message(
-                        &mut message,
-                        runtime,
-                        &mut auction_messages,
-                        &mut player_shop_messages,
-                        &mut shop_messages,
-                        &mut gm_messages,
-                        &mut gma_messages,
-                        &mut depot_messages,
-                        &mut increment_shop_messages,
-                        &mut jjc_system_messages,
-                        &mut increment_shop_billing_messages,
-                        &mut organizing_messages,
-                        &mut country_war_messages,
-                        &mut goods_war_messages,
-                        &mut container_messages,
-                        &mut goods_messages,
-                        &mut skill_messages,
-                        &mut team_messages,
-                        &mut shape_messages,
-                        &mut other_messages,
-                        &mut pet_messages,
-                        &mut player_messages,
-                        &mut log_messages,
-                        &mut server_messages,
-                        &mut unresolved_routes,
-                    );
+                    self.run_incoming_message(&mut message, runtime);
                 }
                 GameServerEvent::WorldClientReconnected(client) => {
-                    world_reconnections.push(self.accept_reconnected_world_client(client, runtime));
+                    let _ = self.accept_reconnected_world_client(client, runtime);
+                    info!(target: "miracle_server::gameserver::messages", "принято повторное подключение World");
                 }
                 GameServerEvent::BillingClientReconnected(client) => {
                     let _legacy_ignored = on_billing_client_reconnected(self, client);
                 }
             }
-        }
-        GameProcessMessagesReport {
-            legacy_return: 1,
-            auction_messages,
-            player_shop_messages,
-            shop_messages,
-            gm_messages,
-            gma_messages,
-            depot_messages,
-            increment_shop_messages,
-            jjc_system_messages,
-            increment_shop_billing_messages,
-            organizing_messages,
-            country_war_messages,
-            goods_war_messages,
-            container_messages,
-            goods_messages,
-            skill_messages,
-            team_messages,
-            shape_messages,
-            other_messages,
-            pet_messages,
-            player_messages,
-            log_messages,
-            server_messages,
-            world_reconnections,
-            unresolved_routes,
         }
     }
 
@@ -41094,109 +40697,149 @@ impl CGame {
         &mut self,
         message: &mut CMessage,
         runtime: &mut Runtime,
-        auction_messages: &mut Vec<Result<WorldAuctionMessageReport, WorldAuctionMessageError>>,
-        player_shop_messages: &mut Vec<Result<PlayerShopMessageReport, PlayerShopMessageError>>,
-        shop_messages: &mut Vec<Result<ShopMessageReport, ShopMessageError>>,
-        gm_messages: &mut Vec<Result<GmMessageReport, GmMessageError>>,
-        gma_messages: &mut Vec<Result<GmaMessageReport, GmaMessageError>>,
-        depot_messages: &mut Vec<DepotMessageReport>,
-        increment_shop_messages: &mut Vec<
-            Result<GameIncrementShopMessageReport, GameIncrementShopMessageError>,
-        >,
-        jjc_system_messages: &mut Vec<
-            Result<GameJjcSystemMessageReport, GameJjcSystemMessageError>,
-        >,
-        increment_shop_billing_messages: &mut Vec<
-            Result<IncrementShopBillingReport, IncrementShopBillingMessageError>,
-        >,
-        organizing_messages: &mut Vec<
-            Result<GameOrganizingMessageReport, GameOrganizingMessageError>,
-        >,
-        country_war_messages: &mut Vec<
-            Result<
-                GameCountryWarMessageReport,
-                CountryWarMessageDispatchError<CountryBattleStateBlock>,
-            >,
-        >,
-        goods_war_messages: &mut Vec<Result<GameGoodsWarMessageReport, GameGoodsWarMessageError>>,
-        container_messages: &mut Vec<Result<GameContainerMessageReport, GameContainerMessageError>>,
-        goods_messages: &mut Vec<Result<GameGoodsMessageReport, GameGoodsMessageError>>,
-        skill_messages: &mut Vec<Result<GameSkillMessageReport, GameSkillMessageError>>,
-        team_messages: &mut Vec<Result<GameTeamMessageReport, GameTeamMessageError>>,
-        shape_messages: &mut Vec<Result<GameShapeMessageReport, GameShapeMessageError>>,
-        other_messages: &mut Vec<Result<GameOtherMessageReport, GameOtherMessageError>>,
-        pet_messages: &mut Vec<Result<GamePetMessageReport, GamePetMessageError>>,
-        player_messages: &mut Vec<Result<GamePlayerMessageReport, GamePlayerMessageError>>,
-        log_messages: &mut Vec<Result<GameLogMessageReport, GameLogMessageError>>,
-        server_messages: &mut Vec<
-            Result<GameServerMessageReport, GameServerMessageError<Runtime::RuntimeError>>,
-        >,
-        unresolved_routes: &mut Vec<GameUnresolvedMessageRoute>,
     ) {
-        if let Some(report) =
+        let message_type = message.message_type();
+        if let Some(result) =
             dispatch_server_message(message, self, runtime, |runtime| runtime.now_milliseconds())
         {
-            server_messages.push(report);
+            trace_message_dispatch("server", message_type, result.is_ok());
         } else if dispatch_client_auction_message(message, self, runtime, |runtime| {
             runtime.now_milliseconds()
         })
         .is_some()
         {
-        } else if let Some(report) =
+            trace_message_dispatch("client_auction", message_type, true);
+        } else if let Some(result) =
             dispatch_world_auction_message(message, self, runtime, |runtime| {
                 runtime.now_milliseconds()
             })
         {
-            auction_messages.push(report);
-        } else if let Some(report) = dispatch_player_shop_message(message, self, runtime) {
-            player_shop_messages.push(report);
-        } else if let Some(report) = dispatch_shop_message(message, self, runtime) {
-            shop_messages.push(report);
-        } else if let Some(report) = dispatch_gm_message(message, self, runtime) {
-            gm_messages.push(report);
-        } else if let Some(report) = dispatch_gma_message(message, self) {
-            gma_messages.push(report);
-        } else if let Some(report) = dispatch_depot_message(message, self) {
-            depot_messages.push(report);
-        } else if let Some(report) = dispatch_increment_shop_message(message, self) {
-            increment_shop_messages.push(report);
-        } else if let Some(report) = dispatch_game_jjc_system_message(message, self, runtime) {
-            jjc_system_messages.push(report);
-        } else if let Some(report) = dispatch_increment_shop_billing_message(message, self, runtime)
+            trace_message_dispatch("world_auction", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_player_shop_message(message, self, runtime) {
+            trace_message_dispatch("player_shop", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_shop_message(message, self, runtime) {
+            trace_message_dispatch("shop", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_gm_message(message, self, runtime) {
+            trace_message_dispatch("gm", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_gma_message(message, self) {
+            trace_message_dispatch("gma", message_type, result.is_ok());
+        } else if dispatch_depot_message(message, self).is_some() {
+            trace_message_dispatch("depot", message_type, true);
+        } else if let Some(result) = dispatch_increment_shop_message(message, self) {
+            trace_message_dispatch("increment_shop", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_jjc_system_message(message, self, runtime) {
+            trace_message_dispatch("jjc", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_increment_shop_billing_message(message, self, runtime)
         {
-            increment_shop_billing_messages.push(report);
-        } else if let Some(report) = dispatch_game_organizing_message(message, self, runtime) {
-            organizing_messages.push(report);
-        } else if let Some(report) = dispatch_game_country_war_message(message, self, runtime) {
-            country_war_messages.push(report);
-        } else if let Some(report) = dispatch_game_goods_war_message(message, self) {
-            goods_war_messages.push(report);
-        } else if let Some(report) = dispatch_game_container_message(message, self, runtime) {
-            container_messages.push(report);
-        } else if let Some(report) = dispatch_game_goods_message(message, self, runtime) {
-            goods_messages.push(report);
-        } else if let Some(report) = dispatch_game_skill_message(message, self, runtime) {
-            skill_messages.push(report);
-        } else if let Some(report) = dispatch_game_team_message(message, self) {
-            team_messages.push(report);
+            trace_message_dispatch("billing", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_organizing_message(message, self, runtime) {
+            trace_message_dispatch("organizing", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_country_war_message(message, self, runtime) {
+            trace_message_dispatch("country", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_goods_war_message(message, self) {
+            trace_message_dispatch("goods_war", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_container_message(message, self, runtime) {
+            trace_message_dispatch("container", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_goods_message(message, self, runtime) {
+            trace_message_dispatch("goods", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_skill_message(message, self, runtime) {
+            trace_message_dispatch("skill", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_team_message(message, self) {
+            trace_message_dispatch("team", message_type, result.is_ok());
         } else if dispatch_game_region_message(message, self, runtime).is_some() {
-        } else if let Some(report) = dispatch_game_shape_message(message, self, runtime) {
-            shape_messages.push(report);
-        } else if let Some(report) = dispatch_game_other_message(message, self, runtime) {
-            other_messages.push(report);
-        } else if let Some(report) = dispatch_game_pet_message(message, self) {
-            pet_messages.push(report);
-        } else if let Some(report) = dispatch_game_player_message(message, self, runtime) {
-            player_messages.push(report);
-        } else if let Some(report) = dispatch_game_log_message(message, self, runtime) {
-            log_messages.push(report);
+            trace_message_dispatch("region", message_type, true);
+        } else if let Some(result) = dispatch_game_shape_message(message, self, runtime) {
+            trace_message_dispatch("shape", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_other_message(message, self, runtime) {
+            trace_message_dispatch("other", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_pet_message(message, self) {
+            trace_message_dispatch("pet", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_player_message(message, self, runtime) {
+            trace_message_dispatch("player", message_type, result.is_ok());
+        } else if let Some(result) = dispatch_game_log_message(message, self, runtime) {
+            trace_message_dispatch("log", message_type, result.is_ok());
         } else {
-            unresolved_routes.push(GameUnresolvedMessageRoute {
-                message_type: message.message_type(),
-                route: message.select_game_route(self),
-            });
+            warn!(
+                target: "miracle_server::gameserver::messages",
+                message_type,
+                route = ?message.select_game_route(self),
+                "для входящего сообщения не найден обработчик"
+            );
         }
     }
+}
+
+fn trace_message_dispatch(family: &'static str, message_type: i32, succeeded: bool) {
+    if succeeded {
+        trace!(
+            target: "miracle_server::gameserver::messages",
+            family,
+            message_type,
+            "входящее сообщение обработано"
+        );
+    } else {
+        warn!(
+            target: "miracle_server::gameserver::messages",
+            family,
+            message_type,
+            "обработчик входящего сообщения завершился ошибкой"
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trace_region_ai_pass(
+    region_id: i32,
+    battle_fairy_deaths: usize,
+    periodical_updates: usize,
+    player_abnormalities: usize,
+    battle_fairy_follows: usize,
+    player_ai_tails: usize,
+    player_skill_executions: usize,
+    player_energy_regenerations: usize,
+    player_auto_progress: usize,
+    player_lost_timeouts: usize,
+    player_fight_states: usize,
+    player_criminal_states: usize,
+    base_region: bool,
+    nation_contend: bool,
+    city_contend: bool,
+    village_contend: bool,
+    country_contend: bool,
+    gods_battle: bool,
+    deletions: usize,
+    removals: usize,
+    area_transitions: usize,
+    region_changes: usize,
+    returned_players: usize,
+) {
+    trace!(
+        target: "miracle_server::gameserver::ai",
+        region_id,
+        battle_fairy_deaths,
+        periodical_updates,
+        player_abnormalities,
+        battle_fairy_follows,
+        player_ai_tails,
+        player_skill_executions,
+        player_energy_regenerations,
+        player_auto_progress,
+        player_lost_timeouts,
+        player_fight_states,
+        player_criminal_states,
+        base_region,
+        nation_contend,
+        city_contend,
+        village_contend,
+        country_contend,
+        gods_battle,
+        deletions,
+        removals,
+        area_transitions,
+        region_changes,
+        returned_players,
+        "завершён проход ИИ региона"
+    );
 }
 
 /// Safe process-owned замена `GameThreadFunc`: wall-clock и sequence
@@ -41218,7 +40861,7 @@ pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
         loop {
             let turn = game.main_loop(runtime);
             main_loop_calls = main_loop_calls.wrapping_add(1);
-            if turn.return_value == 0 {
+            if turn == GameMainLoopOutcome::ExitRequested {
                 break;
             }
         }

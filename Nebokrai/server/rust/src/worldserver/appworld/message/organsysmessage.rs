@@ -1718,7 +1718,7 @@ pub(crate) fn dispatch_organizing_session_result(
         .map_or(0, |result| i32::from(result as u8));
     let cookie_first = message.base_mut().get_long().unwrap_or(0);
     let outcome =
-        manager.on_sync_callback_result(session_id, cookie_first, cookie_second, &result);
+        manager.on_sync_callback_result(session_id, cookie_first, cookie_second, result);
     OrganizingSessionResultDispatch::Delivered {
         message_type,
         session_id,
