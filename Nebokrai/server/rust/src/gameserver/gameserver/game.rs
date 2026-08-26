@@ -1784,13 +1784,6 @@ pub(crate) struct GoodsDestroyDeleteRequest {
     pub(crate) write_delete_log: bool,
 }
 
-#[must_use = "общий DeleteGoods report сохраняет mutation и client публикации"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GoodsDestroyDeleteReport {
-    pub(crate) removed_amount: u32,
-    pub(crate) deliveries: Vec<i32>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GoodsDestroyAuditLog {
     pub(crate) reason: u8,
@@ -1876,92 +1869,6 @@ struct PlayerTradeAuditParty {
     tile_y: i32,
     client_ip: u32,
     name: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SynthesisOpenReport {
-    pub(crate) outcome: SynthesisOpenOutcome,
-    pub(crate) delivery: i32,
-    pub(crate) player_mutation:
-        Option<crate::gameserver::appserver::player::GoodsSessionPlayerRelease>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SynthesisComposeOutcome {
-    MissingRecipe,
-    MissingIngredients,
-    InsufficientMoney,
-    InsufficientContribution,
-    InsufficientPacketSpace,
-    RandomFailure,
-    Completed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SynthesisComposeReport {
-    pub(crate) synthesis_index: u32,
-    pub(crate) requested_amount: u32,
-    pub(crate) result_amount: u32,
-    pub(crate) outcome: SynthesisComposeOutcome,
-    pub(crate) result_delivery: Option<i32>,
-    pub(crate) notice_delivery: Option<i32>,
-    pub(crate) money_delivery: Vec<i32>,
-    pub(crate) consumptions: Vec<CiQingPacketConsumption>,
-    pub(crate) consumption_deliveries: Vec<Vec<i32>>,
-    pub(crate) additions: Vec<CiQingPacketAddition>,
-    pub(crate) addition_deliveries: Vec<Vec<i32>>,
-    pub(crate) rejected_goods: Vec<ShapeIdentity>,
-    pub(crate) broadcast_delivery: Option<Result<i32, SendMessageError>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GoodsDestroyOpenOutcome {
-    DeleteRequested,
-    ConfigurationEnabled,
-    ConfigurationDisabled,
-}
-
-#[must_use = "open report сохраняет decode, delete либо configuration wire"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GoodsDestroyOpenReport {
-    pub(crate) player_id: i32,
-    pub(crate) container_extend_id: i32,
-    pub(crate) goods_id: Option<CGuid>,
-    pub(crate) requested_amount: u32,
-    pub(crate) outcome: GoodsDestroyOpenOutcome,
-    pub(crate) deletion: Option<GoodsDestroyDeleteReport>,
-    pub(crate) notice_delivery: Option<i32>,
-    pub(crate) response_delivery: Option<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GoodsDestroyConfirmOutcome {
-    ConfigurationDisabled,
-    MissingHandGoods,
-    MissingBaseProperties,
-    OriginalNameRestricted,
-    GoodsTypeRejected,
-    EquipmentStateRestricted,
-    Destroyed,
-}
-
-#[must_use = "confirm report сохраняет guards, container mutation, audit и result wire"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GoodsDestroyConfirmReport {
-    pub(crate) player_id: i32,
-    pub(crate) outcome: GoodsDestroyConfirmOutcome,
-    pub(crate) goods: Option<ShapeIdentity>,
-    pub(crate) type_key: Option<u16>,
-    pub(crate) equipment_state: Option<i32>,
-    pub(crate) requested_amount: u32,
-    pub(crate) removed_amount: u32,
-    pub(crate) consumption: Option<GoodsDestroyHandConsumption>,
-    pub(crate) consumption_deliveries: Vec<i32>,
-    pub(crate) notice_delivery: Option<i32>,
-    pub(crate) audit: Option<GoodsDestroyAuditLog>,
-    pub(crate) audit_dispatched: bool,
-    pub(crate) world_deliveries: Vec<i32>,
-    pub(crate) result_delivery: Option<i32>,
 }
 
 /// Battle-fairy death/equipment transitions используют runtime только для
@@ -24897,7 +24804,7 @@ impl CGame {
         }
     }
 
-    pub(crate) fn open_synthesis(&mut self, player_id: i32) -> Option<SynthesisOpenReport> {
+    pub(crate) fn open_synthesis(&mut self, player_id: i32) -> Option<()> {
         let (region_id, tile_x, tile_y, progress, fight_state_count) = {
             let player = self.find_player(player_id)?;
             (
@@ -24938,11 +24845,8 @@ impl CGame {
                     .map(CPlayer::begin_synthesis)
             })
             .flatten();
-        Some(SynthesisOpenReport {
-            outcome,
-            delivery,
-            player_mutation,
-        })
+        tracing::debug!(player_id, ?outcome, delivery, player_mutated = player_mutation.is_some(), "открытие синтеза обработано");
+        Some(())
     }
 
     /// Сценарный `OpenSynthesis` открывает только клиентскую страницу.
@@ -24967,8 +24871,10 @@ impl CGame {
     pub(crate) fn close_synthesis(
         &mut self,
         player_id: i32,
-    ) -> Option<crate::gameserver::appserver::player::GoodsSessionPlayerRelease> {
-        self.find_player_mut(player_id)?.close_synthesis()
+    ) -> Option<()> {
+        let release = self.find_player_mut(player_id)?.close_synthesis();
+        tracing::trace!(player_id, ?release, "сессия синтеза закрыта");
+        Some(())
     }
 
     fn synthesis_result_fits_packet(&self, player_id: i32, goods: &[CGoods]) -> bool {
@@ -24985,22 +24891,8 @@ impl CGame {
         synthesis_index: u32,
         amount: u32,
         context: &mut Context,
-    ) -> Option<SynthesisComposeReport> {
-        let mut report = SynthesisComposeReport {
-            synthesis_index,
-            requested_amount: amount,
-            result_amount: amount,
-            outcome: SynthesisComposeOutcome::MissingRecipe,
-            result_delivery: None,
-            notice_delivery: None,
-            money_delivery: Vec::new(),
-            consumptions: Vec::new(),
-            consumption_deliveries: Vec::new(),
-            additions: Vec::new(),
-            addition_deliveries: Vec::new(),
-            rejected_goods: Vec::new(),
-            broadcast_delivery: None,
-        };
+    ) -> Option<()> {
+        let mut result_amount = amount;
         let Some(recipe) = self
             .synthesis
             .recipe(synthesis_index)
@@ -25012,7 +24904,8 @@ impl CGame {
             })
             .cloned()
         else {
-            return Some(report);
+            tracing::trace!(player_id, synthesis_index, amount, "рецепт синтеза не найден");
+            return Some(());
         };
         let required = |formula: &SynthesisFormula| u64::from(formula.amount) * u64::from(amount);
         let (missing_ingredients, player_money, player_contribution) = {
@@ -25026,28 +24919,28 @@ impl CGame {
             )
         };
         if missing_ingredients {
-            report.outcome = SynthesisComposeOutcome::MissingIngredients;
-            report.result_delivery = Some(send_synthesis_result(self, player_id, 0));
-            return Some(report);
+            let delivery = send_synthesis_result(self, player_id, 0);
+            tracing::trace!(player_id, synthesis_index, amount, delivery, "для синтеза не хватает ингредиентов");
+            return Some(());
         }
         let total_coins = u64::from(recipe.coins as u32) * u64::from(amount);
         if u64::from(player_money) < total_coins {
-            report.outcome = SynthesisComposeOutcome::InsufficientMoney;
-            report.result_delivery = Some(send_synthesis_result(self, player_id, 1));
-            return Some(report);
+            let delivery = send_synthesis_result(self, player_id, 1);
+            tracing::trace!(player_id, synthesis_index, amount, delivery, "для синтеза не хватает денег");
+            return Some(());
         }
         if player_contribution < recipe.prestige {
-            report.outcome = SynthesisComposeOutcome::InsufficientContribution;
-            report.result_delivery = Some(send_synthesis_result(self, player_id, 2));
-            return Some(report);
+            let delivery = send_synthesis_result(self, player_id, 2);
+            tracing::trace!(player_id, synthesis_index, amount, delivery, "для синтеза не хватает вклада");
+            return Some(());
         }
         if recipe.probability != 100
             && game_legacy_random(&mut self.random_state, 100).wrapping_add(1)
                 > i32::from(recipe.probability)
         {
-            report.result_amount = 0;
+            result_amount = 0;
         }
-        let created = if report.result_amount == 0 {
+        let created = if result_amount == 0 {
             Vec::new()
         } else {
             let (random_state, goods_factory, fairy_exp_conf, battle_fairy_exp_config) = (
@@ -25059,7 +24952,7 @@ impl CGame {
             let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
             goods_factory.create_goods_batch(
                 recipe.goods_index,
-                report.result_amount,
+                result_amount,
                 &mut random,
                 || CGuid::create().unwrap_or(CGuid::GUID_INVALID),
                 |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level),
@@ -25067,9 +24960,9 @@ impl CGame {
             )
         };
         if !created.is_empty() && !self.synthesis_result_fits_packet(player_id, &created) {
-            report.outcome = SynthesisComposeOutcome::InsufficientPacketSpace;
-            report.result_delivery = Some(send_synthesis_result(self, player_id, 3));
-            return Some(report);
+            let delivery = send_synthesis_result(self, player_id, 3);
+            tracing::trace!(player_id, synthesis_index, amount, delivery, "для результата синтеза не хватает места");
+            return Some(());
         }
 
         let money_change = {
@@ -25078,28 +24971,25 @@ impl CGame {
                 .get_mut(&player_id)?
                 .decrease_money(total_coins as u32, goods_factory)
         };
-        report.money_delivery = self.send_player_money_decrease(player_id, &money_change.outcome);
+        let money_delivery = self.send_player_money_decrease(player_id, &money_change.outcome);
+        tracing::trace!(player_id, synthesis_index, ?money_delivery, "уменьшение денег за синтез отправлено");
         for formula in &recipe.formulas {
             let consumptions = self.find_player_mut(player_id)?.remove_item_in_packet(
                 formula.goods_index,
                 required(formula).min(u64::from(u32::MAX)) as u32,
             );
             for consumption in consumptions {
-                report
-                    .consumption_deliveries
-                    .push(self.send_player_packet_consumption(&consumption));
-                report.consumptions.push(consumption);
+                let deliveries = self.send_player_packet_consumption(&consumption);
+                tracing::trace!(player_id, synthesis_index, ?deliveries, "расход ингредиента синтеза отправлен");
             }
         }
-        if report.result_amount == 0 {
-            report.outcome = SynthesisComposeOutcome::RandomFailure;
-            report.result_delivery = Some(send_synthesis_result(self, player_id, 5));
+        if result_amount == 0 {
+            let result_delivery = send_synthesis_result(self, player_id, 5);
             let text = self.get_string_by_id(b"GS1017");
-            report.notice_delivery = Some(
-                colored_player_notice_message(0xffff_ffff, 0, text)
-                    .send_to_player(self.net_server(), player_id),
-            );
-            return Some(report);
+            let notice_delivery = colored_player_notice_message(0xffff_ffff, 0, text)
+                .send_to_player(self.net_server(), player_id);
+            tracing::debug!(player_id, synthesis_index, amount, result_delivery, notice_delivery, "синтез завершился случайной неудачей");
+            return Some(());
         }
         let (additions, rejected) = {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
@@ -25108,22 +24998,18 @@ impl CGame {
             player.add_goods_to_packet(created, goods_factory, &mut encode)
         };
         for addition in additions {
-            report
-                .addition_deliveries
-                .push(self.send_player_packet_addition(&addition));
-            report.additions.push(addition);
+            let deliveries = self.send_player_packet_addition(&addition);
+            tracing::trace!(player_id, synthesis_index, ?deliveries, "результат синтеза отправлен в инвентарь");
         }
-        report.rejected_goods = rejected.iter().map(CGoods::identity).collect();
-        report.outcome = SynthesisComposeOutcome::Completed;
-        report.result_delivery = Some(send_synthesis_result(self, player_id, 4));
+        let rejected_count = rejected.len();
+        let result_delivery = send_synthesis_result(self, player_id, 4);
         let text = self.get_string_by_id(b"GS1016");
-        report.notice_delivery = Some(
-            colored_player_notice_message(0xffff_ffff, 0, text)
-                .send_to_player(self.net_server(), player_id),
-        );
-        report.broadcast_delivery = synthesis_broadcast_message(self, player_id, &recipe, amount)
+        let notice_delivery = colored_player_notice_message(0xffff_ffff, 0, text)
+            .send_to_player(self.net_server(), player_id);
+        let broadcast_delivery = synthesis_broadcast_message(self, player_id, &recipe, amount)
             .map(|message| message.send(self, false));
-        Some(report)
+        tracing::debug!(player_id, synthesis_index, amount, rejected_count, result_delivery, notice_delivery, ?broadcast_delivery, "синтез завершён");
+        Some(())
     }
 
     pub(crate) const fn new_skill_monster_conf_mut(&mut self) -> &mut NewSkillMonsterConf {
@@ -25183,14 +25069,12 @@ impl CGame {
         &mut self,
         request: GoodsDestroyDeleteRequest,
         context: &mut Context,
-    ) -> GoodsDestroyDeleteReport {
+    ) {
         let Some(location) = self.players.get(&request.player_id).and_then(|player| {
             player.owned_goods_location(request.container_extend_id, request.goods_id)
         }) else {
-            return GoodsDestroyDeleteReport {
-                removed_amount: 0,
-                deliveries: Vec::new(),
-            };
+            tracing::trace!(player_id = request.player_id, container_extend_id = request.container_extend_id, ?request.goods_id, "предмет для удаления не найден");
+            return;
         };
         let deletion = if location.extend_id == 2 {
             let mut player = self
@@ -25262,26 +25146,22 @@ impl CGame {
             })
         };
         let Some(deletion) = deletion else {
-            return GoodsDestroyDeleteReport {
-                removed_amount: 0,
-                deliveries: Vec::new(),
-            };
+            tracing::trace!(player_id = request.player_id, container_extend_id = request.container_extend_id, ?request.goods_id, "удаление предмета не выполнено");
+            return;
         };
         let player = self
             .players
             .get(&request.player_id)
             .expect("delete owner возвращён до wire");
-        let mut deliveries = vec![self.send_player_owned_goods_deletion(player, &deletion)];
+        let client_delivery = self.send_player_owned_goods_deletion(player, &deletion);
+        let mut audit_delivery = None;
         if request.write_delete_log && deletion.remaining_amount == 0 {
             let world = self.send_goods_deletion_audit(player, &deletion);
             if let Ok(delivery) = world {
-                deliveries.push(delivery);
+                audit_delivery = Some(delivery);
             }
         }
-        GoodsDestroyDeleteReport {
-            removed_amount: deletion.removed_amount,
-            deliveries,
-        }
+        tracing::debug!(player_id = request.player_id, ?request.goods_id, removed_amount = deletion.removed_amount, client_delivery, ?audit_delivery, "предмет удалён");
     }
 
     pub(crate) fn open_goods_destroy<Context: GameContainerMessageRuntime>(
@@ -25291,20 +25171,9 @@ impl CGame {
         goods_id: Option<CGuid>,
         requested_amount: u32,
         context: &mut Context,
-    ) -> GoodsDestroyOpenReport {
-        let mut report = GoodsDestroyOpenReport {
-            player_id,
-            container_extend_id,
-            goods_id,
-            requested_amount,
-            outcome: GoodsDestroyOpenOutcome::ConfigurationDisabled,
-            deletion: None,
-            notice_delivery: None,
-            response_delivery: None,
-        };
+    ) {
         if container_extend_id != 0 {
-            report.outcome = GoodsDestroyOpenOutcome::DeleteRequested;
-            report.deletion = goods_id.map(|goods_id| {
+            if let Some(goods_id) = goods_id {
                 self.delete_goods_for_destroy_open(
                     GoodsDestroyDeleteRequest {
                         player_id,
@@ -25314,64 +25183,49 @@ impl CGame {
                         write_delete_log: false,
                     },
                     context,
-                )
-            });
-            return report;
+                );
+            } else {
+                tracing::trace!(player_id, container_extend_id, requested_amount, "идентификатор удаляемого предмета отсутствует");
+            }
+            return;
         }
 
         let enabled = self.goods_destroy_setup.enabled();
-        report.outcome = if enabled {
-            GoodsDestroyOpenOutcome::ConfigurationEnabled
+        let notice_delivery = if enabled {
+            None
         } else {
             let text = self.get_string_by_id(b"GS1014");
-            report.notice_delivery = Some(
+            Some(
                 colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
                     .send_to_player(self.net_server(), player_id),
-            );
-            GoodsDestroyOpenOutcome::ConfigurationDisabled
+            )
         };
         let mut response = CMessage::new(0x0b_f926);
         response.base_mut().add_byte(u8::from(enabled));
-        report.response_delivery = Some(response.send_to_player(self.net_server(), player_id));
-        report
+        let response_delivery = response.send_to_player(self.net_server(), player_id);
+        tracing::debug!(player_id, enabled, ?notice_delivery, response_delivery, "страница уничтожения предметов обработана");
     }
 
-    pub(crate) fn confirm_goods_destroy(&mut self, player_id: i32) -> GoodsDestroyConfirmReport {
-        let mut report = GoodsDestroyConfirmReport {
-            player_id,
-            outcome: GoodsDestroyConfirmOutcome::ConfigurationDisabled,
-            goods: None,
-            type_key: None,
-            equipment_state: None,
-            requested_amount: 0,
-            removed_amount: 0,
-            consumption: None,
-            consumption_deliveries: Vec::new(),
-            notice_delivery: None,
-            audit: None,
-            audit_dispatched: false,
-            world_deliveries: Vec::new(),
-            result_delivery: None,
-        };
+    pub(crate) fn confirm_goods_destroy(&mut self, player_id: i32) {
         if !self.goods_destroy_setup.enabled() {
-            return report;
+            tracing::trace!(player_id, "уничтожение предметов отключено");
+            return;
         }
 
         let Some(hand_goods) = self
             .find_player(player_id)
             .and_then(CPlayer::ci_qing_hand_goods)
         else {
-            report.outcome = GoodsDestroyConfirmOutcome::MissingHandGoods;
-            return report;
+            tracing::trace!(player_id, "предмет в руке для уничтожения не найден");
+            return;
         };
         let identity = hand_goods.identity();
-        report.goods = Some(identity);
         let Some(properties) = self
             .goods_factory
             .query_goods_base_properties(hand_goods.base_properties_index())
         else {
-            report.outcome = GoodsDestroyConfirmOutcome::MissingBaseProperties;
-            return report;
+            tracing::warn!(player_id, ?identity, "базовые свойства уничтожаемого предмета не найдены");
+            return;
         };
         if self
             .goods_destroy_setup
@@ -25379,56 +25233,48 @@ impl CGame {
             .iter()
             .any(|name| name.as_slice() == properties.original_name())
         {
-            report.outcome = GoodsDestroyConfirmOutcome::OriginalNameRestricted;
             let text = self.get_string_by_id(b"GS1015");
-            report.notice_delivery = Some(
-                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
-                    .send_to_player(self.net_server(), player_id),
-            );
-            return report;
+            let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                .send_to_player(self.net_server(), player_id);
+            tracing::trace!(player_id, ?identity, delivery, "уничтожение предмета запрещено по исходному имени");
+            return;
         }
         let type_key = if properties.goods_type() == GOODS_TYPE_EQUIPMENT {
             properties.equip_place().wrapping_add(1) as u16
         } else {
             properties.goods_type() as u16
         };
-        report.type_key = Some(type_key);
         if !self.goods_destroy_setup.goods_types().contains(&type_key) {
-            report.outcome = GoodsDestroyConfirmOutcome::GoodsTypeRejected;
             let text = self.get_string_by_id(b"GS1014");
-            report.notice_delivery = Some(
-                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
-                    .send_to_player(self.net_server(), player_id),
-            );
-            return report;
+            let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                .send_to_player(self.net_server(), player_id);
+            tracing::trace!(player_id, ?identity, type_key, delivery, "тип предмета запрещён для уничтожения");
+            return;
         }
         let equipment_state =
             hand_goods.addon_property_value(&self.goods_factory, GAP_EQUIP_STATE, 1);
-        report.equipment_state = Some(equipment_state);
         if matches!(equipment_state, 1 | 2) {
-            report.outcome = GoodsDestroyConfirmOutcome::EquipmentStateRestricted;
             let text = self.get_string_by_id(b"GSN1014");
-            report.notice_delivery = Some(
-                colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
-                    .send_to_player(self.net_server(), player_id),
-            );
-            return report;
+            let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
+                .send_to_player(self.net_server(), player_id);
+            tracing::trace!(player_id, ?identity, equipment_state, delivery, "состояние экипировки запрещает уничтожение");
+            return;
         }
 
         let price = hand_goods.price();
         let name = hand_goods.name().to_vec();
         let amount = hand_goods.amount();
-        report.requested_amount = amount;
         let consumption = self
             .find_player_mut(player_id)
             .and_then(|player| player.destroy_hand_goods(identity.ex_id, amount));
-        if let Some(consumption) = consumption {
-            report.removed_amount = consumption.removed_amount;
-            report.consumption_deliveries = self.send_goods_destroy_hand_consumption(&consumption);
-            report.consumption = Some(consumption);
-        }
+        let removed_amount = consumption.as_ref().map_or(0, |value| value.removed_amount);
+        let consumption_deliveries = consumption
+            .as_ref()
+            .map(|value| self.send_goods_destroy_hand_consumption(value))
+            .unwrap_or_default();
 
-        if report.removed_amount != 0 && self.log_system.goods_destroy_enabled() {
+        let mut world_deliveries = Vec::new();
+        if removed_amount != 0 && self.log_system.goods_destroy_enabled() {
             let player = self
                 .find_player(player_id)
                 .expect("player с hand goods остаётся в CGame после synchronous удаления");
@@ -25440,20 +25286,17 @@ impl CGame {
                 goods: identity,
                 price,
                 name,
-                removed_amount: report.removed_amount,
+                removed_amount,
                 region_id: player.server_region_id(),
                 tile_x: player.shape().get_tile_x(),
                 tile_y: player.shape().get_tile_y(),
             };
-            report.world_deliveries = self.send_goods_destroy_log(player, &audit);
-            report.audit = Some(audit);
-            report.audit_dispatched = true;
+            world_deliveries = self.send_goods_destroy_log(player, &audit);
         }
         let mut response = CMessage::new(0x0b_f927);
-        response.add_ulong(report.removed_amount);
-        report.result_delivery = Some(response.send_to_player(self.net_server(), player_id));
-        report.outcome = GoodsDestroyConfirmOutcome::Destroyed;
-        report
+        response.add_ulong(removed_amount);
+        let result_delivery = response.send_to_player(self.net_server(), player_id);
+        tracing::debug!(player_id, ?identity, type_key, equipment_state, amount, removed_amount, ?consumption_deliveries, ?world_deliveries, result_delivery, "уничтожение предмета завершено");
     }
 
     pub(crate) const fn change_body_conf_mut(&mut self) -> &mut CChangeBodyConf {

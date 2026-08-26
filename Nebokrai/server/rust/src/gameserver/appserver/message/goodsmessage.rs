@@ -415,7 +415,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value as u32,
                 Err(error) => return Some(Err(error)),
             };
-            let Some(_report) = game.compose_synthesis(player_id, synthesis_index, amount, runtime)
+            let Some(()) = game.compose_synthesis(player_id, synthesis_index, amount, runtime)
             else {
                 return Some(Ok(()));
             };
@@ -446,7 +446,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 };
                 (Some(goods_id), requested_amount)
             };
-            let _ = game.open_goods_destroy(
+            game.open_goods_destroy(
                 player_id,
                 container_extend_id,
                 goods_id,
@@ -455,7 +455,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             );
         }
         CONFIRM_GOODS_DESTROY => {
-            let _ = game.confirm_goods_destroy(player_id);
+            game.confirm_goods_destroy(player_id);
         }
         CLOSE_EQUIPMENT_DA_KONG => {
             let session_id = match read_long(message, "equipment DaKong close session ID") {
