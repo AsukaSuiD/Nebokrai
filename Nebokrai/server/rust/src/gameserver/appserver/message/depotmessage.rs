@@ -1,18 +1,20 @@
-//! GameServer depot-password message owner.
+//! Владелец сообщений пароля хранилища GameServer.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
-//! исходный owner `server/gameserver/appserver/message/depotmessage.cpp`
-//! подтверждают всю family. После player/changing/progress guards `0x8FE06`
-//! сравнивает максимум шесть password bytes, сначала отвечает `0xBFB07`, затем
-//! открывает и bank, и depot. `0x8FE07` проверяет старый пароль, длину и ASCII
-//! alphanumeric нового, отвечает `0xBFB08` и только после success меняет player
-//! password. `0x8FE08` синхронно закрывает оба контейнера и завершает banking.
-//! Другие depot opcodes не имеют side effects. `Vec<u8>` заменяет C-string без
-//! требования UTF-8; `CBank/CDepot` остаются owned player state.
+//! исходный владелец `server/gameserver/appserver/message/depotmessage.cpp`
+//! подтверждают всё семейство. После проверок игрока, смены сервера/региона и
+//! текущего процесса `0x8FE06` сравнивает максимум шесть байтов пароля, сначала
+//! отвечает `0xBFB07`, затем открывает bank и depot. `0x8FE07` проверяет старый
+//! пароль, длину и ASCII-буквы/цифры нового, отвечает `0xBFB08` и только после
+//! успеха меняет пароль игрока. `0x8FE08` синхронно закрывает оба контейнера и
+//! завершает банковский процесс. Другие opcode хранилища не имеют эффектов.
+//! `Vec<u8>` сохраняет C-строку без требования UTF-8; `CBank/CDepot` остаются
+//! состоянием игрока. Диагностические причины публикуются через `tracing`.
 
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use tracing::{debug, trace};
 
 const DEPOT_CLIENT_FAMILY: u32 = 0x0008_FE00;
 const DEPOT_SERVER_FAMILY: u32 = 0x0007_FB00;
@@ -24,15 +26,6 @@ const DEPOT_CHANGE_PASSWORD_RESPONSE: i32 = 0x000B_FB08;
 const DEPOT_PASSWORD_BUFFER_SIZE: usize = 7;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DepotMessageIgnoreReason {
-    MissingPlayerContext,
-    MissingPlayer,
-    ChangingServer,
-    ChangingRegion,
-    NotBanking,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DepotPasswordChangeStatus {
     Changed = 0,
     OldPasswordMismatch = 1,
@@ -40,43 +33,12 @@ pub(crate) enum DepotPasswordChangeStatus {
     TooLong = 3,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DepotMessageReport {
-    Ignored {
-        message_type: i32,
-        player_id: Option<i32>,
-        reason: DepotMessageIgnoreReason,
-    },
-    Unlock {
-        player_id: i32,
-        authenticated: bool,
-        delivery: i32,
-        bank_locked: bool,
-        depot_locked: bool,
-    },
-    PasswordChange {
-        player_id: i32,
-        status: DepotPasswordChangeStatus,
-        delivery: i32,
-    },
-    Closed {
-        player_id: i32,
-        bank_locked: bool,
-        depot_locked: bool,
-        progress: PlayerProgress,
-    },
-    Unknown {
-        message_type: i32,
-        player_id: i32,
-    },
-}
-
 /// Материализует весь `OnDepotMessage`; `None` оставляет сообщения других
 /// family их собственным owner-ам.
 pub(crate) fn dispatch_depot_message(
     message: &mut CMessage,
     game: &mut CGame,
-) -> Option<DepotMessageReport> {
+) -> Option<()> {
     let message_type = message.message_type();
     let family = message_type as u32 & 0xFFFF_FF00;
     if family != DEPOT_CLIENT_FAMILY && family != DEPOT_SERVER_FAMILY {
@@ -85,59 +47,52 @@ pub(crate) fn dispatch_depot_message(
 
     message.resolve_player_context(game);
     let Some(player_id) = message.player_id() else {
-        return Some(DepotMessageReport::Ignored {
-            message_type,
-            player_id: None,
-            reason: DepotMessageIgnoreReason::MissingPlayerContext,
-        });
+        trace!(message_type, "сообщение хранилища пропущено: нет контекста игрока");
+        return Some(());
     };
     let Some(player) = game.find_player(player_id) else {
-        return Some(DepotMessageReport::Ignored {
-            message_type,
-            player_id: Some(player_id),
-            reason: DepotMessageIgnoreReason::MissingPlayer,
-        });
+        trace!(message_type, player_id, "сообщение хранилища пропущено: игрок не найден");
+        return Some(());
     };
     let guard = if player.in_changing_server() {
-        Some(DepotMessageIgnoreReason::ChangingServer)
+        Some("смена сервера")
     } else if player.in_changing_region() {
-        Some(DepotMessageIgnoreReason::ChangingRegion)
+        Some("смена региона")
     } else if player.current_progress() != PlayerProgress::Banking {
-        Some(DepotMessageIgnoreReason::NotBanking)
+        Some("игрок не работает с хранилищем")
     } else {
         None
     };
     if let Some(reason) = guard {
-        return Some(DepotMessageReport::Ignored {
-            message_type,
-            player_id: Some(player_id),
-            reason,
-        });
+        trace!(message_type, player_id, reason, "сообщение хранилища пропущено");
+        return Some(());
     }
 
     match message_type {
-        DEPOT_UNLOCK => Some(unlock_depot(message, game, player_id)),
-        DEPOT_CHANGE_PASSWORD => Some(change_depot_password(message, game, player_id)),
+        DEPOT_UNLOCK => {
+            unlock_depot(message, game, player_id);
+            Some(())
+        }
+        DEPOT_CHANGE_PASSWORD => {
+            change_depot_password(message, game, player_id);
+            Some(())
+        }
         DEPOT_CLOSE => {
             let player = game
                 .find_player_mut(player_id)
                 .expect("player проверен до depot close");
             player.close_depot_storage();
-            Some(DepotMessageReport::Closed {
-                player_id,
-                bank_locked: player.bank_locked(),
-                depot_locked: player.depot_locked(),
-                progress: player.current_progress(),
-            })
+            debug!(player_id, "хранилище игрока закрыто");
+            Some(())
         }
-        _ => Some(DepotMessageReport::Unknown {
-            message_type,
-            player_id,
-        }),
+        _ => {
+            trace!(message_type, player_id, "неизвестное сообщение хранилища не имеет эффекта");
+            Some(())
+        }
     }
 }
 
-fn unlock_depot(message: &mut CMessage, game: &mut CGame, player_id: i32) -> DepotMessageReport {
+fn unlock_depot(message: &mut CMessage, game: &mut CGame, player_id: i32) {
     let password = message
         .base_mut()
         .get_str_bytes(DEPOT_PASSWORD_BUFFER_SIZE)
@@ -148,30 +103,21 @@ fn unlock_depot(message: &mut CMessage, game: &mut CGame, player_id: i32) -> Dep
 
     let mut response = CMessage::new(DEPOT_UNLOCK_RESPONSE);
     response.add_byte(u8::from(authenticated));
-    let delivery = response.send_to_player(game.net_server(), player_id);
+    let _ = response.send_to_player(game.net_server(), player_id);
 
     if authenticated {
         game.find_player_mut(player_id)
             .expect("player проверен до depot unlock")
             .unlock_depot_storage();
     }
-    let player = game
-        .find_player(player_id)
-        .expect("player сохраняется на время depot dispatch");
-    DepotMessageReport::Unlock {
-        player_id,
-        authenticated,
-        delivery,
-        bank_locked: player.bank_locked(),
-        depot_locked: player.depot_locked(),
-    }
+    debug!(player_id, authenticated, "обработано открытие хранилища");
 }
 
 fn change_depot_password(
     message: &mut CMessage,
     game: &mut CGame,
     player_id: i32,
-) -> DepotMessageReport {
+) {
     let old_password = message
         .base_mut()
         .get_str_bytes(DEPOT_PASSWORD_BUFFER_SIZE)
@@ -198,15 +144,11 @@ fn change_depot_password(
 
     let mut response = CMessage::new(DEPOT_CHANGE_PASSWORD_RESPONSE);
     response.add_byte(status as u8);
-    let delivery = response.send_to_player(game.net_server(), player_id);
+    let _ = response.send_to_player(game.net_server(), player_id);
     if status == DepotPasswordChangeStatus::Changed {
         game.find_player_mut(player_id)
             .expect("player проверен до смены depot password")
             .set_depot_password(&new_password);
     }
-    DepotMessageReport::PasswordChange {
-        player_id,
-        status,
-        delivery,
-    }
+    debug!(player_id, ?status, "обработана смена пароля хранилища");
 }
