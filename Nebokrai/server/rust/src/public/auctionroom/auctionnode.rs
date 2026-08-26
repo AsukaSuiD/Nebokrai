@@ -1,11 +1,12 @@
 //! Межсерверный узел аукционного товара `CGoodsNode`.
 //! Источники контракта — точные пары Misc/Game/World EXE/PDB.
 //!
-//! Все варианты совпадают: decode сначала очищает owner, затем читает scalar
-//! fields, две C-строки, GUID marker, `AuctionInfo`, длину и goods bytes;
-//! encode пишет обратную последовательность. Cursor включает NUL и GUID marker.
-//! Owned vectors и fixed byte arrays заменяют C++ buffers/lifetime, сохраняя
-//! wire, state transitions и partial decode effects.
+//! Во всех вариантах декодирование сначала очищает владельца, затем читает
+//! скалярные поля, две C-строки, маркер GUID, `AuctionInfo`, длину и байты
+//! предмета; кодирование пишет обратную последовательность. Курсор включает
+//! NUL и маркер GUID. Владеющие векторы и массивы фиксированного размера
+//! заменяют буферы и управление временем жизни C++, сохраняя сетевой формат,
+//! переходы состояния и последствия частичного декодирования.
 
 use std::error::Error;
 use std::fmt;
@@ -308,8 +309,8 @@ pub(crate) struct AuctionDatabaseNodeFields {
     pub(crate) buyer_id: u32,
 }
 
-/// Поля одного exact `MakeCurAucNode` после успешного удаления товара из
-/// двухъячеечного player auction-container.
+/// Поля одного точного `MakeCurAucNode` после успешного удаления товара из
+/// двухъячеечного аукционного контейнера игрока.
 pub(crate) struct AuctionListingNodeFields<'value> {
     pub(crate) account: &'value [u8],
     pub(crate) owner_id: u32,
@@ -324,6 +325,23 @@ pub(crate) struct AuctionListingNodeFields<'value> {
     pub(crate) seller_money: u32,
     pub(crate) seller_time: u32,
     pub(crate) seller_ip: &'value [u8],
+    pub(crate) end_time: u32,
+    pub(crate) goods_bytes: Vec<u8>,
+}
+
+/// Поля одного успешного шага `CPlayer::AutoAddAuctionGoods`.
+pub(crate) struct AuctionAutomaticNodeFields<'value> {
+    pub(crate) account: &'value [u8],
+    pub(crate) owner_id: u32,
+    pub(crate) money_type: u8,
+    pub(crate) goods_type: u8,
+    pub(crate) npc_price: i32,
+    pub(crate) amount: i32,
+    pub(crate) guid: CGuid,
+    pub(crate) level_limit: u32,
+    pub(crate) goods_name: &'value [u8],
+    pub(crate) base_index: u32,
+    pub(crate) seller_time: u32,
     pub(crate) end_time: u32,
     pub(crate) goods_bytes: Vec<u8>,
 }
@@ -466,8 +484,8 @@ impl CGoodsNode {
         node
     }
 
-    /// Создаёт pending listing-node в точном порядке итоговых полей
-    /// `MakeCurAucNode`; client path всегда выставляет цену в YuanBao.
+    /// Создаёт ожидающий узел продажи в точном порядке итоговых полей
+    /// `MakeCurAucNode`; клиентский путь всегда выставляет цену в YuanBao.
     pub(crate) fn from_player_listing(fields: AuctionListingNodeFields<'_>) -> Self {
         let mut node = Self::new();
         node.add_ticket = fields.end_time;
@@ -498,6 +516,37 @@ impl CGoodsNode {
                 .try_into()
                 .expect("PDB seller-ip диапазон имеет длину 0x10"),
             fields.seller_ip,
+        );
+        node.goods_bytes = fields.goods_bytes;
+        node
+    }
+
+    /// Создаёт узел, которым `AutoAddAuctionGoods` заменяет
+    /// `m_CurrentAucNode`; этот сценарный путь не задаёт IP продавца.
+    pub(crate) fn from_automatic_goods(fields: AuctionAutomaticNodeFields<'_>) -> Self {
+        let mut node = Self::new();
+        node.add_ticket = fields.end_time;
+        copy_legacy_database_string(&mut node.account, fields.account);
+        node.owner_id = fields.owner_id;
+        node.auction_time = 0x3840;
+        node.money_type = fields.money_type;
+        node.goods_type = Some(fields.goods_type);
+        node.npc_price = fields.npc_price;
+        node.amount = fields.amount;
+        node.goods_state = GoodsState::AUCTION;
+        node.guid = fields.guid;
+        node.level_limit = Some(fields.level_limit);
+        copy_legacy_database_string(&mut node.goods_name, fields.goods_name);
+        node.base_index = fields.base_index;
+        node.auction_info.set_database_fields(
+            fields.account,
+            1,
+            fields.seller_time,
+            fields.owner_id,
+            &[],
+            0,
+            0,
+            0,
         );
         node.goods_bytes = fields.goods_bytes;
         node

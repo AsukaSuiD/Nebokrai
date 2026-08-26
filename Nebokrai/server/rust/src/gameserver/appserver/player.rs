@@ -8213,6 +8213,12 @@ impl CPlayer {
         true
     }
 
+    /// Точная запись `AutoAddAuctionGoods`: каждый созданный предмет целиком
+    /// заменяет предыдущий `m_CurrentAucNode` без проверки занятости узла.
+    pub(crate) fn replace_current_auction_node(&mut self, node: CGoodsNode) {
+        self.current_auction_node = Some(node);
+    }
+
     pub(crate) fn take_current_auction_node(&mut self) -> Option<CGoodsNode> {
         self.current_auction_node.take()
     }

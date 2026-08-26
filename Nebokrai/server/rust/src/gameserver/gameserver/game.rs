@@ -548,8 +548,9 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_BATTLE_FAIRY, GAP_BF_BRAVE, GAP_BF_CURRENT_MAX_EXP, GAP_BF_DEFUALT_SKLL, GAP_BF_HP,
     GAP_BF_HUOXIESHU_SKILL, GAP_BF_LEVEL, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAX_MP, GAP_BF_MODULE,
     GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_CIQING_PROPERTY1, GAP_EQUIP_STATE,
-    GAP_GOODS_BIND, GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE, GAP_WEAPON_DAMAGE_LEVEL,
-    GOODS_TYPE_EQUIPMENT,
+    GAP_GOODS_AUCTION_SCALE, GAP_GOODS_BIND, GAP_GOODS_PACKAGE_EXTENTION, GAP_PARTICULAR_ATTRIBUTE,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_DAMAGE_LEVEL, GOODS_TYPE_CONSUMABLE,
+    GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::goods::fairyproperties::{
@@ -806,6 +807,7 @@ use crate::nets::netserver::mynetserver::{
 };
 use crate::nets::servers::ServerHostError;
 use crate::public::aucitionroom::CGameAuctionRoom;
+use crate::public::auctionnode::{AuctionAutomaticNodeFields, CGoodsNode};
 use crate::public::ciqing::{CCiQingSetup, CiQingSerializationBlock};
 use crate::public::dakongxiangqian::CDaKongXiangQian;
 use crate::public::dupliregionsetup::CDupliRegionSetup;
@@ -14678,6 +14680,78 @@ impl CGame {
         let mut message = CMessage::new(0x000c_070b);
         message.add_ulong(current);
         let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    /// Полный проход `CPlayer::AutoAddAuctionGoods`: фабричный предмет
+    /// копируется, копия получает новый GUID и на каждом успешном шаге целиком
+    /// заменяет текущий аукционный узел игрока. Этот служебный сценарный путь
+    /// не отправляет сообщений и не добавляет узел в общий аукционный зал.
+    pub(crate) fn auto_add_script_auction_goods(
+        &mut self,
+        player_id: i32,
+        first_index: i32,
+        count: i32,
+        money_type: i32,
+    ) {
+        if count <= 0 || !self.players.contains_key(&player_id) {
+            return;
+        }
+        for offset in 0..count {
+            let goods_index = first_index.wrapping_add(offset) as u32;
+            let Some(factory_goods) = self.create_goods_core(goods_index) else {
+                break;
+            };
+            let mut goods = factory_goods.clone();
+            let Some(properties) = self
+                .goods_factory
+                .query_goods_base_properties(goods.base_properties_index())
+            else {
+                break;
+            };
+            let goods_type = match properties.goods_type() {
+                GOODS_TYPE_USELESS => 0,
+                GOODS_TYPE_CONSUMABLE => 1,
+                GOODS_TYPE_EQUIPMENT => properties.equip_place().wrapping_add(1) as u8,
+                _ => break,
+            };
+            let _ = goods.set_addon_property_value_core(GAP_GOODS_AUCTION_SCALE, 1, 1);
+            goods.set_ex_id(CGuid::create().unwrap_or(CGuid::GUID_INVALID));
+
+            let seller_time = game_wall_time_seconds() as u32;
+            let end_time = (game_wall_time_seconds() as u32).wrapping_add(0x3840);
+            let level_limit =
+                goods.addon_property_value(&self.goods_factory, GAP_ROLE_MINIMUM_LEVEL_LIMIT, 1)
+                    as u32;
+            let mut goods_bytes = Vec::new();
+            if !goods.serialize(&mut goods_bytes, true) {
+                break;
+            }
+            let account = self
+                .players
+                .get(&player_id)
+                .expect("игрок проверен перед AutoAddAuctionGoods")
+                .account()
+                .to_vec();
+            let node = CGoodsNode::from_automatic_goods(AuctionAutomaticNodeFields {
+                account: &account,
+                owner_id: player_id as u32,
+                money_type: money_type as u8,
+                goods_type,
+                npc_price: goods.price() as i32,
+                amount: goods.amount() as i32,
+                guid: goods.identity().ex_id,
+                level_limit,
+                goods_name: goods.name(),
+                base_index: goods.base_properties_index(),
+                seller_time,
+                end_time,
+                goods_bytes,
+            });
+            self.players
+                .get_mut(&player_id)
+                .expect("игрок проверен перед заменой аукционного узла")
+                .replace_current_auction_node(node);
+        }
     }
 
     pub(crate) fn refresh_player_auction_self_goods(
