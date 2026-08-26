@@ -660,7 +660,7 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddRuntimeFacts, PlayerEquipmentDelivery, PlayerEquipmentRemoveEffect,
     PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts, PlayerExitSilenceUpdate,
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGameSaveDecodeReport,
-    PlayerGoodsAiDeletion, PlayerHonorResetReport, PlayerLoginGoodsLocation,
+    PlayerGoodsAiDeletion, PlayerLoginGoodsLocation,
     PlayerMurdererSignDecrease, PlayerProgress, PlayerReliveMutation, PlayerReliveOwnedPrelude,
     PlayerSkillDispatch, PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel,
     PlayerUncreatedCarriage,
@@ -28721,14 +28721,12 @@ impl CGame {
         self.players.keys().copied().collect()
     }
 
-    pub(crate) fn reset_total_honor_eliminate(
-        &mut self,
-        reset_mask: u32,
-    ) -> Vec<PlayerHonorResetReport> {
-        self.players
-            .values_mut()
-            .map(|player| player.reset_total_honor_eliminate(reset_mask))
-            .collect()
+    pub(crate) fn reset_total_honor_eliminate(&mut self, reset_mask: u32) {
+        for player in self.players.values_mut() {
+            let player_id = player.player_id();
+            let reset = player.reset_total_honor_eliminate(reset_mask);
+            tracing::trace!(player_id, reset_mask, ?reset, "счётчики чести игрока сброшены");
+        }
     }
 
     pub(crate) fn register_team_session(&mut self, team_id: u32, session_id: i32) -> Option<i32> {
