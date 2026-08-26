@@ -130,16 +130,6 @@ pub(crate) trait AreaAiContext {
     fn monster_ai_facts(&mut self, monster_id: i32) -> Option<AreaMonsterAiFacts>;
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct AreaAiReport {
-    pub(crate) expired_goods: Vec<(CGuid, bool)>,
-    pub(crate) expired_protections: Vec<CGuid>,
-    pub(crate) stale_monsters: Vec<i32>,
-    pub(crate) hibernated_monsters: Vec<i32>,
-    pub(crate) tamed_monsters: Vec<i32>,
-    pub(crate) carriages: Vec<i32>,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct AreaGoodsProtection {
     timestamp_ms: u32,
@@ -362,9 +352,9 @@ impl CArea {
         &mut self,
         goods_disappear_timer_ms: u32,
         context: &mut Context,
-    ) -> AreaAiReport {
+    ) -> Vec<CGuid> {
         let _guard = self.critical_section.lock();
-        let mut report = AreaAiReport::default();
+        let mut expired_goods = Vec::new();
         let goods_ids: Vec<_> = self.dropped_goods_timestamps.keys().copied().collect();
         for ex_id in goods_ids {
             let timestamp_ms = self.dropped_goods_timestamps[&ex_id];
@@ -372,10 +362,10 @@ impl CArea {
             if now_ms >= timestamp_ms.wrapping_add(goods_disappear_timer_ms) {
                 // Wire publication и `CS_DELETE` принадлежат owning region/
                 // game. Deadline снимается reached tail-ом только после них.
-                report.expired_goods.push((ex_id, false));
+                expired_goods.push(ex_id);
             }
         }
-        report
+        expired_goods
     }
 
     /// Продолжает exact `CArea::AI` после завершения goods pass. Deadline
@@ -385,9 +375,13 @@ impl CArea {
         &mut self,
         goods_protected_timer_ms: u32,
         context: &mut Context,
-        report: &mut AreaAiReport,
     ) {
         let _guard = self.critical_section.lock();
+        let mut expired_protections = 0usize;
+        let mut stale_monsters = 0usize;
+        let mut hibernated_monsters = 0usize;
+        let mut tamed_monsters = 0usize;
+        let mut carriages = 0usize;
         let protected_goods_ids: Vec<_> = self.goods_protection.keys().copied().collect();
         for ex_id in protected_goods_ids {
             let protection = self.goods_protection[&ex_id];
@@ -398,48 +392,63 @@ impl CArea {
                     .wrapping_add(goods_protected_timer_ms)
             {
                 self.goods_protection.remove(&ex_id);
-                report.expired_protections.push(ex_id);
+                expired_protections = expired_protections.wrapping_add(1);
             }
         }
 
-        if !self.players.is_empty()
-            || (self.active_monsters.is_empty()
-                && self.pets.is_empty()
-                && self.carriages.is_empty())
+        if self.players.is_empty()
+            && (!self.active_monsters.is_empty()
+                || !self.pets.is_empty()
+                || !self.carriages.is_empty())
         {
-            return;
-        }
-
-        let mut index = 0;
-        while index < self.active_monsters.len() {
-            let monster_id = self.active_monsters[index];
-            let Some(facts) = context.monster_ai_facts(monster_id) else {
-                self.active_monsters.remove(index);
-                report.stale_monsters.push(monster_id);
-                continue;
-            };
-            if facts.hibernated {
-                self.sleeping_monsters.push(monster_id);
-                self.active_monsters.remove(index);
-                report.hibernated_monsters.push(monster_id);
-            } else if facts.tamed {
-                self.pets.push(monster_id);
-                self.active_monsters.remove(index);
-                report.tamed_monsters.push(monster_id);
-            } else if facts.carriage {
-                self.carriages.push(monster_id);
-                self.active_monsters.remove(index);
-                report.carriages.push(monster_id);
-            } else {
-                index += 1;
+            let mut index = 0;
+            while index < self.active_monsters.len() {
+                let monster_id = self.active_monsters[index];
+                let Some(facts) = context.monster_ai_facts(monster_id) else {
+                    self.active_monsters.remove(index);
+                    stale_monsters = stale_monsters.wrapping_add(1);
+                    continue;
+                };
+                if facts.hibernated {
+                    self.sleeping_monsters.push(monster_id);
+                    self.active_monsters.remove(index);
+                    hibernated_monsters = hibernated_monsters.wrapping_add(1);
+                } else if facts.tamed {
+                    self.pets.push(monster_id);
+                    self.active_monsters.remove(index);
+                    tamed_monsters = tamed_monsters.wrapping_add(1);
+                } else if facts.carriage {
+                    self.carriages.push(monster_id);
+                    self.active_monsters.remove(index);
+                    carriages = carriages.wrapping_add(1);
+                } else {
+                    index += 1;
+                }
             }
+            move_hibernated_monsters(
+                &mut self.pets,
+                &mut self.sleeping_monsters,
+                context,
+                &mut stale_monsters,
+                &mut hibernated_monsters,
+            );
+            move_hibernated_monsters(
+                &mut self.carriages,
+                &mut self.sleeping_monsters,
+                context,
+                &mut stale_monsters,
+                &mut hibernated_monsters,
+            );
         }
-        move_hibernated_monsters(&mut self.pets, &mut self.sleeping_monsters, context, report);
-        move_hibernated_monsters(
-            &mut self.carriages,
-            &mut self.sleeping_monsters,
-            context,
-            report,
+        tracing::trace!(
+            area_x = self.x,
+            area_y = self.y,
+            expired_protections,
+            stale_monsters,
+            hibernated_monsters,
+            tamed_monsters,
+            carriages,
+            "завершены переходы ИИ области"
         );
     }
 
@@ -707,20 +716,21 @@ fn move_hibernated_monsters<Context: AreaAiContext>(
     source: &mut Vec<i32>,
     sleeping: &mut Vec<i32>,
     context: &mut Context,
-    report: &mut AreaAiReport,
+    stale_monsters: &mut usize,
+    hibernated_monsters: &mut usize,
 ) {
     let mut index = 0;
     while index < source.len() {
         let monster_id = source[index];
         let Some(facts) = context.monster_ai_facts(monster_id) else {
             source.remove(index);
-            report.stale_monsters.push(monster_id);
+            *stale_monsters = stale_monsters.wrapping_add(1);
             continue;
         };
         if facts.hibernated {
             sleeping.push(monster_id);
             source.remove(index);
-            report.hibernated_monsters.push(monster_id);
+            *hibernated_monsters = hibernated_monsters.wrapping_add(1);
         } else {
             index += 1;
         }

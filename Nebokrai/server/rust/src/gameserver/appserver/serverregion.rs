@@ -138,7 +138,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use encoding_rs::WINDOWS_1251;
 
-use super::area::{AreaAiContext, AreaAiReport, AreaWokenMonsterClass, CArea, WarSoulPoint};
+use super::area::{AreaAiContext, AreaWokenMonsterClass, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
 use super::country::countryparam::CCountryParam;
 use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
@@ -1377,7 +1377,7 @@ impl CServerRegion {
         area_index: usize,
         goods_disappear_timer_ms: u32,
         context: &mut Context,
-    ) -> Option<AreaAiReport> {
+    ) -> Option<Vec<CGuid>> {
         Some(
             self.areas
                 .get_mut(area_index)?
@@ -1396,10 +1396,9 @@ impl CServerRegion {
         area_index: usize,
         goods_protected_timer_ms: u32,
         context: &mut Context,
-        report: &mut AreaAiReport,
     ) {
         if let Some(area) = self.areas.get_mut(area_index) {
-            area.finish_ai(goods_protected_timer_ms, context, report);
+            area.finish_ai(goods_protected_timer_ms, context);
         }
     }
 

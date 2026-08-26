@@ -36902,20 +36902,21 @@ impl CGame {
                 });
                 monster_facts.insert(identity.id, facts);
             }
-            let area_ai = {
+            let expired_goods = {
                 let mut context = GameAreaAiContext {
                     runtime,
                     monster_facts: monster_facts.clone(),
                 };
                 region.begin_area_ai(area_index, goods_disappear_timer_ms, &mut context)
             };
-            if let Some(mut area_ai) = area_ai {
-                for (ex_id, resolved) in &mut area_ai.expired_goods {
+            if let Some(expired_goods) = expired_goods {
+                for ex_id in expired_goods {
                     let mut around_delivery = None;
-                    if region.find_ground_goods(*ex_id).is_some() {
+                    let mut staged_for_delete = false;
+                    if region.find_ground_goods(ex_id).is_some() {
                         {
                             let goods = region
-                                .find_ground_goods(*ex_id)
+                                .find_ground_goods(ex_id)
                                 .expect("owned ground goods проверен выше");
                             let position = goods
                                 .shape()
@@ -36929,7 +36930,7 @@ impl CGame {
                             let mut deletion = CS2CContainerObjectMove::default();
                             deletion.set_operation(ContainerObjectMoveOperation::DeleteObject);
                             deletion.set_source_container(200, region.id, position);
-                            deletion.set_source_object(GOODS_TYPE, *ex_id, goods.amount());
+                            deletion.set_source_object(GOODS_TYPE, ex_id, goods.amount());
                             let message = deletion.message();
                             if let Some(around) = GameServerAroundRuntime::new(
                                 self,
@@ -36945,14 +36946,14 @@ impl CGame {
                                 ));
                             }
                         }
-                        if let Some(goods) = region.find_ground_goods_mut(*ex_id) {
+                        if let Some(goods) = region.find_ground_goods_mut(ex_id) {
                             goods.shape_mut().set_change_state(SHAPE_CHANGE_DELETE);
-                            *resolved = true;
+                            staged_for_delete = true;
                         }
                     }
-                    region.finish_area_ground_goods_expiration(area_index, *ex_id);
+                    region.finish_area_ground_goods_expiration(area_index, ex_id);
                     ground_goods_expirations = ground_goods_expirations.wrapping_add(1);
-                    tracing::trace!(region_id = region.id, ex_id = ?ex_id, ?around_delivery, staged_for_delete = *resolved, "завершён срок жизни предмета на земле");
+                    tracing::trace!(region_id = region.id, ex_id = ?ex_id, ?around_delivery, staged_for_delete, "завершён срок жизни предмета на земле");
                 }
                 {
                     let mut context = GameAreaAiContext {
@@ -36963,11 +36964,10 @@ impl CGame {
                         area_index,
                         goods_protected_timer_ms,
                         &mut context,
-                        &mut area_ai,
                     );
                 }
                 area_ai_passes = area_ai_passes.wrapping_add(1);
-                tracing::trace!(region_id = region.id, area_index, ?area_ai, "завершён проход ИИ области");
+                tracing::trace!(region_id = region.id, area_index, "завершён проход ИИ области");
             }
             for identity in region.active_shape_candidates(area_index) {
                 let Some(change_state) = self.region_shape_change_state(region, identity, runtime)
