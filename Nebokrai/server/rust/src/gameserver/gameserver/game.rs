@@ -730,10 +730,8 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 };
 use crate::gameserver::appserver::session::cequipmentupgrade::{
     CEquipmentUpgrade, EQUIPMENT_UPGRADE_FAILURE_LOG_REASON, EQUIPMENT_UPGRADE_LOST_LOG_REASON,
-    EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON, EquipmentUpgradeAuditLog, EquipmentUpgradeClientUpdate,
-    EquipmentUpgradeCloseOutcome, EquipmentUpgradeCloseReport, EquipmentUpgradeConsumption,
-    EquipmentUpgradeConsumptionRemoval, EquipmentUpgradeGoodsSnapshot,
-    EquipmentUpgradeLostAuditLog, EquipmentUpgradeOutcome, EquipmentUpgradeReport,
+    EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON, EquipmentUpgradeAuditLog,
+    EquipmentUpgradeGoodsSnapshot, EquipmentUpgradeLostAuditLog,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     CSessionFactory, EquipmentSessionPlugKind, EquipmentSessionShadowRemoved, SessionEndReport,
@@ -18911,124 +18909,100 @@ impl CGame {
         session_id: i32,
         requested_plug_id: i32,
         context: &mut Context,
-    ) -> EquipmentUpgradeReport {
-        let mut report = EquipmentUpgradeReport {
-            session_id,
-            requested_plug_id,
-            actual_plug_id: None,
-            outcome: EquipmentUpgradeOutcome::MissingSessionOrPlug,
-            price: 0,
-            probability: 0,
-            roll: None,
-            previous_money: None,
-            current_money: None,
-            previous_level: None,
-            resulting_level: None,
-            notifications: Vec::new(),
-            money_deliveries: Vec::new(),
-            consumptions: Vec::new(),
-            client_update: None,
-            client_update_delivery: None,
-            audit: None,
-            lost_audit: None,
-            world_deliveries: Vec::new(),
-        };
+    ) {
         if self.session_factory.query_session(session_id).is_none() {
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, "сессия улучшения не найдена");
+            return;
         }
-        report.actual_plug_id = self
+        let actual_plug_id = self
             .session_factory
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
-        let Some(actual_plug_id) = report.actual_plug_id else {
-            return report;
+        let Some(actual_plug_id) = actual_plug_id else {
+            tracing::trace!(player_id, session_id, requested_plug_id, "plug улучшения не найден");
+            return;
         };
         if actual_plug_id != requested_plug_id {
-            report.outcome = EquipmentUpgradeOutcome::PlugIdMismatch;
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, actual_plug_id, "plug улучшения не совпал");
+            return;
         }
         let Some(mut plug) = self
             .session_factory
             .take_equipment_upgrade_plug(actual_plug_id)
         else {
-            return report;
+            tracing::trace!(player_id, session_id, actual_plug_id, "владелец plug улучшения не найден");
+            return;
         };
         let Some(mut player) = self.players.remove(&player_id) else {
             self.session_factory
                 .register_equipment_upgrade_plug(actual_plug_id, plug);
-            return report;
+            tracing::trace!(player_id, session_id, actual_plug_id, "игрок улучшения не найден");
+            return;
         };
-        report = self.upgrade_equipment_inner(&mut player, &mut plug, report, context);
+        self.upgrade_equipment_inner(
+            &mut player,
+            &mut plug,
+            session_id,
+            requested_plug_id,
+            context,
+        );
         self.players.insert(player_id, player);
         self.session_factory
             .register_equipment_upgrade_plug(actual_plug_id, plug);
-        report
     }
 
     fn upgrade_equipment_inner<Context: EquipmentUpgradeContext>(
         &mut self,
         player: &mut CPlayer,
         plug: &mut CEquipmentUpgrade,
-        mut report: EquipmentUpgradeReport,
+        session_id: i32,
+        requested_plug_id: i32,
         context: &mut Context,
-    ) -> EquipmentUpgradeReport {
+    ) {
         let player_id = player.player_id();
         let Some(region_id) = player.server_region_id() else {
-            report.outcome = EquipmentUpgradeOutcome::MissingPlayerOrRegion;
-            return report;
+            tracing::trace!(player_id, session_id, requested_plug_id, "регион игрока улучшения не найден");
+            return;
         };
         let tile_x = player.shape().get_tile_x().unwrap_or(0);
         let tile_y = player.shape().get_tile_y().unwrap_or(0);
-        report.price = plug.upgrade_price(|goods_id| {
+        let price = plug.upgrade_price(|goods_id| {
             player.get_goods_by_id(goods_id).map_or(0, |goods| {
                 CEquipmentUpgrade::price_property(goods, &self.goods_factory)
             })
         });
-        if player.money() < report.price {
-            report.outcome = EquipmentUpgradeOutcome::InsufficientMoneyForValidation;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(
-                    player_id,
-                    "GS0250",
-                    Some(report.price),
-                ));
-            return report;
+        if player.money() < price {
+            self.send_equipment_upgrade_notification(player_id, "GS0250", Some(price));
+            tracing::trace!(player_id, session_id, requested_plug_id, price, "недостаточно денег при проверке улучшения");
+            return;
         }
         let Some(equipment_id) = plug.goods_id(UpgradeEquipmentCell::Equipment) else {
-            report.outcome = EquipmentUpgradeOutcome::MissingOrInvalidEquipment;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(player_id, "GS0249", None));
-            return report;
+            self.send_equipment_upgrade_notification(player_id, "GS0249", None);
+            tracing::trace!(player_id, session_id, "оборудование для улучшения не выбрано");
+            return;
         };
         let Some(equipment) = player.get_goods_by_id(equipment_id) else {
-            report.outcome = EquipmentUpgradeOutcome::MissingOrInvalidEquipment;
-            return report;
+            tracing::trace!(player_id, session_id, ?equipment_id, "оборудование для улучшения не найдено");
+            return;
         };
         if !equipment.can_upgraded(&self.goods_factory) {
-            report.outcome = EquipmentUpgradeOutcome::MissingOrInvalidEquipment;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(player_id, "GS0249", None));
-            return report;
+            self.send_equipment_upgrade_notification(player_id, "GS0249", None);
+            tracing::trace!(player_id, session_id, ?equipment_id, "оборудование нельзя улучшить");
+            return;
         }
         let current_level = equipment.addon_property_value(
             &self.goods_factory,
             crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_LEVEL,
             1,
         );
-        report.previous_level = Some(current_level as u32);
         let Some(base_gem_id) = plug.goods_id(UpgradeEquipmentCell::BaseGem) else {
-            report.outcome = EquipmentUpgradeOutcome::MissingBaseGem;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(player_id, "GS0248", None));
-            return report;
+            self.send_equipment_upgrade_notification(player_id, "GS0248", None);
+            tracing::trace!(player_id, session_id, "базовый камень улучшения не выбран");
+            return;
         };
         let Some(base_gem) = player.get_goods_by_id(base_gem_id) else {
-            report.outcome = EquipmentUpgradeOutcome::MissingBaseGem;
-            return report;
+            tracing::trace!(player_id, session_id, ?base_gem_id, "базовый камень улучшения не найден");
+            return;
         };
         let minimum_level = base_gem.addon_property_value(
             &self.goods_factory,
@@ -19041,38 +19015,30 @@ impl CGame {
             2,
         ));
         if current_level < minimum_level || maximum_level < current_level {
-            report.outcome = EquipmentUpgradeOutcome::EquipmentLevelOutsideGemRange;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(player_id, "GS0247", None));
-            return report;
+            self.send_equipment_upgrade_notification(player_id, "GS0247", None);
+            tracing::trace!(player_id, session_id, current_level, minimum_level, maximum_level, "уровень оборудования вне диапазона камня");
+            return;
         }
         if 98 < current_level as u32 {
-            report.outcome = EquipmentUpgradeOutcome::MaximumLevel;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(player_id, "GS0257", None));
-            return report;
+            self.send_equipment_upgrade_notification(player_id, "GS0257", None);
+            tracing::trace!(player_id, session_id, current_level, "достигнут максимальный уровень улучшения");
+            return;
         }
-        report.probability = plug.probability(|goods_id, property, value_id| {
+        let probability = plug.probability(|goods_id, property, value_id| {
             player.get_goods_by_id(goods_id).map_or(0, |goods| {
                 goods.addon_property_value(&self.goods_factory, property, value_id)
             })
         });
-        if player.money() < report.price {
-            report.outcome = EquipmentUpgradeOutcome::InsufficientMoneyAtExecution;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(player_id, "GS0256", None));
-            return report;
+        if player.money() < price {
+            self.send_equipment_upgrade_notification(player_id, "GS0256", None);
+            tracing::trace!(player_id, session_id, price, "недостаточно денег при выполнении улучшения");
+            return;
         }
 
-        let money = player.decrease_money(report.price, &self.goods_factory);
-        report.previous_money = Some(money.previous);
-        report.current_money = Some(money.current);
-        report.money_deliveries = self.send_player_money_decrease(player_id, &money.outcome);
+        let money = player.decrease_money(price, &self.goods_factory);
+        let money_deliveries = self.send_player_money_decrease(player_id, &money.outcome);
+        tracing::trace!(player_id, session_id, previous_money = money.previous, current_money = money.current, ?money_deliveries, "списана стоимость улучшения");
         let roll = game_legacy_random(&mut self.random_state, 100) as u32 + 1;
-        report.roll = Some(roll);
 
         let gem_cells = [
             UpgradeEquipmentCell::BaseGem,
@@ -19086,7 +19052,7 @@ impl CGame {
                 .map(EquipmentUpgradeGoodsSnapshot::capture)
         });
 
-        let success = roll <= report.probability;
+        let success = roll <= probability;
         if success {
             let succeed = plug.succeed_result(
                 |goods_id, property, value_id| {
@@ -19103,11 +19069,7 @@ impl CGame {
                     game_legacy_random(random_state, upper_bound)
                 });
             }
-            report.resulting_level = Some(target_level as u32);
-            report.outcome = EquipmentUpgradeOutcome::Succeeded;
-            report
-                .notifications
-                .push(self.send_equipment_upgrade_notification(player_id, "GS0251", None));
+            self.send_equipment_upgrade_notification(player_id, "GS0251", None);
             if self.log_system.goods_upgrade_success_enabled() {
                 let audit = EquipmentUpgradeAuditLog {
                     reason: EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON,
@@ -19121,12 +19083,10 @@ impl CGame {
                     tile_x,
                     tile_y,
                 };
-                report
-                    .world_deliveries
-                    .extend(self.send_equipment_upgrade_audit(&audit));
-                report.audit = Some(audit);
+                self.send_equipment_upgrade_audit(&audit);
             }
-            self.publish_equipment_upgrade_update(player, equipment_id, &mut report, context);
+            self.publish_equipment_upgrade_update(player, equipment_id, context);
+            tracing::trace!(player_id, session_id, price, probability, roll, previous_level = current_level, resulting_level = target_level, "оборудование улучшено");
         } else {
             let equipment_snapshot = player
                 .get_goods_by_id(equipment_id)
@@ -19142,10 +19102,7 @@ impl CGame {
                     tile_x,
                     tile_y,
                 };
-                report
-                    .world_deliveries
-                    .extend(self.send_equipment_upgrade_audit(&audit));
-                report.audit = Some(audit);
+                self.send_equipment_upgrade_audit(&audit);
             }
             match plug.failed_result(|goods_id, property, value_id| {
                 player.get_goods_by_id(goods_id).map_or(0, |goods| {
@@ -19153,11 +19110,8 @@ impl CGame {
                 })
             }) {
                 1 => {
-                    report.outcome = EquipmentUpgradeOutcome::FailedUnchanged;
-                    report.resulting_level = Some(current_level as u32);
-                    report
-                        .notifications
-                        .push(self.send_equipment_upgrade_notification(player_id, "GS0252", None));
+                    self.send_equipment_upgrade_notification(player_id, "GS0252", None);
+                    tracing::trace!(player_id, session_id, probability, roll, current_level, "неудачное улучшение не изменило уровень");
                 }
                 2 => {
                     let target_level = current_level.saturating_sub(1);
@@ -19167,17 +19121,9 @@ impl CGame {
                             game_legacy_random(random_state, upper_bound)
                         });
                     }
-                    report.outcome = EquipmentUpgradeOutcome::FailedLevelLost;
-                    report.resulting_level = Some(target_level as u32);
-                    report
-                        .notifications
-                        .push(self.send_equipment_upgrade_notification(player_id, "GS0253", None));
-                    self.publish_equipment_upgrade_update(
-                        player,
-                        equipment_id,
-                        &mut report,
-                        context,
-                    );
+                    self.send_equipment_upgrade_notification(player_id, "GS0253", None);
+                    self.publish_equipment_upgrade_update(player, equipment_id, context);
+                    tracing::trace!(player_id, session_id, probability, roll, previous_level = current_level, resulting_level = target_level, "неудачное улучшение снизило уровень");
                 }
                 3 => {
                     if let Some(equipment) = player.get_goods_by_id_mut(equipment_id) {
@@ -19186,23 +19132,12 @@ impl CGame {
                             game_legacy_random(random_state, upper_bound)
                         });
                     }
-                    report.outcome = EquipmentUpgradeOutcome::FailedReset;
-                    report.resulting_level = Some(0);
-                    report
-                        .notifications
-                        .push(self.send_equipment_upgrade_notification(player_id, "GS0254", None));
-                    self.publish_equipment_upgrade_update(
-                        player,
-                        equipment_id,
-                        &mut report,
-                        context,
-                    );
+                    self.send_equipment_upgrade_notification(player_id, "GS0254", None);
+                    self.publish_equipment_upgrade_update(player, equipment_id, context);
+                    tracing::trace!(player_id, session_id, probability, roll, previous_level = current_level, "неудачное улучшение сбросило уровень");
                 }
                 _ => {
-                    report.outcome = EquipmentUpgradeOutcome::FailedEquipmentLost;
-                    report
-                        .notifications
-                        .push(self.send_equipment_upgrade_notification(player_id, "GS0255", None));
+                    self.send_equipment_upgrade_notification(player_id, "GS0255", None);
                     if self.log_system.goods_lost_by_upgrade_enabled() {
                         let lost = EquipmentUpgradeLostAuditLog {
                             reason: EQUIPMENT_UPGRADE_LOST_LOG_REASON,
@@ -19217,26 +19152,22 @@ impl CGame {
                             tile_y,
                             client_ip: player.client_ip(),
                         };
-                        report
-                            .world_deliveries
-                            .extend(self.send_equipment_upgrade_lost_audit(&lost));
-                        report.lost_audit = Some(lost);
+                        self.send_equipment_upgrade_lost_audit(&lost);
                     }
                     self.consume_equipment_upgrade_cell(
                         player,
                         plug,
                         UpgradeEquipmentCell::Equipment,
-                        &mut report,
                         context,
                     );
+                    tracing::trace!(player_id, session_id, probability, roll, "неудачное улучшение уничтожило оборудование");
                 }
             }
         }
 
         for cell in gem_cells {
-            self.consume_equipment_upgrade_cell(player, plug, cell, &mut report, context);
+            self.consume_equipment_upgrade_cell(player, plug, cell, context);
         }
-        report
     }
 
     fn send_equipment_upgrade_notification(
@@ -19244,17 +19175,18 @@ impl CGame {
         player_id: i32,
         string_id: &str,
         format_value: Option<u32>,
-    ) -> i32 {
+    ) {
         let template = self.get_string_by_id(string_id.as_bytes());
         let text = format_value.map_or_else(
             || legacy_c_string_prefix(template).to_vec(),
             |value| format_single_legacy_u32(template, value, 255),
         );
-        colored_player_notice_message(0xffff_ffff, 0, &text)
-            .send_to_player(self.net_server(), player_id)
+        let delivery = colored_player_notice_message(0xffff_ffff, 0, &text)
+            .send_to_player(self.net_server(), player_id);
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление улучшения");
     }
 
-    fn send_equipment_upgrade_audit(&self, audit: &EquipmentUpgradeAuditLog) -> Vec<i32> {
+    fn send_equipment_upgrade_audit(&self, audit: &EquipmentUpgradeAuditLog) {
         let mut message = CMessage::new(0x0006_0203);
         message.add_byte(audit.reason);
         message.add_long(audit.player_id);
@@ -19265,10 +19197,11 @@ impl CGame {
         message.add_long(audit.region_id);
         message.add_long(audit.tile_x);
         message.add_long(audit.tile_y);
-        message.send(self, false).into_iter().collect()
+        let deliveries = message.send(self, false);
+        tracing::trace!(player_id = audit.player_id, reason = audit.reason, ?deliveries, "отправлен журнал улучшения в World");
     }
 
-    fn send_equipment_upgrade_lost_audit(&self, audit: &EquipmentUpgradeLostAuditLog) -> Vec<i32> {
+    fn send_equipment_upgrade_lost_audit(&self, audit: &EquipmentUpgradeLostAuditLog) {
         let mut message = CMessage::new(0x0006_0202);
         message.add_byte(audit.reason);
         message.add_long(audit.player_id);
@@ -19285,21 +19218,24 @@ impl CGame {
         message.add_long(audit.tile_x);
         message.add_long(audit.tile_y);
         message.add_ulong(audit.client_ip);
-        message.send(self, false).into_iter().collect()
+        let deliveries = message.send(self, false);
+        tracing::trace!(player_id = audit.player_id, reason = audit.reason, ?deliveries, "отправлен журнал потери оборудования в World");
     }
 
     fn send_equipment_upgrade_consumption(
         &self,
         previous: &crate::gameserver::appserver::container::ccontainer::PreviousContainer,
         consumption: &CiQingPacketConsumption,
-    ) -> Vec<i32> {
+    ) {
         if consumption.remaining_amount == 0 {
-            return vec![self.send_container_object_delete(
+            let delivery = self.send_container_object_delete(
                 consumption.player_id,
                 previous,
                 consumption.goods,
                 consumption.previous_amount,
-            )];
+            );
+            tracing::trace!(player_id = consumption.player_id, ?consumption.goods, delivery, "отправлено удаление расходника улучшения");
+            return;
         }
         let mut message = CS2CContainerObjectAmountChange::default();
         message.set_source_container(
@@ -19310,7 +19246,8 @@ impl CGame {
         message.set_source_container_extend_id(previous.container_extend_id);
         message.set_object(consumption.goods.object_type, consumption.goods.ex_id);
         message.set_object_amount(consumption.remaining_amount);
-        vec![message.send_to_player(self, consumption.player_id)]
+        let delivery = message.send_to_player(self, consumption.player_id);
+        tracing::trace!(player_id = consumption.player_id, ?consumption.goods, delivery, remaining_amount = consumption.remaining_amount, "отправлено изменение расходника улучшения");
     }
 
     fn send_container_object_delete(
@@ -19336,25 +19273,23 @@ impl CGame {
         &self,
         player: &CPlayer,
         equipment_id: CGuid,
-        report: &mut EquipmentUpgradeReport,
         context: &mut Context,
     ) {
         let Some(goods) = player.get_goods_by_id(equipment_id) else {
             return;
         };
-        let update = EquipmentUpgradeClientUpdate {
-            player_id: player.player_id(),
-            goods: goods.identity(),
-            old_client_payload: context.encode_goods_for_old_client(goods),
-        };
+        let player_id = player.player_id();
+        let goods = goods.identity();
+        let old_client_payload = context.encode_goods_for_old_client(
+            player.get_goods_by_id(equipment_id).expect("оборудование проверено"),
+        );
         let mut message = CMessage::new(0x0b_f918);
-        message.add_long(update.player_id);
-        message.base_mut().add_guid(update.goods.ex_id);
-        message.add_ulong(update.old_client_payload.len() as u32);
-        message.base_mut().add(&update.old_client_payload);
-        report.client_update_delivery =
-            Some(message.send_to_player(self.net_server(), update.player_id));
-        report.client_update = Some(update);
+        message.add_long(player_id);
+        message.base_mut().add_guid(goods.ex_id);
+        message.add_ulong(old_client_payload.len() as u32);
+        message.base_mut().add(&old_client_payload);
+        let delivery = message.send_to_player(self.net_server(), player_id);
+        tracing::trace!(player_id, ?goods, delivery, "отправлено обновление улучшенного оборудования");
     }
 
     fn consume_equipment_upgrade_cell<Context: EquipmentUpgradeContext>(
@@ -19362,7 +19297,6 @@ impl CGame {
         player: &mut CPlayer,
         plug: &mut CEquipmentUpgrade,
         cell: UpgradeEquipmentCell,
-        report: &mut EquipmentUpgradeReport,
         context: &mut Context,
     ) {
         let Some(goods_id) = plug.goods_id(cell) else {
@@ -19383,14 +19317,13 @@ impl CGame {
                 ex_id: goods_id,
             });
         let previous_amount = player.get_goods_by_id(goods_id).map_or(0, CGoods::amount);
-        let mut deliveries = Vec::new();
-        let removal = if player.packet().base().find(goods_id).is_some() {
+        let source_removed = if player.packet().base().find(goods_id).is_some() {
             match player.remove_packet_goods_by_id(goods_id, 1) {
                 Some(consumption) => {
-                    deliveries = self.send_equipment_upgrade_consumption(&previous, &consumption);
-                    EquipmentUpgradeConsumptionRemoval::Packet(consumption)
+                    self.send_equipment_upgrade_consumption(&previous, &consumption);
+                    true
                 }
-                None => EquipmentUpgradeConsumptionRemoval::Missing,
+                None => false,
             }
         } else if let Some(goods) = player.equipment().find(goods_id) {
             let facts = context.enhancement_equipment_remove_facts(
@@ -19410,79 +19343,59 @@ impl CGame {
             drop(recompute);
             self.publish_player_equipment_remove_report(&mut removal);
             if matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_)) {
-                deliveries.push(self.send_container_object_delete(
+                let delivery = self.send_container_object_delete(
                     player.player_id(),
                     &previous,
                     identity,
                     previous_amount,
-                ));
+                );
+                tracing::trace!(player_id = player.player_id(), ?identity, delivery, "отправлено удаление расходника улучшения из экипировки");
             }
-            EquipmentUpgradeConsumptionRemoval::Equipment(removal)
+            matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_))
         } else {
-            EquipmentUpgradeConsumptionRemoval::Missing
-        };
-        let source_removed = match &removal {
-            EquipmentUpgradeConsumptionRemoval::Packet(_) => true,
-            EquipmentUpgradeConsumptionRemoval::Equipment(removal) => {
-                matches!(removal.outcome, EquipmentRemoveOutcome::Removed(_))
-            }
-            EquipmentUpgradeConsumptionRemoval::Missing => false,
+            false
         };
         if source_removed {
             let _ = plug.upgrade_container_mut().on_source_removed(goods_id, 1);
         }
-        report.consumptions.push(EquipmentUpgradeConsumption {
-            cell,
-            goods: identity,
-            previous,
-            previous_amount,
-            removal,
-            deliveries,
-        });
+        tracing::trace!(player_id = player.player_id(), ?cell, ?identity, source_removed, "обработан расход ячейки улучшения");
     }
 
     pub(crate) fn close_equipment_upgrade(
         &mut self,
         player_id: i32,
         session_id: i32,
-    ) -> EquipmentUpgradeCloseReport {
-        let mut report = EquipmentUpgradeCloseReport {
-            session_id,
-            actual_plug_id: None,
-            outcome: EquipmentUpgradeCloseOutcome::MissingSessionOrPlug,
-            session_end: None,
-            listener_detach: None,
-            previous_progress: None,
-            cleared_shadows: 0,
-            close_delivery: None,
-            collected_plug_ids: Vec::new(),
-        };
+    ) {
         if self.session_factory.query_session(session_id).is_none() {
-            return report;
+            tracing::trace!(player_id, session_id, "закрываемая сессия улучшения не найдена");
+            return;
         }
-        report.actual_plug_id = self
+        let plug_id = self
             .session_factory
             .query_session_plug_by_owner(session_id, 400, player_id)
             .map(|plug| plug.id());
-        let Some(plug_id) = report.actual_plug_id else {
-            return report;
+        let Some(plug_id) = plug_id else {
+            tracing::trace!(player_id, session_id, "закрываемый plug улучшения не найден");
+            return;
         };
         let Some(mut plug) = self.session_factory.take_equipment_upgrade_plug(plug_id) else {
-            return report;
+            tracing::trace!(player_id, session_id, plug_id, "владелец закрываемого plug улучшения не найден");
+            return;
         };
-        report.session_end = self.session_factory.end_session(session_id);
+        let session_end = self.session_factory.end_session(session_id);
+        let mut listener_detach = None;
+        let mut previous_progress = None;
         if let Some(player) = self.find_player_mut(player_id) {
-            report.listener_detach = Some(player.detach_equipment_session_listener(plug_id));
+            listener_detach = Some(player.detach_equipment_session_listener(plug_id));
             let previous = player.current_progress();
             player.set_current_progress_snapshot(PlayerProgress::None);
-            report.previous_progress = Some(previous);
+            previous_progress = Some(previous);
         }
-        report.cleared_shadows = plug.close();
+        let cleared_shadows = plug.close();
         let message = CMessage::new(0x0b_f913);
-        report.close_delivery = Some(message.send_to_player(self.net_server(), player_id));
-        report.collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
-        report.outcome = EquipmentUpgradeCloseOutcome::Closed;
-        report
+        let close_delivery = message.send_to_player(self.net_server(), player_id);
+        let collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
+        tracing::trace!(player_id, session_id, plug_id, ?session_end, ?listener_detach, ?previous_progress, cleared_shadows, close_delivery, ?collected_plug_ids, "сессия улучшения закрыта");
     }
 
     pub(crate) fn compose_equipment<Context: EquipmentComposeContext + ScriptFunctionRuntime>(

@@ -9,13 +9,12 @@
 //! session, очищает progress/shadow, отправляет `0xBF913` и освобождает
 //! session/plug registry.
 //!
-//! MSVC listener/vtable plumbing заменён owned listener handle, concrete
-//! terminal session state и явными effect-report-ами. Локализованные notices,
-//! wallet/container packets и World audit исполняются живым `CGame`; полной
-//! runtime-границей остаются только combat property recompute и around effects
-//! снятого equipment.
+//! MSVC listener/vtable plumbing заменён owned listener handle и concrete
+//! terminal session state. Наблюдаемые эффекты исполняются живым `CGame` в
+//! исходном порядке, а их результаты публикуются через `tracing`, не возвращаясь
+//! диагностическим деревом. Runtime-границей остаются combat property recompute
+//! и around effects снятого equipment.
 
-use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
 use crate::gameserver::appserver::container::cequipmentupgradeshadowcontainer::{
     CEquipmentUpgradeShadowContainer, UpgradeEquipmentCell,
 };
@@ -25,13 +24,8 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_GOODS_UPGRADE_PRICE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
-use crate::gameserver::appserver::player::{
-    CiQingPacketConsumption, PlayerEquipmentRemoveReport, PlayerProgress,
-};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
-
-use super::csessionfactory::SessionEndReport;
 
 pub(crate) const EQUIPMENT_UPGRADE_SUCCESS_LOG_REASON: u8 = 1;
 pub(crate) const EQUIPMENT_UPGRADE_FAILURE_LOG_REASON: u8 = 2;
@@ -80,92 +74,6 @@ pub(crate) struct EquipmentUpgradeLostAuditLog {
     pub(crate) tile_x: i32,
     pub(crate) tile_y: i32,
     pub(crate) client_ip: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentUpgradeConsumptionRemoval {
-    Packet(CiQingPacketConsumption),
-    Equipment(PlayerEquipmentRemoveReport),
-    Missing,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentUpgradeConsumption {
-    pub(crate) cell: UpgradeEquipmentCell,
-    pub(crate) goods: ShapeIdentity,
-    pub(crate) previous: PreviousContainer,
-    pub(crate) previous_amount: u32,
-    pub(crate) removal: EquipmentUpgradeConsumptionRemoval,
-    pub(crate) deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentUpgradeClientUpdate {
-    pub(crate) player_id: i32,
-    pub(crate) goods: ShapeIdentity,
-    pub(crate) old_client_payload: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentUpgradeOutcome {
-    MissingSessionOrPlug,
-    PlugIdMismatch,
-    MissingPlayerOrRegion,
-    InsufficientMoneyForValidation,
-    MissingOrInvalidEquipment,
-    MissingBaseGem,
-    EquipmentLevelOutsideGemRange,
-    MaximumLevel,
-    InsufficientMoneyAtExecution,
-    Succeeded,
-    FailedUnchanged,
-    FailedLevelLost,
-    FailedReset,
-    FailedEquipmentLost,
-}
-
-#[must_use = "upgrade report хранит оплату, RNG, mutation, расход и публикации"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentUpgradeReport {
-    pub(crate) session_id: i32,
-    pub(crate) requested_plug_id: i32,
-    pub(crate) actual_plug_id: Option<i32>,
-    pub(crate) outcome: EquipmentUpgradeOutcome,
-    pub(crate) price: u32,
-    pub(crate) probability: u32,
-    pub(crate) roll: Option<u32>,
-    pub(crate) previous_money: Option<u32>,
-    pub(crate) current_money: Option<u32>,
-    pub(crate) previous_level: Option<u32>,
-    pub(crate) resulting_level: Option<u32>,
-    pub(crate) notifications: Vec<i32>,
-    pub(crate) money_deliveries: Vec<i32>,
-    pub(crate) consumptions: Vec<EquipmentUpgradeConsumption>,
-    pub(crate) client_update: Option<EquipmentUpgradeClientUpdate>,
-    pub(crate) client_update_delivery: Option<i32>,
-    pub(crate) audit: Option<EquipmentUpgradeAuditLog>,
-    pub(crate) lost_audit: Option<EquipmentUpgradeLostAuditLog>,
-    pub(crate) world_deliveries: Vec<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentUpgradeCloseOutcome {
-    MissingSessionOrPlug,
-    Closed,
-}
-
-#[must_use = "close report хранит End/progress/shadow/wire/registry lifecycle"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentUpgradeCloseReport {
-    pub(crate) session_id: i32,
-    pub(crate) actual_plug_id: Option<i32>,
-    pub(crate) outcome: EquipmentUpgradeCloseOutcome,
-    pub(crate) session_end: Option<SessionEndReport>,
-    pub(crate) listener_detach: Option<[bool; 2]>,
-    pub(crate) previous_progress: Option<PlayerProgress>,
-    pub(crate) cleared_shadows: usize,
-    pub(crate) close_delivery: Option<i32>,
-    pub(crate) collected_plug_ids: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
