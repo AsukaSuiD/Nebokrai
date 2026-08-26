@@ -1,23 +1,26 @@
-//! Полный входной lifecycle personal shop GameServer.
+//! Полный входной жизненный цикл личной лавки GameServer.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и owner
 //! `server/gameserver/appserver/message/playershopmessage.cpp` подтверждают
-//! `0x90201..0x90208`: guards, local seller/buyer session, shadow goods и цены,
-//! open/close/enter/exit/end, cash/Billing purchase и client/around/World wire.
-//! Rust handler подключён к реальному message FIFO; malformed payload выражен
-//! typed error вместо invalid access. Проверка общего state `0x186A4` остаётся
-//! явно названной runtime-границей до материализации state owner-а.
+//! `0x90201..0x90208`: проверки, локальные сессии продавца и покупателя,
+//! теневые товары и цены, открытие/закрытие/вход/выход/завершение, покупку за
+//! наличные или через Billing и wire-обмен с клиентом, окружением и World.
+//! Обработчик подключён к реальному FIFO сообщений; повреждённый payload
+//! выражен типизированной ошибкой вместо недопустимого доступа. Проверка общего
+//! состояния `0x186A4` остаётся явно названной границей исполнения. Уже
+//! выполненные эффекты не дублируются отчётами и диагностируются через
+//! `tracing`.
 
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::region::RegionCellAccessBlock;
 use crate::gameserver::appserver::shape::ShapeCoordinateBlock;
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, PersonalShopPurchaseReport, PersonalShopTerminalReport,
-    colored_player_notice_message,
+    CGame, GameContainerMessageRuntime, colored_player_notice_message,
 };
-use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
+use tracing::{debug, trace};
 
 const PLAYER_SHOP_OPEN_MESSAGE: i32 = 0x0009_0201;
 const PLAYER_SHOP_SET_PRICE_MESSAGE: i32 = 0x0009_0202;
@@ -35,14 +38,6 @@ const CLIENT_PLAYER_SHOP_ENTERED_MESSAGE: i32 = 0x000c_0006;
 const WORLD_PLAYER_SHOP_REQUEST_MESSAGE: i32 = 0x0006_0811;
 const WORLD_PLAYER_SHOP_OVER_MESSAGE: i32 = 0x0006_0812;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerShopIgnoreReason {
-    MissingPlayerContext,
-    MissingPlayer,
-    ChangingServer,
-    ChangingRegion,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerShopMessageError {
     MissingSourceWorldServerId,
@@ -56,86 +51,11 @@ pub(crate) enum PlayerShopMessageError {
     RegionCell(RegionCellAccessBlock),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerShopOpenOutcome {
-    Dead,
-    ProgressConflict,
-    MissingRegion,
-    OutsideStallArea,
-    SessionCreationFailed,
-    LocalSession {
-        session_id: i32,
-        plug_id: i32,
-        seller_volume: u32,
-        seller_extend_id: i32,
-        seller_shop_opened: bool,
-        seller_name_empty: bool,
-        listener_attach: [bool; 2],
-        client_delivery: i32,
-    },
-    WorldRequested,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerShopMessageReport {
-    Ignored {
-        player_id: Option<i32>,
-        reason: PlayerShopIgnoreReason,
-    },
-    Opened {
-        player_id: i32,
-        source_world_server_id: i32,
-        outcome: PlayerShopOpenOutcome,
-        notice_delivery: Option<i32>,
-        world_request: Option<Result<i32, SendMessageError>>,
-        world_completion: Option<Result<i32, SendMessageError>>,
-    },
-    Action {
-        player_id: i32,
-        outcome: PlayerShopActionOutcome,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerShopActionOutcome {
-    Ignored,
-    Notice {
-        string_id: &'static [u8],
-        delivery: i32,
-    },
-    PriceSet {
-        session_id: i32,
-        plug_id: i32,
-        goods_id: CGuid,
-        delivery: i32,
-    },
-    Purchased(PersonalShopPurchaseReport),
-    BusinessStarted {
-        session_id: i32,
-        plug_id: i32,
-        name: Vec<u8>,
-        delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    },
-    BusinessClosed {
-        session_id: i32,
-        plug_id: i32,
-        delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    },
-    BuyerEntered {
-        session_id: i32,
-        buyer_plug_id: i32,
-        goods_count: u32,
-        delivery: i32,
-    },
-    SessionEnded(PersonalShopTerminalReport),
-    BuyerExited(PersonalShopTerminalReport),
-}
-
 pub(crate) fn dispatch_player_shop_message<Context: GameContainerMessageRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
-) -> Option<Result<PlayerShopMessageReport, PlayerShopMessageError>> {
+) -> Option<Result<(), PlayerShopMessageError>> {
     let message_type = message.message_type();
     if !matches!(
         message_type,
@@ -146,26 +66,16 @@ pub(crate) fn dispatch_player_shop_message<Context: GameContainerMessageRuntime>
 
     message.resolve_player_context(game);
     let Some(player_id) = message.player_id() else {
-        return Some(Ok(PlayerShopMessageReport::Ignored {
-            player_id: None,
-            reason: PlayerShopIgnoreReason::MissingPlayerContext,
-        }));
+        trace!(message_type, "сообщение личной лавки пропущено: нет контекста игрока");
+        return Some(Ok(()));
     };
     let Some(player) = game.find_player(player_id) else {
-        return Some(Ok(PlayerShopMessageReport::Ignored {
-            player_id: Some(player_id),
-            reason: PlayerShopIgnoreReason::MissingPlayer,
-        }));
+        trace!(message_type, player_id, "сообщение личной лавки пропущено: игрок не найден");
+        return Some(Ok(()));
     };
     if player.in_changing_server() || player.in_changing_region() {
-        return Some(Ok(PlayerShopMessageReport::Ignored {
-            player_id: Some(player_id),
-            reason: if player.in_changing_server() {
-                PlayerShopIgnoreReason::ChangingServer
-            } else {
-                PlayerShopIgnoreReason::ChangingRegion
-            },
-        }));
+        trace!(message_type, player_id, changing_server = player.in_changing_server(), changing_region = player.in_changing_region(), "сообщение личной лавки пропущено во время перехода");
+        return Some(Ok(()));
     }
 
     if message_type == PLAYER_SHOP_OPEN_MESSAGE {
@@ -194,8 +104,8 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
     game: &mut CGame,
     context: &mut Context,
     player_id: i32,
-) -> Result<PlayerShopMessageReport, PlayerShopMessageError> {
-    let outcome = match message_type {
+) -> Result<(), PlayerShopMessageError> {
+    match message_type {
         PLAYER_SHOP_SET_PRICE_MESSAGE => {
             let (session_id, plug_id) = read_session_plug(message)?;
             let goods_id = message
@@ -213,15 +123,15 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 .map(|value| value as u32)
                 .ok_or(PlayerShopMessageError::MissingPrice)?;
             if !seller_owned_by(game, session_id, plug_id, player_id) {
-                PlayerShopActionOutcome::Ignored
+                trace!(player_id, session_id, plug_id, "изменение цены отклонено владельцем сессии");
             } else if game
                 .session_factory()
                 .personal_shop_seller(plug_id)
                 .is_some_and(|seller| seller.shop_opened())
             {
-                action_notice(game, player_id, b"GS0075")
+                action_notice(game, player_id, b"GS0075");
             } else if !personal_shop_goods_live(game, plug_id, goods_id) {
-                action_notice(game, player_id, b"GS0074")
+                action_notice(game, player_id, b"GS0074");
             } else {
                 let stored = game
                     .session_factory_mut()
@@ -229,7 +139,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                     .expect("seller ownership проверен")
                     .set_goods_price(goods_id, price_type, price);
                 if !stored {
-                    action_notice(game, player_id, b"GS0074")
+                    action_notice(game, player_id, b"GS0074");
                 } else {
                     let mut response = CMessage::new(CLIENT_PLAYER_SHOP_PRICE_MESSAGE);
                     response.add_long(session_id);
@@ -237,12 +147,8 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                     response.base_mut().add_guid(goods_id);
                     response.add_ulong(price_type);
                     response.add_ulong(price);
-                    PlayerShopActionOutcome::PriceSet {
-                        session_id,
-                        plug_id,
-                        goods_id,
-                        delivery: response.send_to_player(game.net_server(), player_id),
-                    }
+                    let _ = response.send_to_player(game.net_server(), player_id);
+                    debug!(player_id, session_id, plug_id, price_type, price, "цена товара личной лавки изменена");
                 }
             }
         }
@@ -253,16 +159,17 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 .get_guid()
                 .ok_or(PlayerShopMessageError::MissingGoodsId)?;
             if !game.personal_shop_session_available(session_id, context) {
-                action_notice(game, player_id, b"GS0078")
+                action_notice(game, player_id, b"GS0078");
             } else if !buyer_owned_by(game, session_id, buyer_plug_id, player_id) {
-                PlayerShopActionOutcome::Ignored
+                trace!(player_id, session_id, buyer_plug_id, "покупка отклонена владельцем сессии");
             } else {
-                PlayerShopActionOutcome::Purchased(game.purchase_personal_shop_goods(
+                let _ = game.purchase_personal_shop_goods(
                     session_id,
                     buyer_plug_id,
                     goods_id,
                     context,
-                ))
+                );
+                debug!(player_id, session_id, buyer_plug_id, "обработана покупка в личной лавке");
             }
         }
         PLAYER_SHOP_START_BUSINESS_MESSAGE => {
@@ -272,19 +179,19 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 .get_str_bytes(0x200)
                 .ok_or(PlayerShopMessageError::MissingShopName)?;
             if name.len() >= 0x12 {
-                action_notice(game, player_id, b"GS0076")
+                action_notice(game, player_id, b"GS0076");
             } else if !seller_owned_by(game, session_id, plug_id, player_id)
                 || game
                     .session_factory()
                     .personal_shop_seller(plug_id)
                     .is_none_or(|seller| seller.shop_opened())
             {
-                PlayerShopActionOutcome::Ignored
+                trace!(player_id, session_id, plug_id, "открытие торговли отклонено состоянием сессии");
             } else if !game
                 .words_filter()
                 .check_with_numeric_gate(&mut name, false, true)
             {
-                action_notice(game, player_id, b"GS0334")
+                action_notice(game, player_id, b"GS0334");
             } else {
                 let seller = game
                     .session_factory_mut()
@@ -295,7 +202,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 game.find_player_mut(player_id)
                     .expect("seller player проверен")
                     .set_personal_shop_flag(session_id, plug_id);
-                let delivery = opened
+                let _ = opened
                     .then(|| {
                         let mut response = CMessage::new(CLIENT_PLAYER_SHOP_STARTED_MESSAGE);
                         response.add_long(player_id);
@@ -305,25 +212,20 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                         game.send_player_shape_around(player_id, None, &response)
                     })
                     .flatten();
-                PlayerShopActionOutcome::BusinessStarted {
-                    session_id,
-                    plug_id,
-                    name,
-                    delivery,
-                }
+                debug!(player_id, session_id, plug_id, opened, "личная лавка открыта для торговли");
             }
         }
         PLAYER_SHOP_CLOSE_BUSINESS_MESSAGE => {
             let (session_id, plug_id) = read_session_plug(message)?;
             if !seller_owned_by(game, session_id, plug_id, player_id) {
-                PlayerShopActionOutcome::Ignored
+                trace!(player_id, session_id, plug_id, "закрытие торговли отклонено владельцем сессии");
             } else {
                 let was_open = game
                     .session_factory()
                     .personal_shop_seller(plug_id)
                     .is_some_and(|seller| seller.shop_opened());
                 if !was_open {
-                    PlayerShopActionOutcome::Ignored
+                    trace!(player_id, session_id, plug_id, "личная лавка уже закрыта");
                 } else {
                     game.session_factory_mut()
                         .personal_shop_seller_mut(plug_id)
@@ -336,11 +238,8 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                     response.add_long(player_id);
                     response.add_long(session_id);
                     response.add_long(plug_id);
-                    PlayerShopActionOutcome::BusinessClosed {
-                        session_id,
-                        plug_id,
-                        delivery: game.send_player_shape_around(player_id, None, &response),
-                    }
+                    let _ = game.send_player_shape_around(player_id, None, &response);
+                    debug!(player_id, session_id, plug_id, "торговля личной лавки закрыта");
                 }
             }
         }
@@ -354,7 +253,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 .is_none_or(|player| player.current_progress() != PlayerProgress::None)
                 || !game.personal_shop_session_available(session_id, context)
             {
-                PlayerShopActionOutcome::Ignored
+                trace!(player_id, session_id, "вход в личную лавку отклонён состоянием игрока или сессии");
             } else if let Some(buyer_plug_id) = game
                 .session_factory_mut()
                 .insert_personal_shop_buyer(session_id, player_id)
@@ -371,14 +270,10 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 response.add_long(session_id);
                 response.add_long(buyer_plug_id);
                 response.base_mut().add(&goods);
-                PlayerShopActionOutcome::BuyerEntered {
-                    session_id,
-                    buyer_plug_id,
-                    goods_count,
-                    delivery: response.send_to_player(game.net_server(), player_id),
-                }
+                let _ = response.send_to_player(game.net_server(), player_id);
+                debug!(player_id, session_id, buyer_plug_id, goods_count, "покупатель вошёл в личную лавку");
             } else {
-                action_notice(game, player_id, b"GS0077")
+                action_notice(game, player_id, b"GS0077");
             }
         }
         PLAYER_SHOP_END_SESSION_MESSAGE => {
@@ -386,9 +281,10 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
             if seller_owned_by(game, session_id, plug_id, player_id)
                 && game.personal_shop_session_available(session_id, context)
             {
-                PlayerShopActionOutcome::SessionEnded(game.finish_personal_shop_session(session_id))
+                let _ = game.finish_personal_shop_session(session_id);
+                debug!(player_id, session_id, plug_id, "сессия личной лавки завершена продавцом");
             } else {
-                PlayerShopActionOutcome::Ignored
+                trace!(player_id, session_id, plug_id, "завершение личной лавки отклонено");
             }
         }
         PLAYER_SHOP_EXIT_MESSAGE => {
@@ -396,16 +292,15 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
             if buyer_owned_by(game, session_id, plug_id, player_id)
                 && game.personal_shop_session_available(session_id, context)
             {
-                PlayerShopActionOutcome::BuyerExited(
-                    game.exit_personal_shop_buyer(session_id, plug_id),
-                )
+                let _ = game.exit_personal_shop_buyer(session_id, plug_id);
+                debug!(player_id, session_id, plug_id, "покупатель вышел из личной лавки");
             } else {
-                PlayerShopActionOutcome::Ignored
+                trace!(player_id, session_id, plug_id, "выход из личной лавки отклонён");
             }
         }
         _ => unreachable!(),
-    };
-    Ok(PlayerShopMessageReport::Action { player_id, outcome })
+    }
+    Ok(())
 }
 
 fn read_session_plug(message: &mut CMessage) -> Result<(i32, i32), PlayerShopMessageError> {
@@ -515,12 +410,9 @@ fn action_notice(
     game: &CGame,
     player_id: i32,
     string_id: &'static [u8],
-) -> PlayerShopActionOutcome {
-    PlayerShopActionOutcome::Notice {
-        string_id,
-        delivery: colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(string_id))
-            .send_to_player(game.net_server(), player_id),
-    }
+) {
+    let _ = colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(string_id))
+        .send_to_player(game.net_server(), player_id);
 }
 
 fn add_c_string(message: &mut CMessage, value: &[u8]) {
@@ -534,7 +426,7 @@ fn open_player_shop(
     game: &mut CGame,
     player_id: i32,
     source_world_server_id: i32,
-) -> Result<PlayerShopMessageReport, PlayerShopMessageError> {
+) -> Result<(), PlayerShopMessageError> {
     let (_, world_server_id) = game.server_ids();
     let (dead, progress, region_id) = {
         let player = game
@@ -547,144 +439,95 @@ fn open_player_shop(
         )
     };
 
-    let mut notice_delivery = None;
-    let mut world_request = None;
-    let mut world_completion = None;
-    let outcome = if dead {
-        PlayerShopOpenOutcome::Dead
-    } else if progress != PlayerProgress::None {
-        notice_delivery = Some(
-            colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0072"))
-                .send_to_player(game.net_server(), player_id),
-        );
-        PlayerShopOpenOutcome::ProgressConflict
-    } else if let Some(region_id) = region_id {
-        let Some(region) = game.find_region(region_id) else {
-            if source_world_server_id == world_server_id {
-                world_completion = Some(send_world_shop_completion(game, player_id));
-            }
-            return Ok(PlayerShopMessageReport::Opened {
-                player_id,
-                source_world_server_id,
-                outcome: PlayerShopOpenOutcome::MissingRegion,
-                notice_delivery,
-                world_request,
-                world_completion,
-            });
-        };
-        let (tile_x, tile_y) = {
-            let player = game
-                .find_player(player_id)
-                .expect("player проверен перед region lookup");
-            (
-                player
-                    .shape()
-                    .get_tile_x()
-                    .map_err(PlayerShopMessageError::Coordinate)?,
-                player
-                    .shape()
-                    .get_tile_y()
-                    .map_err(PlayerShopMessageError::Coordinate)?,
-            )
-        };
-        let block = region
-            .base()
-            .region
-            .get_block(tile_x, tile_y)
-            .map_err(PlayerShopMessageError::RegionCell)?;
-        if block != 2 {
-            notice_delivery = Some(
-                colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0073"))
-                    .send_to_player(game.net_server(), player_id),
-            );
-            if source_world_server_id == world_server_id {
-                world_completion = Some(send_world_shop_completion(game, player_id));
-            }
-            return Ok(PlayerShopMessageReport::Opened {
-                player_id,
-                source_world_server_id,
-                outcome: PlayerShopOpenOutcome::OutsideStallArea,
-                notice_delivery,
-                world_request,
-                world_completion,
-            });
+    if dead {
+        if source_world_server_id == world_server_id {
+            send_world_shop_completion(game, player_id);
         }
-
-        if !game.globe_setup().auction_enabled() || source_world_server_id != 0 {
-            let Some((session_id, plug_id)) = game
-                .session_factory_mut()
-                .create_personal_shop_seller_session(player_id)
-            else {
-                return Ok(PlayerShopMessageReport::Opened {
-                    player_id,
-                    source_world_server_id,
-                    outcome: PlayerShopOpenOutcome::SessionCreationFailed,
-                    notice_delivery,
-                    world_request,
-                    world_completion,
-                });
-            };
-            let seller = game
-                .session_factory()
-                .personal_shop_seller(plug_id)
-                .expect("personal-shop factory публикует typed seller");
-            let seller_volume = seller.goods().size();
-            let seller_extend_id = seller.goods().base().base().container_extend_id();
-            let seller_shop_opened = seller.shop_opened();
-            let seller_name_empty = seller.shop_name().is_empty();
-            let listener_attach = {
-                let player = game
-                    .find_player_mut(player_id)
-                    .expect("player жив во время session insertion");
-                let listener_attach = player.attach_equipment_session_listener(plug_id);
-                player.set_current_progress_snapshot(PlayerProgress::OpenStall);
-                listener_attach
-            };
-            let mut response = CMessage::new(CLIENT_PLAYER_SHOP_OPENED_MESSAGE);
-            response.base_mut().add_long(session_id);
-            response.base_mut().add_long(plug_id);
-            let client_delivery = response.send_to_player(game.net_server(), player_id);
-            PlayerShopOpenOutcome::LocalSession {
-                session_id,
-                plug_id,
-                seller_volume,
-                seller_extend_id,
-                seller_shop_opened,
-                seller_name_empty,
-                listener_attach,
-                client_delivery,
-            }
-        } else {
-            let mut request = CMessage::new(WORLD_PLAYER_SHOP_REQUEST_MESSAGE);
-            request.base_mut().add_long(player_id);
-            request.base_mut().add_ulong(message.ip());
-            world_request = Some(request.send(game, false));
-            PlayerShopOpenOutcome::WorldRequested
-        }
-    } else {
-        PlayerShopOpenOutcome::MissingRegion
-    };
-
-    if matches!(
-        outcome,
-        PlayerShopOpenOutcome::Dead
-            | PlayerShopOpenOutcome::ProgressConflict
-            | PlayerShopOpenOutcome::MissingRegion
-    ) && source_world_server_id == world_server_id
-    {
-        world_completion = Some(send_world_shop_completion(game, player_id));
+        trace!(player_id, source_world_server_id, "открытие личной лавки отклонено: игрок мёртв");
+        return Ok(());
     }
-    Ok(PlayerShopMessageReport::Opened {
-        player_id,
-        source_world_server_id,
-        outcome,
-        notice_delivery,
-        world_request,
-        world_completion,
-    })
+    if progress != PlayerProgress::None {
+        action_notice(game, player_id, b"GS0072");
+        if source_world_server_id == world_server_id {
+            send_world_shop_completion(game, player_id);
+        }
+        trace!(player_id, source_world_server_id, ?progress, "открытие личной лавки отклонено текущим процессом");
+        return Ok(());
+    }
+    let Some(region_id) = region_id else {
+        if source_world_server_id == world_server_id {
+            send_world_shop_completion(game, player_id);
+        }
+        trace!(player_id, source_world_server_id, "открытие личной лавки отклонено: нет региона");
+        return Ok(());
+    };
+    let Some(region) = game.find_region(region_id) else {
+        if source_world_server_id == world_server_id {
+            send_world_shop_completion(game, player_id);
+        }
+        trace!(player_id, source_world_server_id, region_id, "открытие личной лавки отклонено: регион не найден");
+        return Ok(());
+    };
+    let (tile_x, tile_y) = {
+        let player = game
+            .find_player(player_id)
+            .expect("player проверен перед region lookup");
+        (
+            player
+                .shape()
+                .get_tile_x()
+                .map_err(PlayerShopMessageError::Coordinate)?,
+            player
+                .shape()
+                .get_tile_y()
+                .map_err(PlayerShopMessageError::Coordinate)?,
+        )
+    };
+    let block = region
+        .base()
+        .region
+        .get_block(tile_x, tile_y)
+        .map_err(PlayerShopMessageError::RegionCell)?;
+    if block != 2 {
+        action_notice(game, player_id, b"GS0073");
+        if source_world_server_id == world_server_id {
+            send_world_shop_completion(game, player_id);
+        }
+        trace!(player_id, source_world_server_id, region_id, block, "игрок находится вне зоны личных лавок");
+        return Ok(());
+    }
+
+    if !game.globe_setup().auction_enabled() || source_world_server_id != 0 {
+        let Some((session_id, plug_id)) = game
+            .session_factory_mut()
+            .create_personal_shop_seller_session(player_id)
+        else {
+            trace!(player_id, source_world_server_id, "сессию продавца личной лавки создать не удалось");
+            return Ok(());
+        };
+        {
+            let player = game
+                .find_player_mut(player_id)
+                .expect("player жив во время session insertion");
+            let _ = player.attach_equipment_session_listener(plug_id);
+            player.set_current_progress_snapshot(PlayerProgress::OpenStall);
+        }
+        let mut response = CMessage::new(CLIENT_PLAYER_SHOP_OPENED_MESSAGE);
+        response.base_mut().add_long(session_id);
+        response.base_mut().add_long(plug_id);
+        let _ = response.send_to_player(game.net_server(), player_id);
+        debug!(player_id, source_world_server_id, session_id, plug_id, "создана локальная сессия личной лавки");
+    } else {
+        let mut request = CMessage::new(WORLD_PLAYER_SHOP_REQUEST_MESSAGE);
+        request.base_mut().add_long(player_id);
+        request.base_mut().add_ulong(message.ip());
+        let _ = request.send(game, false);
+        debug!(player_id, source_world_server_id, "запрошена World-сессия личной лавки");
+    }
+    Ok(())
 }
 
-fn send_world_shop_completion(game: &CGame, player_id: i32) -> Result<i32, SendMessageError> {
+fn send_world_shop_completion(game: &CGame, player_id: i32) {
     let client_ip = game
         .find_player(player_id)
         .expect("completion относится к live player")
@@ -692,5 +535,5 @@ fn send_world_shop_completion(game: &CGame, player_id: i32) -> Result<i32, SendM
     let mut completion = CMessage::new(WORLD_PLAYER_SHOP_OVER_MESSAGE);
     completion.base_mut().add_long(player_id);
     completion.base_mut().add_ulong(client_ip);
-    completion.send(game, false)
+    let _ = completion.send(game, false);
 }
