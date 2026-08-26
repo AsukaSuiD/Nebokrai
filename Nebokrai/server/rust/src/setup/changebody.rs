@@ -9,11 +9,11 @@
 //! Game decoder немедленно очищает vector и сохраняет каждый полный `u32`;
 //! safe short-buffer оставляет подтверждённый decoded prefix.
 
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CChangeBodyConf {
@@ -121,9 +121,10 @@ impl CChangeBodyConf {
     ) -> Result<(), ChangeBodySerializeError> {
         let count = i32::try_from(self.restrictions_goods.len())
             .map_err(|_| ChangeBodySerializeError::CountOverflow)?;
-        destination.extend_from_slice(&count.to_le_bytes());
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(count);
         for &goods_id in &self.restrictions_goods {
-            destination.extend_from_slice(&goods_id.to_le_bytes());
+            writer.write_u32(goods_id);
         }
         Ok(())
     }
@@ -146,39 +147,16 @@ impl CChangeBodyConf {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum ChangeBodyDecodeError {
+    #[error("ChangeBody snapshot обрывается на {offset}: нужно {needed}, доступно {available}")]
     UnexpectedEnd {
         offset: usize,
         needed: usize,
         available: usize,
     },
-    Allocation(std::collections::TryReserveError),
-}
-
-impl fmt::Display for ChangeBodyDecodeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEnd {
-                offset,
-                needed,
-                available,
-            } => write!(
-                formatter,
-                "ChangeBody snapshot обрывается на {offset}: нужно {needed}, доступно {available}"
-            ),
-            Self::Allocation(_) => formatter.write_str("не удалось выделить ChangeBody snapshot"),
-        }
-    }
-}
-
-impl Error for ChangeBodyDecodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Allocation(source) => Some(source),
-            _ => None,
-        }
-    }
+    #[error("не удалось выделить ChangeBody snapshot")]
+    Allocation(#[source] std::collections::TryReserveError),
 }
 
 fn required_index(start: &BytesStart<'_>) -> Result<u32, ChangeBodyLoadError> {
@@ -223,28 +201,17 @@ fn legacy_atol(value: &[u8]) -> i32 {
 }
 
 fn read_wire_i32(source: &[u8], cursor: &mut usize) -> Result<i32, ChangeBodyDecodeError> {
-    Ok(i32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_i32_from(source, cursor).map_err(map_read_block)
 }
 
 fn read_wire_u32(source: &[u8], cursor: &mut usize) -> Result<u32, ChangeBodyDecodeError> {
-    Ok(u32::from_le_bytes(read_wire_array(source, cursor)?))
+    LegacyReader::read_u32_from(source, cursor).map_err(map_read_block)
 }
 
-fn read_wire_array<const N: usize>(
-    source: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], ChangeBodyDecodeError> {
-    let offset = *cursor;
-    let available = source.len().saturating_sub(offset);
-    let Some(bytes) = source.get(offset..offset.saturating_add(N)) else {
-        return Err(ChangeBodyDecodeError::UnexpectedEnd {
-            offset,
-            needed: N,
-            available,
-        });
-    };
-    *cursor += N;
-    Ok(bytes
-        .try_into()
-        .expect("размер ChangeBody scalar уже проверен"))
+fn map_read_block(block: LegacyReadBlock) -> ChangeBodyDecodeError {
+    ChangeBodyDecodeError::UnexpectedEnd {
+        offset: block.offset,
+        needed: block.needed,
+        available: block.available,
+    }
 }

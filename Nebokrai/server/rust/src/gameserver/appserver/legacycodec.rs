@@ -82,6 +82,62 @@ impl<'source> LegacyReader<'source> {
         self.read_primitive(8, |source| source.try_get_i64_le())
     }
 
+    pub(crate) fn read_u8_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<u8, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_u8)
+    }
+
+    pub(crate) fn read_i8_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<i8, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_i8)
+    }
+
+    pub(crate) fn read_u16_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<u16, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_u16)
+    }
+
+    pub(crate) fn read_i16_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<i16, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_i16)
+    }
+
+    pub(crate) fn read_u32_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<u32, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_u32)
+    }
+
+    pub(crate) fn read_i32_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<i32, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_i32)
+    }
+
+    pub(crate) fn read_u64_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<u64, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_u64)
+    }
+
+    pub(crate) fn read_i64_from(
+        source: &'source [u8],
+        cursor: &mut usize,
+    ) -> Result<i64, LegacyReadBlock> {
+        Self::read_from(source, cursor, Self::read_i64)
+    }
+
     pub(crate) fn read_bytes(&mut self, length: usize) -> Result<&'source [u8], LegacyReadBlock> {
         self.ensure(length)?;
         let start = self.cursor;
@@ -134,6 +190,17 @@ impl<'source> LegacyReader<'source> {
             available: self.remaining(),
         })?;
         self.cursor += width;
+        Ok(value)
+    }
+
+    fn read_from<T>(
+        source: &'source [u8],
+        cursor: &mut usize,
+        read: impl FnOnce(&mut Self) -> Result<T, LegacyReadBlock>,
+    ) -> Result<T, LegacyReadBlock> {
+        let mut reader = Self::at(source, *cursor)?;
+        let value = read(&mut reader)?;
+        *cursor = reader.position();
         Ok(value)
     }
 }
