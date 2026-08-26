@@ -546,6 +546,7 @@ use crate::gameserver::appserver::exstate::{ExtendedState, ExtendedStateKind};
 use crate::gameserver::appserver::gameeffectjournal::{
     GameEffect, GameEffectJournal, SharedGameEffectJournal, shared_game_effect_journal,
 };
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::goods::cbattlefairyproperty::{
     BattleFairyExpUpResult, BattleFairyPlayerFacts, CBattleFairyProperty,
 };
@@ -21725,22 +21726,19 @@ impl CGame {
             .expect("target ID разрешён через canonical player map");
         let merged = player.ci_qing_property_result();
         let mut payload = Vec::new();
-        payload.extend_from_slice(&player.shape().identity().object_type.to_le_bytes());
-        payload.extend_from_slice(&player.player_id().to_le_bytes());
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_i32(player.shape().identity().object_type);
+        writer.write_i32(player.player_id());
         for value in merged.values() {
-            payload.extend_from_slice(&value.to_le_bytes());
+            writer.write_u32(*value);
         }
-        payload.extend_from_slice(
-            &player
-                .ci_qing_goods_amount(&self.goods_factory)
-                .to_le_bytes(),
-        );
+        writer.write_u32(player.ci_qing_goods_amount(&self.goods_factory));
         for position in 0..8 {
             if let Some(goods) = player.ci_qing_goods(position) {
-                payload.extend_from_slice(&context.encode_goods_for_old_client(goods));
+                writer.write_bytes(&context.encode_goods_for_old_client(goods));
             }
         }
-        payload.extend_from_slice(&player.ci_qing_property_snapshot().2.to_le_bytes());
+        writer.write_u32(player.ci_qing_property_snapshot().2);
         let mut message = CMessage::new(0x0c_010f);
         message.base_mut().add(&payload);
         let delivery = message.send_to_player(self.net_server(), requester_id);

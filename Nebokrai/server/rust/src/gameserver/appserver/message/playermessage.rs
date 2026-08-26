@@ -209,12 +209,12 @@ fn send_item_skill_wire(
                 .query_skill_name(skill_id as i32)
                 .unwrap_or_default(),
         );
-        message.base_mut().add(&(skill_level as i16).to_le_bytes());
+        message.base_mut().add_short(skill_level as i16);
     }
     message.add_ulong(wire.value_84);
-    message.base_mut().add(&wire.value_70.to_le_bytes());
-    message.base_mut().add(&wire.value_74.to_le_bytes());
-    message.base_mut().add(&wire.value_78.to_le_bytes());
+    message.base_mut().add_short(wire.value_70 as i16);
+    message.base_mut().add_short(wire.value_74 as i16);
+    message.base_mut().add_short(wire.value_78 as i16);
     message.send_to_player(game.net_server(), player_id)
 }
 
@@ -992,7 +992,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 );
                             let mut update = CMessage::new(0x000b_f70a);
                             if property == 0x4b {
-                                update.base_mut().add(&(resulting as i16).to_le_bytes());
+                                update.base_mut().add_short(resulting as i16);
                             } else {
                                 update.add_long(resulting);
                             }
@@ -1585,7 +1585,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let system_time = TagTime::local_now().fields();
             let mut response = CMessage::new(0x000b_f73f);
             for field in system_time {
-                response.base_mut().add(&field.to_le_bytes());
+                response.base_mut().add_short(field as i16);
             }
             let _ = response.send_to_player(game.net_server(), player_id);
             trace_player_message_outcome(
