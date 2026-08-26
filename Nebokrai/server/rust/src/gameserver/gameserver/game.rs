@@ -735,7 +735,7 @@ use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_monster_from_monster_base_attack, defend_player_base_attack,
     defend_player_from_monster_base_attack,
 };
-use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -34477,7 +34477,7 @@ impl CGame {
                 target = Some(selected);
             }
         }
-        let target = cast.map(|cast| cast.target).or(target);
+        let target = cast.map(|cast| cast.dispatch().target).or(target);
         let Some(target) =
             target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE))
         else {
@@ -34656,16 +34656,17 @@ impl CGame {
         }
 
         if let Some(cast) = cast {
-            if !time_reached(now_ms, cast.started_at_ms, delay_ms) {
+            if !time_reached(now_ms, cast.started_at_ms(), delay_ms) {
                 return true;
             }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                let _ = monster.finish_base_attack_cast();
+                let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
             }
+            let dispatch = cast.dispatch();
             let mut fire = CMessage::new(0x000b_fe01);
             fire.add_byte(2);
             fire.add_long(BASE_ATTACK_SKILL_ID as i32);
-            fire.add_short(cast.skill_level as i16);
+            fire.add_short(dispatch.skill_level as i16);
             fire.add_long(MONSTER_TYPE);
             fire.add_long(monster_id);
             fire.add_long(target.object_type);
@@ -34696,7 +34697,7 @@ impl CGame {
                 .wrapping_add(game_legacy_random(&mut self.random_state, element_span));
             let mut attack = AttackInformation {
                 skill_id: BASE_ATTACK_SKILL_ID,
-                skill_level: cast.skill_level as u8,
+                skill_level: dispatch.skill_level as u8,
                 attacker_type: MONSTER_TYPE,
                 attacker_id: monster_id,
                 attacker_team_id: 0,
@@ -34741,6 +34742,10 @@ impl CGame {
                     &self.globe_setup,
                     &mut random,
                 );
+            }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+                let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
             }
             let damage = attack.hp_damage().min(target_health);
             if attack.full_miss != 0 {
@@ -34896,6 +34901,7 @@ impl CGame {
             }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.move_shape_mut().shape_mut().set_action(1);
+                let _ = monster.finish_base_attack_cast();
             }
             return true;
         }
@@ -35878,9 +35884,10 @@ impl CGame {
                 .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending => false,
-                QueuedSkillExecutionState::Completed | QueuedSkillExecutionState::Rejected => {
-                    player_ai.finish_player_skill(dispatch)
-                }
+                QueuedSkillExecutionState::Completed =>
+                    player_ai.finish_player_skill(dispatch, SkillTermination::Completed),
+                QueuedSkillExecutionState::Rejected =>
+                    player_ai.finish_player_skill(dispatch, SkillTermination::Rejected),
             };
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");

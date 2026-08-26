@@ -17,10 +17,18 @@ pub(crate) enum SkillStage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillTermination {
+    Completed,
+    Rejected,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SkillExecutionKernel<Dispatch> {
     dispatch: Dispatch,
     started_at_ms: u32,
     stage: SkillStage,
+    termination: Option<SkillTermination>,
 }
 
 impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
@@ -29,6 +37,7 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
             dispatch,
             started_at_ms,
             stage: SkillStage::Begin,
+            termination: None,
         }
     }
 
@@ -44,11 +53,23 @@ impl<Dispatch: Copy + Eq> SkillExecutionKernel<Dispatch> {
         self.stage
     }
 
+    pub(crate) const fn termination(self) -> Option<SkillTermination> {
+        self.termination
+    }
+
     pub(crate) fn advance(&mut self, expected: SkillStage, next: SkillStage) -> bool {
-        if self.stage != expected || next <= expected {
+        if self.termination.is_some() || self.stage != expected || next <= expected {
             return false;
         }
         self.stage = next;
+        true
+    }
+
+    pub(crate) fn terminate(&mut self, termination: SkillTermination) -> bool {
+        if self.termination.is_some() {
+            return false;
+        }
+        self.termination = Some(termination);
         true
     }
 }

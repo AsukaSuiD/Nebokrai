@@ -23,7 +23,7 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
-use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -105,12 +105,19 @@ impl CPlayerAI {
         self.player_skills.front().copied()
     }
 
-    pub(crate) fn finish_player_skill(&mut self, expected: PlayerSkillDispatch) -> bool {
+    pub(crate) fn finish_player_skill(
+        &mut self,
+        expected: PlayerSkillDispatch,
+        termination: SkillTermination,
+    ) -> bool {
         if self.player_skills.front().copied() != Some(expected) {
             return false;
         }
         self.player_skills.pop_front();
-        self.base_attack = None;
+        if let Some(mut execution) = self.base_attack.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
+        }
         true
     }
 

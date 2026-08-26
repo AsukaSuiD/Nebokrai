@@ -37,6 +37,7 @@
 use super::masterinfo::MasterInfo;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
+use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -128,11 +129,12 @@ pub(crate) struct PetExperienceUpdate {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MonsterBaseAttackCast {
+pub(crate) struct MonsterBaseAttackDispatch {
     pub(crate) target: ShapeIdentity,
     pub(crate) skill_level: u16,
-    pub(crate) started_at_ms: u32,
 }
+
+pub(crate) type MonsterBaseAttackCast = SkillExecutionKernel<MonsterBaseAttackDispatch>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MonsterTraceMoveDelay {
@@ -330,12 +332,12 @@ impl CMonster {
         self.pet_mode
     }
 
-    pub(crate) const fn set_pet_action(&mut self, action: i32) {
+    pub(crate) fn set_pet_action(&mut self, action: i32) {
         self.pet_action = action;
         if action != 0 {
             self.pet_target = None;
             self.ai_target = None;
-            self.base_attack_cast = None;
+            self.cancel_base_attack_cast();
             self.trace_move_delay = None;
         }
     }
@@ -427,11 +429,11 @@ impl CMonster {
         outcome
     }
 
-    pub(crate) const fn set_pet_target(&mut self, target: ShapeIdentity) {
+    pub(crate) fn set_pet_target(&mut self, target: ShapeIdentity) {
         self.pet_action = 0;
         self.pet_target = Some(target);
         self.ai_target = Some(target);
-        self.base_attack_cast = None;
+        self.cancel_base_attack_cast();
         self.trace_move_delay = None;
     }
 
@@ -632,24 +634,43 @@ impl CMonster {
         skill_level: u16,
         now_ms: u32,
     ) {
-        self.base_attack_cast = Some(MonsterBaseAttackCast {
+        let mut execution = MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
             target,
             skill_level,
-            started_at_ms: now_ms,
-        });
+        }, now_ms);
+        let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
+        self.base_attack_cast = Some(execution);
         self.last_base_attack_ms = now_ms;
     }
 
     pub(crate) fn finish_base_attack_cast(&mut self) -> Option<MonsterBaseAttackCast> {
-        self.base_attack_cast.take()
+        let mut execution = self.base_attack_cast.take()?;
+        let _ = execution.terminate(SkillTermination::Completed);
+        Some(execution)
+    }
+
+    pub(crate) fn advance_base_attack_cast(
+        &mut self,
+        expected: SkillStage,
+        next: SkillStage,
+    ) -> bool {
+        self.base_attack_cast
+            .as_mut()
+            .is_some_and(|execution| execution.advance(expected, next))
     }
 
     pub(crate) fn clear_ai_target(&mut self) {
         self.ai_target = None;
-        self.base_attack_cast = None;
+        self.cancel_base_attack_cast();
         self.trace_move_delay = None;
         if self.tamed && self.pet_action == 0 {
             self.pet_action = 1;
+        }
+    }
+
+    fn cancel_base_attack_cast(&mut self) {
+        if let Some(mut execution) = self.base_attack_cast.take() {
+            let _ = execution.terminate(SkillTermination::Cancelled);
         }
     }
 
