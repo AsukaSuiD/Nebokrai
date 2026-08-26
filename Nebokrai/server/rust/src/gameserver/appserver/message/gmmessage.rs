@@ -400,10 +400,10 @@ pub(crate) fn dispatch_gm_message<
         let kick = game.kick_player_by_name(&player_name);
         let mut response = CMessage::new(GM_KICK_BY_NAME_RESPONSE);
         response.add_long(requester_id);
-        response.add_byte(u8::from(kick.is_some()));
+        response.add_byte(u8::from(kick));
         add_legacy_c_string(&mut response, &player_name);
         let delivery = response.send(game, false);
-        trace!(requester_id, kicked = kick.is_some(), ?delivery, "Обработано отключение игрока по имени");
+        trace!(requester_id, kicked = kick, ?delivery, "Обработано отключение игрока по имени");
         return Some(Ok(()));
     }
 
@@ -414,15 +414,17 @@ pub(crate) fn dispatch_gm_message<
         let Some(response_context) = message.base_mut().get_long() else {
             return Some(Err(GmMessageError::MissingKickAroundContext));
         };
-        let traversal = game.kick_players_around_name(&player_name);
-        if traversal.outcome != GameKickAroundOutcome::Completed {
-            trace!(requester_id, response_context, ?traversal.outcome, "Отключение игроков вокруг не выполнено");
-            return Some(Ok(()));
-        }
+        let matched_players = match game.kick_players_around_name(&player_name) {
+            GameKickAroundOutcome::Completed { matched_players } => matched_players,
+            outcome => {
+                trace!(requester_id, response_context, ?outcome, "Отключение игроков вокруг не выполнено");
+                return Some(Ok(()));
+            }
+        };
         let formatted_text = match format_gm_template(
             game.get_string_by_id(b"GS0030"),
             &[GmFormatArgument::Signed(
-                traversal.matched_player_ids.len() as i32
+                matched_players as i32
             )],
         ) {
             Ok(formatted) => formatted,
@@ -435,7 +437,7 @@ pub(crate) fn dispatch_gm_message<
         response.add_long(0);
         add_legacy_c_string(&mut response, &formatted_text);
         let delivery = response.send(game, false);
-        trace!(requester_id, response_context, matched = traversal.matched_player_ids.len(), ?delivery, "Завершено отключение игроков вокруг");
+        trace!(requester_id, response_context, matched_players, ?delivery, "Завершено отключение игроков вокруг");
         return Some(Ok(()));
     }
 
@@ -468,7 +470,7 @@ pub(crate) fn dispatch_gm_message<
     }
 
     if message_type == GM_KICK_OTHERS_MESSAGE {
-        let kicked = game.kick_players_except(requester_id).len();
+        let kicked = game.kick_players_except(requester_id);
         trace!(requester_id, kicked, "Поставлено массовое отключение игроков");
         return Some(Ok(()));
     }
@@ -478,9 +480,7 @@ pub(crate) fn dispatch_gm_message<
             return Some(Err(GmMessageError::MissingKickRegionId));
         };
         let region_found = game.find_region(region_id).is_some();
-        let kicked = game
-            .kick_players_in_region_except(region_id, requester_id)
-            .len();
+        let kicked = game.kick_players_in_region_except(region_id, requester_id);
         trace!(requester_id, region_id, region_found, kicked, "Поставлено отключение игроков региона");
         return Some(Ok(()));
     }

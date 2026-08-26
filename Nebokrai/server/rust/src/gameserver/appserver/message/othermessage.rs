@@ -888,8 +888,8 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameContainerMessageRuntime>(
         return Some(result);
     }
     if message_type == WORLD_KICK_ALL_PLAYERS {
-        let kicks = game.kick_all_players();
-        tracing::trace!(message_type, count = kicks.len(), "все игроки отключены");
+        let kicked = game.kick_all_players();
+        tracing::trace!(message_type, count = kicked, "все игроки отключены");
         return Some(Ok(()));
     }
     if message_type == WORLD_START_REGION_CLEAR {

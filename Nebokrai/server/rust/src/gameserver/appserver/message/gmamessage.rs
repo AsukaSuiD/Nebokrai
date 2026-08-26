@@ -48,13 +48,13 @@ pub(crate) fn dispatch_gma_message(
         let kick = game.kick_player_by_name(&player_name);
         let mut response = CMessage::new(GMA_KICK_RESPONSE);
         response.add_long(request_id);
-        response.add_byte(u8::from(kick.is_some()));
+        response.add_byte(u8::from(kick));
         add_legacy_c_string(&mut response, &player_name);
-        if kick.is_none() {
+        if !kick {
             add_legacy_c_string(&mut response, GMA_KICK_MISSING_DETAIL);
         }
         let _ = response.send(game, false);
-        debug!(request_id, player_found = kick.is_some(), player_name_len = legacy_c_string_prefix(&player_name).len(), "обработана GMA-команда отключения игрока");
+        debug!(request_id, player_found = kick, player_name_len = legacy_c_string_prefix(&player_name).len(), "обработана GMA-команда отключения игрока");
         return Some(Ok(()));
     }
 

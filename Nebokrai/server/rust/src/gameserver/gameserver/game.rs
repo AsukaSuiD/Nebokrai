@@ -3810,31 +3810,10 @@ struct GameTeamSnapshotQuery {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GameKickPlayerReport {
-    pub(crate) player_id: i32,
-    pub(crate) command_result: i32,
-    pub(crate) legacy_return: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameKickAroundOutcome {
     TargetMissing,
-    ServerRegionMissing,
-    CoordinateBlocked(ShapeCoordinateBlock),
-    RegionMissing,
-    UnresolvedShape(ShapeIdentity),
-    LookupBlocked(RegionMembershipBlock),
-    Completed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameKickAroundReport {
-    pub(crate) outcome: GameKickAroundOutcome,
-    pub(crate) target_player_id: Option<i32>,
-    pub(crate) server_region_id: Option<i32>,
-    pub(crate) window_origin: Option<(i32, i32)>,
-    pub(crate) matched_player_ids: Vec<i32>,
-    pub(crate) kicks: Vec<GameKickPlayerReport>,
+    Blocked,
+    Completed { matched_players: usize },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -28446,39 +28425,37 @@ impl CGame {
             .map(|player| player.add_goods_to_packet(goods, goods_factory, encode_old_client))
     }
 
-    /// Exact `CGame::KickPlayer`: queue side effect сохраняется, публичный
-    /// bool исходника всегда остаётся `false`.
-    pub(crate) fn kick_player(&self, player_id: i32) -> GameKickPlayerReport {
+    /// Точный `CGame::KickPlayer`: команда отключения ставится в очередь,
+    /// исходное возвращаемое логическое значение всегда равно `false`.
+    pub(crate) fn kick_player(&self, player_id: i32) {
         let command_result = self.net_server().command_handle().quit_by_map_id(player_id);
-        GameKickPlayerReport {
-            player_id,
-            command_result,
-            legacy_return: false,
-        }
+        tracing::trace!(player_id, command_result, legacy_return = false, "поставлено отключение игрока");
     }
 
     /// Exact `OnGMMessage 0x7FC09` recipient pass: requester остаётся,
     /// остальные canonical player ID закрываются в signed map-order.
-    pub(crate) fn kick_players_except(
-        &self,
-        preserved_player_id: i32,
-    ) -> Vec<GameKickPlayerReport> {
-        self.players
+    pub(crate) fn kick_players_except(&self, preserved_player_id: i32) -> usize {
+        let mut kicked = 0usize;
+        for player_id in self
+            .players
             .keys()
             .copied()
             .filter(|player_id| *player_id != preserved_player_id)
-            .map(|player_id| self.kick_player(player_id))
-            .collect()
+        {
+            self.kick_player(player_id);
+            kicked = kicked.wrapping_add(1);
+        }
+        kicked
     }
 
     /// Exact `OnOtherMessage 0x7FA0C`: snapshot signed player-map order и
     /// отдельный `KickPlayer` network command для каждого текущего owner-а.
-    pub(crate) fn kick_all_players(&self) -> Vec<GameKickPlayerReport> {
-        self.players
-            .keys()
-            .copied()
-            .map(|player_id| self.kick_player(player_id))
-            .collect()
+    pub(crate) fn kick_all_players(&self) -> usize {
+        let kicked = self.players.len();
+        for player_id in self.players.keys().copied() {
+            self.kick_player(player_id);
+        }
+        kicked
     }
 
     /// Exact `OnGMMessage 0x7FC0A`: region последовательно обходит все area,
@@ -28487,60 +28464,52 @@ impl CGame {
         &self,
         region_id: i32,
         preserved_player_id: i32,
-    ) -> Vec<GameKickPlayerReport> {
+    ) -> usize {
         let Some(region) = self.regions.get(&region_id) else {
-            return Vec::new();
+            return 0;
         };
         let mut player_ids = Vec::new();
         region.base().find_all_player_ids(&mut player_ids);
-        player_ids
+        let mut kicked = 0usize;
+        for player_id in player_ids
             .into_iter()
             .filter(|player_id| *player_id != preserved_player_id)
-            .map(|player_id| self.kick_player(player_id))
-            .collect()
+        {
+            self.kick_player(player_id);
+            kicked = kicked.wrapping_add(1);
+        }
+        kicked
     }
 
     /// Exact `OnGMMessage 0x7FC07` до network response: X-major 7×7 scan
     /// использует region `GetShape`, а `Vec::dedup` повторяет именно
     /// consecutive-only семантику исходного `std::list::unique`.
-    pub(crate) fn kick_players_around_name(&self, name: &[u8]) -> GameKickAroundReport {
+    pub(crate) fn kick_players_around_name(&self, name: &[u8]) -> GameKickAroundOutcome {
         let Some(player) = self.find_player_by_name(name) else {
-            return game_kick_around_block(GameKickAroundOutcome::TargetMissing, None, None);
+            return GameKickAroundOutcome::TargetMissing;
         };
         let target_player_id = player.player_id();
         let Some(server_region_id) = player.server_region_id() else {
-            return game_kick_around_block(
-                GameKickAroundOutcome::ServerRegionMissing,
-                Some(target_player_id),
-                None,
-            );
+            tracing::debug!(target_player_id, "массовое отключение вокруг заблокировано: регион игрока отсутствует");
+            return GameKickAroundOutcome::Blocked;
         };
         let tile_x = match player.shape().get_tile_x() {
             Ok(tile_x) => tile_x,
             Err(block) => {
-                return game_kick_around_block(
-                    GameKickAroundOutcome::CoordinateBlocked(block),
-                    Some(target_player_id),
-                    Some(server_region_id),
-                );
+                tracing::debug!(target_player_id, server_region_id, ?block, "массовое отключение вокруг заблокировано координатой X");
+                return GameKickAroundOutcome::Blocked;
             }
         };
         let tile_y = match player.shape().get_tile_y() {
             Ok(tile_y) => tile_y,
             Err(block) => {
-                return game_kick_around_block(
-                    GameKickAroundOutcome::CoordinateBlocked(block),
-                    Some(target_player_id),
-                    Some(server_region_id),
-                );
+                tracing::debug!(target_player_id, server_region_id, ?block, "массовое отключение вокруг заблокировано координатой Y");
+                return GameKickAroundOutcome::Blocked;
             }
         };
         let Some(region) = self.regions.get(&server_region_id) else {
-            return game_kick_around_block(
-                GameKickAroundOutcome::RegionMissing,
-                Some(target_player_id),
-                Some(server_region_id),
-            );
+            tracing::debug!(target_player_id, server_region_id, "массовое отключение вокруг заблокировано: владелец региона отсутствует");
+            return GameKickAroundOutcome::Blocked;
         };
         let region = region.base();
         if let Some(identity) = region
@@ -28548,11 +28517,8 @@ impl CGame {
             .into_iter()
             .find(|identity| self.resolve_shape(*identity).is_none())
         {
-            return game_kick_around_block(
-                GameKickAroundOutcome::UnresolvedShape(identity),
-                Some(target_player_id),
-                Some(server_region_id),
-            );
+            tracing::warn!(target_player_id, server_region_id, ?identity, "массовое отключение вокруг заблокировано неразрешённой формой");
+            return GameKickAroundOutcome::Blocked;
         }
         let window_x = gm_kick_window_origin(tile_x, region.region.width);
         let window_y = gm_kick_window_origin(tile_y, region.region.height);
@@ -28567,14 +28533,8 @@ impl CGame {
                 let shape = match region.get_shape(scan_x, scan_y, area_width, area_height, self) {
                     Ok(shape) => shape,
                     Err(block) => {
-                        return GameKickAroundReport {
-                            outcome: GameKickAroundOutcome::LookupBlocked(block),
-                            target_player_id: Some(target_player_id),
-                            server_region_id: Some(server_region_id),
-                            window_origin: Some((window_x, window_y)),
-                            matched_player_ids,
-                            kicks: Vec::new(),
-                        };
+                        tracing::debug!(target_player_id, server_region_id, window_x, window_y, ?block, matched_players = matched_player_ids.len(), "массовое отключение вокруг заблокировано пространственным поиском");
+                        return GameKickAroundOutcome::Blocked;
                     }
                 };
                 if let Some(shape) = shape.filter(|shape| shape.identity.object_type == PLAYER_TYPE)
@@ -28586,19 +28546,11 @@ impl CGame {
             scan_x = scan_x.wrapping_add(1);
         }
         matched_player_ids.dedup();
-        let kicks = matched_player_ids
-            .iter()
-            .copied()
-            .map(|player_id| self.kick_player(player_id))
-            .collect();
-        GameKickAroundReport {
-            outcome: GameKickAroundOutcome::Completed,
-            target_player_id: Some(target_player_id),
-            server_region_id: Some(server_region_id),
-            window_origin: Some((window_x, window_y)),
-            matched_player_ids,
-            kicks,
+        let matched_players = matched_player_ids.len();
+        for player_id in matched_player_ids {
+            self.kick_player(player_id);
         }
+        GameKickAroundOutcome::Completed { matched_players }
     }
 
     /// Exact X-major 7×7 `SetPlayerRegionEx` target snapshot. Как исходный
@@ -28643,9 +28595,12 @@ impl CGame {
     }
 
     /// Exact name lookup + `KickPlayer` side effect для GM `0x7FC06`.
-    pub(crate) fn kick_player_by_name(&self, name: &[u8]) -> Option<GameKickPlayerReport> {
-        let player_id = self.find_player_by_name(name)?.player_id();
-        Some(self.kick_player(player_id))
+    pub(crate) fn kick_player_by_name(&self, name: &[u8]) -> bool {
+        let Some(player_id) = self.find_player_by_name(name).map(CPlayer::player_id) else {
+            return false;
+        };
+        self.kick_player(player_id);
+        true
     }
 
     fn send_shape_exit_around(&self, region: &CServerRegion, shape: &CShape) -> Option<i32> {
@@ -38917,21 +38872,6 @@ fn format_legacy_mixed(
     }
     output.truncate(maximum_bytes);
     output
-}
-
-fn game_kick_around_block(
-    outcome: GameKickAroundOutcome,
-    target_player_id: Option<i32>,
-    server_region_id: Option<i32>,
-) -> GameKickAroundReport {
-    GameKickAroundReport {
-        outcome,
-        target_player_id,
-        server_region_id,
-        window_origin: None,
-        matched_player_ids: Vec::new(),
-        kicks: Vec::new(),
-    }
 }
 
 fn gm_kick_window_origin(tile: i32, extent: i32) -> i32 {

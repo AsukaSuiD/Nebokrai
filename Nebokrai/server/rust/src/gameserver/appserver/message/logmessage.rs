@@ -117,8 +117,8 @@ fn dispatch_player_kick(
             game.get_string_by_id(b"GS0041"),
         );
         let delivery = notice.send_to_player(game.net_server(), player_id);
-        let kick = game.kick_player(player_id);
-        tracing::trace!(player_id, delivery, route_command = kick.command_result, "активный игрок отключён");
+        game.kick_player(player_id);
+        tracing::trace!(player_id, delivery, "активный игрок отключён");
         return Ok(());
     }
 
@@ -130,8 +130,8 @@ fn dispatch_player_kick(
     }
 
     if game.player_registered_in_region(player_id) {
-        let kick = game.kick_player(player_id);
-        tracing::warn!(player_id, route_command = kick.command_result, "игрок без основного владельца удалён из региона");
+        game.kick_player(player_id);
+        tracing::warn!(player_id, "игрок без основного владельца удалён из региона");
         return Ok(());
     }
 

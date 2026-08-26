@@ -6520,8 +6520,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             if script_player_id.is_none() {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }
-            let traversal = game.kick_players_around_name(target_name);
-            match traversal.outcome {
+            match game.kick_players_around_name(target_name) {
                 GameKickAroundOutcome::TargetMissing => {
                     let mut request = CMessage::new(0x0005_ff08);
                     request.add_long(player_id);
@@ -6532,8 +6531,8 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         _ => Some(ScriptFunctionDispatchOutcome::Invalid),
                     }
                 }
-                GameKickAroundOutcome::Completed => {
-                    let count = traversal.matched_player_ids.len() as i32;
+                GameKickAroundOutcome::Completed { matched_players } => {
+                    let count = matched_players as i32;
                     let count_text = count.to_string().into_bytes();
                     let text = format_legacy_text_fields(
                         game.get_string_by_id(b"GS0030"),
@@ -6837,7 +6836,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
-            if game.kick_player_by_name(target_name).is_some() {
+            if game.kick_player_by_name(target_name) {
                 let text = format_legacy_text_fields(
                     game.get_string_by_id(b"GS0025"),
                     &[target_name],
