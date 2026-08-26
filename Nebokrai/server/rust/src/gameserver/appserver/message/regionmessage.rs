@@ -66,9 +66,8 @@ pub(crate) fn dispatch_game_region_message<
                 message.socket_id(),
                 context,
             ),
-            _ => None,
-        }
-        .is_some();
+            _ => false,
+        };
         debug!(?player_id, ?region_id, applied, "завершён вход игрока в сменённый регион");
     } else {
         let target_region_id = argument;

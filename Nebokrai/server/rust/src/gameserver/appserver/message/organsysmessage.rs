@@ -1390,7 +1390,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 .expect("Nation m_vPlayers ID проверен до random position")
                 .shape()
                 .get_direction();
-            let _business = self.game.finish_player_business(player_id);
+            self.game.finish_player_business(player_id);
             {
                 let player = self
                     .game

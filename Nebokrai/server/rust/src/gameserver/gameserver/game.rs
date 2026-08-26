@@ -650,7 +650,7 @@ use crate::gameserver::appserver::player::{
     CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
     CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
     EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
-    GoodsDestroyHandConsumption, GoodsSessionPlayerRelease, HotkeyHandTransferOutcome,
+    GoodsDestroyHandConsumption, HotkeyHandTransferOutcome,
     HotkeyHandTransferReport, PlayerAuctionGoodsReturn, PlayerAuctionMoneyChange,
     PlayerBankCurrencyAddOutcome, PlayerCombatProperties,
     PlayerDeathGoodsCandidate, PlayerEquipmentAddEffect, PlayerEquipmentAddReport,
@@ -1755,16 +1755,6 @@ pub(crate) enum GamePlayerLoginPreludeError {
     Sequence(SequenceSerializeError),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GameRegionEnterReport {
-    pub(crate) player_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) entry_token: i32,
-    pub(crate) previous_changing_region: bool,
-    pub(crate) relocation: Option<(i32, i32, i32)>,
-    pub(crate) membership: Result<(), RegionMembershipBlock>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerRegionChangeKind {
     MissingPlayer,
@@ -1787,7 +1777,6 @@ pub(crate) struct PlayerRegionChangeReport {
     pub(crate) range: i32,
     pub(crate) carriage_distance: i32,
     pub(crate) kind: PlayerRegionChangeKind,
-    pub(crate) business: Option<GamePlayerBusinessEndReport>,
     pub(crate) position_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) direction_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
     pub(crate) region_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
@@ -1796,15 +1785,6 @@ pub(crate) struct PlayerRegionChangeReport {
     pub(crate) world_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) change_log_delivery: Option<Result<i32, SendMessageError>>,
     pub(crate) player_snapshot_size: Option<usize>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GamePlayerBusinessEndReport {
-    pub(crate) player_id: i32,
-    pub(crate) previous_progress: PlayerProgress,
-    pub(crate) session_id: Option<i32>,
-    pub(crate) player_release: Option<GoodsSessionPlayerRelease>,
-    pub(crate) increment_close_delivery: Option<i32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15719,7 +15699,6 @@ impl CGame {
             range,
             carriage_distance,
             kind: PlayerRegionChangeKind::MissingPlayer,
-            business: None,
             position_delivery: None,
             direction_delivery: None,
             region_delivery: None,
@@ -15758,7 +15737,7 @@ impl CGame {
             report.kind = PlayerRegionChangeKind::MissingSourceRegion;
             return report;
         };
-        report.business = self.finish_player_business(player_id);
+        self.finish_player_business(player_id);
         let mut player = self
             .players
             .remove(&player_id)
@@ -16547,7 +16526,7 @@ impl CGame {
         changing_server: bool,
         runtime: &mut Runtime,
     ) {
-        let business = self.finish_player_business(player_id);
+        self.finish_player_business(player_id);
         let silence = self
             .find_player_mut(player_id)
             .expect("OnExit player проверен reached caller-ом")
@@ -16590,7 +16569,6 @@ impl CGame {
         tracing::trace!(
             player_id,
             changing_server,
-            ?business,
             ?silence,
             ?around_delivery,
             ?return_point,
@@ -16732,8 +16710,12 @@ impl CGame {
     pub(crate) fn finish_player_business(
         &mut self,
         player_id: i32,
-    ) -> Option<GamePlayerBusinessEndReport> {
-        let previous_progress = self.find_player(player_id)?.current_progress();
+    ) {
+        let Some(previous_progress) = self.find_player(player_id).map(CPlayer::current_progress)
+        else {
+            tracing::trace!(player_id, "завершение business-состояния пропущено: игрок отсутствует");
+            return;
+        };
         let session_id = matches!(
             previous_progress,
             PlayerProgress::Trading
@@ -16766,13 +16748,14 @@ impl CGame {
         }
         let increment_close_delivery = (previous_progress == PlayerProgress::Increment)
             .then(|| CMessage::new(0x000c_0404).send_to_player(self.net_server(), player_id));
-        Some(GamePlayerBusinessEndReport {
+        tracing::trace!(
             player_id,
-            previous_progress,
-            session_id,
-            player_release,
-            increment_close_delivery,
-        })
+            ?previous_progress,
+            ?session_id,
+            ?player_release,
+            ?increment_close_delivery,
+            "business-состояние игрока завершено"
+        );
     }
 
     /// Client `8F801` acknowledgement completes a deferred local change. The
@@ -16786,16 +16769,18 @@ impl CGame {
         client_ip: u32,
         socket_id: i32,
         context: &mut Context,
-    ) -> Option<GameRegionEnterReport> {
-        let mut player = self.players.remove(&player_id)?;
+    ) -> bool {
+        let Some(mut player) = self.players.remove(&player_id) else {
+            return false;
+        };
         let previous_changing_region = player.in_changing_region();
         if !previous_changing_region || player.server_region_id() != Some(region_id) {
             self.players.insert(player_id, player);
-            return None;
+            return false;
         }
         let Some(mut owner) = self.take_region_owner(region_id) else {
             self.players.insert(player_id, player);
-            return None;
+            return false;
         };
         player.set_changing_state_snapshot(player.in_changing_server(), false);
         player.set_client_ip_snapshot(client_ip);
@@ -16857,14 +16842,16 @@ impl CGame {
                 socket_id,
             );
         }
-        Some(GameRegionEnterReport {
+        tracing::debug!(
             player_id,
             region_id,
             entry_token,
             previous_changing_region,
-            relocation,
-            membership,
-        })
+            ?relocation,
+            ?membership,
+            "завершена попытка входа игрока в сменённый регион"
+        );
+        true
     }
 
     /// Очищает и декодирует language table, пишет exact log и лишь затем
@@ -21571,7 +21558,6 @@ impl CGame {
             range,
             carriage_distance,
             kind: PlayerRegionChangeKind::MissingPlayer,
-            business: None,
             position_delivery: None,
             direction_delivery: None,
             region_delivery: None,
