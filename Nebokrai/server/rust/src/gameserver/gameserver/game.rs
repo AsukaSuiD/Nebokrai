@@ -682,7 +682,6 @@ use crate::gameserver::appserver::servercityregion::{
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
-    CountryRegionAiError,
     CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
@@ -705,7 +704,7 @@ use crate::gameserver::appserver::serverregion::{
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
-    ContendAiError, ContendPlayerState, SymbolCaptureLog, WarContendContext,
+    ContendPlayerState, SymbolCaptureLog, WarContendContext,
     WarContendEntryContext, WarRegionContext, WarRegionOwnership,
 };
 use crate::gameserver::appserver::session::cequipmentcompose::{
@@ -3320,53 +3319,11 @@ pub(crate) enum GamePlayerFightStatePhase {
     MoveShapeAi,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryRegionAiEffect {
-    ContendTime {
-        player_id: i32,
-        percentage: i32,
-        delivery: i32,
-    },
-    PlayerState {
-        player_id: i32,
-        state: bool,
-        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    },
-    PlayerNotice {
-        player_id: i32,
-        string_id: &'static str,
-        delivery: i32,
-    },
-    CountryWonSymbol {
-        country: i32,
-        symbol_id: i32,
-    },
-    RegionNotice {
-        country: u8,
-        symbol_name: Vec<u8>,
-        delivery: i32,
-    },
-    TopInfo {
-        country: u8,
-        region_name: Vec<u8>,
-        symbol_name: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CountryRegionAiReport {
-    pub(crate) region_id: i32,
-    pub(crate) result: Result<(), CountryRegionAiError>,
-    pub(crate) effects: Vec<CountryRegionAiEffect>,
-}
-
 struct GameCountryRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
     region: CServerRegion,
     ai_tick: i32,
-    effects: Vec<CountryRegionAiEffect>,
 }
 
 impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
@@ -3380,22 +3337,14 @@ impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
         let mut message = CMessage::new(0x000b_ff29);
         message.add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(CountryRegionAiEffect::ContendTime {
-            player_id,
-            percentage: time,
-            delivery,
-        });
+        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата символа государства");
     }
 
     fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
                 .publish_war_player_contend_state(&self.region, player_id, state);
-        self.effects.push(CountryRegionAiEffect::PlayerState {
-            player_id,
-            state,
-            around_delivery,
-        });
+        tracing::trace!(player_id, state, ?around_delivery, "опубликовано состояние захвата символа государства");
     }
 
     fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
@@ -3405,11 +3354,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendEntryContext
             self.game.get_string_by_id(string_id.as_bytes()),
         );
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(CountryRegionAiEffect::PlayerNotice {
-            player_id,
-            string_id,
-            delivery,
-        });
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата символа государства");
     }
 }
 
@@ -3450,8 +3395,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
     fn on_country_win_one_symbol(&mut self, country: i32, symbol_id: i32) {
         // Country-region не переопределяет пустой base virtual slot; реальный
         // owned result уже записан в `symbol_hold` перед этим уведомлением.
-        self.effects
-            .push(CountryRegionAiEffect::CountryWonSymbol { country, symbol_id });
+        tracing::trace!(country, symbol_id, "государство захватило символ");
     }
 
     fn send_country_symbol_captured_region_notice(&mut self, country: u8, symbol_name: &str) {
@@ -3467,11 +3411,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
             .send_to_region(Some(&self.region), None, self.game);
-        self.effects.push(CountryRegionAiEffect::RegionNotice {
-            country,
-            symbol_name: symbol_name.as_bytes().to_vec(),
-            delivery,
-        });
+        tracing::trace!(country, symbol_name, delivery, "отправлено уведомление региона о захвате символа государства");
     }
 
     fn send_country_symbol_captured_top_info(
@@ -3491,77 +3431,8 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
             0x3ff,
         );
         let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
-        self.effects.push(CountryRegionAiEffect::TopInfo {
-            country,
-            region_name: region_name.as_bytes().to_vec(),
-            symbol_name: symbol_name.as_bytes().to_vec(),
-            delivery,
-        });
+        tracing::trace!(country, region_name, symbol_name, ?delivery, "отправлена верхняя строка о захвате символа государства");
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WarSymbolCaptureLog {
-    pub(crate) war_number: i32,
-    pub(crate) owned_faction_id: i32,
-    pub(crate) owned_union_id: i32,
-    pub(crate) faction_name: Vec<u8>,
-    pub(crate) faction_id: i32,
-    pub(crate) player_id: i32,
-    pub(crate) symbol_id: i32,
-    pub(crate) union_id: i32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CityRegionAiEffect {
-    ContendTime {
-        player_id: i32,
-        percentage: i32,
-        delivery: i32,
-    },
-    PlayerState {
-        player_id: i32,
-        state: bool,
-        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    },
-    PlayerNotice {
-        player_id: i32,
-        string_id: &'static str,
-        delivery: i32,
-    },
-    FirstContenderNotice {
-        country: u8,
-        faction_name: Vec<u8>,
-        symbol_name: Vec<u8>,
-        delivery: i32,
-    },
-    DefenceSideChanged {
-        faction_id: i32,
-    },
-    Victory {
-        faction_id: i32,
-        union_id: i32,
-        previous: WarRegionOwnership,
-        current: WarRegionOwnership,
-    },
-    RegionNotice {
-        delivery: i32,
-    },
-    TopInfo {
-        faction_name: Vec<u8>,
-        symbol_name: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-    CaptureLog(WarSymbolCaptureLog),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CityRegionAiReport {
-    pub(crate) region_id: i32,
-    pub(crate) result: Result<(), ContendAiError<AttackCityMembershipBlock>>,
-    pub(crate) owner: WarRegionOwnership,
-    pub(crate) defence_side_faction_id: i32,
-    pub(crate) effects: Vec<CityRegionAiEffect>,
 }
 
 struct GameCityRegionAiContext<'a, Runtime> {
@@ -3572,7 +3443,6 @@ struct GameCityRegionAiContext<'a, Runtime> {
     war_number: i32,
     owner: WarRegionOwnership,
     defence_side_faction_id: i32,
-    effects: Vec<CityRegionAiEffect>,
 }
 
 impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameCityRegionAiContext<'_, Runtime> {
@@ -3592,22 +3462,14 @@ impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameCityRegionAiContext<
         let mut message = CMessage::new(0x000b_ff29);
         message.add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(CityRegionAiEffect::ContendTime {
-            player_id,
-            percentage: time,
-            delivery,
-        });
+        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата городского символа");
     }
 
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
                 .publish_war_player_contend_state(&self.region, player_id, state);
-        self.effects.push(CityRegionAiEffect::PlayerState {
-            player_id,
-            state,
-            around_delivery,
-        });
+        tracing::trace!(player_id, state, ?around_delivery, "опубликовано состояние захвата городского символа");
     }
 
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
@@ -3651,11 +3513,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext for GameCityRegionAiCo
             self.game.get_string_by_id(string_id.as_bytes()),
         );
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(CityRegionAiEffect::PlayerNotice {
-            player_id,
-            string_id,
-            delivery,
-        });
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата городского символа");
     }
 
     fn register_needed_good(&mut self, _good_name: &str) {
@@ -3684,12 +3542,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext for GameCityRegionAiCo
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
             .send_to_region(Some(&self.region), None, self.game);
-        self.effects.push(CityRegionAiEffect::FirstContenderNotice {
-            country,
-            faction_name: faction_name.as_bytes().to_vec(),
-            symbol_name: symbol_name.as_bytes().to_vec(),
-            delivery,
-        });
+        tracing::trace!(country, faction_name, symbol_name, delivery, "отправлено уведомление о первом претенденте на городской символ");
     }
 }
 
@@ -3730,8 +3583,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
     fn on_faction_win_one_symbol(&mut self, faction_id: i32, symbol_id: i32) {
         if symbol_id == 0 {
             self.defence_side_faction_id = faction_id;
-            self.effects
-                .push(CityRegionAiEffect::DefenceSideChanged { faction_id });
+            tracing::trace!(faction_id, "изменена защищающая городская сторона");
         }
     }
 
@@ -3759,12 +3611,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
             }
         };
         self.owner = current;
-        self.effects.push(CityRegionAiEffect::Victory {
-            faction_id,
-            union_id,
-            previous: current_owner,
-            current,
-        });
+        tracing::trace!(faction_id, union_id, previous = ?current_owner, ?current, "обработана победа фракции в городе");
         current
     }
 
@@ -3776,8 +3623,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
             self.game.get_string_by_id(b"GS0241"),
         )
         .send_to_region(Some(&self.region), None, self.game);
-        self.effects
-            .push(CityRegionAiEffect::RegionNotice { delivery });
+        tracing::trace!(delivery, "отправлено уведомление региона о захвате городского символа");
     }
 
     fn send_symbol_captured_top_info(&mut self, faction_name: &str, symbol_name: &str) {
@@ -3787,81 +3633,13 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
             0x3ff,
         );
         let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
-        self.effects.push(CityRegionAiEffect::TopInfo {
-            faction_name: faction_name.as_bytes().to_vec(),
-            symbol_name: symbol_name.as_bytes().to_vec(),
-            delivery,
-        });
+        tracing::trace!(faction_name, symbol_name, ?delivery, "отправлена верхняя строка о захвате городского символа");
     }
 
     fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>) {
         self.game.write_war_symbol_capture_log(&capture);
-        self.effects
-            .push(CityRegionAiEffect::CaptureLog(WarSymbolCaptureLog {
-                war_number: capture.war_number,
-                owned_faction_id: capture.owned_faction_id,
-                owned_union_id: capture.owned_union_id,
-                faction_name: capture.faction_name.as_bytes().to_vec(),
-                faction_id: capture.faction_id,
-                player_id: capture.player_id,
-                symbol_id: capture.symbol_id,
-                union_id: capture.union_id,
-            }));
+        tracing::trace!(war_number = capture.war_number, owned_faction_id = capture.owned_faction_id, owned_union_id = capture.owned_union_id, faction_name = capture.faction_name, faction_id = capture.faction_id, player_id = capture.player_id, symbol_id = capture.symbol_id, union_id = capture.union_id, "записан журнал захвата городского символа");
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum VillageRegionAiEffect {
-    ContendTime {
-        player_id: i32,
-        percentage: i32,
-        delivery: i32,
-    },
-    PlayerState {
-        player_id: i32,
-        state: bool,
-        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    },
-    PlayerNotice {
-        player_id: i32,
-        string_id: &'static str,
-        delivery: i32,
-    },
-    NeededGoodRegistered {
-        name: Vec<u8>,
-    },
-    FirstContenderNotice {
-        country: u8,
-        faction_name: Vec<u8>,
-        symbol_name: Vec<u8>,
-        delivery: i32,
-    },
-    FlagOwnerChanged {
-        faction_id: i32,
-    },
-    Victory {
-        faction_id: i32,
-        union_id: i32,
-        previous: WarRegionOwnership,
-        current: WarRegionOwnership,
-    },
-    RegionNotice {
-        delivery: i32,
-    },
-    TopInfo {
-        faction_name: Vec<u8>,
-        symbol_name: Vec<u8>,
-        delivery: Result<i32, SendMessageError>,
-    },
-    CaptureLog(WarSymbolCaptureLog),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct VillageRegionAiReport {
-    pub(crate) region_id: i32,
-    pub(crate) result: Result<(), ContendAiError<Infallible>>,
-    pub(crate) flag_owner_faction_id: i32,
-    pub(crate) effects: Vec<VillageRegionAiEffect>,
 }
 
 struct GameVillageRegionAiContext<'a, Runtime> {
@@ -3872,7 +3650,6 @@ struct GameVillageRegionAiContext<'a, Runtime> {
     ai_tick: i32,
     flag_owner_faction_id: i32,
     needed_goods: Vec<String>,
-    effects: Vec<VillageRegionAiEffect>,
 }
 
 impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameVillageRegionAiContext<'_, Runtime> {
@@ -3893,22 +3670,14 @@ impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameVillageRegionAiConte
         let mut message = CMessage::new(0x000b_ff29);
         message.add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(VillageRegionAiEffect::ContendTime {
-            player_id,
-            percentage: time,
-            delivery,
-        });
+        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата деревенского символа");
     }
 
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
                 .publish_war_player_contend_state(&self.region, player_id, state);
-        self.effects.push(VillageRegionAiEffect::PlayerState {
-            player_id,
-            state,
-            around_delivery,
-        });
+        tracing::trace!(player_id, state, ?around_delivery, "опубликовано состояние захвата деревенского символа");
     }
 
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
@@ -3968,11 +3737,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
             self.game.get_string_by_id(string_id.as_bytes()),
         );
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(VillageRegionAiEffect::PlayerNotice {
-            player_id,
-            string_id,
-            delivery,
-        });
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата деревенского символа");
     }
 
     fn register_needed_good(&mut self, good_name: &str) {
@@ -3980,10 +3745,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
             return;
         }
         self.needed_goods.push(good_name.to_owned());
-        self.effects
-            .push(VillageRegionAiEffect::NeededGoodRegistered {
-                name: good_name.as_bytes().to_vec(),
-            });
+        tracing::trace!(good_name, "зарегистрирован необходимый предмет деревенской войны");
     }
 
     fn send_first_faction_contender_notice(
@@ -4008,13 +3770,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendEntryContext
         );
         let delivery = colored_text_message(0xbf806, 0xffff_ffff, 0xffff_0000, &text)
             .send_to_region(Some(&self.region), None, self.game);
-        self.effects
-            .push(VillageRegionAiEffect::FirstContenderNotice {
-                country,
-                faction_name: faction_name.as_bytes().to_vec(),
-                symbol_name: symbol_name.as_bytes().to_vec(),
-                delivery,
-            });
+        tracing::trace!(country, faction_name, symbol_name, delivery, "отправлено уведомление о первом претенденте на деревенский символ");
     }
 }
 
@@ -4051,8 +3807,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
     fn on_faction_win_one_symbol(&mut self, faction_id: i32, symbol_id: i32) {
         if symbol_id == 0 {
             self.flag_owner_faction_id = faction_id;
-            self.effects
-                .push(VillageRegionAiEffect::FlagOwnerChanged { faction_id });
+            tracing::trace!(faction_id, "изменён владелец деревенского флага");
         }
     }
 
@@ -4065,12 +3820,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
         // `CServerVillageRegion` делегирует сюда только при active city-state,
         // но точный `CServerWarRegion::OnFactionVictory` slot пуст.
         let current = current_owner;
-        self.effects.push(VillageRegionAiEffect::Victory {
-            faction_id,
-            union_id,
-            previous: current_owner,
-            current,
-        });
+        tracing::trace!(faction_id, union_id, previous = ?current_owner, ?current, "обработана победа фракции в деревне");
         current
     }
 
@@ -4082,8 +3832,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
             self.game.get_string_by_id(b"GS0241"),
         )
         .send_to_region(Some(&self.region), None, self.game);
-        self.effects
-            .push(VillageRegionAiEffect::RegionNotice { delivery });
+        tracing::trace!(delivery, "отправлено уведомление региона о захвате деревенского символа");
     }
 
     fn send_symbol_captured_top_info(&mut self, faction_name: &str, symbol_name: &str) {
@@ -4093,26 +3842,12 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
             0x3ff,
         );
         let delivery = self.game.send_top_info_to_client(-1, 0, 1, 1, &text);
-        self.effects.push(VillageRegionAiEffect::TopInfo {
-            faction_name: faction_name.as_bytes().to_vec(),
-            symbol_name: symbol_name.as_bytes().to_vec(),
-            delivery,
-        });
+        tracing::trace!(faction_name, symbol_name, ?delivery, "отправлена верхняя строка о захвате деревенского символа");
     }
 
     fn write_symbol_capture_logs(&mut self, capture: SymbolCaptureLog<'_>) {
         self.game.write_war_symbol_capture_log(&capture);
-        self.effects
-            .push(VillageRegionAiEffect::CaptureLog(WarSymbolCaptureLog {
-                war_number: capture.war_number,
-                owned_faction_id: capture.owned_faction_id,
-                owned_union_id: capture.owned_union_id,
-                faction_name: capture.faction_name.as_bytes().to_vec(),
-                faction_id: capture.faction_id,
-                player_id: capture.player_id,
-                symbol_id: capture.symbol_id,
-                union_id: capture.union_id,
-            }));
+        tracing::trace!(war_number = capture.war_number, owned_faction_id = capture.owned_faction_id, owned_union_id = capture.owned_union_id, faction_name = capture.faction_name, faction_id = capture.faction_id, player_id = capture.player_id, symbol_id = capture.symbol_id, union_id = capture.union_id, "записан журнал захвата деревенского символа");
     }
 }
 
@@ -37719,7 +37454,7 @@ impl CGame {
         region_id: i32,
         ai_tick: i32,
         runtime: &mut Runtime,
-    ) -> Option<CountryRegionAiReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Country(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -37731,17 +37466,12 @@ impl CGame {
             runtime,
             region: projection,
             ai_tick,
-            effects: Vec::new(),
         };
         let result = region.ai(&mut context);
-        let effects = std::mem::take(&mut context.effects);
         drop(context);
         self.restore_region_owner(ServerRegionOwner::Country(region));
-        Some(CountryRegionAiReport {
-            region_id,
-            result,
-            effects,
-        })
+        tracing::trace!(region_id, ?result, "завершён проход ИИ государственного региона");
+        Some(())
     }
 
     /// Concrete City override наследует `CServerWarRegion::AI`; adapter
@@ -37752,7 +37482,7 @@ impl CGame {
         region_id: i32,
         ai_tick: i32,
         runtime: &mut Runtime,
-    ) -> Option<CityRegionAiReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::City(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -37770,22 +37500,21 @@ impl CGame {
                 union_id: region.war.base.param.owned_union_id,
             },
             defence_side_faction_id: region.defence_side_faction_id,
-            effects: Vec::new(),
         };
         let result = region.war.ai(&mut context);
         let owner = context.owner;
         let defence_side_faction_id = context.defence_side_faction_id;
-        let effects = std::mem::take(&mut context.effects);
         drop(context);
         region.defence_side_faction_id = defence_side_faction_id;
         self.restore_region_owner(ServerRegionOwner::City(region));
-        Some(CityRegionAiReport {
+        tracing::trace!(
             region_id,
-            result,
-            owner,
+            ?result,
+            ?owner,
             defence_side_faction_id,
-            effects,
-        })
+            "завершён проход ИИ городского региона"
+        );
+        Some(())
     }
 
     /// Concrete Village override наследует `CServerWarRegion::AI`; adapter
@@ -37796,7 +37525,7 @@ impl CGame {
         region_id: i32,
         ai_tick: i32,
         runtime: &mut Runtime,
-    ) -> Option<VillageRegionAiReport> {
+    ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::Village(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -37811,22 +37540,23 @@ impl CGame {
             ai_tick,
             flag_owner_faction_id: region.flag_owner_faction_id,
             needed_goods: Vec::new(),
-            effects: Vec::new(),
         };
         let result = region.war.ai(&mut context);
         let flag_owner_faction_id = context.flag_owner_faction_id;
         let needed_goods = std::mem::take(&mut context.needed_goods);
-        let effects = std::mem::take(&mut context.effects);
+        let needed_goods_count = needed_goods.len();
         drop(context);
         region.flag_owner_faction_id = flag_owner_faction_id;
         region.goods.extend(needed_goods);
         self.restore_region_owner(ServerRegionOwner::Village(region));
-        Some(VillageRegionAiReport {
+        tracing::trace!(
             region_id,
-            result,
+            ?result,
             flag_owner_faction_id,
-            effects,
-        })
+            needed_goods = needed_goods_count,
+            "завершён проход ИИ деревенского региона"
+        );
+        Some(())
     }
 
     /// Exact `CGame::AI`: signed region-map order, reached player AI prefix и
