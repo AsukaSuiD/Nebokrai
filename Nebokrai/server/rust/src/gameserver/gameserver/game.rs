@@ -1817,33 +1817,6 @@ pub(crate) trait EquipmentUpgradeContext: GameContainerMessageRuntime {}
 impl<T: GameContainerMessageRuntime> EquipmentUpgradeContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EquipmentSessionOpenOutcome {
-    FeatureDisabled,
-    MissingOrDeadPlayer,
-    Busy,
-    TeamStateBlocked,
-    FactoryRejected,
-    SendFailed,
-    Opened,
-}
-
-#[must_use = "open report хранит session/plug identity, player lock и wire result"]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EquipmentSessionOpenReport {
-    pub(crate) kind: EquipmentSessionPlugKind,
-    pub(crate) player_id: i32,
-    pub(crate) outcome: EquipmentSessionOpenOutcome,
-    pub(crate) session_id: Option<i32>,
-    pub(crate) plug_id: Option<i32>,
-    pub(crate) notification_delivery: Option<i32>,
-    pub(crate) player_transition:
-        Option<crate::gameserver::appserver::player::GoodsSessionPlayerRelease>,
-    pub(crate) listener_attach: Option<[bool; 2]>,
-    pub(crate) open_delivery: Option<i32>,
-    pub(crate) collected_plug_ids: Vec<i32>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ScriptNpcShopOpenOutcome {
     MissingContext,
     Busy,
@@ -18809,74 +18782,63 @@ impl CGame {
         &mut self,
         player_id: i32,
         kind: EquipmentSessionPlugKind,
-    ) -> EquipmentSessionOpenReport {
-        let mut report = EquipmentSessionOpenReport {
-            kind,
-            player_id,
-            outcome: EquipmentSessionOpenOutcome::MissingOrDeadPlayer,
-            session_id: None,
-            plug_id: None,
-            notification_delivery: None,
-            player_transition: None,
-            listener_attach: None,
-            open_delivery: None,
-            collected_plug_ids: Vec::new(),
-        };
+    ) {
         if kind == EquipmentSessionPlugKind::DaKong && !self.da_kong_xiang_qian.key() {
-            report.outcome = EquipmentSessionOpenOutcome::FeatureDisabled;
-            return report;
+            tracing::trace!(player_id, ?kind, "сессия оборудования отключена");
+            return;
         }
         let Some(player) = self.find_player(player_id) else {
-            return report;
+            tracing::trace!(player_id, ?kind, "игрок открытия сессии оборудования не найден");
+            return;
         };
         if player.is_dead() {
-            return report;
+            tracing::trace!(player_id, ?kind, "мёртвый игрок не может открыть сессию оборудования");
+            return;
         }
         if player.current_progress() != PlayerProgress::None {
-            report.outcome = EquipmentSessionOpenOutcome::Busy;
             let string_id = match kind {
                 EquipmentSessionPlugKind::Upgrade => "GS0177",
                 EquipmentSessionPlugKind::DaKong => "GS1057",
                 EquipmentSessionPlugKind::Compose => "GS1061",
             };
-            report.notification_delivery =
-                Some(self.send_equipment_session_notification(player_id, string_id));
-            return report;
+            let notification_delivery = self.send_equipment_session_notification(player_id, string_id);
+            tracing::trace!(player_id, ?kind, notification_delivery, "игрок занят при открытии сессии оборудования");
+            return;
         }
         if kind != EquipmentSessionPlugKind::Upgrade
             && self
                 .find_player(player_id)
                 .is_some_and(CPlayer::has_team_recruitment_state)
         {
-            report.outcome = EquipmentSessionOpenOutcome::TeamStateBlocked;
             let string_id = match kind {
                 EquipmentSessionPlugKind::DaKong => "GS1058",
                 EquipmentSessionPlugKind::Compose => "GS1062",
                 EquipmentSessionPlugKind::Upgrade => unreachable!(),
             };
-            report.notification_delivery =
-                Some(self.send_equipment_session_notification(player_id, string_id));
-            return report;
+            let notification_delivery = self.send_equipment_session_notification(player_id, string_id);
+            tracing::trace!(player_id, ?kind, notification_delivery, "командное состояние блокирует сессию оборудования");
+            return;
         }
         let Some((session_id, plug_id)) = self
             .session_factory
             .create_equipment_session(kind, player_id)
         else {
-            report.outcome = EquipmentSessionOpenOutcome::FactoryRejected;
-            return report;
+            tracing::trace!(player_id, ?kind, "фабрика отклонила сессию оборудования");
+            return;
         };
-        report.session_id = Some(session_id);
-        report.plug_id = Some(plug_id);
         let (progress, lock_movement, message_type) = match kind {
             EquipmentSessionPlugKind::Upgrade => (PlayerProgress::Upgrade, false, 0x0b_f912),
             EquipmentSessionPlugKind::DaKong => (PlayerProgress::DaKong, false, 0x0b_f929),
             EquipmentSessionPlugKind::Compose => (PlayerProgress::Compose, true, 0x0b_f92a),
         };
-        if let Some(player) = self.find_player_mut(player_id) {
-            report.listener_attach = Some(player.attach_equipment_session_listener(plug_id));
-            report.player_transition =
-                Some(player.begin_equipment_session(progress, lock_movement));
-        }
+        let (listener_attach, player_transition) = self
+            .find_player_mut(player_id)
+            .map(|player| {
+                let listener_attach = player.attach_equipment_session_listener(plug_id);
+                let transition = player.begin_equipment_session(progress, lock_movement);
+                (Some(listener_attach), Some(transition))
+            })
+            .unwrap_or((None, None));
         let mut message = CMessage::new(message_type);
         message.add_long(session_id);
         message.add_long(plug_id);
@@ -18884,18 +18846,16 @@ impl CGame {
             message.add_long(player_id);
         }
         let delivery = message.send_to_player(self.net_server(), player_id);
-        report.open_delivery = Some(delivery);
         if delivery == 0 {
-            report.outcome = EquipmentSessionOpenOutcome::SendFailed;
-            report.collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
+            let collected_plug_ids = self.session_factory.garbage_collect_session(session_id);
             if let Some(player) = self.find_player_mut(player_id) {
                 let _listener_detach = player.detach_equipment_session_listener(plug_id);
                 let _ = player.release_goods_session_state();
             }
-            return report;
+            tracing::trace!(player_id, ?kind, session_id, plug_id, ?listener_attach, ?player_transition, ?collected_plug_ids, "открытие сессии оборудования не доставлено");
+            return;
         }
-        report.outcome = EquipmentSessionOpenOutcome::Opened;
-        report
+        tracing::trace!(player_id, ?kind, session_id, plug_id, ?listener_attach, ?player_transition, delivery, "сессия оборудования открыта");
     }
 
     pub(crate) fn upgrade_equipment<Context: EquipmentUpgradeContext>(

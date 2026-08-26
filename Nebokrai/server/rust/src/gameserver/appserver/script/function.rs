@@ -453,7 +453,7 @@ use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlug
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
-    CiQingComposeContext, EquipmentDaKongContext, EquipmentSessionOpenReport, GameClockContext,
+    CiQingComposeContext, EquipmentDaKongContext, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     GodsBattleSzlPlayerUpdate, MonsterDeathContext, NationCarriageReturnReport,
     NationCombatContext, NationContendEnterReport, PlayerReliveContext,
@@ -3529,7 +3529,7 @@ fn run_goods_war_script_function(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EquipmentSessionScriptFunctionOutcome {
     DifferentFunction,
-    Opened(EquipmentSessionOpenReport),
+    Handled,
 }
 
 pub(crate) fn run_equipment_session_script_function(
@@ -3543,7 +3543,8 @@ pub(crate) fn run_equipment_session_script_function(
         SCRIPT_FUNCTION_OPEN_EQUIPMENT_UPGRADE => EquipmentSessionPlugKind::Upgrade,
         _ => return EquipmentSessionScriptFunctionOutcome::DifferentFunction,
     };
-    EquipmentSessionScriptFunctionOutcome::Opened(game.open_equipment_session(player_id, kind))
+    game.open_equipment_session(player_id, kind);
+    EquipmentSessionScriptFunctionOutcome::Handled
 }
 
 #[must_use = "диспетчер сценариев отличает чужой идентификатор от обработанного вызова"]
@@ -9208,7 +9209,7 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         CountryScalarScriptFunctionOutcome::Handled
     );
 
-    if let EquipmentSessionScriptFunctionOutcome::Opened(_) = run_equipment_session_script_function(
+    if let EquipmentSessionScriptFunctionOutcome::Handled = run_equipment_session_script_function(
         game,
         script_player_id.unwrap_or_default(),
         function_id,
