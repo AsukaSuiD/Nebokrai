@@ -447,7 +447,7 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
     EquipmentDaKongScriptModifyKind,
 };
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
-use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeResolver};
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
     CiQingComposeContext, EquipmentDaKongContext, GameClockContext,
@@ -882,32 +882,7 @@ impl<T> ScriptFunctionRuntime for T where
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WarContendEffect {
-    PlayerState {
-        player_id: i32,
-        state: bool,
-        changed: bool,
-    },
-    Time {
-        player_id: i32,
-        percentage: i32,
-        delivery: i32,
-    },
-    Notice {
-        player_id: Option<i32>,
-        string_id: &'static str,
-        delivery: i32,
-    },
-    FirstFactionNotice {
-        country: u8,
-        faction_name: String,
-        symbol_name: String,
-        delivery: i32,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WarContendScriptDisposition {
+enum WarContendScriptDisposition {
     CallerMissing,
     CallerShapeMissing,
     TooFar {
@@ -936,17 +911,13 @@ pub(crate) enum WarContendScriptDisposition {
         duration_ms: i32,
         required_goods: [String; 4],
         result: Result<(), AttackCityMembershipBlock>,
-        effects: Vec<WarContendEffect>,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WarContendScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        legacy_return: i32,
-        disposition: WarContendScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 #[derive(Clone, Copy)]
@@ -963,7 +934,6 @@ struct GameWarContendEntryContext<'a, Runtime> {
     owner_faction_id: i32,
     schedule: ContendEntrySchedule,
     needed_goods: Vec<String>,
-    effects: Vec<WarContendEffect>,
 }
 
 impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
@@ -992,11 +962,7 @@ impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
         let mut message = CMessage::new(0x000b_ff29);
         message.base_mut().add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(WarContendEffect::Time {
-            player_id,
-            percentage: time,
-            delivery,
-        });
+        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата военного региона");
     }
 
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
@@ -1004,11 +970,7 @@ impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
             .game
             .publish_war_player_contend_state(&self.region, player_id, state)
             .is_some();
-        self.effects.push(WarContendEffect::PlayerState {
-            player_id,
-            state,
-            changed,
-        });
+        tracing::trace!(player_id, state, changed, "опубликовано состояние захвата военного региона");
     }
 
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
@@ -1052,11 +1014,7 @@ impl<Runtime: GameClockContext> WarContendEntryContext for GameWarContendEntryCo
 
     fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
         let delivery = send_country_war_script_notice(self.game, player_id, string_id.as_bytes());
-        self.effects.push(WarContendEffect::Notice {
-            player_id: Some(player_id),
-            string_id,
-            delivery,
-        });
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата военного региона");
     }
 
     fn register_needed_good(&mut self, good_name: &str) {
@@ -1087,12 +1045,7 @@ impl<Runtime: GameClockContext> WarContendEntryContext for GameWarContendEntryCo
         );
         let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
             .send_to_region(Some(&self.region), None, self.game);
-        self.effects.push(WarContendEffect::FirstFactionNotice {
-            country,
-            faction_name: faction_name.to_owned(),
-            symbol_name: symbol_name.to_owned(),
-            delivery,
-        });
+        tracing::trace!(country, faction_name, symbol_name, delivery, "опубликован первый претендент фракции");
     }
 }
 
@@ -1109,9 +1062,9 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
     if function_id != SCRIPT_FUNCTION_ENTER_CONTEND_STATE {
         return WarContendScriptFunctionOutcome::DifferentFunction;
     }
-    let handled = |disposition| WarContendScriptFunctionOutcome::Handled {
-        legacy_return: 0,
-        disposition,
+    let handled = |disposition| {
+        tracing::debug!(function_id, ?disposition, "обработана сценарная функция захвата военного региона");
+        WarContendScriptFunctionOutcome::Handled { legacy_return: 0 }
     };
     let (Some(player_id), Some(npc_id)) = (script_player_id, script_npc_id) else {
         return handled(WarContendScriptDisposition::CallerMissing);
@@ -1227,7 +1180,6 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
         owner_faction_id,
         schedule,
         needed_goods: Vec::new(),
-        effects: Vec::new(),
     };
     let result = war.on_enter_contend(
         Some(&player),
@@ -1238,7 +1190,6 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
         &mut context,
     );
     let needed_goods = std::mem::take(&mut context.needed_goods);
-    let effects = std::mem::take(&mut context.effects);
     drop(context);
     if let ServerRegionOwner::Village(region) = &mut owner {
         for good_name in &needed_goods {
@@ -1253,19 +1204,18 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
         duration_ms,
         required_goods,
         result,
-        effects,
     })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleScalarScriptKind {
+enum GodsBattleScalarScriptKind {
     AreaId,
     PlayerSzl,
     ChangePlayerSzl,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleScalarScriptDisposition {
+enum GodsBattleScalarScriptDisposition {
     Scalar {
         player_id: Option<i32>,
         value: i32,
@@ -1281,11 +1231,7 @@ pub(crate) enum GodsBattleScalarScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleScalarScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        kind: GodsBattleScalarScriptKind,
-        legacy_return: i32,
-        disposition: GodsBattleScalarScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 pub(crate) fn run_gods_battle_scalar_script_function<Runtime: GodsBattleDeathContext>(
@@ -1301,10 +1247,9 @@ pub(crate) fn run_gods_battle_scalar_script_function<Runtime: GodsBattleDeathCon
         SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => GodsBattleScalarScriptKind::ChangePlayerSzl,
         _ => return GodsBattleScalarScriptFunctionOutcome::DifferentFunction,
     };
-    let handled = |legacy_return, disposition| GodsBattleScalarScriptFunctionOutcome::Handled {
-        kind,
-        legacy_return,
-        disposition,
+    let handled = |legacy_return, disposition| {
+        tracing::debug!(function_id, ?kind, ?disposition, legacy_return, "обработана сценарная функция битвы богов");
+        GodsBattleScalarScriptFunctionOutcome::Handled { legacy_return }
     };
     match kind {
         GodsBattleScalarScriptKind::AreaId => {
@@ -1350,33 +1295,13 @@ pub(crate) fn run_gods_battle_scalar_script_function<Runtime: GodsBattleDeathCon
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarActionKind {
+enum CountryWarActionKind {
     EnterContend,
     PublishVictory,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarContendEffect {
-    PlayerState {
-        player_id: i32,
-        state: bool,
-        changed: bool,
-        around_delivery: Option<Result<i32, ShapeCoordinateBlock>>,
-    },
-    Time {
-        player_id: i32,
-        percentage: i32,
-        delivery: i32,
-    },
-    Notice {
-        player_id: i32,
-        string_id: &'static str,
-        delivery: i32,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CountryWarActionScriptDisposition {
+enum CountryWarActionScriptDisposition {
     CallerMissing,
     CallerShapeMissing,
     WarClosed {
@@ -1406,7 +1331,6 @@ pub(crate) enum CountryWarActionScriptDisposition {
         symbol_id: i32,
         duration_ms: i32,
         result: Result<(), CountryNullPlayerCancelBlock>,
-        effects: Vec<CountryWarContendEffect>,
     },
     VictoryNotPublished,
     VictoryPublished {
@@ -1418,19 +1342,13 @@ pub(crate) enum CountryWarActionScriptDisposition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarActionScriptFunctionOutcome {
     DifferentFunction,
-    Handled {
-        function_id: i32,
-        kind: CountryWarActionKind,
-        legacy_return: i32,
-        disposition: CountryWarActionScriptDisposition,
-    },
+    Handled { legacy_return: i32 },
 }
 
 struct GameCountryContendEntryContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
     region: CServerRegion,
-    effects: Vec<CountryWarContendEffect>,
 }
 
 impl<Runtime: GameClockContext> CountryContendEntryContext
@@ -1444,32 +1362,19 @@ impl<Runtime: GameClockContext> CountryContendEntryContext
         let mut message = CMessage::new(0x000b_ff29);
         message.base_mut().add_long(time);
         let delivery = message.send_to_player(self.game.net_server(), player_id);
-        self.effects.push(CountryWarContendEffect::Time {
-            player_id,
-            percentage: time,
-            delivery,
-        });
+        tracing::trace!(player_id, percentage = time, delivery, "отправлено время захвата страны");
     }
 
     fn set_known_player_contend_state(&mut self, player_id: i32, state: bool) {
         let around_delivery =
             self.game
                 .publish_war_player_contend_state(&self.region, player_id, state);
-        self.effects.push(CountryWarContendEffect::PlayerState {
-            player_id,
-            state,
-            changed: around_delivery.is_some(),
-            around_delivery,
-        });
+        tracing::trace!(player_id, state, changed = around_delivery.is_some(), ?around_delivery, "опубликовано состояние захвата страны");
     }
 
     fn notify_player(&mut self, player_id: i32, string_id: &'static str) {
         let delivery = send_country_war_script_notice(self.game, player_id, string_id.as_bytes());
-        self.effects.push(CountryWarContendEffect::Notice {
-            player_id,
-            string_id,
-            delivery,
-        });
+        tracing::trace!(player_id, string_id, delivery, "отправлено уведомление захвата страны");
     }
 }
 
@@ -1646,7 +1551,6 @@ pub(crate) fn run_country_war_action_script_function<Runtime: GameClockContext>(
         game,
         runtime,
         region: region_projection,
-        effects: Vec::new(),
     };
     let result = region.on_enter_contend(
         Some(&player),
@@ -1655,7 +1559,6 @@ pub(crate) fn run_country_war_action_script_function<Runtime: GameClockContext>(
         duration_ms,
         &mut context,
     );
-    let effects = std::mem::take(&mut context.effects);
     drop(context);
     game.restore_region_owner(ServerRegionOwner::Country(region));
     country_war_action_handled(
@@ -1668,7 +1571,6 @@ pub(crate) fn run_country_war_action_script_function<Runtime: GameClockContext>(
             symbol_id,
             duration_ms,
             result,
-            effects,
         },
     )
 }
@@ -1679,12 +1581,8 @@ fn country_war_action_handled(
     legacy_return: i32,
     disposition: CountryWarActionScriptDisposition,
 ) -> CountryWarActionScriptFunctionOutcome {
-    CountryWarActionScriptFunctionOutcome::Handled {
-        function_id,
-        kind,
-        legacy_return,
-        disposition,
-    }
+    tracing::debug!(function_id, ?kind, legacy_return, ?disposition, "обработана сценарная функция войны стран");
+    CountryWarActionScriptFunctionOutcome::Handled { legacy_return }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
