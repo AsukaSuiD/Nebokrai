@@ -577,8 +577,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         UPGRADE_BATTLE_FAIRY => {
-            let _ = game
-                .upgrade_battle_fairy_equipment(player_id, runtime)
+            game.upgrade_battle_fairy_equipment(player_id, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         RESET_BATTLE_FAIRY_SKILLS => {
@@ -628,13 +627,11 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 };
                 allocations.push((property, points));
             }
-            let _ = game
-                .allocate_battle_fairy_potential(player_id, &allocations, runtime)
+            game.allocate_battle_fairy_potential(player_id, &allocations, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         RESET_BATTLE_FAIRY_POTENTIAL => {
-            let _ = game
-                .reset_battle_fairy_potential(player_id, runtime)
+            game.reset_battle_fairy_potential(player_id, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         SUMMON_BATTLE_FAIRY | RECALL_BATTLE_FAIRY => {

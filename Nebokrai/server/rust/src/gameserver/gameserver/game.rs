@@ -644,12 +644,11 @@ use crate::gameserver::appserver::player::{
     BattleFairyEquipmentMutationEffect, BattleFairyEquipmentMutationOutcome,
     BattleFairyEquipmentMutationReport, BattleFairyFollowDelivery, BattleFairyFollowEffect,
     BattleFairyFollowReport, BattleFairyObjectMove, BattleFairyObjectMoveOperation,
-    BattleFairyPotentialAllocationDelivery, BattleFairyPotentialAllocationEffect,
-    BattleFairyPotentialResetDelivery, BattleFairyPotentialResetEffect,
+    BattleFairyPotentialAllocationEffect, BattleFairyPotentialResetEffect,
     BattleFairySkillDispatch, BattleFairySkillRequest, BattleFairySkillRequestFacts,
     BattleFairySkillResetDelivery, BattleFairySkillResetEffect, BattleFairySkillResetReport,
-    BattleFairySummonEffect, BattleFairySummonReport,
-    BattleFairyUpgradeDelivery, BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer,
+    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeEffect,
+    BattleFairyWarSoulAction, CPlayer,
     CiQingContainerAddition, CiQingContainerConsumption, CiQingHandConsumption,
     CiQingPacketAddition, CiQingPacketConsumption, EnhancementDeselectionBlock,
     EnhancementDeselectionReport, EnhancementSelectionBlock, EnhancementSelectionReport,
@@ -30966,10 +30965,10 @@ impl CGame {
         player_id: i32,
         allocations: &[(i32, i32)],
         context: &mut Context,
-    ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialAllocationReport> {
+    ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let coefficients = self.globe_setup.player_property_coefficients();
-        let mut report = {
+        let report = {
             let player = self.players.get_mut(&player_id)?;
             let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.allocate_battle_fairy_potential(
@@ -30993,29 +30992,22 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    report
-                        .deliveries
-                        .push(BattleFairyPotentialAllocationDelivery::Player(delivery));
+                    tracing::trace!(player_id, delivery, "уведомление распределения потенциала боевой феи отправлено");
                 }
                 BattleFairyPotentialAllocationEffect::PropertiesChanged { player_id } => {
                     if let Some(player) = self.find_player(player_id) {
-                        report
-                            .deliveries
-                            .push(BattleFairyPotentialAllocationDelivery::Properties(
-                                self.send_player_properties_changed(player),
-                            ));
+                        let delivery = self.send_player_properties_changed(player);
+                        tracing::trace!(player_id, delivery, "свойства после распределения потенциала боевой феи отправлены");
                     }
                 }
                 BattleFairyPotentialAllocationEffect::GoodsUpdated(update) => {
-                    report
-                        .deliveries
-                        .push(BattleFairyPotentialAllocationDelivery::GoodsUpdated(
-                            self.send_battle_fairy_goods_update(&update),
-                        ));
+                    let delivery = self.send_battle_fairy_goods_update(&update);
+                    tracing::trace!(player_id = update.player_id, delivery, "предмет после распределения потенциала боевой феи обновлён");
                 }
             }
         }
-        Some(report)
+        tracing::debug!(player_id, ?report.outcome, aggregate_client_points = report.aggregate_client_points, processed = report.processed_properties.len(), "потенциал боевой феи распределён");
+        Some(())
     }
 
     /// Полный runtime entry point goods-message `0x8FC28`: общий Game RNG,
@@ -31025,13 +31017,13 @@ impl CGame {
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<crate::gameserver::appserver::player::BattleFairyUpgradeReport> {
+    ) -> Option<()> {
         let log_gates = crate::gameserver::appserver::player::BattleFairyUpgradeLogGates {
             success: self.log_system.goods_upgrade_success_enabled(),
             failure: self.log_system.goods_upgrade_failure_enabled(),
             lost_target: self.log_system.goods_lost_by_upgrade_enabled(),
         };
-        let mut report = {
+        let report = {
             let (players, random_state, goods_factory) = (
                 &mut self.players,
                 &mut self.random_state,
@@ -31062,40 +31054,31 @@ impl CGame {
                     );
                     let delivery = colored_player_notice_message(color, 0, &text)
                         .send_to_player(self.net_server(), player_id);
-                    report
-                        .deliveries
-                        .push(BattleFairyUpgradeDelivery::Player(delivery));
+                    tracing::trace!(player_id, delivery, "уведомление улучшения боевой феи отправлено");
                 }
                 BattleFairyUpgradeEffect::MoneyChanged {
                     player_id, outcome, ..
                 } => {
-                    report.deliveries.push(BattleFairyUpgradeDelivery::Money(
-                        self.send_player_money_decrease(player_id, &outcome),
-                    ));
+                    let deliveries = self.send_player_money_decrease(player_id, &outcome);
+                    tracing::trace!(player_id, ?deliveries, "уменьшение денег за улучшение боевой феи отправлено");
                 }
                 BattleFairyUpgradeEffect::GoodsUpdated(update) => {
-                    report
-                        .deliveries
-                        .push(BattleFairyUpgradeDelivery::GoodsUpdated(
-                            self.send_battle_fairy_goods_update(&update),
-                        ));
+                    let delivery = self.send_battle_fairy_goods_update(&update);
+                    tracing::trace!(player_id = update.player_id, delivery, "улучшенный предмет боевой феи обновлён");
                 }
                 effect @ (BattleFairyUpgradeEffect::GemConsumed { .. }
                 | BattleFairyUpgradeEffect::TargetDeleted { .. }) => {
-                    report
-                        .deliveries
-                        .push(BattleFairyUpgradeDelivery::Container(
-                            self.send_battle_fairy_upgrade_container(&effect),
-                        ));
+                    let deliveries = self.send_battle_fairy_upgrade_container(&effect);
+                    tracing::trace!(player_id, ?deliveries, "контейнерный эффект улучшения боевой феи отправлен");
                 }
                 effect @ BattleFairyUpgradeEffect::Audit { .. } => {
-                    report.deliveries.push(BattleFairyUpgradeDelivery::Audit(
-                        self.send_battle_fairy_upgrade_audit(&effect),
-                    ));
+                    let deliveries = self.send_battle_fairy_upgrade_audit(&effect);
+                    tracing::trace!(player_id, ?deliveries, "аудит улучшения боевой феи отправлен");
                 }
             }
         }
-        Some(report)
+        tracing::debug!(player_id, ?report.outcome, price = report.price, probability = report.probability, ?report.previous_level, ?report.resulting_level, consumed_gems = report.consumed_gems.len(), "улучшение боевой феи завершено");
+        Some(())
     }
 
     pub(crate) fn send_player_money_decrease(
@@ -31353,9 +31336,9 @@ impl CGame {
         &mut self,
         player_id: i32,
         context: &mut Context,
-    ) -> Option<crate::gameserver::appserver::player::BattleFairyPotentialResetReport> {
+    ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
-        let mut report = {
+        let report = {
             let player = self.players.get_mut(&player_id)?;
             let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.reset_battle_fairy_potential(
@@ -31377,36 +31360,26 @@ impl CGame {
                         self.get_string_by_id(string_id.as_bytes()),
                     )
                     .send_to_player(self.net_server(), player_id);
-                    report
-                        .deliveries
-                        .push(BattleFairyPotentialResetDelivery::Player(delivery));
+                    tracing::trace!(player_id, delivery, "уведомление сброса потенциала боевой феи отправлено");
                 }
                 effect @ BattleFairyPotentialResetEffect::PacketItemConsumed { .. } => {
-                    report
-                        .deliveries
-                        .push(BattleFairyPotentialResetDelivery::PacketItem(
-                            self.send_battle_fairy_packet_consumption(&effect),
-                        ));
+                    let deliveries = self.send_battle_fairy_packet_consumption(&effect);
+                    tracing::trace!(player_id, ?deliveries, "расход предмета сброса потенциала боевой феи отправлен");
                 }
                 BattleFairyPotentialResetEffect::PropertiesChanged { player_id } => {
                     if let Some(player) = self.find_player(player_id) {
-                        report
-                            .deliveries
-                            .push(BattleFairyPotentialResetDelivery::Properties(
-                                self.send_player_properties_changed(player),
-                            ));
+                        let delivery = self.send_player_properties_changed(player);
+                        tracing::trace!(player_id, delivery, "свойства после сброса потенциала боевой феи отправлены");
                     }
                 }
                 BattleFairyPotentialResetEffect::GoodsUpdated(update) => {
-                    report
-                        .deliveries
-                        .push(BattleFairyPotentialResetDelivery::GoodsUpdated(
-                            self.send_battle_fairy_goods_update(&update),
-                        ));
+                    let delivery = self.send_battle_fairy_goods_update(&update);
+                    tracing::trace!(player_id = update.player_id, delivery, "предмет после сброса потенциала боевой феи обновлён");
                 }
             }
         }
-        Some(report)
+        tracing::debug!(player_id, ?report.outcome, recovered_potential = report.recovered_potential, "потенциал боевой феи сброшен");
+        Some(())
     }
 
     /// Runtime entry point `CBattleFairyContainer::ResetSkill`, общий для

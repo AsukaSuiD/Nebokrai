@@ -755,13 +755,6 @@ pub(crate) enum BattleFairyPotentialAllocationEffect {
     GoodsUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyPotentialAllocationDelivery {
-    Player(i32),
-    Properties(i32),
-    GoodsUpdated(i32),
-}
-
 #[must_use = "allocation report сохраняет ordered player и network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyPotentialAllocationReport {
@@ -770,7 +763,6 @@ pub(crate) struct BattleFairyPotentialAllocationReport {
     pub(crate) aggregate_client_points: i32,
     pub(crate) processed_properties: Vec<i32>,
     pub(crate) effects: Vec<BattleFairyPotentialAllocationEffect>,
-    pub(crate) deliveries: Vec<BattleFairyPotentialAllocationDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -861,15 +853,6 @@ pub(crate) enum BattleFairyUpgradeEffect {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyUpgradeDelivery {
-    Player(i32),
-    Money(Vec<i32>),
-    GoodsUpdated(i32),
-    Container(Vec<i32>),
-    Audit(Vec<i32>),
-}
-
 #[must_use = "upgrade report содержит wallet, ownership и network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyUpgradeReport {
@@ -881,7 +864,6 @@ pub(crate) struct BattleFairyUpgradeReport {
     pub(crate) resulting_level: Option<i32>,
     pub(crate) consumed_gems: Vec<BattleFairyUpgradeConsumedGem>,
     pub(crate) effects: Vec<BattleFairyUpgradeEffect>,
-    pub(crate) deliveries: Vec<BattleFairyUpgradeDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -915,14 +897,6 @@ pub(crate) enum BattleFairyPotentialResetEffect {
     GoodsUpdated(BattleFairyDefaultGoodsUpdate),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum BattleFairyPotentialResetDelivery {
-    Player(i32),
-    PacketItem(Vec<i32>),
-    Properties(i32),
-    GoodsUpdated(i32),
-}
-
 #[must_use = "reset report содержит packet ownership и player/network effects"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairyPotentialResetReport {
@@ -930,7 +904,6 @@ pub(crate) struct BattleFairyPotentialResetReport {
     pub(crate) outcome: BattleFairyPotentialResetOutcome,
     pub(crate) recovered_potential: i32,
     pub(crate) effects: Vec<BattleFairyPotentialResetEffect>,
-    pub(crate) deliveries: Vec<BattleFairyPotentialResetDelivery>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9799,7 +9772,6 @@ impl CPlayer {
             aggregate_client_points,
             processed_properties: Vec::new(),
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         let Some(goods) = self.equipment.get_goods(10) else {
             return report;
@@ -9997,7 +9969,6 @@ impl CPlayer {
             resulting_level: None,
             consumed_gems: Vec::new(),
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         if self.server_region_id.is_none() {
             return report;
@@ -10251,7 +10222,6 @@ impl CPlayer {
             outcome: BattleFairyPotentialResetOutcome::MissingHeadgear,
             recovered_potential: 0,
             effects: Vec::new(),
-            deliveries: Vec::new(),
         };
         if !battle_fairy_enabled {
             report.outcome = BattleFairyPotentialResetOutcome::FeatureDisabled;
