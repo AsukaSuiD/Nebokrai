@@ -24,8 +24,10 @@ use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 
 use super::ai::baseai::{AiShapeAction, CBaseAI};
-use super::chbystate::{ChangeBodyMutation, ChangeBodyState};
-use super::exstate::{ExtendedState, ExtendedStateKind, ExtendedStateMutation};
+use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyMutation, ChangeBodyState};
+use super::exstate::{
+    EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind, ExtendedStateMutation,
+};
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
@@ -574,10 +576,30 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>) {
+        let known_offsets = known_state_record_offsets(&states);
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
+        self.change_body_states.retain(|state| {
+            state
+                .serialized_span()
+                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
+        });
         self.extended_states = ExtendedState::decode_all(&states, 0);
+        self.extended_states.retain(|state| {
+            state
+                .serialized_span()
+                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
+        });
         self.undead_states = UndeadState::decode_all(&states, 0);
-        self.ride_state = RideState::decode(&states);
+        self.undead_states.retain(|state| {
+            state
+                .serialized_span()
+                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
+        });
+        self.ride_state = RideState::decode(&states).filter(|state| {
+            state
+                .serialized_span()
+                .is_some_and(|(offset, _)| known_offsets.contains(&offset))
+        });
         self.ex_states.replace(states);
     }
 
@@ -1594,6 +1616,45 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
     } else {
         destination
     }
+}
+
+/// Возвращает только подтверждённые начала известных записей. Размер
+/// неизвестного класса из wire не выводится, поэтому после него типизация
+/// прекращается, а исходный хвост остаётся в `LegacyStateCodec` без изменений.
+fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
+    let Some(declared_count) = read_u32(payload, 0) else {
+        return Vec::new();
+    };
+    let mut offsets = Vec::new();
+    let mut cursor = 4usize;
+    for _ in 0..declared_count {
+        let Some(state_id) = read_u32(payload, cursor) else {
+            break;
+        };
+        let size = match state_id {
+            CHANGE_BODY_STATE_ID => 124,
+            EX_STATE_ID => 44,
+            EX_STATE_NEW_ID => 56,
+            UNDEAD_STATE_ID => 76,
+            RIDE_STATE_ID => {
+                let name_start = cursor.saturating_add(16);
+                let Some(name) = payload.get(name_start..) else {
+                    break;
+                };
+                let Some(length) = name.iter().take(256).position(|byte| *byte == 0) else {
+                    break;
+                };
+                16 + length + 1
+            }
+            _ => break,
+        };
+        let Some(end) = cursor.checked_add(size).filter(|end| *end <= payload.len()) else {
+            break;
+        };
+        offsets.push(cursor);
+        cursor = end;
+    }
+    offsets
 }
 
 fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
