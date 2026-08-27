@@ -1,6 +1,39 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Немедленное исполнение `CTaiJi`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
+//! `taiji.cpp` и `taiji.h`. `AI` выбирает владельца навыка раньше заданной
+//! цели, создаёт новое состояние до поиска прежнего `0x12d`, заменяет только
+//! это состояние, публикует текущее состояние владельца и завершает навык с часами
+//! восстановления. Навык не ставит запрет движения и не создаёт отдельный
+//! визуальный пакет, однако базовое завершение один раз снимает запрет.
+
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+
+pub(crate) const TAIJI_SKILL_ID: u32 = 301;
+pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TaiJiExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+}
+
+impl TaiJiExecutionState {
+    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+        }
+    }
+
+    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> { self.kernel }
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

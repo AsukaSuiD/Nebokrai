@@ -41,6 +41,7 @@ use crate::gameserver::appserver::skills::agilitystate::{
 };
 use crate::gameserver::appserver::skills::callositystate::CallosityState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -441,6 +442,7 @@ pub(crate) struct CanonicalStateStorage {
     persistent_agility_family_state: Option<PersistentAgilityFamilyState>,
     agility_state_2: Option<AgilityState>,
     callosity_state: Option<CallosityState>,
+    taiji_state: Option<TaiJiState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
@@ -618,6 +620,7 @@ impl CMoveShape {
         self.persistent_agility_family_state = None;
         self.agility_state_2 = None;
         self.callosity_state = None;
+        self.taiji_state = None;
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
@@ -715,9 +718,14 @@ impl CMoveShape {
             self.agility_state_2
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let taiji = usize::from(
+            self.taiji_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         scripted
             .saturating_add(agility)
             .saturating_add(callosity)
+            .saturating_add(taiji)
             .saturating_add(change_body)
             .saturating_add(extended)
             .saturating_add(undead)
@@ -735,6 +743,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .callosity_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .taiji_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .script_states
@@ -767,6 +778,14 @@ impl CMoveShape {
     pub(crate) fn begin_callosity_state(&mut self, state: CallosityState) {
         debug_assert!(self.callosity_state.is_none());
         self.callosity_state = Some(state);
+    }
+
+    pub(crate) const fn taiji_state(&self) -> Option<TaiJiState> {
+        self.state_storage.taiji_state
+    }
+
+    pub(crate) fn replace_taiji_state(&mut self, state: TaiJiState) -> Option<TaiJiState> {
+        self.taiji_state.replace(state)
     }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {

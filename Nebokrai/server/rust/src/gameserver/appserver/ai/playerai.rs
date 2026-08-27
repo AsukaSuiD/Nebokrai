@@ -9,7 +9,7 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба, семейство ловкости, парная закалка и атака боевой феи сохраняют
+//! стрельба, семейство ловкости, парная закалка, тайцзи и атака боевой феи сохраняют
 //! незавершённое состояние между проходами ИИ. Хвост `CPlayerAI::Run` хранит часы
 //! автоматического прироста,
 //! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
@@ -34,6 +34,7 @@ use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
+use crate::gameserver::appserver::skills::taiji::TaiJiExecutionState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -58,6 +59,7 @@ pub(crate) struct CPlayerAI {
     battle_fairy_base_magic_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
+    taiji: Option<TaiJiExecutionState>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -107,6 +109,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.callosity = None;
+        self.taiji = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -164,6 +167,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
         }
+        if let Some(mut execution) = self.taiji.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение тайцзи завершено");
+        }
         true
     }
 
@@ -187,6 +194,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.callosity = None;
+        self.taiji = None;
         true
     }
 
@@ -311,6 +319,14 @@ impl CPlayerAI {
             0
         };
         self.callosity_last_used_ms[index] = now_ms;
+    }
+
+    pub(crate) const fn taiji(&self) -> Option<TaiJiExecutionState> { self.taiji }
+    pub(crate) const fn begin_taiji(&mut self, state: TaiJiExecutionState) {
+        self.taiji = Some(state);
+    }
+    pub(crate) fn taiji_mut(&mut self) -> Option<&mut TaiJiExecutionState> {
+        self.taiji.as_mut()
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {

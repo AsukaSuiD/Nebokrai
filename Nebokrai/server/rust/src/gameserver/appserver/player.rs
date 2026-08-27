@@ -4200,6 +4200,26 @@ impl CPlayer {
         properties
     }
 
+    pub(crate) fn replace_taiji_state(
+        &mut self,
+        state: super::skills::taijistate::TaiJiState,
+    ) -> Option<super::skills::taijistate::TaiJiState> {
+        self.move_shape.replace_taiji_state(state)
+    }
+
+    pub(crate) fn apply_taiji_state_properties(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        if let Some(state) = self.move_shape.taiji_state() {
+            properties.element_resistance = properties
+                .element_resistance
+                .saturating_add(u32::from(state.player_element_resistance_gain()))
+                .min(i32::MAX as u32);
+        }
+        properties
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,

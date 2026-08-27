@@ -757,6 +757,11 @@ use crate::gameserver::appserver::skills::rapture::{
     RAPTURE_SKILL_ID, SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN,
 };
 use crate::gameserver::appserver::skills::rapturestate::RaptureState;
+use crate::gameserver::appserver::skills::taiji::{
+    SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN as TAIJI_ELEMENT_RESISTANT_GAIN, TAIJI_SKILL_ID,
+    TaiJiExecutionState,
+};
+use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::archery::{ARCHERY_SKILL_ID, ArcheryExecutionState};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     ArcheryPhalanxTick, CArcheryPhalanx,
@@ -4941,6 +4946,12 @@ impl CGame {
         let Some(properties) = self
             .find_player(player_id)
             .map(|player| player.apply_agility_state_properties(properties))
+        else {
+            return false;
+        };
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| player.apply_taiji_state_properties(properties))
         else {
             return false;
         };
@@ -35923,6 +35934,77 @@ impl CGame {
         terminal(QueuedSkillExecutionState::Completed)
     }
 
+    fn execute_player_taiji<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let terminal = |state| QueuedSkillExecutionOutcome {
+            state,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let skill_id = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. }
+                if skill_id == TAIJI_SKILL_ID => skill_id,
+            _ => return terminal(QueuedSkillExecutionState::Rejected),
+        };
+        if self.find_player(player_id).is_none() {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+
+        if player_ai.taiji().is_none() {
+            let started_at_ms = runtime.now_milliseconds();
+            self.enter_player_combat_state(player_id);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_current_skill_id(Some(skill_id));
+            }
+            player_ai.begin_taiji(TaiJiExecutionState::begin(dispatch, started_at_ms));
+        } else if player_ai
+            .taiji()
+            .is_none_or(|state| state.kernel().dispatch() != dispatch)
+        {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+
+        let skill_level = self
+            .find_player(player_id)
+            .map_or(0, |player| player.learned_skill_level(skill_id));
+        let Some(properties) = self
+            .skill_factory
+            .query_skill_base_properties(skill_id, skill_level)
+        else {
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_skill_moveable(true);
+                player.set_current_skill_id(None);
+            }
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let gain = properties.query_property(TAIJI_ELEMENT_RESISTANT_GAIN) as i32;
+        let _state_started_at_ms = runtime.now_milliseconds();
+        let state = TaiJiState::new(gain);
+        if let Some(player) = self.find_player_mut(player_id) {
+            let _ = player.replace_taiji_state(state);
+        }
+        let _ = self.publish_player_states(player_id);
+        if let Some(state) = player_ai.taiji_mut() {
+            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+            let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+            let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_skill_moveable(true);
+            player.set_current_skill_id(None);
+        }
+        let _last_used_at_ms = runtime.now_milliseconds();
+        terminal(QueuedSkillExecutionState::Completed)
+    }
+
     fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -37647,6 +37729,11 @@ impl CGame {
                     )
                 }
             };
+            let concrete_taiji = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == TAIJI_SKILL_ID,
+            };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
             } else if concrete_archery {
@@ -37657,6 +37744,8 @@ impl CGame {
                 self.execute_player_callosity(player_id, dispatch, player_ai, runtime)
             } else if concrete_agility_family {
                 self.execute_player_agility_family(player_id, dispatch, player_ai, runtime)
+            } else if concrete_taiji {
+                self.execute_player_taiji(player_id, dispatch, player_ai, runtime)
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };

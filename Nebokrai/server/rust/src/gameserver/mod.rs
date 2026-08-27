@@ -78,6 +78,8 @@ pub(crate) mod appserver {
         pub(crate) mod realmappellation;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
+        pub(crate) mod taiji;
+        pub(crate) mod taijistate;
     }
     pub(crate) mod states {
         pub(crate) mod attackpower;

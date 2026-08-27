@@ -1,6 +1,32 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническая достигнутая часть `CTaiJiState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает постоянное
+//! состояние `0x12d` без собственного визуального эффекта. Для игрока
+//! `OnUpdateProperties` использует младшие 16 бит параметра и насыщает
+//! сопротивление стихиям до `i32::MAX`. Ветка монстра остаётся сохранённым
+//! псевдокодом до появления настоящего исполнителя навыка монстра.
+
+use super::taiji::TAIJI_SKILL_ID;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TaiJiState {
+    element_resistance_gain: i32,
+}
+
+impl TaiJiState {
+    pub(crate) const fn new(element_resistance_gain: i32) -> Self {
+        Self { element_resistance_gain }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 { TAIJI_SKILL_ID }
+    pub(crate) const fn player_element_resistance_gain(self) -> u16 {
+        self.element_resistance_gain as u16
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
