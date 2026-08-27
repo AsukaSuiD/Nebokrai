@@ -69,6 +69,10 @@ pub(crate) mod appserver {
         pub(crate) mod battlefairybasemagicphalanx;
         pub(crate) mod callosity;
         pub(crate) mod callositystate;
+        pub(crate) mod enlargemaxhp;
+        pub(crate) mod enlargemaxhpstate;
+        pub(crate) mod enlargemaxmp;
+        pub(crate) mod enlargemaxmpstate;
         pub(crate) mod fightdefense;
         pub(crate) mod kernel;
         pub(crate) mod natural;

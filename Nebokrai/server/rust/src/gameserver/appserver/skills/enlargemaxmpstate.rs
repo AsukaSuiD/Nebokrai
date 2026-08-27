@@ -1,6 +1,28 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническая достигнутая часть `CEnlargeMaxMpState`.
+//!
+//! Для игрока состояние `602` складывает текущий максимум MP и знаковый
+//! параметр как `u32` с переполнением, после чего ограничивает результат
+//! значением `i32::MAX`. Собственного визуального сообщения и таймера нет.
+
+use super::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EnlargeMaxMpState {
+    gain: i32,
+}
+
+impl EnlargeMaxMpState {
+    pub(crate) const fn new(gain: i32) -> Self { Self { gain } }
+    pub(crate) const fn skill_id(self) -> u32 { ENLARGE_MAX_MP_SKILL_ID }
+    pub(crate) const fn apply(self, value: u32) -> u32 {
+        let result = value.wrapping_add(self.gain as u32);
+        if result > i32::MAX as u32 { i32::MAX as u32 } else { result }
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

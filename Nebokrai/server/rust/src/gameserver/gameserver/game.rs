@@ -749,6 +749,14 @@ use crate::gameserver::appserver::skills::agilitystate::{
     AGILITY_STATE_BEGIN_MESSAGE, AGILITY_STATE_END_MESSAGE, AgilityState,
     PersistentAgilityFamilyState,
 };
+use crate::gameserver::appserver::skills::enlargemaxhp::{
+    ENLARGE_MAX_HP_SKILL_ID, SKILL_USAGE_MAX_HP_GAIN,
+};
+use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
+use crate::gameserver::appserver::skills::enlargemaxmp::{
+    ENLARGE_MAX_MP_SKILL_ID, SKILL_USAGE_MAX_MP_GAIN,
+};
+use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::natural::{
     NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN,
 };
@@ -759,7 +767,6 @@ use crate::gameserver::appserver::skills::rapture::{
 use crate::gameserver::appserver::skills::rapturestate::RaptureState;
 use crate::gameserver::appserver::skills::taiji::{
     SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN as TAIJI_ELEMENT_RESISTANT_GAIN, TAIJI_SKILL_ID,
-    TaiJiExecutionState,
 };
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::archery::{ARCHERY_SKILL_ID, ArcheryExecutionState};
@@ -805,7 +812,9 @@ use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_monster_from_monster_base_attack, defend_player_base_attack,
     defend_player_from_monster_base_attack,
 };
-use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{
+    SkillExecutionKernel, SkillStage, SkillTermination,
+};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -4952,6 +4961,12 @@ impl CGame {
         let Some(properties) = self
             .find_player(player_id)
             .map(|player| player.apply_taiji_state_properties(properties))
+        else {
+            return false;
+        };
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| player.apply_enlarge_max_states(properties))
         else {
             return false;
         };
@@ -35934,7 +35949,7 @@ impl CGame {
         terminal(QueuedSkillExecutionState::Completed)
     }
 
-    fn execute_player_taiji<Runtime: GameMainLoopRuntime>(
+    fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         dispatch: PlayerSkillDispatch,
@@ -35950,23 +35965,26 @@ impl CGame {
             PlayerSkillDispatch::SelfTarget { skill_id, .. }
             | PlayerSkillDispatch::Point { skill_id, .. }
             | PlayerSkillDispatch::Object { skill_id, .. }
-                if skill_id == TAIJI_SKILL_ID => skill_id,
+                if matches!(
+                    skill_id,
+                    TAIJI_SKILL_ID | ENLARGE_MAX_HP_SKILL_ID | ENLARGE_MAX_MP_SKILL_ID
+                ) => skill_id,
             _ => return terminal(QueuedSkillExecutionState::Rejected),
         };
         if self.find_player(player_id).is_none() {
             return terminal(QueuedSkillExecutionState::Rejected);
         }
 
-        if player_ai.taiji().is_none() {
+        if player_ai.immediate_state().is_none() {
             let started_at_ms = runtime.now_milliseconds();
             self.enter_player_combat_state(player_id);
             if let Some(player) = self.find_player_mut(player_id) {
                 player.set_current_skill_id(Some(skill_id));
             }
-            player_ai.begin_taiji(TaiJiExecutionState::begin(dispatch, started_at_ms));
+            player_ai.begin_immediate_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
         } else if player_ai
-            .taiji()
-            .is_none_or(|state| state.kernel().dispatch() != dispatch)
+            .immediate_state()
+            .is_none_or(|state| state.dispatch() != dispatch)
         {
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -35984,18 +36002,38 @@ impl CGame {
             }
             return terminal(QueuedSkillExecutionState::Rejected);
         };
-        let gain = properties.query_property(TAIJI_ELEMENT_RESISTANT_GAIN) as i32;
+        enum ImmediateStateKind {
+            TaiJi,
+            EnlargeMaxHp,
+            EnlargeMaxMp,
+        }
+        let (usage, state_kind) = match skill_id {
+            TAIJI_SKILL_ID => (TAIJI_ELEMENT_RESISTANT_GAIN, ImmediateStateKind::TaiJi),
+            ENLARGE_MAX_HP_SKILL_ID => (SKILL_USAGE_MAX_HP_GAIN, ImmediateStateKind::EnlargeMaxHp),
+            ENLARGE_MAX_MP_SKILL_ID => (SKILL_USAGE_MAX_MP_GAIN, ImmediateStateKind::EnlargeMaxMp),
+            _ => unreachable!(),
+        };
+        let gain = properties.query_property(usage) as i32;
         let _state_started_at_ms = runtime.now_milliseconds();
-        let state = TaiJiState::new(gain);
         if let Some(player) = self.find_player_mut(player_id) {
-            let _ = player.replace_taiji_state(state);
+            match state_kind {
+                ImmediateStateKind::TaiJi => {
+                    let _ = player.replace_taiji_state(TaiJiState::new(gain));
+                }
+                ImmediateStateKind::EnlargeMaxHp => {
+                    let _ = player.replace_enlarge_max_hp_state(EnlargeMaxHpState::new(gain));
+                }
+                ImmediateStateKind::EnlargeMaxMp => {
+                    let _ = player.replace_enlarge_max_mp_state(EnlargeMaxMpState::new(gain));
+                }
+            }
         }
         let _ = self.publish_player_states(player_id);
-        if let Some(state) = player_ai.taiji_mut() {
-            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
-            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
-            let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
-            let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+        if let Some(state) = player_ai.immediate_state_mut() {
+            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+            let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
+            let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
+            let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
         }
         if let Some(player) = self.find_player_mut(player_id) {
             player.set_skill_moveable(true);
@@ -37729,10 +37767,13 @@ impl CGame {
                     )
                 }
             };
-            let concrete_taiji = match dispatch {
+            let concrete_immediate_state = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == TAIJI_SKILL_ID,
+                | PlayerSkillDispatch::Object { skill_id, .. } => matches!(
+                    skill_id,
+                    TAIJI_SKILL_ID | ENLARGE_MAX_HP_SKILL_ID | ENLARGE_MAX_MP_SKILL_ID
+                ),
             };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
@@ -37744,8 +37785,8 @@ impl CGame {
                 self.execute_player_callosity(player_id, dispatch, player_ai, runtime)
             } else if concrete_agility_family {
                 self.execute_player_agility_family(player_id, dispatch, player_ai, runtime)
-            } else if concrete_taiji {
-                self.execute_player_taiji(player_id, dispatch, player_ai, runtime)
+            } else if concrete_immediate_state {
+                self.execute_player_immediate_state(player_id, dispatch, player_ai, runtime)
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };

@@ -7,29 +7,8 @@
 //! восстановления. Навык не ставит запрет движения и не создаёт отдельный
 //! визуальный пакет, однако базовое завершение один раз снимает запрет.
 
-use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
-
 pub(crate) const TAIJI_SKILL_ID: u32 = 301;
 pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TaiJiExecutionState {
-    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-}
-
-impl TaiJiExecutionState {
-    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
-        Self {
-            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
-        }
-    }
-
-    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> { self.kernel }
-    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
-        &mut self.kernel
-    }
-}
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2

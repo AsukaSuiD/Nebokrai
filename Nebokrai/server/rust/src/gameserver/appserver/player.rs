@@ -4184,7 +4184,7 @@ impl CPlayer {
             Some(PersistentAgilityFamilyState::Natural(state)) => {
                 properties.element_resistance = properties
                     .element_resistance
-                    .saturating_add(u32::from(state.element_resistance_gain()))
+                    .wrapping_add(u32::from(state.element_resistance_gain()))
                     .min(i32::MAX as u32);
             }
             Some(PersistentAgilityFamilyState::Rapture(state)) => {
@@ -4214,8 +4214,35 @@ impl CPlayer {
         if let Some(state) = self.move_shape.taiji_state() {
             properties.element_resistance = properties
                 .element_resistance
-                .saturating_add(u32::from(state.player_element_resistance_gain()))
+                .wrapping_add(u32::from(state.player_element_resistance_gain()))
                 .min(i32::MAX as u32);
+        }
+        properties
+    }
+
+    pub(crate) fn replace_enlarge_max_hp_state(
+        &mut self,
+        state: super::skills::enlargemaxhpstate::EnlargeMaxHpState,
+    ) -> Option<super::skills::enlargemaxhpstate::EnlargeMaxHpState> {
+        self.move_shape.replace_enlarge_max_hp_state(state)
+    }
+
+    pub(crate) fn replace_enlarge_max_mp_state(
+        &mut self,
+        state: super::skills::enlargemaxmpstate::EnlargeMaxMpState,
+    ) -> Option<super::skills::enlargemaxmpstate::EnlargeMaxMpState> {
+        self.move_shape.replace_enlarge_max_mp_state(state)
+    }
+
+    pub(crate) fn apply_enlarge_max_states(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        if let Some(state) = self.move_shape.enlarge_max_hp_state() {
+            properties.maximum_hp = state.apply(properties.maximum_hp);
+        }
+        if let Some(state) = self.move_shape.enlarge_max_mp_state() {
+            properties.maximum_mp = state.apply(properties.maximum_mp);
         }
         properties
     }

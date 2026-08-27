@@ -9,7 +9,7 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба, семейство ловкости, парная закалка, тайцзи и атака боевой феи сохраняют
+//! стрельба, семейство ловкости, парная закалка и атака боевой феи сохраняют
 //! незавершённое состояние между проходами ИИ. Хвост `CPlayerAI::Run` хранит часы
 //! автоматического прироста,
 //! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
@@ -31,10 +31,11 @@ use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
-use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{
+    SkillExecutionKernel, SkillStage, SkillTermination,
+};
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
-use crate::gameserver::appserver::skills::taiji::TaiJiExecutionState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -59,7 +60,7 @@ pub(crate) struct CPlayerAI {
     battle_fairy_base_magic_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
-    taiji: Option<TaiJiExecutionState>,
+    immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -109,7 +110,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.callosity = None;
-        self.taiji = None;
+        self.immediate_state = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -167,9 +168,9 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
         }
-        if let Some(mut execution) = self.taiji.take() {
-            let _ = execution.kernel_mut().terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение тайцзи завершено");
+        if let Some(mut execution) = self.immediate_state.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение немедленного состояния завершено");
         }
         true
     }
@@ -194,7 +195,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.callosity = None;
-        self.taiji = None;
+        self.immediate_state = None;
         true
     }
 
@@ -321,12 +322,21 @@ impl CPlayerAI {
         self.callosity_last_used_ms[index] = now_ms;
     }
 
-    pub(crate) const fn taiji(&self) -> Option<TaiJiExecutionState> { self.taiji }
-    pub(crate) const fn begin_taiji(&mut self, state: TaiJiExecutionState) {
-        self.taiji = Some(state);
+    pub(crate) const fn immediate_state(
+        &self,
+    ) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.immediate_state
     }
-    pub(crate) fn taiji_mut(&mut self) -> Option<&mut TaiJiExecutionState> {
-        self.taiji.as_mut()
+    pub(crate) const fn begin_immediate_state(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.immediate_state = Some(state);
+    }
+    pub(crate) fn immediate_state_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.immediate_state.as_mut()
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
