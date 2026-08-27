@@ -822,18 +822,9 @@ use crate::gameserver::appserver::skills::fightdefense::{
     defend_player_from_monster_base_attack,
 };
 use crate::gameserver::appserver::skills::hearten::{
-    HEARTEN_EFFECT_MESSAGE, HEARTEN_SKILL_ID,
-    SKILL_USAGE_CAN_BE_BREAKED as HEARTEN_CAN_BE_BREAKED,
-    SKILL_USAGE_DELAY_TIME as HEARTEN_DELAY_TIME,
-    SKILL_USAGE_MAX_HP_GAIN as HEARTEN_MAX_HP_GAIN,
-    SKILL_USAGE_REUSE_DELAY_TIME as HEARTEN_REUSE_DELAY_TIME,
-    SKILL_USAGE_STATE_PERSIST_TIME as HEARTEN_STATE_PERSIST_TIME,
-    SKILL_USAGE_TARGET_MAX_DISTANCE as HEARTEN_TARGET_MAX_DISTANCE,
-    SKILL_USAGE_USER_MP_LOSE as HEARTEN_MP_LOSE,
+    execute_player_hearten, HEARTEN_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::heartenstate::{
-    HEARTEN_STATE_BEGIN_MESSAGE, HEARTEN_STATE_END_MESSAGE, HeartenState,
-};
+use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
@@ -5047,7 +5038,7 @@ impl CGame {
             let _ = self.send_callosity_state_begin(player_id, state);
         }
         if let Some(state) = hearten_visual {
-            let _ = self.send_hearten_state_visual(player_id, state, true, game_tick_milliseconds());
+            send_hearten_state_visual(self, player_id, state, true, game_tick_milliseconds());
         }
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let Some(player) = players.get_mut(&player_id) else {
@@ -5092,30 +5083,6 @@ impl CGame {
         message.add_long(skill_id as i32);
         if begin {
             message.add_long(client_time);
-            message.add_long(0);
-        }
-        self.send_player_shape_around(player_id, None, &message)
-    }
-
-    fn send_hearten_state_visual(
-        &mut self,
-        player_id: i32,
-        state: HeartenState,
-        begin: bool,
-        now_ms: u32,
-    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
-        let player = self.find_player(player_id)?;
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(if begin {
-            HEARTEN_STATE_BEGIN_MESSAGE
-        } else {
-            HEARTEN_STATE_END_MESSAGE
-        });
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(state.skill_id() as i32);
-        if begin {
-            message.add_long(state.client_time(now_ms));
             message.add_long(0);
         }
         self.send_player_shape_around(player_id, None, &message)
@@ -26084,7 +26051,7 @@ impl CGame {
             .find_player_mut(player_id)
             .and_then(|player| player.take_expired_hearten_state(now_ms));
         if let Some(state) = expired_hearten {
-            let _ = self.send_hearten_state_visual(player_id, state, false, now_ms);
+            send_hearten_state_visual(self, player_id, state, false, now_ms);
             let _ = self.publish_player_states(player_id);
         }
         let war_soul_mana = self
@@ -35633,7 +35600,7 @@ impl CGame {
         }
     }
 
-    fn base_magic_path(
+    pub(crate) fn base_magic_path(
         &self,
         region_id: i32,
         source_x: i32,
@@ -35729,49 +35696,6 @@ impl CGame {
             message.add_long(player.shape().get_tile_y().unwrap_or_default());
         }
         let _ = self.send_player_shape_around(player_id, None, &message);
-    }
-
-    fn send_hearten_cast(
-        &mut self,
-        player_id: i32,
-        target_id: i32,
-        skill_level: i32,
-        action: u8,
-    ) {
-        let Some(player) = self.find_player(player_id) else { return };
-        let source = player.shape().identity();
-        let source_direction = player.shape().get_direction();
-        let target = self.find_player(target_id).map(|target| {
-            (
-                target.shape().identity(),
-                target.shape().get_tile_x().unwrap_or_default(),
-                target.shape().get_tile_y().unwrap_or_default(),
-            )
-        });
-        let mut message = CMessage::new(HEARTEN_EFFECT_MESSAGE);
-        message.add_byte(action);
-        message.add_long(HEARTEN_SKILL_ID as i32);
-        message.base_mut().add_short(skill_level as i16);
-        message.add_long(source.object_type);
-        message.add_long(source.id);
-        if action == 1 {
-            message.add_long(source_direction);
-        } else if let Some((target, target_x, target_y)) = target {
-            message.add_long(target.object_type);
-            message.add_long(target.id);
-            message.add_long(target_x);
-            message.add_long(target_y);
-        } else {
-            return;
-        }
-        let _ = self.send_player_shape_around(player_id, None, &message);
-    }
-
-    fn finish_hearten_movement(&mut self, player_id: i32) {
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.set_skill_moveable(true);
-            player.set_current_skill_id(None);
-        }
     }
 
     pub(crate) fn finish_self_shield_movement(&mut self, player_id: i32) {
@@ -36181,178 +36105,6 @@ impl CGame {
         }
         player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
         self.finish_agility_movement(player_id);
-        terminal(QueuedSkillExecutionState::Completed)
-    }
-
-    fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        dispatch: PlayerSkillDispatch,
-        player_ai: &mut CPlayerAI,
-        runtime: &mut Runtime,
-    ) -> QueuedSkillExecutionOutcome {
-        let terminal = |state| QueuedSkillExecutionOutcome {
-            state,
-            first_contact: false,
-            killing_blow: None,
-        };
-        let requested_target_id = match dispatch {
-            PlayerSkillDispatch::SelfTarget { skill_id, .. }
-            | PlayerSkillDispatch::Point { skill_id, .. }
-                if skill_id == HEARTEN_SKILL_ID => player_id,
-            PlayerSkillDispatch::Object { skill_id, target }
-                if skill_id == HEARTEN_SKILL_ID && target.object_type == PLAYER_TYPE => target.id,
-            _ => return terminal(QueuedSkillExecutionState::Rejected),
-        };
-        let Some((region_id, source_x, source_y, skill_level, initial_mana)) = self
-            .find_player(player_id)
-            .and_then(|player| {
-                Some((
-                    player.server_region_id()?,
-                    player.shape().get_tile_x().ok()?,
-                    player.shape().get_tile_y().ok()?,
-                    player.learned_skill_level(HEARTEN_SKILL_ID),
-                    player.mana(),
-                ))
-            })
-        else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let (target_id, target_x, target_y) = self
-            .find_player(requested_target_id)
-            .and_then(|target| {
-                (target.server_region_id()? == region_id).then(|| {
-                    Some((
-                        requested_target_id,
-                        target.shape().get_tile_x().ok()?,
-                        target.shape().get_tile_y().ok()?,
-                    ))
-                })?
-            })
-            .unwrap_or((player_id, source_x, source_y));
-        let Some(properties) = self
-            .skill_factory
-            .query_skill_base_properties(HEARTEN_SKILL_ID, skill_level)
-        else {
-            self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 2);
-            self.finish_hearten_movement(player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let mp_loss = properties.query_property(HEARTEN_MP_LOSE);
-        let delay_ms = properties.query_property(HEARTEN_DELAY_TIME);
-        let reuse_delay_ms = properties.query_property(HEARTEN_REUSE_DELAY_TIME);
-        let maximum_distance = properties.query_property(HEARTEN_TARGET_MAX_DISTANCE);
-        let keep_time_ms = properties.query_property(HEARTEN_STATE_PERSIST_TIME);
-        let max_hp_gain = properties.query_property(HEARTEN_MAX_HP_GAIN) as i32;
-        let _can_be_breaked = properties.query_property(HEARTEN_CAN_BE_BREAKED);
-
-        if player_ai.hearten().is_none() {
-            let started_at_ms = runtime.now_milliseconds();
-            self.enter_player_combat_state(player_id);
-            let cooldown_now_ms = runtime.now_milliseconds();
-            if player_ai.hearten_last_used_ms() != 0
-                && !time_reached(
-                    cooldown_now_ms,
-                    player_ai.hearten_last_used_ms(),
-                    reuse_delay_ms,
-                )
-            {
-                self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 0x0d);
-                self.send_skill_system_info(player_id, b"GS0278");
-                self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 2);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if player_id != target_id
-                && maximum_distance != 0
-                && self
-                    .base_magic_path(region_id, source_x, source_y, target_x, target_y, None)
-                    .len()
-                    > maximum_distance as usize
-            {
-                self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 0x0b);
-                self.send_skill_system_info(player_id, b"GS0290");
-                self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 2);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if mp_loss != 0 && initial_mana < mp_loss {
-                self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-                self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 2);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = self.find_player_mut(player_id) {
-                if mp_loss != 0 {
-                    player.set_skill_moveable(false);
-                }
-                player.set_current_skill_id(Some(HEARTEN_SKILL_ID));
-            }
-            player_ai.begin_hearten(SkillExecutionKernel::begin(dispatch, started_at_ms));
-        } else if player_ai
-            .hearten()
-            .is_none_or(|state| state.dispatch() != dispatch)
-        {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-
-        if self.find_player(target_id).is_some_and(CPlayer::is_dead) {
-            self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 10);
-            self.finish_hearten_movement(player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-
-        if player_ai
-            .hearten()
-            .is_some_and(|state| state.stage() == SkillStage::Begin)
-        {
-            let current_mana = self.find_player(player_id).map_or(0, CPlayer::mana);
-            if current_mana < mp_loss {
-                self.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-                self.finish_hearten_movement(player_id);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_mana(current_mana.wrapping_sub(mp_loss));
-                if player_id != target_id {
-                    player
-                        .movement_shape_mut()
-                        .set_direction(get_line_direction(source_x, source_y, target_x, target_y));
-                }
-            }
-            let _ = self.publish_player_states(player_id);
-            self.send_hearten_cast(player_id, target_id, skill_level, 1);
-            if let Some(state) = player_ai.hearten_mut() {
-                let _ = state.advance(SkillStage::Begin, SkillStage::Check);
-            }
-        }
-
-        let started_at_ms = player_ai
-            .hearten()
-            .map(SkillExecutionKernel::started_at_ms)
-            .expect("выполнение воодушевления создано или восстановлено");
-        if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
-            return terminal(QueuedSkillExecutionState::Pending);
-        }
-
-        self.send_hearten_cast(player_id, target_id, skill_level, 2);
-        let removed = self
-            .find_player_mut(target_id)
-            .and_then(|player| player.replace_hearten_state(HeartenState::new(
-                runtime.now_milliseconds(),
-                keep_time_ms,
-                max_hp_gain,
-            )));
-        if let Some(state) = removed {
-            let _ = self.send_hearten_state_visual(target_id, state, false, 0);
-        }
-        let _ = self.publish_player_states(target_id);
-        if let Some(state) = player_ai.hearten_mut() {
-            let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-            let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-            let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
-        }
-        player_ai.mark_hearten_used(runtime.now_milliseconds());
-        self.finish_hearten_movement(player_id);
         terminal(QueuedSkillExecutionState::Completed)
     }
 
@@ -38250,7 +38002,7 @@ impl CGame {
             } else if concrete_agility_family {
                 self.execute_player_agility_family(player_id, dispatch, player_ai, runtime)
             } else if concrete_hearten {
-                self.execute_player_hearten(player_id, dispatch, player_ai, runtime)
+                execute_player_hearten(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machine_shield {
                 execute_player_machine_shield(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mana_shield {

@@ -6,6 +6,8 @@
 //! завершение публикуется при замене или строгом истечении срока.
 
 use super::hearten::HEARTEN_SKILL_ID;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const HEARTEN_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const HEARTEN_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -35,57 +37,41 @@ impl HeartenState {
     }
 }
 
+pub(crate) fn send_hearten_state_visual(
+    game: &mut CGame,
+    player_id: i32,
+    state: HeartenState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(if begin {
+        HEARTEN_STATE_BEGIN_MESSAGE
+    } else {
+        HEARTEN_STATE_END_MESSAGE
+    });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(0);
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Сохранены только не подключённые конструктор по умолчанию и сериализация.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp
-
-// ============================================================================
-// FUNCTION: CHeartenState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:146
-// RVA: 0x000F9D80
-// ADDRESS: 004f9d80
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeartenState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:133
-// RVA: 0x001D4D10
-// ADDRESS: 005d4d10
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeartenState::CHeartenState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:15
-// RVA: 0x001EE500
-// ADDRESS: 005ee500
-// PROTOTYPE: undefined __thiscall CHeartenState(ulong param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CHeartenState::CHeartenState
@@ -101,93 +87,35 @@ impl HeartenState {
 //
 //
 
-// ============================================================================
-// FUNCTION: CHeartenState::~CHeartenState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:35
-// RVA: 0x001EE5F0
-// ADDRESS: 005ee5f0
-// PROTOTYPE: void __thiscall ~CHeartenState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
-// FUNCTION: CHeartenState::Begin
+// FUNCTION: CHeartenState::Serialize
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:83
-// RVA: 0x001EE600
-// ADDRESS: 005ee600
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeartenState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:93
-// RVA: 0x001EE690
-// ADDRESS: 005ee690
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeartenState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:46
-// RVA: 0x001EE740
-// ADDRESS: 005ee740
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeartenState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:73
-// RVA: 0x001EE7A0
-// ADDRESS: 005ee7a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeartenVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:166
-// RVA: 0x001EE820
-// ADDRESS: 005ee820
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:133
+// RVA: 0x001D4D10
+// ADDRESS: 005d4d10
+// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
 
-
-
+// ============================================================================
+// FUNCTION: CHeartenState::Unserialize
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// COMPONENT: GameServer
+// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heartenstate.cpp:146
+// RVA: 0x000F9D80
+// ADDRESS: 004f9d80
+// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
+//
+// Полный декомпилят сохранён в локальном исследовательском корпусе.
+//
+//
 
 
 // COMPONENT_VARIANT_END: GameServer
