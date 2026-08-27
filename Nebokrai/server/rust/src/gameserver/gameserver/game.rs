@@ -482,6 +482,8 @@
 //! будущего процесса GameServer. Межвладельческие действия налоговых сессий
 //! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
 
+mod poisonarrow;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::ffi::CString;
@@ -789,6 +791,12 @@ use crate::gameserver::appserver::skills::lifeshield::{
 };
 use crate::gameserver::appserver::skills::lifeshieldstate::{
     finish_life_shield_state,
+};
+use crate::gameserver::appserver::skills::poisonarrow::{
+    POISON_ARROW_SKILL_ID, execute_battle_fairy_poison_arrow,
+};
+use crate::gameserver::appserver::skills::poisonarrowstate::{
+    PoisonArrowState, PoisonArrowStateTick, send_poison_arrow_state_visual,
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
@@ -25959,6 +25967,7 @@ impl CGame {
         if let Some(state) = expired_cure {
             send_cure_state_visual(self, player_id, state, false);
         }
+        let poison_arrow_updated = self.update_player_poison_arrow_state(player_id, runtime);
         let agility_state_2_ended = self
             .find_player_mut(player_id)
             .and_then(|player| player.take_expired_agility_state_2(now_ms))
@@ -26018,6 +26027,7 @@ impl CGame {
             agility_state_2_ended,
             hearten_ended = expired_hearten.is_some(),
             cure_ended = expired_cure.is_some(),
+            poison_arrow_updated,
             defense_shields_ended = expired_defense_shields.len(),
             "обновлены временные состояния игрока"
         );
@@ -36459,6 +36469,76 @@ impl CGame {
         }
     }
 
+    pub(crate) fn poison_arrow_target_dead(
+        &self,
+        region_id: i32,
+        target: ShapeIdentity,
+    ) -> bool {
+        match target.object_type {
+            PLAYER_TYPE => self.find_player(target.id).is_none_or(CPlayer::is_dead),
+            MONSTER_TYPE => self
+                .find_region(region_id)
+                .and_then(|owner| owner.base().find_monster_by_id(target.id))
+                .is_none_or(|monster| monster.hit_points() == 0),
+            _ => true,
+        }
+    }
+
+    pub(crate) fn poison_arrow_target_name(
+        &self,
+        region_id: i32,
+        target: ShapeIdentity,
+    ) -> &[u8] {
+        match target.object_type {
+            PLAYER_TYPE => self
+                .find_player(target.id)
+                .map(CPlayer::player_name)
+                .unwrap_or_default(),
+            MONSTER_TYPE => self
+                .find_region(region_id)
+                .and_then(|owner| owner.base().find_monster_by_id(target.id))
+                .map(CMonster::display_name)
+                .unwrap_or_default(),
+            _ => &[],
+        }
+    }
+
+    pub(crate) fn replace_poison_arrow_state(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        state: PoisonArrowState,
+    ) -> Option<(Option<PoisonArrowState>, ShapeIdentity, i32, i32)> {
+        match target.object_type {
+            PLAYER_TYPE => {
+                let player = self.find_player_mut(target.id)?;
+                let identity = player.shape().identity();
+                let x = player.shape().get_tile_x().ok()?;
+                let y = player.shape().get_tile_y().ok()?;
+                let previous = player.replace_poison_arrow_state(state);
+                Some((previous, identity, x, y))
+            }
+            MONSTER_TYPE => {
+                let mut owner = self.take_region_owner(region_id)?;
+                let result = owner
+                    .base_mut()
+                    .find_monster_by_id_mut(target.id)
+                    .and_then(|monster| {
+                        let identity = monster.move_shape().shape().identity();
+                        let x = monster.move_shape().shape().get_tile_x().ok()?;
+                        let y = monster.move_shape().shape().get_tile_y().ok()?;
+                        let previous = monster
+                            .move_shape_mut()
+                            .replace_poison_arrow_state(state);
+                        Some((previous, identity, x, y))
+                    });
+                self.restore_region_owner(owner);
+                result
+            }
+            _ => None,
+        }
+    }
+
     fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -36607,6 +36687,18 @@ impl CGame {
             );
             let outcome = if concrete_life_shield {
                 execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
+                BattleFairySkillDispatch::Object {
+                    skill_id: POISON_ARROW_SKILL_ID,
+                    target: ShapeIdentity {
+                        object_type: PLAYER_TYPE | MONSTER_TYPE,
+                        ..
+                    },
+                    ..
+                }
+            ) {
+                execute_battle_fairy_poison_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
                 BattleFairySkillDispatch::SelfTarget {
@@ -40419,6 +40511,11 @@ impl CGame {
                 })
                 .unwrap_or_default();
             for monster_id in monster_ids {
+                let _ = self.update_monster_poison_arrow_state(
+                    region_id,
+                    monster_id,
+                    runtime,
+                );
                 if self.run_owned_carriage_lifecycle(region_id, monster_id, runtime) {
                     continue;
                 }

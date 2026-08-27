@@ -12,6 +12,7 @@ pub(crate) enum AttackPowerType {
     Physical,
     Element,
     Soul,
+    Poison,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

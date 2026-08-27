@@ -1,0 +1,558 @@
+//! Borrow-координация периодического состояния ядовитой стрелы.
+//!
+//! Конкретные формулы, периодический шаг и визуальный wire принадлежат модулям
+//! навыка и состояния. Этот дочерний runtime-модуль временно извлекает игрока,
+//! монстра и регион, проводит обычный `OnBeenAttacked` через общую защиту и
+//! выполняет обработку смерти и сетевые побочные эффекты, требующие нескольких
+//! независимых владельцев `CGame`.
+
+use super::*;
+
+impl CGame {
+    fn poison_arrow_player_attackable(
+        &self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        victim_id: i32,
+        region_id: i32,
+    ) -> bool {
+        let Some(attacker) = self.find_player(master.master_id) else {
+            return false;
+        };
+        let Some(victim) = self.find_player(victim_id) else {
+            return false;
+        };
+        if master.master_id == victim_id
+            || victim.is_dead()
+            || victim.is_god_mode()
+            || victim.is_nation_war_player_weak()
+            || attacker.server_region_id() != Some(region_id)
+            || victim.server_region_id() != Some(region_id)
+        {
+            return false;
+        }
+        let Some(region) = self.find_region(region_id) else {
+            return false;
+        };
+        let (Ok(attacker_x), Ok(attacker_y), Ok(victim_x), Ok(victim_y)) = (
+            attacker.shape().get_tile_x(),
+            attacker.shape().get_tile_y(),
+            victim.shape().get_tile_x(),
+            victim.shape().get_tile_y(),
+        ) else {
+            return false;
+        };
+        if region.base().no_pk
+            || region.get_security(attacker_x, attacker_y).ok() == Some(RegionSecurity::SAFE)
+            || region.get_security(victim_x, victim_y).ok() == Some(RegionSecurity::SAFE)
+        {
+            return false;
+        }
+        if attacker.is_enemy_faction_member(victim.faction_id())
+            || attacker.is_city_war_enemy_faction_member(victim.faction_id())
+        {
+            return true;
+        }
+        let victim_badman = victim.is_badman(self.globe_setup.pk_count_per_kill());
+        if master.permitted_to_kill_player == 0
+            && !victim_badman
+            && master.master_country_id == i32::from(victim.country())
+        {
+            return false;
+        }
+        if master.permitted_to_kill_teammate == 0
+            && master.master_team_id != 0
+            && master.master_team_id == victim.team_id()
+        {
+            return false;
+        }
+        if master.permitted_to_kill_guild_member == 0
+            && ((master.master_guild_id != 0 && master.master_guild_id == victim.faction_id())
+                || (master.master_union_id != 0 && master.master_union_id == victim.union_id()))
+        {
+            return false;
+        }
+        master.permitted_to_kill_criminal != 0 || !victim_badman
+    }
+
+    fn apply_poison_arrow_to_player<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        target_id: i32,
+        region_id: i32,
+        mut attack: AttackInformation,
+        runtime: &mut Runtime,
+    ) {
+        if !self.poison_arrow_player_attackable(master, target_id, region_id) {
+            return;
+        }
+        let Some((attacker_properties, attacker_occupation, target_properties, target_health, target_mana, target_war_soul_mana)) =
+            self.find_player(master.master_id).and_then(|attacker| {
+                let target = self.find_player(target_id)?;
+                Some((
+                    attacker.combat_properties(),
+                    attacker.occupation(),
+                    target.combat_properties(),
+                    target.health(),
+                    target.mana(),
+                    target.war_soul_mana(&self.goods_factory),
+                ))
+            })
+        else {
+            return;
+        };
+        let _ = self.player_on_first_skill(master.master_id, target_id, Some(region_id), runtime);
+        let mut defense_shields = self
+            .find_player_mut(target_id)
+            .map(CPlayer::take_defense_shields)
+            .unwrap_or_default();
+        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+        defend_player_base_attack(
+            &mut attack,
+            attacker_properties,
+            attacker_occupation,
+            target_properties,
+            target_mana,
+            target_war_soul_mana,
+            &self.globe_setup,
+            &mut random,
+            &mut defense_shields,
+        );
+        if let Some(target) = self.find_player_mut(target_id) {
+            target.restore_defense_shields(defense_shields);
+        }
+        let (damage, mana_damage) =
+            Self::applied_attack_damage(&attack, target_health, target_mana);
+        if attack.full_miss != 0 {
+            let mut missed = CMessage::new(0x000b_f612);
+            missed.add_byte(attack.full_miss);
+            missed.add_long(PLAYER_TYPE);
+            missed.add_long(target_id);
+            let _ = self.send_player_shape_around(target_id, None, &missed);
+            return;
+        }
+        if damage == 0 && mana_damage == 0 {
+            return;
+        }
+        let current_health = target_health - damage;
+        if let Some(target) = self.find_player_mut(target_id) {
+            target.set_health(current_health);
+            target.set_mana(target_mana - mana_damage);
+            target
+                .movement_shape_mut()
+                .set_action(if current_health == 0 { 6 } else { 5 });
+        }
+        if current_health == 0 {
+            let mut died = CMessage::new(0x000b_f60b);
+            died.add_long(master.master_type);
+            died.add_long(master.master_id);
+            died.add_long(PLAYER_TYPE);
+            died.add_long(target_id);
+            died.add_ulong(damage);
+            died.base_mut().add_char(1);
+            Self::append_base_attack_tail(&mut died, &attack);
+            let _ = self.send_player_shape_around(target_id, None, &died);
+            let _ = self.player_on_death(
+                PlayerKillingBlow {
+                    victim_id: target_id,
+                    attacker_type: master.master_type,
+                    attacker_id: master.master_id,
+                    attacker_faction_id: master.master_guild_id,
+                },
+                runtime,
+            );
+        } else {
+            let mut hurt = CMessage::new(0x000b_f60a);
+            hurt.add_long(master.master_type);
+            hurt.add_long(master.master_id);
+            hurt.add_long(PLAYER_TYPE);
+            hurt.add_long(target_id);
+            Self::append_hurt_damage_records(&mut hurt, damage, mana_damage);
+            hurt.add_ulong(current_health);
+            Self::append_base_attack_tail(&mut hurt, &attack);
+            let _ = self.send_player_shape_around(target_id, None, &hurt);
+            self.damage_player_armor(target_id, runtime);
+        }
+    }
+
+    pub(super) fn update_player_poison_arrow_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(mut state) = self
+            .find_player_mut(player_id)
+            .and_then(CPlayer::take_poison_arrow_state_for_ai)
+        else {
+            return false;
+        };
+        let identity_and_position = self.find_player(player_id).and_then(|player| {
+            Some((
+                player.shape().identity(),
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+                player.server_region_id()?,
+                player.is_dead(),
+            ))
+        });
+        let Some((identity, x, y, region_id, dead)) = identity_and_position else {
+            return false;
+        };
+        let lifetime_now_ms = runtime.now_milliseconds();
+        let frequency_now_ms = runtime.now_milliseconds();
+        match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
+            PoisonArrowStateTick::Pending => {
+                if let Some(player) = self.find_player_mut(player_id) {
+                    let _ = player.replace_poison_arrow_state(state);
+                }
+            }
+            PoisonArrowStateTick::Attack(attack) => {
+                let master = state.master();
+                if let Some(player) = self.find_player_mut(player_id) {
+                    let _ = player.replace_poison_arrow_state(state);
+                }
+                self.apply_poison_arrow_to_player(master, player_id, region_id, attack, runtime);
+            }
+            PoisonArrowStateTick::Ended => {
+                send_poison_arrow_state_visual(
+                    self,
+                    region_id,
+                    identity,
+                    x,
+                    y,
+                    state,
+                    false,
+                    lifetime_now_ms,
+                );
+                let _ = self.publish_player_states(player_id);
+            }
+        }
+        true
+    }
+
+    fn poison_arrow_owned_monster_attackable(
+        &self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        owner: crate::gameserver::appserver::masterinfo::MasterInfo,
+    ) -> bool {
+        if owner.master_type != PLAYER_TYPE || owner.master_id == 0 {
+            return true;
+        }
+        let Some(attacker) = self.find_player(master.master_id) else {
+            return false;
+        };
+        let Some(victim) = self.find_player(owner.master_id) else {
+            return false;
+        };
+        if attacker.is_enemy_faction_member(victim.faction_id())
+            || attacker.is_city_war_enemy_faction_member(victim.faction_id())
+        {
+            return true;
+        }
+        let victim_badman = victim.is_badman(self.globe_setup.pk_count_per_kill());
+        if master.permitted_to_kill_player == 0
+            && !victim_badman
+            && owner.master_id != master.master_id
+        {
+            return false;
+        }
+        if master.permitted_to_kill_teammate == 0
+            && (owner.master_id == master.master_id
+                || (master.master_team_id != 0 && master.master_team_id == owner.master_team_id))
+        {
+            return false;
+        }
+        if master.permitted_to_kill_guild_member == 0
+            && ((master.master_guild_id != 0 && master.master_guild_id == owner.master_guild_id)
+                || (master.master_union_id != 0 && master.master_union_id == owner.master_union_id))
+        {
+            return false;
+        }
+        master.permitted_to_kill_criminal != 0
+            || !victim_badman
+            || owner.master_id == master.master_id
+    }
+
+    fn apply_poison_arrow_to_monster<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        target_id: i32,
+        region_id: i32,
+        mut attack: AttackInformation,
+        runtime: &mut Runtime,
+    ) {
+        let Some(property) = self
+            .find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(target_id))
+            .and_then(CMonster::base_property_key)
+            .and_then(|key| self.find_monster_property_by_origin_name(key))
+            .cloned()
+        else {
+            return;
+        };
+        let Some((target_properties, target_health, tamed, carriage, god, target_master, x, y, pos_x, pos_y)) =
+            self.find_region(region_id).and_then(|owner| {
+                let monster = owner.base().find_monster_by_id(target_id)?;
+                let shape = monster.move_shape().shape();
+                Some((
+                    monster.combat_properties(&property),
+                    monster.hit_points(),
+                    monster.is_tamed(),
+                    monster.is_carriage(&property),
+                    monster.move_shape().is_god(),
+                    monster.master_info(),
+                    shape.get_tile_x().ok()?,
+                    shape.get_tile_y().ok()?,
+                    shape.get_pos_x() as u32,
+                    shape.get_pos_y() as u32,
+                ))
+            })
+        else {
+            return;
+        };
+        if target_health == 0
+            || god
+            || !self.guard_monster_attackable(master.master_id, region_id, &property)
+            || ((tamed || carriage)
+                && !self.poison_arrow_owned_monster_attackable(master, target_master))
+        {
+            return;
+        }
+        if (tamed || carriage) && target_master.master_type == PLAYER_TYPE {
+            let _ = self.player_on_first_skill(
+                master.master_id,
+                target_master.master_id,
+                Some(region_id),
+                runtime,
+            );
+        }
+        let Some((attacker_properties, attacker_occupation, attacker_level)) = self
+            .find_player(master.master_id)
+            .map(|attacker| {
+                (
+                    attacker.combat_properties(),
+                    attacker.occupation(),
+                    attacker.level(),
+                )
+            })
+        else {
+            return;
+        };
+        let now_ms = runtime.now_milliseconds();
+        self.apply_guard_monster_first_attack(master.master_id, region_id, &property, now_ms);
+        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+        defend_monster_base_attack(
+            &mut attack,
+            attacker_properties,
+            attacker_occupation,
+            attacker_level,
+            target_properties,
+            &self.globe_setup,
+            &mut random,
+        );
+        let damage = attack.hp_damage().min(target_health);
+        let current_health = target_health - damage;
+        if let Some(mut owner) = self.take_region_owner(region_id) {
+            if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
+                monster.set_hit_points(current_health);
+                if attack.full_miss == 0 && damage != 0 {
+                    monster
+                        .move_shape_mut()
+                        .shape_mut()
+                        .set_action(if current_health == 0 { 6 } else { 5 });
+                    if current_health == 0 {
+                        monster.when_been_killed(now_ms);
+                    } else {
+                        monster.when_been_hurted_by(
+                            ShapeIdentity {
+                                object_type: master.master_type,
+                                id: master.master_id,
+                                ex_id: CGuid::GUID_INVALID,
+                            },
+                            now_ms,
+                        );
+                        monster.register_attacking_player(
+                            master.master_id,
+                            now_ms,
+                            self.globe_setup.attack_monster_protection_ms(),
+                        );
+                    }
+                }
+                if current_health == 0 {
+                    monster.set_killed_by(MonsterKillingAttack {
+                        attacker_type: master.master_type,
+                        attacker_id: master.master_id,
+                        skill_id: attack.skill_id,
+                        skill_level: attack.skill_level,
+                        critical: attack.critical,
+                        blast_attack: attack.blast_attack,
+                    });
+                }
+            }
+            self.restore_region_owner(owner);
+        }
+        if attack.full_miss != 0 {
+            let mut missed = CMessage::new(0x000b_f612);
+            missed.add_byte(attack.full_miss);
+            missed.add_long(MONSTER_TYPE);
+            missed.add_long(target_id);
+            let _ = self.send_shape_position_around(region_id, x, y, &missed);
+            return;
+        }
+        if damage == 0 {
+            return;
+        }
+        if current_health != 0 {
+            let mut hurt = CMessage::new(0x000b_f60a);
+            hurt.add_long(master.master_type);
+            hurt.add_long(master.master_id);
+            hurt.add_long(MONSTER_TYPE);
+            hurt.add_long(target_id);
+            hurt.add_byte(1);
+            hurt.add_byte(0);
+            hurt.add_ulong(damage);
+            hurt.add_ulong(current_health);
+            Self::append_base_attack_tail(&mut hurt, &attack);
+            let _ = self.send_shape_position_around(region_id, x, y, &hurt);
+            let _ = self.monster_on_been_hurted(
+                region_id,
+                target_id,
+                master.master_type,
+                master.master_id,
+            );
+            return;
+        }
+
+        let mut died = CMessage::new(0x000b_f60b);
+        died.add_long(master.master_type);
+        died.add_long(master.master_id);
+        died.add_long(MONSTER_TYPE);
+        died.add_long(target_id);
+        died.add_ulong(damage);
+        died.base_mut().add_char(1);
+        Self::append_base_attack_tail(&mut died, &attack);
+        let _ = self.send_shape_position_around(region_id, x, y, &died);
+        let _ = self.gods_battle_monster_died(
+            region_id,
+            target_id,
+            master.master_type,
+            master.master_id,
+        );
+        let _ = self.monster_on_died(region_id, target_id, master.master_id, runtime);
+        if carriage {
+            let _ = self.send_carriage_log_snapshot(
+                target_master.master_id,
+                property.index,
+                region_id,
+                x,
+                y,
+                3,
+            );
+            if target_master.master_type == PLAYER_TYPE
+                && let Some(owner) = self.find_player_mut(target_master.master_id)
+            {
+                owner.clear_active_carriage(target_id);
+            }
+        } else if !tamed {
+            self.finish_monster_kill_effects(
+                region_id,
+                target_id,
+                master.master_id,
+                x,
+                y,
+                &property,
+                runtime,
+            );
+        } else if target_master.master_type == PLAYER_TYPE
+            && let Some(owner) = self.find_player_mut(target_master.master_id)
+        {
+            owner.remove_active_pet(MONSTER_TYPE, target_id);
+        }
+        let mut exit = CMessage::new(0x000b_f504);
+        exit.add_long(MONSTER_TYPE);
+        exit.add_long(target_id);
+        exit.add_long(0);
+        exit.add_ulong(pos_x);
+        exit.add_ulong(pos_y);
+        let _ = self.send_shape_position_around(region_id, x, y, &exit);
+        if let Some(mut owner) = self.take_region_owner(region_id) {
+            owner.base_mut().finish_owned_monster_death(target_id);
+            self.restore_region_owner(owner);
+        }
+    }
+
+    pub(super) fn update_monster_poison_arrow_state<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let state_and_target = owner
+            .base_mut()
+            .find_monster_by_id_mut(monster_id)
+            .and_then(|monster| {
+                let state = monster
+                    .move_shape_mut()
+                    .take_poison_arrow_state_for_ai()?;
+                let shape = monster.move_shape().shape();
+                Some((
+                    state,
+                    shape.identity(),
+                    shape.get_tile_x().ok()?,
+                    shape.get_tile_y().ok()?,
+                    monster.hit_points() == 0,
+                ))
+            });
+        self.restore_region_owner(owner);
+        let Some((mut state, identity, x, y, dead)) = state_and_target else {
+            return false;
+        };
+        let lifetime_now_ms = runtime.now_milliseconds();
+        let frequency_now_ms = runtime.now_milliseconds();
+        match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
+            PoisonArrowStateTick::Pending => {
+                if let Some(mut owner) = self.take_region_owner(region_id) {
+                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        let _ = monster
+                            .move_shape_mut()
+                            .replace_poison_arrow_state(state);
+                    }
+                    self.restore_region_owner(owner);
+                }
+            }
+            PoisonArrowStateTick::Attack(attack) => {
+                let master = state.master();
+                if let Some(mut owner) = self.take_region_owner(region_id) {
+                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        let _ = monster
+                            .move_shape_mut()
+                            .replace_poison_arrow_state(state);
+                    }
+                    self.restore_region_owner(owner);
+                }
+                self.apply_poison_arrow_to_monster(
+                    master,
+                    monster_id,
+                    region_id,
+                    attack,
+                    runtime,
+                );
+            }
+            PoisonArrowStateTick::Ended => send_poison_arrow_state_visual(
+                self,
+                region_id,
+                identity,
+                x,
+                y,
+                state,
+                false,
+                lifetime_now_ms,
+            ),
+        }
+        true
+    }
+
+
+}

@@ -97,6 +97,7 @@ impl ManaShieldState {
                 power.hp_damage = power.hp_damage.wrapping_sub(self.element_defense / 2);
             }
             AttackPowerType::Soul => {}
+            AttackPowerType::Poison => {}
         }
         power.hp_damage = power.hp_damage.max(0);
         let hp_factor = self.hp_factor as f32 * 0.01;

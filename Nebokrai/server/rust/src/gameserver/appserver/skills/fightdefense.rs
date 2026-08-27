@@ -131,6 +131,7 @@ pub(crate) fn defend_monster_base_attack(
                 }
                 .max(0);
             }
+            AttackPowerType::Poison => {}
         }
         if power.hp_damage > 0 {
             power.hp_damage =
@@ -256,6 +257,7 @@ pub(crate) fn defend_player_base_attack(
                 }
                 .max(0);
             }
+            AttackPowerType::Poison => {}
         }
         if power.hp_damage > 0 {
             power.hp_damage =
@@ -318,6 +320,7 @@ pub(crate) fn defend_player_from_monster_base_attack(
                     .wrapping_sub(i32::from(target.soul_resistance))
                     .max(0);
             }
+            AttackPowerType::Poison => {}
         }
         if power.hp_damage > 0 {
             power.hp_damage =
@@ -364,6 +367,7 @@ pub(crate) fn defend_monster_from_monster_base_attack(
                     .wrapping_sub(i32::from(target.soul_resistance))
                     .max(0);
             }
+            AttackPowerType::Poison => {}
         }
         if power.hp_damage > 0 {
             power.hp_damage =

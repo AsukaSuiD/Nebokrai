@@ -1,27 +1,148 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое периодическое состояние `CPoisonArrowState`.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/poisonarrowstate.cpp`. Состояние хранит снимок владельца,
+//! использует два отдельных чтения часов на шаг и строгую проверку `>` для
+//! срока и очередного удара. Формирование атаки с типом `Poison` и сообщений
+//! `0xBFE03/0xBFE04`
+//! принадлежит этому модулю; `CGame` только применяет рассчитанную атаку к
+//! независимому владельцу игрока или монстра и выполняет доставку.
+//! Не достигнуты восстановление из DB и координатные перегрузки `Begin`; их RAW
+//! сохранён ниже без второго изменяемого представления состояния.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp
+use super::poisonarrow::POISON_ARROW_SKILL_ID;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::attackpower::{
+    AttackInformation, AttackPower, AttackPowerType,
+};
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CPoisonArrowState::CPoisonArrowState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp:17
-// RVA: 0x001E3140
-// ADDRESS: 005e3140
-// PROTOTYPE: undefined __thiscall CPoisonArrowState(tagMasterInfo * param_1, ulong param_2, ulong param_3, ulong param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PoisonArrowStateTick {
+    Pending,
+    Attack(AttackInformation),
+    Ended,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PoisonArrowState {
+    master: MasterInfo,
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    frequency_ms: u32,
+    hp_loss: u32,
+    attack_count: u32,
+}
+
+impl PoisonArrowState {
+    pub(crate) const fn new(
+        master: MasterInfo,
+        started_at_ms: u32,
+        keep_time_ms: u32,
+        frequency_ms: u32,
+        hp_loss: u32,
+    ) -> Self {
+        Self {
+            master,
+            started_at_ms,
+            keep_time_ms,
+            frequency_ms,
+            hp_loss,
+            attack_count: 0,
+        }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        POISON_ARROW_SKILL_ID
+    }
+
+    pub(crate) const fn master(self) -> MasterInfo {
+        self.master
+    }
+
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
+        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
+        if elapsed >= self.keep_time_ms {
+            0
+        } else {
+            self.keep_time_ms.wrapping_sub(elapsed) as i32
+        }
+    }
+
+    pub(crate) fn tick(
+        &mut self,
+        lifetime_now_ms: u32,
+        frequency_now_ms: u32,
+        target_dead: bool,
+    ) -> PoisonArrowStateTick {
+        if lifetime_now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms || target_dead {
+            return PoisonArrowStateTick::Ended;
+        }
+        let delay = self.frequency_ms.wrapping_mul(self.attack_count);
+        if frequency_now_ms.wrapping_sub(self.started_at_ms) <= delay {
+            return PoisonArrowStateTick::Pending;
+        }
+        self.attack_count = self.attack_count.wrapping_add(1);
+        PoisonArrowStateTick::Attack(self.attack())
+    }
+
+    fn attack(self) -> AttackInformation {
+        AttackInformation {
+            skill_id: POISON_ARROW_SKILL_ID,
+            skill_level: 0,
+            attacker_type: self.master.master_type,
+            attacker_id: self.master.master_id,
+            attacker_team_id: self.master.master_team_id,
+            attacker_faction_id: self.master.master_guild_id,
+            attacker_union_id: self.master.master_union_id,
+            hit_modifier: 0,
+            damage_factor: 1.0,
+            damage_modifier: 0,
+            critical: false,
+            blast_attack: false,
+            full_miss: 0,
+            damages: vec![AttackPower {
+                kind: AttackPowerType::Poison,
+                hp_damage: (self.hp_loss as i32).max(0),
+                mp_damage: 0,
+            }],
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической around-доставки")]
+pub(crate) fn send_poison_arrow_state_visual(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: PoisonArrowState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let mut message = CMessage::new(if begin {
+        STATE_BEGIN_MESSAGE
+    } else {
+        STATE_END_MESSAGE
+    });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(0);
+    }
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+// Остаются недостигнутыми создание состояния для DB-восстановления,
+// его чтение и координатные overload-ы Begin.
 // ============================================================================
 // FUNCTION: CPoisonArrowState::CPoisonArrowState
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -31,20 +152,6 @@
 // RVA: 0x001E31F0
 // ADDRESS: 005e31f0
 // PROTOTYPE: undefined __thiscall CPoisonArrowState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonArrowState::~CPoisonArrowState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp:42
-// RVA: 0x001E3280
-// ADDRESS: 005e3280
-// PROTOTYPE: void __thiscall ~CPoisonArrowState(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -79,20 +186,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CPoisonArrowState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp:54
-// RVA: 0x001E3460
-// ADDRESS: 005e3460
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPoisonArrowState::Unserialize
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -105,51 +198,3 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CPoisonArrowStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp:230
-// RVA: 0x001E3550
-// ADDRESS: 005e3550
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonArrowState::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp:161
-// RVA: 0x001E3690
-// ADDRESS: 005e3690
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, tagAttackInformation * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonArrowState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp:112
-// RVA: 0x001E3730
-// ADDRESS: 005e3730
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer

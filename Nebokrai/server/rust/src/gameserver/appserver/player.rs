@@ -4373,6 +4373,19 @@ impl CPlayer {
         self.move_shape.take_cure_state_for_ai()
     }
 
+    pub(crate) fn replace_poison_arrow_state(
+        &mut self,
+        state: super::skills::poisonarrowstate::PoisonArrowState,
+    ) -> Option<super::skills::poisonarrowstate::PoisonArrowState> {
+        self.move_shape.replace_poison_arrow_state(state)
+    }
+
+    pub(crate) fn take_poison_arrow_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::poisonarrowstate::PoisonArrowState> {
+        self.move_shape.take_poison_arrow_state_for_ai()
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,

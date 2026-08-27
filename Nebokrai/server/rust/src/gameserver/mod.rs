@@ -93,6 +93,8 @@ pub(crate) mod appserver {
         pub(crate) mod natural;
         pub(crate) mod origin;
         pub(crate) mod originstate;
+        pub(crate) mod poisonarrow;
+        pub(crate) mod poisonarrowstate;
         pub(crate) mod naturalstate;
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;

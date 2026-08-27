@@ -67,6 +67,8 @@ pub(crate) struct CPlayerAI {
     battle_fairy_transfer_last_used_ms: [u32; 2],
     wangsheng: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     wangsheng_last_used_ms: u32,
+    poison_arrow: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    poison_arrow_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -143,6 +145,7 @@ impl CPlayerAI {
         self.life_shield = None;
         self.battle_fairy_transfer = None;
         self.wangsheng = None;
+        self.poison_arrow = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -232,6 +235,7 @@ impl CPlayerAI {
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
+        self.poison_arrow = None;
         true
     }
 
@@ -480,6 +484,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение восстановления здоровья игрока завершено");
         }
+        if let Some(mut execution) = self.poison_arrow.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитой стрелы завершено");
+        }
         true
     }
 
@@ -603,6 +611,33 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_wangsheng_used(&mut self, now_ms: u32) {
         self.wangsheng_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn poison_arrow(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.poison_arrow
+    }
+
+    pub(crate) const fn begin_poison_arrow(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.poison_arrow = Some(state);
+    }
+
+    pub(crate) fn poison_arrow_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.poison_arrow.as_mut()
+    }
+
+    pub(crate) const fn poison_arrow_last_used_ms(&self) -> u32 {
+        self.poison_arrow_last_used_ms
+    }
+
+    pub(crate) const fn mark_poison_arrow_used(&mut self, now_ms: u32) {
+        self.poison_arrow_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]
