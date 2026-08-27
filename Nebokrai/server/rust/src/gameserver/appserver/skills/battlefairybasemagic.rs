@@ -1,6 +1,55 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовая атака боевой феи GameServer (`SKILL_BATTLEFAIRY_BASE_ATTACK`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/battlefairybasemagic.cpp`. Отдельный FIFO боевой феи
+//! проходит общий `SkillExecutionKernel`, но не блокирует движение игрока.
+//! Начало, выстрел и обязательное завершение используют визуальный тип `700`;
+//! ошибки используют отдельный префикс `4`. После выстрела урон откладывается
+//! до owned `CBattleFairyBaseMagicPhalanx` в ИИ региона. Сырой C++ ниже
+//! сохраняет ещё не достигнутые перегрузки и детали визуального класса.
+
+use crate::gameserver::appserver::player::BattleFairySkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+
+pub(crate) const BATTLE_FAIRY_BASE_MAGIC_SKILL_ID: u32 = 0x224;
+pub(crate) const BATTLE_FAIRY_VISUAL_OBJECT_TYPE: i32 = 700;
+pub(crate) const DENIED_STATE_A: u32 = 0x192;
+pub(crate) const DENIED_STATE_B: u32 = 0x67;
+pub(crate) const DENIED_STATE_C: u32 = 0xd2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BattleFairyBaseMagicExecutionState {
+    kernel: SkillExecutionKernel<BattleFairySkillDispatch>,
+    target: ShapeIdentity,
+}
+
+impl BattleFairyBaseMagicExecutionState {
+    pub(crate) const fn begin(
+        dispatch: BattleFairySkillDispatch,
+        target: ShapeIdentity,
+        started_at_ms: u32,
+    ) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+            target,
+        }
+    }
+
+    pub(crate) const fn kernel(self) -> SkillExecutionKernel<BattleFairySkillDispatch> {
+        self.kernel
+    }
+
+    pub(crate) fn kernel_mut(
+        &mut self,
+    ) -> &mut SkillExecutionKernel<BattleFairySkillDispatch> {
+        &mut self.kernel
+    }
+
+    pub(crate) const fn target(self) -> ShapeIdentity {
+        self.target
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

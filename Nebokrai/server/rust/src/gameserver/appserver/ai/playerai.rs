@@ -24,6 +24,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
+use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +42,8 @@ pub(crate) struct CPlayerAI {
     base_attack_last_used_ms: u32,
     base_magic: Option<BaseMagicExecutionState>,
     base_magic_last_used_ms: u32,
+    battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
+    battle_fairy_base_magic_last_used_ms: u32,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -97,6 +100,7 @@ impl CPlayerAI {
         }
         let replaced = self.battle_fairy_skills.len();
         self.battle_fairy_skills.clear();
+        self.battle_fairy_base_magic = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -203,12 +207,49 @@ impl CPlayerAI {
         self.battle_fairy_skills.front().copied()
     }
 
-    pub(crate) fn finish_battle_fairy_skill(&mut self, expected: BattleFairySkillDispatch) -> bool {
+    pub(crate) fn finish_battle_fairy_skill(
+        &mut self,
+        expected: BattleFairySkillDispatch,
+        termination: SkillTermination,
+    ) -> bool {
         if self.battle_fairy_skills.front().copied() != Some(expected) {
             return false;
         }
         self.battle_fairy_skills.pop_front();
+        if let Some(mut execution) = self.battle_fairy_base_magic.take() {
+            let _ = execution
+                .kernel_mut()
+                .terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой атаки боевой феи завершено");
+        }
         true
+    }
+
+    pub(crate) const fn battle_fairy_base_magic(
+        &self,
+    ) -> Option<BattleFairyBaseMagicExecutionState> {
+        self.battle_fairy_base_magic
+    }
+
+    pub(crate) const fn begin_battle_fairy_base_magic(
+        &mut self,
+        state: BattleFairyBaseMagicExecutionState,
+    ) {
+        self.battle_fairy_base_magic = Some(state);
+    }
+
+    pub(crate) fn battle_fairy_base_magic_mut(
+        &mut self,
+    ) -> Option<&mut BattleFairyBaseMagicExecutionState> {
+        self.battle_fairy_base_magic.as_mut()
+    }
+
+    pub(crate) const fn battle_fairy_base_magic_last_used_ms(&self) -> u32 {
+        self.battle_fairy_base_magic_last_used_ms
+    }
+
+    pub(crate) const fn mark_battle_fairy_base_magic_used(&mut self, now_ms: u32) {
+        self.battle_fairy_base_magic_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]

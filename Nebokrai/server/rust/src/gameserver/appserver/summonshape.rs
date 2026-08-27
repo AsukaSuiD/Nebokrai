@@ -9,6 +9,40 @@
 
 pub(crate) const SUMMON_SHAPE_TYPE: i32 = 1000;
 
+use crate::gameserver::appserver::skills::basemagicphalanx::CBaseMagicPhalanx;
+use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
+use crate::gameserver::appserver::shape::CShape;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SummonedSkillShape {
+    BaseMagic(CBaseMagicPhalanx),
+    BattleFairyBaseMagic(CBattleFairyBaseMagicPhalanx),
+}
+
+impl SummonedSkillShape {
+    pub(crate) const fn shape(&self) -> &CShape {
+        match self {
+            Self::BaseMagic(shape) => shape.shape(),
+            Self::BattleFairyBaseMagic(shape) => shape.shape(),
+        }
+    }
+
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
+        match self {
+            Self::BaseMagic(shape) => shape.shape_mut(),
+            Self::BattleFairyBaseMagic(shape) => shape.shape_mut(),
+        }
+    }
+
+    pub(crate) const fn master(&self) -> MasterInfo {
+        match self {
+            Self::BaseMagic(shape) => shape.master(),
+            Self::BattleFairyBaseMagic(shape) => shape.master(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct NextSummonShapeId(i32);
 

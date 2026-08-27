@@ -976,15 +976,18 @@ pub(crate) struct BattleFairySkillRequestFacts {
 pub(crate) enum BattleFairySkillDispatch {
     SelfTarget {
         skill_id: u32,
+        skill_level: i32,
         player_id: i32,
     },
     Point {
         skill_id: u32,
+        skill_level: i32,
         x: i32,
         y: i32,
     },
     Object {
         skill_id: u32,
+        skill_level: i32,
         target: super::shape::ShapeIdentity,
     },
 }
@@ -5004,6 +5007,10 @@ impl CPlayer {
 
     pub(crate) const fn set_skill_moveable(&mut self, moveable: bool) {
         self.move_shape.set_moveable(moveable);
+    }
+
+    pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {
+        self.move_shape.has_state_by_skill_id(state_id)
     }
 
     pub(crate) fn force_move<Context: MoveShapeCommandContext>(
@@ -10841,11 +10848,13 @@ impl CPlayer {
             if target_x == 0 || target_y == 0 {
                 BattleFairySkillDispatch::SelfTarget {
                     skill_id,
+                    skill_level,
                     player_id,
                 }
             } else {
                 BattleFairySkillDispatch::Point {
                     skill_id,
+                    skill_level,
                     x: target_x,
                     y: target_y,
                 }
@@ -10874,7 +10883,11 @@ impl CPlayer {
                 );
                 return journal;
             }
-            BattleFairySkillDispatch::Object { skill_id, target }
+            BattleFairySkillDispatch::Object {
+                skill_id,
+                skill_level,
+                target,
+            }
         };
         journal.push(GameEffect::QueueBattleFairySkill {
             player_id,

@@ -701,6 +701,26 @@ impl CMoveShape {
             .min(u32::MAX as usize) as u32
     }
 
+    /// `GetStateBySkillID` просматривает канонические типизированные состояния
+    /// по фактическому идентификатору навыка, а не по классу сетевой записи.
+    pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {
+        self.script_states
+            .iter()
+            .any(|state| state.state_id as u32 == state_id)
+            || self
+                .change_body_states
+                .iter()
+                .any(|state| state.level == state_id)
+            || self
+                .extended_states
+                .iter()
+                .any(|state| state.level == state_id)
+            || self
+                .undead_states
+                .iter()
+                .any(|state| state.state_id() == state_id)
+    }
+
     pub(crate) fn take_first_script_state(&mut self, state_id: i32) -> Option<ScriptMoveState> {
         let index = self
             .script_states

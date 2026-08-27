@@ -165,7 +165,7 @@ use super::shape::{
     CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError, ShapeCoordinateBlock,
     ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
-use super::summonshape::SUMMON_SHAPE_TYPE;
+use super::summonshape::{SUMMON_SHAPE_TYPE, SummonedSkillShape};
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::guid::CGuid;
 use crate::public::netsession::{
@@ -778,7 +778,7 @@ pub(crate) struct CServerRegion {
     total_spawned_npcs: i32,
     next_npc_id: NextNpcId,
     owned_goods: BTreeMap<CGuid, CGoods>,
-    owned_base_magic_phalanxes: BTreeMap<i32, CBaseMagicPhalanx>,
+    owned_skill_phalanxes: BTreeMap<i32, SummonedSkillShape>,
     delete_shapes: IndexSet<ShapeIdentity>,
     remove_shapes: IndexSet<ShapeIdentity>,
     change_area_shapes: IndexSet<ShapeIdentity>,
@@ -1206,36 +1206,58 @@ impl CServerRegion {
             context,
         )?;
         let id = phalanx.shape().identity().id;
-        self.owned_base_magic_phalanxes.insert(id, phalanx);
+        self.owned_skill_phalanxes
+            .insert(id, SummonedSkillShape::BaseMagic(phalanx));
         Ok(id)
     }
 
-    pub(crate) fn find_base_magic_phalanx(
-        &self,
-        id: i32,
-    ) -> Option<&CBaseMagicPhalanx> {
-        self.owned_base_magic_phalanxes.get(&id)
-    }
-
-    pub(crate) fn find_base_magic_phalanx_mut(
+    pub(crate) fn add_battle_fairy_base_magic_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
-        id: i32,
-    ) -> Option<&mut CBaseMagicPhalanx> {
-        self.owned_base_magic_phalanxes.get_mut(&id)
+        mut phalanx: super::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx,
+        tile_x: i32,
+        tile_y: i32,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<i32, RegionMembershipBlock> {
+        phalanx
+            .shape_mut()
+            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        self.add_object(
+            phalanx.shape_mut(),
+            ShapeRuntimeFacts::default(),
+            area_width,
+            area_height,
+            now_ms,
+            context,
+        )?;
+        let id = phalanx.shape().identity().id;
+        self.owned_skill_phalanxes
+            .insert(id, SummonedSkillShape::BattleFairyBaseMagic(phalanx));
+        Ok(id)
     }
 
-    pub(crate) fn remove_owned_base_magic_phalanx(
+    pub(crate) fn find_skill_phalanx(&self, id: i32) -> Option<&SummonedSkillShape> {
+        self.owned_skill_phalanxes.get(&id)
+    }
+
+    pub(crate) fn find_skill_phalanx_mut(&mut self, id: i32) -> Option<&mut SummonedSkillShape> {
+        self.owned_skill_phalanxes.get_mut(&id)
+    }
+
+    pub(crate) fn remove_owned_skill_phalanx(
         &mut self,
         id: i32,
     ) -> Result<bool, RegionMembershipBlock> {
-        let Some(mut phalanx) = self.owned_base_magic_phalanxes.remove(&id) else {
+        let Some(mut phalanx) = self.owned_skill_phalanxes.remove(&id) else {
             return Ok(false);
         };
         if let Err(error) = self.remove_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
         ) {
-            self.owned_base_magic_phalanxes.insert(id, phalanx);
+            self.owned_skill_phalanxes.insert(id, phalanx);
             return Err(error);
         }
         Ok(true)
@@ -1688,7 +1710,7 @@ impl CServerRegion {
                 .get(&identity.ex_id)
                 .map(|goods| goods.shape().change_state()),
             SUMMON_SHAPE_TYPE => self
-                .owned_base_magic_phalanxes
+                .owned_skill_phalanxes
                 .get(&identity.id)
                 .map(|phalanx| phalanx.shape().change_state()),
             _ => None,
@@ -1710,9 +1732,9 @@ impl CServerRegion {
                 .get_mut(&identity.ex_id)
                 .map(CGoods::shape_mut),
             SUMMON_SHAPE_TYPE => self
-                .owned_base_magic_phalanxes
+                .owned_skill_phalanxes
                 .get_mut(&identity.id)
-                .map(CBaseMagicPhalanx::shape_mut),
+                .map(SummonedSkillShape::shape_mut),
             _ => None,
         };
         let Some(shape) = shape else {
