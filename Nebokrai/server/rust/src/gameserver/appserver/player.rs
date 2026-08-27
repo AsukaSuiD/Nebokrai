@@ -5002,6 +5002,10 @@ impl CPlayer {
         self.move_shape.shape_mut()
     }
 
+    pub(crate) const fn set_skill_moveable(&mut self, moveable: bool) {
+        self.move_shape.set_moveable(moveable);
+    }
+
     pub(crate) fn force_move<Context: MoveShapeCommandContext>(
         &mut self,
         server_region: &mut CServerRegion,

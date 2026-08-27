@@ -1,6 +1,24 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Общая достигнутая часть идентичности и жизненного цикла `CSummonShape`.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/summonshape.cpp`. Все summoned shapes получают process-wide
+//! знаковый ID с переполнением из прежнего `g_lID`, тип `1000`, начальные часы
+//! и срок жизни. Конкретная область, атака и игровые эффекты остаются у
+//! производного владельца. Счётчик принадлежит `CGame`, а не региону, поэтому смена региона
+//! не создаёт повторные legacy IDs.
+
+pub(crate) const SUMMON_SHAPE_TYPE: i32 = 1000;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct NextSummonShapeId(i32);
+
+impl NextSummonShapeId {
+    pub(crate) fn take(&mut self) -> i32 {
+        let id = self.0;
+        self.0 = self.0.wrapping_add(1);
+        id
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

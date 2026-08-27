@@ -1,6 +1,73 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовая магическая атака GameServer (`SKILL_BASE_MAGIC == 3`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/basemagic.cpp`. `SkillExecutionKernel` сохраняет применение
+//! между тактами: первый такт проверяет цель, поворачивает игрока, отправляет
+//! начало эффекта и запрещает движение; по истечении задержки движение
+//! разрешается до повторной проверки цели и отправки пакета выстрела. Сам урон
+//! намеренно не выполняется здесь: выстрел создаёт принадлежащий региону
+//! `CBaseMagicPhalanx`, который атакует в ИИ региона после отдельной задержки
+//! полёта. Это сохраняет исходные моменты действий, двух владельцев жизненного
+//! цикла и порядок пакетов.
+//! Сырой C++ ниже остаётся локальной документацией ещё не достигнутых
+//! перегрузок и владельца визуального эффекта.
+
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+
+pub(crate) const BASE_MAGIC_SKILL_ID: u32 = 3;
+pub(crate) const BASE_MAGIC_EFFECT_MESSAGE: i32 = 0x000b_fe01;
+pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
+pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
+pub(crate) const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
+pub(crate) const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
+pub(crate) const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
+pub(crate) const SKILL_USAGE_ELEMENT_MODIFIER: u32 = 20_015;
+pub(crate) const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
+pub(crate) const SKILL_USAGE_SUMMONED_SPEED: u32 = 30_002;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BaseMagicExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    target: ShapeIdentity,
+    condition_checked: bool,
+}
+
+impl BaseMagicExecutionState {
+    pub(crate) const fn begin(
+        dispatch: PlayerSkillDispatch,
+        target: ShapeIdentity,
+        started_at_ms: u32,
+    ) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+            target,
+            condition_checked: false,
+        }
+    }
+
+    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
+        self.kernel
+    }
+
+    pub(crate) const fn target(self) -> ShapeIdentity {
+        self.target
+    }
+
+    pub(crate) const fn condition_checked(self) -> bool {
+        self.condition_checked
+    }
+
+    pub(crate) fn mark_condition_checked(&mut self) {
+        self.condition_checked = true;
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

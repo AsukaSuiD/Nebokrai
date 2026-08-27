@@ -23,6 +23,7 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
+use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +39,8 @@ pub(crate) struct CPlayerAI {
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
     base_attack: Option<BaseAttackExecutionState>,
     base_attack_last_used_ms: u32,
+    base_magic: Option<BaseMagicExecutionState>,
+    base_magic_last_used_ms: u32,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -83,6 +86,7 @@ impl CPlayerAI {
         let rejected = self.player_skills.len();
         self.player_skills.clear();
         self.base_attack = None;
+        self.base_magic = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -118,6 +122,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
         }
+        if let Some(mut execution) = self.base_magic.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой магии завершено");
+        }
         true
     }
 
@@ -137,6 +145,7 @@ impl CPlayerAI {
         }
         self.player_skills.pop_front();
         self.base_attack = None;
+        self.base_magic = None;
         true
     }
 
@@ -164,6 +173,26 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_base_attack_used(&mut self, now_ms: u32) {
         self.base_attack_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn base_magic(&self) -> Option<BaseMagicExecutionState> {
+        self.base_magic
+    }
+
+    pub(crate) const fn begin_base_magic(&mut self, state: BaseMagicExecutionState) {
+        self.base_magic = Some(state);
+    }
+
+    pub(crate) fn base_magic_mut(&mut self) -> Option<&mut BaseMagicExecutionState> {
+        self.base_magic.as_mut()
+    }
+
+    pub(crate) const fn base_magic_last_used_ms(&self) -> u32 {
+        self.base_magic_last_used_ms
+    }
+
+    pub(crate) const fn mark_base_magic_used(&mut self, now_ms: u32) {
+        self.base_magic_last_used_ms = now_ms;
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {

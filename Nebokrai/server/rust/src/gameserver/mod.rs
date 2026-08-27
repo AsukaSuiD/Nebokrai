@@ -59,6 +59,8 @@ pub(crate) mod appserver {
     }
     pub(crate) mod skills {
         pub(crate) mod baseattack;
+        pub(crate) mod basemagic;
+        pub(crate) mod basemagicphalanx;
         pub(crate) mod fightdefense;
         pub(crate) mod kernel;
         pub(crate) mod realmappellation;
@@ -139,6 +141,7 @@ pub(crate) mod appserver {
         pub(crate) mod variablelist;
     }
     pub(crate) mod shape;
+    pub(crate) mod summonshape;
 }
 
 #[allow(
