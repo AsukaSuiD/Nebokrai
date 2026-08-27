@@ -4227,6 +4227,13 @@ impl CPlayer {
         self.move_shape.replace_enlarge_max_hp_state(state)
     }
 
+    pub(crate) fn replace_enlarge_full_miss_state(
+        &mut self,
+        state: super::skills::enlargefullmissstate::EnlargeFullMissState,
+    ) -> Option<super::skills::enlargefullmissstate::EnlargeFullMissState> {
+        self.move_shape.replace_enlarge_full_miss_state(state)
+    }
+
     pub(crate) fn replace_enlarge_max_mp_state(
         &mut self,
         state: super::skills::enlargemaxmpstate::EnlargeMaxMpState,
@@ -4243,6 +4250,16 @@ impl CPlayer {
         }
         if let Some(state) = self.move_shape.enlarge_max_mp_state() {
             properties.maximum_mp = state.apply(properties.maximum_mp);
+        }
+        properties
+    }
+
+    pub(crate) fn apply_enlarge_full_miss_state(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        if let Some(state) = self.move_shape.enlarge_full_miss_state() {
+            properties.full_miss = state.apply(properties.full_miss);
         }
         properties
     }

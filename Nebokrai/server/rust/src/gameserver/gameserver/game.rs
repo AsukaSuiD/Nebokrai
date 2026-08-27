@@ -749,6 +749,10 @@ use crate::gameserver::appserver::skills::agilitystate::{
     AGILITY_STATE_BEGIN_MESSAGE, AGILITY_STATE_END_MESSAGE, AgilityState,
     PersistentAgilityFamilyState,
 };
+use crate::gameserver::appserver::skills::enlargefullmiss::{
+    ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN,
+};
+use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
 use crate::gameserver::appserver::skills::enlargemaxhp::{
     ENLARGE_MAX_HP_SKILL_ID, SKILL_USAGE_MAX_HP_GAIN,
 };
@@ -4967,6 +4971,12 @@ impl CGame {
         let Some(properties) = self
             .find_player(player_id)
             .map(|player| player.apply_enlarge_max_states(properties))
+        else {
+            return false;
+        };
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| player.apply_enlarge_full_miss_state(properties))
         else {
             return false;
         };
@@ -35967,7 +35977,10 @@ impl CGame {
             | PlayerSkillDispatch::Object { skill_id, .. }
                 if matches!(
                     skill_id,
-                    TAIJI_SKILL_ID | ENLARGE_MAX_HP_SKILL_ID | ENLARGE_MAX_MP_SKILL_ID
+                    TAIJI_SKILL_ID
+                        | ENLARGE_MAX_HP_SKILL_ID
+                        | ENLARGE_MAX_MP_SKILL_ID
+                        | ENLARGE_FULL_MISS_SKILL_ID
                 ) => skill_id,
             _ => return terminal(QueuedSkillExecutionState::Rejected),
         };
@@ -36004,11 +36017,16 @@ impl CGame {
         };
         enum ImmediateStateKind {
             TaiJi,
+            EnlargeFullMiss,
             EnlargeMaxHp,
             EnlargeMaxMp,
         }
         let (usage, state_kind) = match skill_id {
             TAIJI_SKILL_ID => (TAIJI_ELEMENT_RESISTANT_GAIN, ImmediateStateKind::TaiJi),
+            ENLARGE_FULL_MISS_SKILL_ID => (
+                SKILL_USAGE_FULL_MISS_GAIN,
+                ImmediateStateKind::EnlargeFullMiss,
+            ),
             ENLARGE_MAX_HP_SKILL_ID => (SKILL_USAGE_MAX_HP_GAIN, ImmediateStateKind::EnlargeMaxHp),
             ENLARGE_MAX_MP_SKILL_ID => (SKILL_USAGE_MAX_MP_GAIN, ImmediateStateKind::EnlargeMaxMp),
             _ => unreachable!(),
@@ -36019,6 +36037,10 @@ impl CGame {
             match state_kind {
                 ImmediateStateKind::TaiJi => {
                     let _ = player.replace_taiji_state(TaiJiState::new(gain));
+                }
+                ImmediateStateKind::EnlargeFullMiss => {
+                    let _ = player
+                        .replace_enlarge_full_miss_state(EnlargeFullMissState::new(gain));
                 }
                 ImmediateStateKind::EnlargeMaxHp => {
                     let _ = player.replace_enlarge_max_hp_state(EnlargeMaxHpState::new(gain));
@@ -37772,7 +37794,10 @@ impl CGame {
                 | PlayerSkillDispatch::Point { skill_id, .. }
                 | PlayerSkillDispatch::Object { skill_id, .. } => matches!(
                     skill_id,
-                    TAIJI_SKILL_ID | ENLARGE_MAX_HP_SKILL_ID | ENLARGE_MAX_MP_SKILL_ID
+                    TAIJI_SKILL_ID
+                        | ENLARGE_MAX_HP_SKILL_ID
+                        | ENLARGE_MAX_MP_SKILL_ID
+                        | ENLARGE_FULL_MISS_SKILL_ID
                 ),
             };
             let outcome = if concrete_base_attack {

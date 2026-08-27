@@ -73,6 +73,8 @@ pub(crate) mod appserver {
         pub(crate) mod enlargemaxhpstate;
         pub(crate) mod enlargemaxmp;
         pub(crate) mod enlargemaxmpstate;
+        pub(crate) mod enlargefullmiss;
+        pub(crate) mod enlargefullmissstate;
         pub(crate) mod fightdefense;
         pub(crate) mod kernel;
         pub(crate) mod natural;

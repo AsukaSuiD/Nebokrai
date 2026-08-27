@@ -1,6 +1,27 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническая достигнутая часть `CEnlargeFullMissState`.
+//!
+//! Для игрока состояние `603` прибавляет младшие 16 бит знакового параметра
+//! к `full_miss` точным WORD-сложением с переполнением. Собственного
+//! визуального сообщения и таймера нет.
+
+use super::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EnlargeFullMissState {
+    gain: i32,
+}
+
+impl EnlargeFullMissState {
+    pub(crate) const fn new(gain: i32) -> Self { Self { gain } }
+    pub(crate) const fn skill_id(self) -> u32 { ENLARGE_FULL_MISS_SKILL_ID }
+    pub(crate) const fn apply(self, value: u16) -> u16 {
+        value.wrapping_add(self.gain as u16)
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
