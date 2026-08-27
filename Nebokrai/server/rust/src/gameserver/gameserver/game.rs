@@ -39175,7 +39175,7 @@ impl CGame {
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 continue;
             };
-            let staged_deletions = owner.base().staged_delete_shapes().to_vec();
+            let staged_deletions: Vec<_> = owner.base().staged_delete_shapes().collect();
             let mut completed_deletions = BTreeSet::new();
             let mut deletions = 0usize;
             for identity in staged_deletions {

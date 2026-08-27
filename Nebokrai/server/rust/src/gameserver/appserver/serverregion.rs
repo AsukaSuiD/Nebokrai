@@ -59,8 +59,9 @@
 //! области и отложенная очередь принадлежат `CServerRegion`. `RefeashBlock`
 //! сначала снимает все блоки `3`, затем возвращает одиночный блок живым
 //! `CMoveShape` и NPC.
-//! `m_listDeleteShape/m_listRemoveShape` теперь имеют typed ordered identity
-//! storage:
+//! `m_listDeleteShape/m_listRemoveShape` теперь представлены `IndexSet`:
+//! он обеспечивает уникальность и порядок вставки без ручного поиска,
+//! а игровой код по-прежнему задаёт порядок применения:
 //! Nation clear напрямую ставит туда sleeping monsters, которых active AI
 //! scan не видит, сохраняя pointer-unique append исходника. CGame после scan
 //! выполняет delete с освобождением owner-а либо remove-only detach, а затем
@@ -137,6 +138,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use encoding_rs::WINDOWS_1251;
+use indexmap::IndexSet;
 
 use super::area::{AreaAiContext, AreaWokenMonsterClass, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
@@ -781,10 +783,10 @@ pub(crate) struct CServerRegion {
     total_spawned_npcs: i32,
     next_npc_id: NextNpcId,
     owned_goods: BTreeMap<CGuid, CGoods>,
-    delete_shapes: Vec<ShapeIdentity>,
-    remove_shapes: Vec<ShapeIdentity>,
-    change_area_shapes: Vec<ShapeIdentity>,
-    change_region_shapes: Vec<ShapeIdentity>,
+    delete_shapes: IndexSet<ShapeIdentity>,
+    remove_shapes: IndexSet<ShapeIdentity>,
+    change_area_shapes: IndexSet<ShapeIdentity>,
+    change_region_shapes: IndexSet<ShapeIdentity>,
     pub(crate) param: RegionParamState,
     pub(crate) return_setup: Option<ServerReturnSetup>,
     forbidden_make_goods: BTreeSet<Vec<u8>>,
@@ -1652,27 +1654,19 @@ impl CServerRegion {
     /// Сохраняет pointer-unique append в `m_listDeleteShape`; sleeping
     /// monsters попадают сюда напрямую, потому что base AI их не сканирует.
     pub(crate) fn stage_delete_shape(&mut self, identity: ShapeIdentity) -> bool {
-        if self.delete_shapes.contains(&identity) {
-            return false;
-        }
-        self.delete_shapes.push(identity);
-        true
+        self.delete_shapes.insert(identity)
     }
 
     pub(crate) fn stage_remove_shape(&mut self, identity: ShapeIdentity) -> bool {
-        if self.remove_shapes.contains(&identity) {
-            return false;
-        }
-        self.remove_shapes.push(identity);
-        true
+        self.remove_shapes.insert(identity)
     }
 
     pub(crate) fn take_staged_remove_shapes(&mut self) -> Vec<ShapeIdentity> {
-        std::mem::take(&mut self.remove_shapes)
+        std::mem::take(&mut self.remove_shapes).into_iter().collect()
     }
 
-    pub(crate) fn staged_delete_shapes(&self) -> &[ShapeIdentity] {
-        &self.delete_shapes
+    pub(crate) fn staged_delete_shapes(&self) -> impl Iterator<Item = ShapeIdentity> + '_ {
+        self.delete_shapes.iter().copied()
     }
 
     pub(crate) fn retain_staged_delete_shapes(
@@ -2679,17 +2673,13 @@ impl CServerRegion {
     /// Pointer-unique append area AI scan; marker сбрасывает caller только
     /// после `true`, потому что duplicate исходник оставлял неизменным.
     pub(crate) fn stage_area_transition(&mut self, identity: ShapeIdentity) -> bool {
-        if self.change_area_shapes.contains(&identity) {
-            return false;
-        }
-        self.change_area_shapes.push(identity);
-        true
+        self.change_area_shapes.insert(identity)
     }
 
     /// Возвращает ordered snapshot, не очищая исходный list до применения всех
     /// `OnShapeChangeArea`, как в конце original region AI.
     pub(crate) fn staged_area_transitions(&self) -> Vec<ShapeIdentity> {
-        self.change_area_shapes.clone()
+        self.change_area_shapes.iter().copied().collect()
     }
 
     pub(crate) fn clear_staged_area_transitions(&mut self) {
@@ -2697,15 +2687,13 @@ impl CServerRegion {
     }
 
     pub(crate) fn stage_region_transition(&mut self, identity: ShapeIdentity) -> bool {
-        if self.change_region_shapes.contains(&identity) {
-            return false;
-        }
-        self.change_region_shapes.push(identity);
-        true
+        self.change_region_shapes.insert(identity)
     }
 
     pub(crate) fn take_staged_region_transitions(&mut self) -> Vec<ShapeIdentity> {
         std::mem::take(&mut self.change_region_shapes)
+            .into_iter()
+            .collect()
     }
 
     pub(crate) fn apply_area_transition<

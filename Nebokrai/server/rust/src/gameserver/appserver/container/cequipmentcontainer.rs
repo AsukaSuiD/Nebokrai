@@ -1054,7 +1054,7 @@ impl CEquipmentContainer {
             player_effects,
             package_extension_applied,
             package_extension_delta,
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
         })
     }
 
@@ -1233,7 +1233,7 @@ impl CEquipmentContainer {
                 column,
                 partial_effects,
                 player_effects,
-                listeners: self.base.base().listeners().to_vec(),
+                listeners: self.base.base().listener_snapshot(),
             },
             goods,
         })
@@ -1523,7 +1523,7 @@ impl CEquipmentContainer {
         &mut self,
         observer: &mut dyn FnMut(EquipmentColumn, &CGoods, &[ContainerListenerHandle]),
     ) -> Vec<EquipmentClearedGoods> {
-        let listeners = self.base.base().listeners().to_vec();
+        let listeners = self.base.base().listener_snapshot();
         let columns: Vec<_> = self.equipment.keys().copied().collect();
         let mut reports = Vec::with_capacity(columns.len());
         for column in columns {

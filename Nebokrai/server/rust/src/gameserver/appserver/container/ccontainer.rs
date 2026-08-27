@@ -11,6 +11,8 @@
 //! порядка. `Vec` и RAII заменяют MSVC allocation/memmove без изменения этих
 //! контрактов. Старый pointer identity выражен непрозрачным ненулевым handle:
 //! container не получает владение самим listener-ом.
+//! `IndexSet` заменяет ручные `contains + push` и поиск позиции при удалении,
+//! сохраняя уникальность, порядок вставки и сдвиг последующих обработчиков.
 //!
 //! `Find/Remove` RVA `0x000DF1A0..0x000DF200` были только virtual forwarding
 //! thunks: overload с type игнорировал type, overload с object извлекал его
@@ -18,8 +20,14 @@
 //! конкретного derived container-а; отдельное фиктивное base-хранилище не
 //! вводится. `tagPreviousContainer` RVA `0x000DF1D0` сохранён буквально.
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+use indexmap::IndexSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::BuildHasherDefault;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ContainerListenerHandle(usize);
+
+type OrderedListenerSet = IndexSet<ContainerListenerHandle, BuildHasherDefault<DefaultHasher>>;
 
 impl ContainerListenerHandle {
     /// Null pointer исходного API не образует listener identity.
@@ -48,18 +56,18 @@ pub(crate) struct PreviousContainer {
 /// owner-а, как и в исходной virtual иерархии.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CContainer {
-    listeners: Vec<ContainerListenerHandle>,
+    listeners: OrderedListenerSet,
 }
 
 impl CContainer {
     pub(crate) const fn new() -> Self {
         Self {
-            listeners: Vec::new(),
+            listeners: IndexSet::with_hasher(BuildHasherDefault::new()),
         }
     }
 
-    pub(crate) fn listeners(&self) -> &[ContainerListenerHandle] {
-        &self.listeners
+    pub(crate) fn listener_snapshot(&self) -> Vec<ContainerListenerHandle> {
+        self.listeners.iter().copied().collect()
     }
 
     pub(crate) fn release(&mut self) {
@@ -70,21 +78,13 @@ impl CContainer {
         let Some(listener) = listener else {
             return false;
         };
-        if self.listeners.contains(&listener) {
-            return false;
-        }
-        self.listeners.push(listener);
-        true
+        self.listeners.insert(listener)
     }
 
     pub(crate) fn remove_listener(&mut self, listener: Option<ContainerListenerHandle>) -> bool {
         let Some(listener) = listener else {
             return false;
         };
-        let Some(index) = self.listeners.iter().position(|entry| *entry == listener) else {
-            return false;
-        };
-        self.listeners.remove(index);
-        true
+        self.listeners.shift_remove(&listener)
     }
 }

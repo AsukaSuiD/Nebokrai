@@ -312,7 +312,7 @@ impl<K: CurrencyKind> CSingleCurrencyContainer<K> {
             position: 0,
             identity,
             amount,
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
         })
     }
 
@@ -327,7 +327,7 @@ impl<K: CurrencyKind> CSingleCurrencyContainer<K> {
             owner_id: self.base.owner_id(),
             position: 0,
             amount: goods.amount(),
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
             goods,
         })
     }
@@ -375,7 +375,7 @@ impl<K: CurrencyKind> CSingleCurrencyContainer<K> {
             position,
             source,
             amount: requested,
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
             goods: split,
         }))
     }

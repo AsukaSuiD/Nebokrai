@@ -389,7 +389,7 @@ impl CGoodsShadowContainer {
             container_extend_id: self.container_extend_id,
             position: self.query_goods_position(goods_id)?,
             record,
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
         })
     }
 }

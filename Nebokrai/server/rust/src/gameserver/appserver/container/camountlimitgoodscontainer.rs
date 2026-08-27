@@ -262,7 +262,7 @@ impl CAmountLimitGoodsContainer {
             position: Some(position as u32),
             identity,
             amount,
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
             replaced,
         })
     }
@@ -280,7 +280,7 @@ impl CAmountLimitGoodsContainer {
             owner_id: self.base.owner_id(),
             position: Some(position as u32),
             amount,
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
             goods,
         })
     }
@@ -387,7 +387,7 @@ impl CAmountLimitGoodsContainer {
             base_properties_index,
             source,
             amount: requested_amount,
-            listeners: self.base.base().listeners().to_vec(),
+            listeners: self.base.base().listener_snapshot(),
             goods: split,
         }))
     }
@@ -397,7 +397,7 @@ impl CAmountLimitGoodsContainer {
     pub(crate) fn clear_goods(&mut self) -> AmountLimitGoodsCleared {
         let owner_type = self.base.owner_type();
         let owner_id = self.base.owner_id();
-        let listeners = self.base.base().listeners().to_vec();
+        let listeners = self.base.base().listener_snapshot();
         let goods = std::mem::take(&mut self.goods);
         self.locked_goods.clear();
         let removed = goods

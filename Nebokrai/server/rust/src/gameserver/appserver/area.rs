@@ -11,8 +11,10 @@
 //!
 //! Constructor создаёт base-state type `300`, координаты `-1/-1`, девять
 //! пустых vector-storage, три пустые ordered map и один Win32 critical section.
-//! `Vec`, `BTreeMap` и `parking_lot::Mutex` заменяют достигнутые технические
-//! механизмы. Membership family `GetNumShapes`, `AddObject`, `RemoveObject`,
+//! `Vec` и `BTreeMap` заменяют достигнутые технические механизмы. Блокировка
+//! не переносится: `CArea` физически принадлежит закрытому массиву региона, а
+//! все изменяющие вызовы уже держат исключительный `&mut CServerRegion`.
+//! Семейство операций членства `GetNumShapes`, `AddObject`, `RemoveObject`,
 //! `FindShapes`, `GetAllShapes` RVA `0x00070B80/0x00073B70/0x000721F0/
 //! 0x00073DE0/0x000743A0` также имеет статус `IMPLEMENTED,
 //! VERIFIED_DISASSEMBLY`. Она хранит только исходные ID/GUID/hash и получает
@@ -72,8 +74,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-
-use parking_lot::Mutex;
 
 use super::baseobject::CBaseObject;
 use super::session::csession::CSession;
@@ -142,7 +142,6 @@ pub(crate) struct CArea {
     parent: AreaParentLink,
     x: i32,
     y: i32,
-    critical_section: Mutex<()>,
     players: Vec<i32>,
     active_monsters: Vec<i32>,
     sleeping_monsters: Vec<i32>,
@@ -167,7 +166,6 @@ impl CArea {
             parent: AreaParentLink::Unassigned,
             x: -1,
             y: -1,
-            critical_section: Mutex::new(()),
             players: Vec::new(),
             active_monsters: Vec::new(),
             sleeping_monsters: Vec::new(),
@@ -210,7 +208,6 @@ impl CArea {
     /// Сохраняет порядок type `600` ветви `FindShapes`: active, sleeping,
     /// pets, carriages внутри текущей area.
     pub(crate) fn append_monster_ids(&self, destination: &mut Vec<i32>) {
-        let _guard = self.critical_section.lock();
         destination.extend_from_slice(&self.active_monsters);
         destination.extend_from_slice(&self.sleeping_monsters);
         destination.extend_from_slice(&self.pets);
@@ -220,17 +217,14 @@ impl CArea {
     /// Exact storage `GetSleepMonster`, используемый Nation clear после
     /// общего type `600` pass.
     pub(crate) fn append_sleeping_monster_ids(&self, destination: &mut Vec<i32>) {
-        let _guard = self.critical_section.lock();
         destination.extend_from_slice(&self.sleeping_monsters);
     }
 
     pub(crate) fn take_sleeping_monster_ids(&mut self) -> Vec<i32> {
-        let _guard = self.critical_section.lock();
         std::mem::take(&mut self.sleeping_monsters)
     }
 
     pub(crate) fn push_woken_monster(&mut self, id: i32, class: AreaWokenMonsterClass) {
-        let _guard = self.critical_section.lock();
         match class {
             AreaWokenMonsterClass::Active => self.active_monsters.push(id),
             AreaWokenMonsterClass::Pet => self.pets.push(id),
@@ -246,7 +240,6 @@ impl CArea {
         player_id: i32,
         player_team_id: i32,
     ) -> bool {
-        let _guard = self.critical_section.lock();
         let Some(protection) = self.goods_protection.get(&ex_id) else {
             return true;
         };
@@ -270,7 +263,6 @@ impl CArea {
         } else {
             player_team_id
         };
-        let _guard = self.critical_section.lock();
         self.goods_protection.insert(
             ex_id,
             AreaGoodsProtection {
@@ -285,7 +277,6 @@ impl CArea {
     /// storage order. Живость проверяет owning region/runtime: только он
     /// соответствует старому `FindChildObject` и может удалить stale ID.
     pub(crate) fn active_shape_candidates(&self) -> Vec<ShapeIdentity> {
-        let _guard = self.critical_section.lock();
         let mut identities = Vec::with_capacity(
             self.players.len()
                 + self.active_monsters.len()
@@ -328,7 +319,6 @@ impl CArea {
     /// Exact stale-pointer cleanup внутри `GetActivedShapes`, в том числе для
     /// `m_vOtherShapes`, который обычный `RemoveObject` намеренно не чистит.
     pub(crate) fn forget_unresolved_active_shape(&mut self, identity: ShapeIdentity) {
-        let _guard = self.critical_section.lock();
         match identity.object_type {
             PLAYER_TYPE => remove_first(&mut self.players, &identity.id),
             MONSTER_TYPE => {
@@ -353,7 +343,6 @@ impl CArea {
         goods_disappear_timer_ms: u32,
         context: &mut Context,
     ) -> Vec<CGuid> {
-        let _guard = self.critical_section.lock();
         let mut expired_goods = Vec::new();
         let goods_ids: Vec<_> = self.dropped_goods_timestamps.keys().copied().collect();
         for ex_id in goods_ids {
@@ -376,7 +365,6 @@ impl CArea {
         goods_protected_timer_ms: u32,
         context: &mut Context,
     ) {
-        let _guard = self.critical_section.lock();
         let mut expired_protections = 0usize;
         let mut stale_monsters = 0usize;
         let mut hibernated_monsters = 0usize;
@@ -455,7 +443,6 @@ impl CArea {
     /// Exact tail `CArea::AI`: deadline удаляется после around-delete и
     /// назначения `CS_DELETE`, независимо от успешности dynamic resolve.
     pub(crate) fn finish_ground_goods_expiration(&mut self, ex_id: CGuid) {
-        let _guard = self.critical_section.lock();
         self.dropped_goods_timestamps.remove(&ex_id);
     }
 
@@ -468,7 +455,6 @@ impl CArea {
         if player_id == 0 {
             return false;
         }
-        let _guard = self.critical_section.lock();
         self.war_souls.insert(player_id, point);
         true
     }
@@ -479,7 +465,6 @@ impl CArea {
         if player_id == 0 {
             return false;
         }
-        let _guard = self.critical_section.lock();
         if self.war_souls.get(&player_id).copied() == Some(point) {
             self.war_souls
                 .insert(player_id, WarSoulPoint { x: -1, y: -1 });
@@ -491,7 +476,6 @@ impl CArea {
     /// помеченные `(-1, -1)` записи; duplicate key уже существующего output
     /// оставляет неизменным, как `std::map::insert` в исходнике.
     pub(crate) fn find_war_souls(&self, destination: &mut BTreeMap<u32, WarSoulPoint>) {
-        let _guard = self.critical_section.lock();
         for (&player_id, &point) in &self.war_souls {
             if point.x != -1 && point.y != -1 {
                 destination.entry(player_id).or_insert(point);
@@ -520,7 +504,6 @@ impl CArea {
         facts: ShapeRuntimeFacts,
         now_ms: u32,
     ) {
-        let _guard = self.critical_section.lock();
         if let Some(goods) = facts.goods {
             let timestamp = if goods.particular_attribute & 0x10 == 0 {
                 now_ms
@@ -549,7 +532,6 @@ impl CArea {
     }
 
     pub(crate) fn remove_object(&mut self, identity: ShapeIdentity, facts: ShapeRuntimeFacts) {
-        let _guard = self.critical_section.lock();
         if facts.goods.is_some() {
             self.dropped_goods_timestamps.remove(&identity.ex_id);
             self.goods_protection.remove(&identity.ex_id);
@@ -577,7 +559,6 @@ impl CArea {
         resolver: &Resolver,
         destination: &mut Vec<ShapeView>,
     ) -> bool {
-        let _guard = self.critical_section.lock();
         if self.parent != AreaParentLink::OwningServerRegion {
             return false;
         }
@@ -627,7 +608,6 @@ impl CArea {
     }
 
     pub(crate) fn append_player_ids(&self, destination: &mut Vec<i32>) -> bool {
-        let _guard = self.critical_section.lock();
         if self.parent != AreaParentLink::OwningServerRegion {
             return false;
         }
@@ -636,7 +616,6 @@ impl CArea {
     }
 
     pub(crate) fn append_pet_ids(&self, destination: &mut Vec<i32>) -> bool {
-        let _guard = self.critical_section.lock();
         if self.parent != AreaParentLink::OwningServerRegion {
             return false;
         }
@@ -645,7 +624,6 @@ impl CArea {
     }
 
     pub(crate) fn append_carriage_ids(&self, destination: &mut Vec<i32>) -> bool {
-        let _guard = self.critical_section.lock();
         if self.parent != AreaParentLink::OwningServerRegion {
             return false;
         }
@@ -665,7 +643,6 @@ impl CArea {
             }
         }
 
-        let _guard = self.critical_section.lock();
         if self.parent != AreaParentLink::OwningServerRegion {
             destination.clear();
             return false;
@@ -744,7 +721,6 @@ impl Clone for CArea {
             parent: self.parent,
             x: self.x,
             y: self.y,
-            critical_section: Mutex::new(()),
             players: self.players.clone(),
             active_monsters: self.active_monsters.clone(),
             sleeping_monsters: self.sleeping_monsters.clone(),
