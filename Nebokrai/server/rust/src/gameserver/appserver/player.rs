@@ -4151,6 +4151,19 @@ impl CPlayer {
         self.move_shape.begin_agility_state(state);
     }
 
+    pub(crate) fn take_persistent_agility_family_state(
+        &mut self,
+    ) -> Option<super::skills::agilitystate::PersistentAgilityFamilyState> {
+        self.move_shape.take_persistent_agility_family_state()
+    }
+
+    pub(crate) fn begin_persistent_agility_family_state(
+        &mut self,
+        state: super::skills::agilitystate::PersistentAgilityFamilyState,
+    ) {
+        self.move_shape.begin_persistent_agility_family_state(state);
+    }
+
     pub(crate) fn take_expired_agility_state_2(
         &mut self,
         now_ms: u32,
@@ -4162,13 +4175,27 @@ impl CPlayer {
         &self,
         mut properties: PlayerCombatProperties,
     ) -> PlayerCombatProperties {
-        for skill_id in [
-            super::skills::agility::AGILITY_SKILL_ID,
-            super::skills::agility::AGILITY_2_SKILL_ID,
-        ] {
-            if let Some(state) = self.agility_state(skill_id) {
+        use super::skills::agilitystate::PersistentAgilityFamilyState;
+
+        match self.move_shape.persistent_agility_family_state() {
+            Some(PersistentAgilityFamilyState::Agility(state)) => {
                 properties.full_miss = properties.full_miss.wrapping_add(state.full_miss());
             }
+            Some(PersistentAgilityFamilyState::Natural(state)) => {
+                properties.element_resistance = properties
+                    .element_resistance
+                    .saturating_add(u32::from(state.element_resistance_gain()))
+                    .min(i32::MAX as u32);
+            }
+            Some(PersistentAgilityFamilyState::Rapture(state)) => {
+                properties.blast_attack = properties
+                    .blast_attack
+                    .wrapping_add(state.blast_attack_gain());
+            }
+            None => {}
+        }
+        if let Some(state) = self.agility_state(super::skills::agility::AGILITY_2_SKILL_ID) {
+            properties.full_miss = properties.full_miss.wrapping_add(state.full_miss());
         }
         properties
     }

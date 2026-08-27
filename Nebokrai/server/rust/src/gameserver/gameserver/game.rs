@@ -736,7 +736,8 @@ use crate::gameserver::appserver::skills::baseattack::{
     real_distance, time_reached,
 };
 use crate::gameserver::appserver::skills::agility::{
-    AGILITY_2_SKILL_ID, AGILITY_EFFECT_MESSAGE, AGILITY_SKILL_ID, AgilityExecutionState,
+    AGILITY_2_SKILL_ID, AGILITY_EFFECT_MESSAGE, AGILITY_SKILL_ID,
+    AgilityFamilyExecutionState,
     SKILL_USAGE_CAN_BE_BREAKED as AGILITY_CAN_BE_BREAKED,
     SKILL_USAGE_DELAY_TIME as AGILITY_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME as AGILITY_REUSE_DELAY_TIME,
@@ -746,7 +747,16 @@ use crate::gameserver::appserver::skills::agility::{
 };
 use crate::gameserver::appserver::skills::agilitystate::{
     AGILITY_STATE_BEGIN_MESSAGE, AGILITY_STATE_END_MESSAGE, AgilityState,
+    PersistentAgilityFamilyState,
 };
+use crate::gameserver::appserver::skills::natural::{
+    NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN,
+};
+use crate::gameserver::appserver::skills::naturalstate::NaturalState;
+use crate::gameserver::appserver::skills::rapture::{
+    RAPTURE_SKILL_ID, SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN,
+};
+use crate::gameserver::appserver::skills::rapturestate::RaptureState;
 use crate::gameserver::appserver::skills::archery::{ARCHERY_SKILL_ID, ArcheryExecutionState};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     ArcheryPhalanxTick, CArcheryPhalanx,
@@ -4976,10 +4986,10 @@ impl CGame {
         self.send_player_shape_around(player_id, None, &message)
     }
 
-    fn send_agility_state_visual(
+    fn send_agility_family_state_visual(
         &mut self,
         player_id: i32,
-        state: AgilityState,
+        skill_id: u32,
         begin: bool,
         client_time: i32,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
@@ -4992,7 +5002,7 @@ impl CGame {
         });
         message.add_long(identity.object_type);
         message.add_long(identity.id);
-        message.add_long(state.skill_id() as i32);
+        message.add_long(skill_id as i32);
         if begin {
             message.add_long(client_time);
             message.add_long(0);
@@ -32985,11 +32995,11 @@ impl CGame {
                         .players
                         .get_mut(&player_id)
                         .expect("skill dispatch сохраняет canonical player");
-                    let interrupted_agility = player.player_ai().agility().is_some()
+                    let interrupted_agility = player.player_ai().agility_family().is_some()
                         && player.player_ai().next_player_skill() != Some(dispatch);
                     let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
                         || player.player_ai().archery().is_some()
-                        || player.player_ai().agility().is_some()
+                        || player.player_ai().agility_family().is_some()
                         || player.player_ai().callosity().is_some())
                         && player.player_ai().next_player_skill() != Some(dispatch);
                     if interrupted_delayed_skill {
@@ -33416,10 +33426,10 @@ impl CGame {
 
     fn release_reciprocal_player_target(&mut self, player_id: i32, target: ShapeIdentity) {
         let released = self.find_player_mut(player_id).is_some_and(|player| {
-            let interrupted_agility = player.player_ai().agility().is_some();
+            let interrupted_agility = player.player_ai().agility_family().is_some();
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
-                || player.player_ai().agility().is_some()
+                || player.player_ai().agility_family().is_some()
                 || player.player_ai().callosity().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -35681,7 +35691,7 @@ impl CGame {
         }
     }
 
-    fn execute_player_agility<Runtime: GameMainLoopRuntime>(
+    fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         dispatch: PlayerSkillDispatch,
@@ -35697,7 +35707,10 @@ impl CGame {
             PlayerSkillDispatch::SelfTarget { skill_id, .. }
             | PlayerSkillDispatch::Point { skill_id, .. }
             | PlayerSkillDispatch::Object { skill_id, .. }
-                if matches!(skill_id, AGILITY_SKILL_ID | AGILITY_2_SKILL_ID) => skill_id,
+                if matches!(
+                    skill_id,
+                    AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
+                ) => skill_id,
             _ => return terminal(QueuedSkillExecutionState::Rejected),
         };
         let Some(player) = self.find_player(player_id) else {
@@ -35710,7 +35723,7 @@ impl CGame {
         let initial_mana = player.mana();
         let Some(properties) = self.skill_factory.query_skill_base_properties(skill_id, skill_level)
         else {
-            if player_ai.agility().is_some()
+            if player_ai.agility_family().is_some()
                 && let Some(player) = self.find_player_mut(player_id)
             {
                 player.set_skill_moveable(true);
@@ -35721,15 +35734,37 @@ impl CGame {
         let mp_loss = properties.query_property(AGILITY_MP_LOSE);
         let delay_ms = properties.query_property(AGILITY_DELAY_TIME);
         let reuse_delay_ms = properties.query_property(AGILITY_REUSE_DELAY_TIME);
-        let full_miss = properties.query_property(AGILITY_FULL_MISS_GAIN) as u16;
+        enum FamilyBonus {
+            FullMiss(u16),
+            ElementResistance(u16),
+            BlastAttack(u16),
+        }
+        let (bonus, insufficient_mana_message): (FamilyBonus, &[u8]) = match skill_id {
+            NATURAL_SKILL_ID => (
+                FamilyBonus::ElementResistance(
+                    properties.query_property(SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN) as u16,
+                ),
+                b"GS0288",
+            ),
+            RAPTURE_SKILL_ID => (
+                FamilyBonus::BlastAttack(
+                    properties.query_property(SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN) as u16,
+                ),
+                b"GS0279",
+            ),
+            _ => (
+                FamilyBonus::FullMiss(properties.query_property(AGILITY_FULL_MISS_GAIN) as u16),
+                b"GS0279",
+            ),
+        };
         let keep_time_ms = properties.query_property(AGILITY_STATE_PERSIST_TIME) as i32;
         let _can_be_breaked = properties.query_property(AGILITY_CAN_BE_BREAKED);
 
-        if player_ai.agility().is_none() {
+        if player_ai.agility_family().is_none() {
             let started_at_ms = runtime.now_milliseconds();
             self.enter_player_combat_state(player_id);
             let cooldown_now_ms = runtime.now_milliseconds();
-            let last_used_ms = player_ai.agility_last_used_ms(skill_id);
+            let last_used_ms = player_ai.agility_family_last_used_ms(skill_id);
             if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
                 self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 0x0d);
                 self.send_skill_system_info(player_id, b"GS0278");
@@ -35738,7 +35773,11 @@ impl CGame {
             }
             if mp_loss != 0 && initial_mana < mp_loss {
                 self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0279", mp_loss);
+                self.send_skill_system_info_with_unsigned(
+                    player_id,
+                    insufficient_mana_message,
+                    mp_loss,
+                );
                 self.finish_agility_movement(player_id);
                 return terminal(QueuedSkillExecutionState::Rejected);
             }
@@ -35748,9 +35787,12 @@ impl CGame {
                 }
                 player.set_current_skill_id(Some(skill_id));
             }
-            player_ai.begin_agility(AgilityExecutionState::begin(dispatch, started_at_ms));
+            player_ai.begin_agility_family(AgilityFamilyExecutionState::begin(
+                dispatch,
+                started_at_ms,
+            ));
         } else if player_ai
-            .agility()
+            .agility_family()
             .is_none_or(|state| state.kernel().dispatch() != dispatch)
         {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -35759,18 +35801,22 @@ impl CGame {
         if self.find_player(player_id).is_some_and(CPlayer::is_dead) {
             self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 2);
             self.finish_agility_movement(player_id);
-            player_ai.mark_agility_used(skill_id, runtime.now_milliseconds());
+            player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
             return terminal(QueuedSkillExecutionState::Rejected);
         }
 
         if player_ai
-            .agility()
+            .agility_family()
             .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
         {
             let current_mana = self.find_player(player_id).map_or(0, CPlayer::mana);
             if current_mana < mp_loss {
                 self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0279", mp_loss);
+                self.send_skill_system_info_with_unsigned(
+                    player_id,
+                    insufficient_mana_message,
+                    mp_loss,
+                );
                 self.finish_agility_movement(player_id);
                 return terminal(QueuedSkillExecutionState::Rejected);
             }
@@ -35793,15 +35839,15 @@ impl CGame {
                 skill_level,
                 1,
             );
-            if let Some(state) = player_ai.agility_mut() {
+            if let Some(state) = player_ai.agility_family_mut() {
                 let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
             }
         }
 
         let started_at_ms = player_ai
-            .agility()
+            .agility_family()
             .map(|state| state.kernel().started_at_ms())
-            .expect("исполнение ловкости создано или восстановлено");
+            .expect("исполнение семейства ловкости создано или восстановлено");
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
             return terminal(QueuedSkillExecutionState::Pending);
         }
@@ -35813,26 +35859,34 @@ impl CGame {
             2,
         );
 
-        let removed = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.take_agility_state(skill_id));
-        if let Some(state) = removed {
-            if skill_id == AGILITY_SKILL_ID {
-                let _ = self.send_agility_state_visual(player_id, state, false, 0);
+        let removed_skill_id = if skill_id == AGILITY_2_SKILL_ID {
+            self.find_player_mut(player_id)
+                .and_then(|player| player.take_agility_state(skill_id))
+                .map(|state| state.skill_id())
+        } else {
+            self.find_player_mut(player_id)
+                .and_then(CPlayer::take_persistent_agility_family_state)
+                .map(PersistentAgilityFamilyState::skill_id)
+        };
+        if let Some(removed_skill_id) = removed_skill_id {
+            if removed_skill_id != AGILITY_2_SKILL_ID {
+                let _ = self.send_agility_family_state_visual(
+                    player_id,
+                    removed_skill_id,
+                    false,
+                    0,
+                );
             }
             let _ = self.publish_player_states(player_id);
         }
 
         let state_started_at_ms = runtime.now_milliseconds();
-        let state = if skill_id == AGILITY_2_SKILL_ID {
-            AgilityState::timed(full_miss, state_started_at_ms, keep_time_ms)
-        } else {
-            AgilityState::persistent(full_miss)
-        };
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.begin_agility_state(state);
-        }
-        let client_time = if state.is_timed() {
+        let client_time = if skill_id == AGILITY_2_SKILL_ID {
+            let FamilyBonus::FullMiss(full_miss) = bonus else { unreachable!() };
+            let state = AgilityState::timed(full_miss, state_started_at_ms, keep_time_ms);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.begin_agility_state(state);
+            }
             let first_now_ms = runtime.now_milliseconds();
             let second_now_ms = if state.client_time_needs_second_clock(first_now_ms) {
                 runtime.now_milliseconds()
@@ -35841,16 +35895,30 @@ impl CGame {
             };
             state.client_time(first_now_ms, second_now_ms)
         } else {
+            let state = match bonus {
+                FamilyBonus::FullMiss(full_miss) => PersistentAgilityFamilyState::Agility(
+                    AgilityState::persistent(full_miss),
+                ),
+                FamilyBonus::ElementResistance(gain) => {
+                    PersistentAgilityFamilyState::Natural(NaturalState::new(gain))
+                }
+                FamilyBonus::BlastAttack(gain) => {
+                    PersistentAgilityFamilyState::Rapture(RaptureState::new(gain))
+                }
+            };
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.begin_persistent_agility_family_state(state);
+            }
             0
         };
-        let _ = self.send_agility_state_visual(player_id, state, true, client_time);
+        let _ = self.send_agility_family_state_visual(player_id, skill_id, true, client_time);
         let _ = self.publish_player_states(player_id);
-        if let Some(state) = player_ai.agility_mut() {
+        if let Some(state) = player_ai.agility_family_mut() {
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
             let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        player_ai.mark_agility_used(skill_id, runtime.now_milliseconds());
+        player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
         self.finish_agility_movement(player_id);
         terminal(QueuedSkillExecutionState::Completed)
     }
@@ -37569,11 +37637,14 @@ impl CGame {
                     matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID)
                 }
             };
-            let concrete_agility = match dispatch {
+            let concrete_agility_family = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
                 | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    matches!(skill_id, AGILITY_SKILL_ID | AGILITY_2_SKILL_ID)
+                    matches!(
+                        skill_id,
+                        AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
+                    )
                 }
             };
             let outcome = if concrete_base_attack {
@@ -37584,8 +37655,8 @@ impl CGame {
                 self.execute_player_base_magic(player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
                 self.execute_player_callosity(player_id, dispatch, player_ai, runtime)
-            } else if concrete_agility {
-                self.execute_player_agility(player_id, dispatch, player_ai, runtime)
+            } else if concrete_agility_family {
+                self.execute_player_agility_family(player_id, dispatch, player_ai, runtime)
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };

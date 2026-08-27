@@ -71,6 +71,10 @@ pub(crate) mod appserver {
         pub(crate) mod callositystate;
         pub(crate) mod fightdefense;
         pub(crate) mod kernel;
+        pub(crate) mod natural;
+        pub(crate) mod naturalstate;
+        pub(crate) mod rapture;
+        pub(crate) mod rapturestate;
         pub(crate) mod realmappellation;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;

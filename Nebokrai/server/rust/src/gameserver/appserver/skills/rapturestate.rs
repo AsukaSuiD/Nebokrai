@@ -1,6 +1,35 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние `CRaptureState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает постоянное
+//! состояние `0xdb`, нулевые клиентские время и дополнительные данные,
+//! сообщения начала/окончания `0xBFE03/0xBFE04` и сложение `blast_attack`
+//! как `u16` с переполнением. Владение состоянием остаётся у
+//! `CanonicalStateStorage`; сохранённый псевдокод ниже описывает остальной
+//! непереведённый корпус.
+
+use super::rapture::RAPTURE_SKILL_ID;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RaptureState {
+    blast_attack_gain: u16,
+}
+
+impl RaptureState {
+    pub(crate) const fn new(blast_attack_gain: u16) -> Self {
+        Self { blast_attack_gain }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        RAPTURE_SKILL_ID
+    }
+    pub(crate) const fn blast_attack_gain(self) -> u16 {
+        self.blast_attack_gain
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -119,7 +148,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
 
 // COMPONENT_VARIANT_END: GameServer

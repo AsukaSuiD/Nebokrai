@@ -1,12 +1,14 @@
-//! Исполнение пары `CAgility/CAgility2`.
+//! Общее исполнение семейства `CAgility/CAgility2/CNatural/CRapture`.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
 //! `appserver/skills/agility.cpp` и `agility2.cpp`. Общая часть сохраняет
 //! отдельные часы восстановления, повторную проверку и расход MP, дополнительный
 //! `UpdateCurrentState`, задержку и сетевой формат навыка на себя. Нулевая цена MP
 //! намеренно не ставит запрет движения, хотя завершение всё равно снимает его.
-//! Различающиеся замена и жизненный цикл состояний принадлежат каноническому
-//! владельцу и вызывающему `CGame`, а не общему `SkillExecutionKernel`.
+//! Три постоянных состояния взаимно заменяются, а временная `CAgility2`
+//! заменяет только себя. Различающиеся свойства и жизненный цикл принадлежат
+//! `CanonicalStateStorage` и вызывающему `CGame`, а не общему
+//! `SkillExecutionKernel`.
 
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
@@ -22,11 +24,11 @@ pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AgilityExecutionState {
+pub(crate) struct AgilityFamilyExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
 }
 
-impl AgilityExecutionState {
+impl AgilityFamilyExecutionState {
     pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
         Self {
             kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),

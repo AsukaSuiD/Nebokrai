@@ -8,6 +8,10 @@
 //! `CanonicalStateStorage`; сырой сохранённый псевдокод оставлен ниже.
 
 use super::agility::{AGILITY_2_SKILL_ID, AGILITY_SKILL_ID};
+use super::natural::NATURAL_SKILL_ID;
+use super::naturalstate::NaturalState;
+use super::rapture::RAPTURE_SKILL_ID;
+use super::rapturestate::RaptureState;
 
 pub(crate) const AGILITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const AGILITY_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -55,6 +59,31 @@ impl AgilityState {
         } else {
             self.started_at_ms.wrapping_sub(second_now_ms).wrapping_add(self.keep_time_ms as u32) as i32
         }
+    }
+}
+
+/// Одно из трёх взаимно исключающих постоянных состояний семейства.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersistentAgilityFamilyState {
+    Agility(AgilityState),
+    Natural(NaturalState),
+    Rapture(RaptureState),
+}
+
+impl PersistentAgilityFamilyState {
+    pub(crate) const fn skill_id(self) -> u32 {
+        match self {
+            Self::Agility(state) => state.skill_id(),
+            Self::Natural(state) => state.skill_id(),
+            Self::Rapture(state) => state.skill_id(),
+        }
+    }
+
+    pub(crate) const fn is_known_skill(skill_id: u32) -> bool {
+        matches!(
+            skill_id,
+            AGILITY_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
+        )
     }
 }
 

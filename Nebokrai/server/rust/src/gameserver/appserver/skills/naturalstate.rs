@@ -1,6 +1,37 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние `CNaturalState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает постоянное
+//! состояние `0xdc`, нулевые клиентские время и дополнительные данные,
+//! сообщения начала/окончания `0xBFE03/0xBFE04` и насыщение сопротивления
+//! стихиям до `i32::MAX`. Владение состоянием остаётся у
+//! `CanonicalStateStorage`; сохранённый псевдокод ниже описывает остальной
+//! непереведённый корпус.
+
+use super::natural::NATURAL_SKILL_ID;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NaturalState {
+    element_resistance_gain: u16,
+}
+
+impl NaturalState {
+    pub(crate) const fn new(element_resistance_gain: u16) -> Self {
+        Self {
+            element_resistance_gain,
+        }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        NATURAL_SKILL_ID
+    }
+    pub(crate) const fn element_resistance_gain(self) -> u16 {
+        self.element_resistance_gain
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
