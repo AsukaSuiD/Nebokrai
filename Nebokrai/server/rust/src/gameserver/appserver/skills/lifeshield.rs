@@ -16,139 +16,205 @@ pub(crate) const SKILL_USAGE_STATE_HP: u32 = 10_010;
 pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
 pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
 
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+use super::baseattack::time_reached;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::lifeshieldstate::{
+    finish_life_shield_state, send_life_shield_state_visual, LifeShieldState,
+};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate;
+use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
+use crate::nets::netserver::message::CMessage;
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.h
+fn send_cast(game: &mut CGame, player_id: i32, skill_level: i32, action: u8) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let mut message = CMessage::new(LIFE_SHIELD_EFFECT_MESSAGE);
+    message.add_byte(action);
+    message.add_long(LIFE_SHIELD_SKILL_ID as i32);
+    message.base_mut().add_short(skill_level as i16);
+    message.add_long(LIFE_SHIELD_VISUAL_OBJECT_TYPE);
+    message.add_long(player_id);
+    if action == 2 {
+        message.add_long(0);
+        message.add_long(0);
+    } else {
+        message.add_long(player.shape().get_direction());
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+fn send_goods_update(game: &mut CGame, update: &BattleFairyDefaultGoodsUpdate) {
+    let mut message = CMessage::new(update.message_type as i32);
+    message.add_long(update.player_id);
+    message.base_mut().add_guid(update.goods.ex_id);
+    message.add_ulong(update.old_client_payload.len() as u32);
+    message.base_mut().add(&update.old_client_payload);
+    let _ = game.send_player_shape_around(update.player_id, None, &message);
+}
 
-// ============================================================================
-// FUNCTION: CLifeShield::CLifeShield
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:20
-// RVA: 0x00118100
-// ADDRESS: 00518100
-// PROTOTYPE: undefined __thiscall CLifeShield(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: BattleFairySkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let terminal = |state| QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    };
+    let (skill_id, skill_level) = match dispatch {
+        BattleFairySkillDispatch::SelfTarget {
+            skill_id,
+            skill_level,
+            ..
+        }
+        | BattleFairySkillDispatch::Point {
+            skill_id,
+            skill_level,
+            ..
+        }
+        | BattleFairySkillDispatch::Object {
+            skill_id,
+            skill_level,
+            ..
+        } if skill_id == LIFE_SHIELD_SKILL_ID => (skill_id, skill_level),
+        _ => return terminal(QueuedSkillExecutionState::Rejected),
+    };
+    if game.find_player(player_id).is_none() {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        game.send_battle_fairy_skill_failure(player_id, 2);
+        send_cast(game, player_id, skill_level, 3);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let state_life = properties.query_property(SKILL_USAGE_STATE_HP) as i32;
+    let hp_factor = properties.query_property(SKILL_USAGE_TARGET_HP_DECREASE_FACTOR) as u16;
+    let mp_factor = properties.query_property(SKILL_USAGE_TARGET_MP_DECREASE_FACTOR) as u16;
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-// ============================================================================
-// FUNCTION: CLifeShield::~CLifeShield
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:28
-// RVA: 0x00118170
-// ADDRESS: 00518170
-// PROTOTYPE: void __thiscall ~CLifeShield(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if player_ai.life_shield().is_none() {
+        let started_at_ms = runtime.now_milliseconds();
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if player_ai.life_shield_last_used_ms() != 0
+            && !time_reached(
+                cooldown_now_ms,
+                player_ai.life_shield_last_used_ms(),
+                reuse_delay_ms,
+            )
+        {
+            game.send_battle_fairy_skill_failure(player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"ZHGS0048");
+            game.send_battle_fairy_skill_failure(player_id, 2);
+            send_cast(game, player_id, skill_level, 3);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss != 0 {
+            let Some(current) = game
+                .find_player(player_id)
+                .and_then(|player| player.war_soul_mana(game.goods_factory()))
+            else {
+                game.send_battle_fairy_skill_failure(player_id, 2);
+                send_cast(game, player_id, skill_level, 3);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            if i64::from(current) - i64::from(mp_loss) < 0 {
+                game.send_battle_fairy_skill_failure(player_id, 7);
+                let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+                game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
+                game.send_battle_fairy_skill_failure(player_id, 2);
+                send_cast(game, player_id, skill_level, 3);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+        }
+        player_ai.begin_life_shield(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai
+        .life_shield()
+        .is_none_or(|state| state.dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
 
-// ============================================================================
-// FUNCTION: CLifeShield::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:122
-// RVA: 0x00118190
-// ADDRESS: 00518190
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if player_ai
+        .life_shield()
+        .is_some_and(|state| state.stage() == SkillStage::Begin)
+    {
+        if game
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id)
+            .is_none()
+        {
+            send_cast(game, player_id, skill_level, 3);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(current) = game
+            .find_player(player_id)
+            .and_then(|player| player.war_soul_mana(game.goods_factory()))
+        else {
+            return terminal(QueuedSkillExecutionState::Pending);
+        };
+        if i64::from(current) - i64::from(mp_loss) < 0 {
+            game.send_battle_fairy_skill_failure(player_id, 7);
+            let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+            game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
+            send_cast(game, player_id, skill_level, 3);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let goods_factory = game.goods_factory().clone();
+        let da_kong_key = game.globe_setup().da_kong_key();
+        let update = game.find_player_mut(player_id).and_then(|player| {
+            player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
+        });
+        if let Some(update) = update.as_ref() {
+            send_goods_update(game, update);
+        }
+        send_cast(game, player_id, skill_level, 1);
+        if let Some(state) = player_ai.life_shield_mut() {
+            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CLifeShield::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:139
-// RVA: 0x00118260
-// ADDRESS: 00518260
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    let started_at_ms = player_ai
+        .life_shield()
+        .map(SkillExecutionKernel::started_at_ms)
+        .expect("выполнение щита жизни создано или восстановлено");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
 
-// ============================================================================
-// FUNCTION: CLifeShield::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:104
-// RVA: 0x00118360
-// ADDRESS: 00518360
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLifeShieldEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:311
-// RVA: 0x00118430
-// ADDRESS: 00518430
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLifeShield::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:39
-// RVA: 0x00118850
-// ADDRESS: 00518850
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLifeShield::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshield.cpp:174
-// RVA: 0x00118A60
-// ADDRESS: 00518a60
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+    send_cast(game, player_id, skill_level, 2);
+    let state = LifeShieldState::new(
+        runtime.now_milliseconds(),
+        keep_time_ms,
+        state_life,
+        hp_factor,
+        mp_factor,
+        skill_level,
+    );
+    let removed = game
+        .find_player_mut(player_id)
+        .and_then(|player| player.replace_life_shield_state(state));
+    if let Some(removed) = removed {
+        finish_life_shield_state(game, player_id, removed, runtime.now_milliseconds());
+    }
+    let state_now_ms = runtime.now_milliseconds();
+    send_life_shield_state_visual(game, player_id, state, true, state_now_ms);
+    if let Some(state) = player_ai.life_shield_mut() {
+        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_life_shield_used(runtime.now_milliseconds());
+    send_cast(game, player_id, skill_level, 3);
+    terminal(QueuedSkillExecutionState::Completed)
+}
