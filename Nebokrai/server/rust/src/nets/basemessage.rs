@@ -111,14 +111,29 @@
 
 use std::ffi::CStr;
 
+use zerocopy::byteorder::little_endian::U32;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+
 use crate::public::guid::CGuid;
 
 const HEADER_LEN: usize = 16;
-const LENGTH_OFFSET: usize = 0;
-const LENGTH_SIZE: usize = size_of::<u32>();
 const RLE_MARKER_BASE: u8 = 0xF7;
 const RLE_FIRST_MARKER: u8 = 0xF8;
 const RLE_MAX_RUN: usize = 8;
+
+/// Полностью подтверждённый фиксированный заголовок общих сообщений.
+///
+/// Два последних слова остаются непрозрачными и при получении или создании
+/// копируются без интерпретации. Порядок байтов выражен типами `zerocopy`; все
+/// битовые значения `u32` допустимы, а размер не зависит от ручной нарезки
+/// диапазонов.
+#[repr(C)]
+#[derive(Clone, Copy, FromBytes, Immutable, IntoBytes, KnownLayout)]
+struct LegacyMessageHeader {
+    length: U32,
+    message_type: U32,
+    reserved: [U32; 2],
+}
 
 /// Ошибка кодирования на границе, для которой исходное поведение не определено
 /// безопасным контрактом.
@@ -245,8 +260,10 @@ impl CBaseMessage {
     /// Как исходные `CreateMessage*`, нормализует первое слово заголовка до
     /// фактической итоговой длины, сохраняя остальные три слова без толкования.
     pub(crate) fn from_header_and_payload(mut header: [u8; HEADER_LEN], payload: &[u8]) -> Self {
-        header[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_SIZE]
-            .copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
+        LegacyMessageHeader::mut_from_bytes(&mut header)
+            .expect("массив имеет точный layout legacy header")
+            .length
+            .set(HEADER_LEN as u32);
         let mut message = Self {
             data: header.to_vec(),
             cursor: HEADER_LEN,
@@ -265,7 +282,12 @@ impl CBaseMessage {
     /// Это точная безопасная форма старых записей `*(message + 4) = opcode`;
     /// payload, курсор чтения и остальные слова заголовка не меняются.
     pub(crate) fn set_message_type(&mut self, message_type: i32) {
-        self.data[4..8].copy_from_slice(&message_type.to_le_bytes());
+        self.header_mut().message_type.set(message_type as u32);
+    }
+
+    /// Возвращает второе слово фиксированного header без ручного slicing.
+    pub(crate) fn message_type(&self) -> i32 {
+        self.header().message_type.get() as i32
     }
 
     /// Возвращает текущий offset чтения внутри wire-буфера.
@@ -474,8 +496,17 @@ impl CBaseMessage {
         // запись оставляла младшие 32 бита; здесь они сохранены, но совместимость
         // последующего чтения буфера больше u32::MAX пока не утверждается.
         let legacy_length = self.data.len() as u32;
-        self.data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_SIZE]
-            .copy_from_slice(&legacy_length.to_le_bytes());
+        self.header_mut().length.set(legacy_length);
+    }
+
+    fn header(&self) -> &LegacyMessageHeader {
+        LegacyMessageHeader::ref_from_bytes(&self.data[..HEADER_LEN])
+            .expect("CBaseMessage всегда содержит фиксированный legacy header")
+    }
+
+    fn header_mut(&mut self) -> &mut LegacyMessageHeader {
+        LegacyMessageHeader::mut_from_bytes(&mut self.data[..HEADER_LEN])
+            .expect("CBaseMessage всегда содержит фиксированный legacy header")
     }
 }
 

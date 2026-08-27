@@ -339,6 +339,8 @@ use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use crate::setup::hitlevelsetup::HitLevelEntry;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use bitflags::bitflags;
 use thiserror::Error;
 use tracing::trace;
 
@@ -1019,6 +1021,26 @@ impl BattleFairyGearAddons {
     }
 }
 
+bitflags! {
+    /// Подтверждённые LeiTing/FY-флаги в `u32` legacy-формата игрока.
+    ///
+    /// Неизвестные биты сохраняются через `from_bits_retain` и возвращаются в
+    /// сетевой/DB формат без усечения; известные `0..=8` соответствуют порогам
+    /// энергии и числу суточных подъёмов выше 60.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(crate) struct LeiTingEnableFlags: u32 {
+        const ENERGY_20 = 1 << 0;
+        const ENERGY_60 = 1 << 1;
+        const ENERGY_80 = 1 << 2;
+        const ENERGY_100 = 1 << 3;
+        const LT_UP_60_4 = 1 << 4;
+        const LT_UP_60_10 = 1 << 5;
+        const LT_UP_60_16 = 1 << 6;
+        const LT_UP_60_22 = 1 << 7;
+        const LT_UP_60_28 = 1 << 8;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerBaseProperties {
     pub(crate) level: u8,
@@ -1052,7 +1074,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) quest_time_begin: i32,
     pub(crate) quest_time_limit: i32,
     pub(crate) quest_enabled: bool,
-    pub(crate) fy_enable_flags: u32,
+    pub(crate) fy_enable_flags: LeiTingEnableFlags,
     pub(crate) fy_energy: u32,
     pub(crate) lt_60_stamp: u32,
     pub(crate) lt_up_60_count: u16,
@@ -2843,7 +2865,7 @@ impl CPlayer {
             (BASE_FY_ENERGY_OFFSET, self.base_properties.fy_energy),
             (
                 BASE_FY_ENABLE_FLAGS_OFFSET,
-                self.base_properties.fy_enable_flags,
+                self.base_properties.fy_enable_flags.bits(),
             ),
             (BASE_LT_60_STAMP_OFFSET, self.base_properties.lt_60_stamp),
             (BASE_SZL_OFFSET, self.base_properties.szl),
@@ -2973,8 +2995,9 @@ impl CPlayer {
         self.base_properties.jjc_level = read_player_wire_u32(wire, BASE_JJC_LEVEL_OFFSET);
         self.base_properties.jjc_score = read_player_wire_u32(wire, BASE_JJC_SCORE_OFFSET);
         self.base_properties.fy_energy = read_player_wire_u32(wire, BASE_FY_ENERGY_OFFSET);
-        self.base_properties.fy_enable_flags =
-            read_player_wire_u32(wire, BASE_FY_ENABLE_FLAGS_OFFSET);
+        self.base_properties.fy_enable_flags = LeiTingEnableFlags::from_bits_retain(
+            read_player_wire_u32(wire, BASE_FY_ENABLE_FLAGS_OFFSET),
+        );
         self.base_properties.lt_up_60_count =
             read_player_wire_u16(wire, BASE_LT_UP_60_COUNT_OFFSET);
         self.base_properties.remain_jing_li_dan_count =
@@ -3655,7 +3678,7 @@ impl CPlayer {
     pub(crate) fn encode_lei_ting(&self) -> Vec<u8> {
         let mut payload = Vec::with_capacity(20 + self.lei_ting_things.len() * 8);
         let mut writer = LegacyWriter::new(&mut payload);
-        writer.write_u32(self.base_properties.fy_enable_flags);
+        writer.write_u32(self.base_properties.fy_enable_flags.bits());
         writer.write_u32(self.base_properties.fy_energy);
         writer.write_u32(self.base_properties.lt_60_stamp);
         writer.write_u16(self.base_properties.lt_up_60_count);
@@ -3722,7 +3745,8 @@ impl CPlayer {
             Ok(value)
         }
 
-        self.base_properties.fy_enable_flags = read_u32(source, cursor, "dwfyenFlag")?;
+        self.base_properties.fy_enable_flags =
+            LeiTingEnableFlags::from_bits_retain(read_u32(source, cursor, "dwfyenFlag")?);
         self.base_properties.fy_energy = read_u32(source, cursor, "dwfyEnergy")?;
         self.base_properties.lt_60_stamp = read_u32(source, cursor, "dwLT60Stamp")?;
         self.base_properties.lt_up_60_count = read_u16(source, cursor, "wLTUp60Cnt")?;
@@ -3754,11 +3778,13 @@ impl CPlayer {
             8 => self.base_properties.lt_up_60_count >= 28,
             _ => return false,
         };
-        let mask = 1u32 << index;
-        if !threshold_reached || self.base_properties.fy_enable_flags & mask != 0 {
+        let flag = LeiTingEnableFlags::from_bits_retain(1u32 << index);
+        if !threshold_reached || self.base_properties.fy_enable_flags.contains(flag) {
             return false;
         }
-        self.base_properties.fy_enable_flags |= mask;
+        self.base_properties.fy_enable_flags = LeiTingEnableFlags::from_bits_retain(
+            self.base_properties.fy_enable_flags.bits() | flag.bits(),
+        );
         true
     }
 

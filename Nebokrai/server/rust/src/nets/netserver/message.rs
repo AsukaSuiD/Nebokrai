@@ -384,11 +384,7 @@ impl CMessage {
     }
 
     pub(crate) fn message_type(&self) -> i32 {
-        i32::from_le_bytes(
-            self.base.as_wire_bytes()[4..8]
-                .try_into()
-                .expect("CBaseMessage всегда содержит 16-байтовый header"),
-        )
+        self.base.message_type()
     }
 
     pub(crate) fn set_message_type(&mut self, message_type: i32) {

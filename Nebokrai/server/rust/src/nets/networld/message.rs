@@ -146,11 +146,7 @@ impl CMessage {
 
     /// Возвращает точный полный `MsgType` из слова header `+4`.
     pub(crate) fn message_type(&self) -> i32 {
-        i32::from_le_bytes(
-            self.base.as_wire_bytes()[4..8]
-                .try_into()
-                .expect("CBaseMessage всегда содержит 16-байтовый header"),
-        )
+        self.base.message_type()
     }
 
     /// Меняет только полный `MsgType`, сохраняя payload и runtime metadata.
