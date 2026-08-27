@@ -1,6 +1,60 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние пары `CCallosityState/CCallosityState2`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
+//! `appserver/skills/callositystate.cpp` и `callositystate2.cpp`. Состояния
+//! взаимно исключают друг друга и хранятся одним типизированным владельцем.
+//! Подтверждённая
+//! странность сохранена: `time_to_keep` не обслуживается отдельным `AI`, а
+//! унаследованные `GetClientStateTime/GetAdditionalData` возвращают нули.
+//! Коэффициент `CCH` применяется только при общем `UpdateProperty`; каждый
+//! такой проход повторно публикует начальный визуальный эффект, как
+//! `OnUpdateProperties`.
+
+use super::callosity::{CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID};
+
+pub(crate) const CALLOSITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CallosityState {
+    skill_id: u32,
+    blast_factor: u16,
+    time_to_keep: i32,
+}
+
+impl CallosityState {
+    pub(crate) const fn new(skill_id: u32, blast_factor: u16, time_to_keep: i32) -> Self {
+        debug_assert!(skill_id == CALLOSITY_SKILL_ID || skill_id == CALLOSITY_2_SKILL_ID);
+        Self {
+            skill_id,
+            blast_factor,
+            time_to_keep,
+        }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        self.skill_id
+    }
+
+    pub(crate) const fn blast_factor(self) -> u16 {
+        self.blast_factor
+    }
+
+    pub(crate) const fn time_to_keep(self) -> i32 {
+        self.time_to_keep
+    }
+
+    pub(crate) const fn client_state_time(self) -> i32 {
+        0
+    }
+
+    pub(crate) const fn additional_data(self) -> u32 {
+        0
+    }
+}
+
+// Статус сохранённых метаданных: UNKNOWN; полный декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

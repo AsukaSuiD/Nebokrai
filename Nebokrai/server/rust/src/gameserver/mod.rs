@@ -65,6 +65,8 @@ pub(crate) mod appserver {
         pub(crate) mod basemagicphalanx;
         pub(crate) mod battlefairybasemagic;
         pub(crate) mod battlefairybasemagicphalanx;
+        pub(crate) mod callosity;
+        pub(crate) mod callositystate;
         pub(crate) mod fightdefense;
         pub(crate) mod kernel;
         pub(crate) mod realmappellation;

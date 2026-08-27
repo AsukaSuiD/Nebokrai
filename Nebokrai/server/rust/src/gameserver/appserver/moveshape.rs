@@ -37,6 +37,7 @@ use super::shape::{
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::skills::callositystate::CallosityState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -434,6 +435,7 @@ impl DerefMut for LegacyStateCodec {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CanonicalStateStorage {
+    callosity_state: Option<CallosityState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
@@ -608,6 +610,7 @@ impl CMoveShape {
         self.current_skill_id = None;
         self.item_skill_ids.clear();
         self.ex_states.clear();
+        self.callosity_state = None;
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
@@ -693,7 +696,12 @@ impl CMoveShape {
             .then_some(self.undead_states.len())
             .unwrap_or(0);
         let ride = usize::from(state_id == RIDE_STATE_ID as i32 && self.ride_state.is_some());
+        let callosity = usize::from(
+            self.callosity_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         scripted
+            .saturating_add(callosity)
             .saturating_add(change_body)
             .saturating_add(extended)
             .saturating_add(undead)
@@ -704,7 +712,9 @@ impl CMoveShape {
     /// `GetStateBySkillID` просматривает канонические типизированные состояния
     /// по фактическому идентификатору навыка, а не по классу сетевой записи.
     pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {
-        self.script_states
+        self.callosity_state
+            .is_some_and(|state| state.skill_id() == state_id)
+            || self.script_states
             .iter()
             .any(|state| state.state_id as u32 == state_id)
             || self
@@ -719,6 +729,21 @@ impl CMoveShape {
                 .undead_states
                 .iter()
                 .any(|state| state.state_id() == state_id)
+    }
+
+    pub(crate) fn callosity_state(&self) -> Option<CallosityState> {
+        self.state_storage.callosity_state
+    }
+
+    pub(crate) fn take_callosity_state(&mut self, skill_id: u32) -> Option<CallosityState> {
+        self.callosity_state
+            .filter(|state| state.skill_id() == skill_id)?;
+        self.callosity_state.take()
+    }
+
+    pub(crate) fn begin_callosity_state(&mut self, state: CallosityState) {
+        debug_assert!(self.callosity_state.is_none());
+        self.callosity_state = Some(state);
     }
 
     pub(crate) fn take_first_script_state(&mut self, state_id: i32) -> Option<ScriptMoveState> {

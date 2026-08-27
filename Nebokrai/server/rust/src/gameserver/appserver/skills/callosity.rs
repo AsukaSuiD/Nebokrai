@@ -1,6 +1,56 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Исполнение взаимно исключающих навыков `CCallosity/CCallosity2`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
+//! `appserver/skills/callosity.cpp` и `callosity2.cpp`. Оба навыка сохраняют
+//! один порядок: две проверки ресурсов, запрет движения, повторная проверка
+//! с необратимым расходом MP до проверки RP, задержка, удаление первого
+//! конфликтующего состояния, наложение нового состояния и `OnChangeStates`.
+//! Общий `SkillExecutionKernel` хранит только стадии и часы команды; форматы
+//! сообщений, частичная мутация и два независимых времени восстановления
+//! остаются здесь.
+//!
+//! Сохранённый ниже псевдокод относится к `CCallosity`; `CCallosity2` имеет
+//! тот же контракт с идентификатором `0x7d` и собственным временем
+//! восстановления.
+
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+
+pub(crate) const CALLOSITY_SKILL_ID: u32 = 0x75;
+pub(crate) const CALLOSITY_2_SKILL_ID: u32 = 0x7d;
+pub(crate) const CALLOSITY_EFFECT_MESSAGE: i32 = 0x000b_fe01;
+pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+pub(crate) const SKILL_USAGE_USER_RP_LOSE: u32 = 3;
+pub(crate) const SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN: u32 = 125;
+pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
+pub(crate) const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
+pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CallosityExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+}
+
+impl CallosityExecutionState {
+    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+        }
+    }
+
+    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
+        self.kernel
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+}
+
+// Статус сохранённых метаданных: UNKNOWN; полный декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

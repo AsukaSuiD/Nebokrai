@@ -4097,6 +4097,39 @@ impl CPlayer {
         self.move_shape.has_materialized_abnormality()
     }
 
+    pub(crate) fn callosity_state(
+        &self,
+    ) -> Option<super::skills::callositystate::CallosityState> {
+        self.move_shape.callosity_state()
+    }
+
+    pub(crate) fn take_callosity_state(
+        &mut self,
+        skill_id: u32,
+    ) -> Option<super::skills::callositystate::CallosityState> {
+        self.move_shape.take_callosity_state(skill_id)
+    }
+
+    pub(crate) fn begin_callosity_state(
+        &mut self,
+        state: super::skills::callositystate::CallosityState,
+    ) {
+        self.move_shape.begin_callosity_state(state);
+    }
+
+    /// `CCallosityState::OnUpdateProperties` не меняет базовый снимок и
+    /// применяет WORD-сложение только при очередном общем пересчёте свойств.
+    pub(crate) fn apply_callosity_state_properties(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> (PlayerCombatProperties, Option<super::skills::callositystate::CallosityState>) {
+        let state = self.callosity_state();
+        if let Some(state) = state {
+            properties.cch = properties.cch.wrapping_add(state.blast_factor());
+        }
+        (properties, state)
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,
@@ -11204,6 +11237,14 @@ impl CPlayer {
     pub(crate) const fn set_mana(&mut self, value: u32) {
         self.base_properties.mana = if self.combat_properties.maximum_mp < value {
             self.combat_properties.maximum_mp
+        } else {
+            value
+        };
+    }
+
+    pub(crate) const fn set_rp(&mut self, value: u16) {
+        self.base_properties.rp = if self.base_properties.maximum_rp < value {
+            self.base_properties.maximum_rp
         } else {
             value
         };

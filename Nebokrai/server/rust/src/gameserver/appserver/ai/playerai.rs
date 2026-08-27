@@ -9,8 +9,9 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба и атака боевой феи сохраняют незавершённое состояние между
-//! проходами ИИ. Хвост `CPlayerAI::Run` хранит часы автоматического прироста,
+//! стрельба, парная закалка и атака боевой феи сохраняют незавершённое
+//! состояние между проходами ИИ. Хвост `CPlayerAI::Run` хранит часы
+//! автоматического прироста,
 //! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
 //! проверку срока. Прирост опыта возвращается в полный `CGame::CheckLevel`,
 //! энергия публикуется адресным сообщением `0xBF72C`.
@@ -26,6 +27,7 @@ use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
+use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +49,8 @@ pub(crate) struct CPlayerAI {
     base_magic_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
+    callosity: Option<CallosityExecutionState>,
+    callosity_last_used_ms: [u32; 2],
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -94,6 +98,7 @@ impl CPlayerAI {
         self.base_attack = None;
         self.archery = None;
         self.base_magic = None;
+        self.callosity = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -143,6 +148,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой магии завершено");
         }
+        if let Some(mut execution) = self.callosity.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
+        }
         true
     }
 
@@ -164,6 +173,7 @@ impl CPlayerAI {
         self.base_attack = None;
         self.archery = None;
         self.base_magic = None;
+        self.callosity = None;
         true
     }
 
@@ -231,6 +241,37 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_base_magic_used(&mut self, now_ms: u32) {
         self.base_magic_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {
+        self.callosity
+    }
+
+    pub(crate) const fn begin_callosity(&mut self, state: CallosityExecutionState) {
+        self.callosity = Some(state);
+    }
+
+    pub(crate) fn callosity_mut(&mut self) -> Option<&mut CallosityExecutionState> {
+        self.callosity.as_mut()
+    }
+
+    pub(crate) const fn callosity_last_used_ms(&self, skill_id: u32) -> u32 {
+        if skill_id == crate::gameserver::appserver::skills::callosity::CALLOSITY_2_SKILL_ID {
+            self.callosity_last_used_ms[1]
+        } else {
+            self.callosity_last_used_ms[0]
+        }
+    }
+
+    pub(crate) fn mark_callosity_used(&mut self, skill_id: u32, now_ms: u32) {
+        let index = if skill_id
+            == crate::gameserver::appserver::skills::callosity::CALLOSITY_2_SKILL_ID
+        {
+            1
+        } else {
+            0
+        };
+        self.callosity_last_used_ms[index] = now_ms;
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {

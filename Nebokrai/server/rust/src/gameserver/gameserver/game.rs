@@ -761,6 +761,19 @@ use crate::gameserver::appserver::skills::battlefairybasemagic::{
 use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::{
     BattleFairyPhalanxTick, CBattleFairyBaseMagicPhalanx,
 };
+use crate::gameserver::appserver::skills::callosity::{
+    CALLOSITY_2_SKILL_ID, CALLOSITY_EFFECT_MESSAGE, CALLOSITY_SKILL_ID,
+    CallosityExecutionState, SKILL_USAGE_CAN_BE_BREAKED as CALLOSITY_CAN_BE_BREAKED,
+    SKILL_USAGE_DELAY_TIME as CALLOSITY_DELAY_TIME,
+    SKILL_USAGE_REUSE_DELAY_TIME as CALLOSITY_REUSE_DELAY_TIME,
+    SKILL_USAGE_STATE_PERSIST_TIME as CALLOSITY_STATE_PERSIST_TIME,
+    SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN as CALLOSITY_BLAST_COEFFICIENT_GAIN,
+    SKILL_USAGE_USER_MP_LOSE as CALLOSITY_MP_LOSE,
+    SKILL_USAGE_USER_RP_LOSE as CALLOSITY_RP_LOSE,
+};
+use crate::gameserver::appserver::skills::callositystate::{
+    CALLOSITY_STATE_BEGIN_MESSAGE, CallosityState,
+};
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_monster_from_monster_base_attack, defend_player_base_attack,
     defend_player_from_monster_base_attack,
@@ -4903,6 +4916,12 @@ impl CGame {
         player_id: i32,
         properties: PlayerCombatProperties,
     ) -> bool {
+        let Some((properties, callosity_visual)) = self
+            .find_player(player_id)
+            .map(|player| player.apply_callosity_state_properties(properties))
+        else {
+            return false;
+        };
         let Some((properties, script_visuals)) = self
             .find_player_mut(player_id)
             .map(|player| player.apply_script_move_state_properties(properties))
@@ -4912,12 +4931,31 @@ impl CGame {
         for state in script_visuals {
             let _ = self.send_script_move_state_visual(player_id, state, true);
         }
+        if let Some(state) = callosity_visual {
+            let _ = self.send_callosity_state_begin(player_id, state);
+        }
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let Some(player) = players.get_mut(&player_id) else {
             return false;
         };
         player.apply_recomputed_combat_properties(properties, goods_factory);
         true
+    }
+
+    fn send_callosity_state_begin(
+        &mut self,
+        player_id: i32,
+        state: CallosityState,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player(player_id)?;
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(CALLOSITY_STATE_BEGIN_MESSAGE);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(state.skill_id() as i32);
+        message.add_long(state.client_state_time());
+        message.add_ulong(state.additional_data());
+        self.send_player_shape_around(player_id, None, &message)
     }
 
     fn send_script_move_state_visual(
@@ -32898,7 +32936,8 @@ impl CGame {
                         .get_mut(&player_id)
                         .expect("skill dispatch сохраняет canonical player");
                     let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
-                        || player.player_ai().archery().is_some())
+                        || player.player_ai().archery().is_some()
+                        || player.player_ai().callosity().is_some())
                         && player.player_ai().next_player_skill() != Some(dispatch);
                     if interrupted_delayed_skill {
                         player.set_skill_moveable(true);
@@ -33322,7 +33361,8 @@ impl CGame {
     fn release_reciprocal_player_target(&mut self, player_id: i32, target: ShapeIdentity) {
         let released = self.find_player_mut(player_id).is_some_and(|player| {
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
-                || player.player_ai().archery().is_some();
+                || player.player_ai().archery().is_some()
+                || player.player_ai().callosity().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
                 if interrupted_delayed_skill {
@@ -35276,6 +35316,23 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
+    fn send_skill_system_info_with_unsigned(
+        &self,
+        player_id: i32,
+        string_id: &[u8],
+        value: u32,
+    ) {
+        let text = format_legacy_mixed(
+            self.get_string_by_id(string_id),
+            &[LegacyFormatArgument::Unsigned(value)],
+            0xff,
+        );
+        let mut message = CMessage::new(0x000b_f807);
+        message.add_ulong(CSkillFactory::get_skill_failed_message_color());
+        add_legacy_c_string(message.base_mut(), &text);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
     fn base_magic_target_view(
         &self,
         region_id: i32,
@@ -35346,6 +35403,206 @@ impl CGame {
             path.push((x, y, block));
         }
         path
+    }
+
+    fn send_callosity_failure(&self, player_id: i32, action: u8) {
+        let mut message = CMessage::new(CALLOSITY_EFFECT_MESSAGE);
+        message.add_byte(0);
+        message.add_byte(action);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    fn send_callosity_cast(&mut self, player_id: i32, skill_id: u32, skill_level: i32, action: u8) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(CALLOSITY_EFFECT_MESSAGE);
+        message.add_byte(action);
+        message.add_long(skill_id as i32);
+        message.base_mut().add_short(skill_level as i16);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        if action == 1 {
+            message.add_long(player.shape().get_direction());
+        } else {
+            message.add_long(identity.object_type);
+            message.add_long(identity.id);
+            message.add_long(player.shape().get_tile_x().unwrap_or_default());
+            message.add_long(player.shape().get_tile_y().unwrap_or_default());
+        }
+        let _ = self.send_player_shape_around(player_id, None, &message);
+    }
+
+    fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let rejected = || QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Rejected,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let pending = || QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Pending,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let skill_id = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. }
+                if matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID) => skill_id,
+            _ => return rejected(),
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return rejected();
+        };
+        if player.server_region_id().is_none() {
+            return rejected();
+        }
+        let skill_level = player.learned_skill_level(skill_id);
+        let initial_mana = player.mana();
+        let initial_rp = player.rp();
+        let Some(properties) = self.skill_factory.query_skill_base_properties(skill_id, skill_level)
+        else {
+            if player_ai.callosity().is_some() {
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.set_skill_moveable(true);
+                    player.set_current_skill_id(None);
+                }
+            }
+            return rejected();
+        };
+        let mp_loss = properties.query_property(CALLOSITY_MP_LOSE);
+        let rp_loss = properties.query_property(CALLOSITY_RP_LOSE);
+        let delay_ms = properties.query_property(CALLOSITY_DELAY_TIME);
+        let reuse_delay_ms = properties.query_property(CALLOSITY_REUSE_DELAY_TIME);
+        let blast_factor = properties.query_property(CALLOSITY_BLAST_COEFFICIENT_GAIN) as u16;
+        let state_persist_time = properties.query_property(CALLOSITY_STATE_PERSIST_TIME) as i32;
+        let _can_be_breaked = properties.query_property(CALLOSITY_CAN_BE_BREAKED);
+
+        if player_ai.callosity().is_none() {
+            let started_at_ms = runtime.now_milliseconds();
+            self.enter_player_combat_state(player_id);
+            let cooldown_now_ms = runtime.now_milliseconds();
+            let last_used_ms = player_ai.callosity_last_used_ms(skill_id);
+            if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
+                self.send_callosity_failure(player_id, 0x0d);
+                self.send_skill_system_info(player_id, b"GS0278");
+                return rejected();
+            }
+            if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
+                self.send_callosity_failure(player_id, 7);
+                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+                return rejected();
+            }
+            if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 {
+                self.send_callosity_failure(player_id, 8);
+                self.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss);
+                return rejected();
+            }
+            let Some(player) = self.find_player_mut(player_id) else {
+                return rejected();
+            };
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(skill_id));
+            player_ai.begin_callosity(CallosityExecutionState::begin(dispatch, started_at_ms));
+        } else if player_ai
+            .callosity()
+            .is_none_or(|state| state.kernel().dispatch() != dispatch)
+        {
+            return rejected();
+        }
+
+        if self.find_player(player_id).is_some_and(CPlayer::is_dead) {
+            self.send_callosity_failure(player_id, 2);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_skill_moveable(true);
+                player.set_current_skill_id(None);
+            }
+            player_ai.mark_callosity_used(skill_id, runtime.now_milliseconds());
+            return rejected();
+        }
+
+        if player_ai
+            .callosity()
+            .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
+        {
+            let current_mp = self.find_player(player_id).map_or(0, CPlayer::mana);
+            if (current_mp.wrapping_sub(mp_loss) as i32) < 0 {
+                self.send_callosity_failure(player_id, 7);
+                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.set_skill_moveable(true);
+                    player.set_current_skill_id(None);
+                }
+                return rejected();
+            }
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_mana(current_mp.wrapping_sub(mp_loss));
+            }
+            let current_rp = self.find_player(player_id).map_or(0, CPlayer::rp);
+            if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
+                self.send_callosity_failure(player_id, 8);
+                self.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss);
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.set_skill_moveable(true);
+                    player.set_current_skill_id(None);
+                }
+                return rejected();
+            }
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_rp(current_rp.wrapping_sub(rp_loss as u16));
+            }
+            self.send_callosity_cast(player_id, skill_id, skill_level, 1);
+            if let Some(state) = player_ai.callosity_mut() {
+                let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+            }
+        }
+
+        let started_at_ms = player_ai
+            .callosity()
+            .map(|state| state.kernel().started_at_ms())
+            .expect("исполнение закалки создано или восстановлено");
+        let delay_now_ms = runtime.now_milliseconds();
+        if !time_reached(delay_now_ms, started_at_ms, delay_ms) {
+            return pending();
+        }
+
+        self.send_callosity_cast(player_id, skill_id, skill_level, 2);
+        let removed = self.find_player_mut(player_id).and_then(|player| {
+            player
+                .take_callosity_state(CALLOSITY_SKILL_ID)
+                .or_else(|| player.take_callosity_state(CALLOSITY_2_SKILL_ID))
+        });
+        if removed.is_some() {
+            let _ = self.publish_player_states(player_id);
+        }
+        let state = CallosityState::new(skill_id, blast_factor, state_persist_time);
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.begin_callosity_state(state);
+        }
+        let _ = self.send_callosity_state_begin(player_id, state);
+        let _ = self.publish_player_states(player_id);
+        if let Some(state) = player_ai.callosity_mut() {
+            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+            let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+            let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        player_ai.mark_callosity_used(skill_id, runtime.now_milliseconds());
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_skill_moveable(true);
+            player.set_current_skill_id(None);
+        }
+        QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Completed,
+            first_contact: false,
+            killing_blow: None,
+        }
     }
 
     fn execute_player_archery<Runtime: GameMainLoopRuntime>(
@@ -37055,12 +37312,21 @@ impl CGame {
                 }
                 _ => false,
             };
+            let concrete_callosity = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => {
+                    matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID)
+                }
+            };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
             } else if concrete_archery {
                 self.execute_player_archery(player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 self.execute_player_base_magic(player_id, dispatch, player_ai, runtime)
+            } else if concrete_callosity {
+                self.execute_player_callosity(player_id, dispatch, player_ai, runtime)
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };
@@ -42618,11 +42884,12 @@ pub(crate) fn format_legacy_text_fields(
 enum LegacyFormatArgument<'a> {
     Bytes(&'a [u8]),
     Signed(i32),
+    Unsigned(u32),
 }
 
-/// Bounded replacement for the reached SZLGS `%s`/`%d` templates. It keeps
-/// `%%` and leaves an unmatched conversion literal instead of reading a
-/// missing vararg beyond the proven call contract.
+/// Ограниченная замена достигнутых SZLGS-шаблонов `%s/%d/%u`. Сохраняет
+/// `%%`, а несовпавшую конверсию оставляет буквально, не читая отсутствующий
+/// vararg за границей подтверждённого контракта вызова.
 fn format_legacy_mixed(
     template: &[u8],
     arguments: &[LegacyFormatArgument<'_>],
@@ -42656,6 +42923,7 @@ fn format_legacy_mixed(
             (Some(b'd' | b'i'), LegacyFormatArgument::Signed(value)) => {
                 value.to_string().into_bytes()
             }
+            (Some(b'u'), LegacyFormatArgument::Unsigned(value)) => value.to_string().into_bytes(),
             _ => {
                 output.push(b'%');
                 offset += 1;
