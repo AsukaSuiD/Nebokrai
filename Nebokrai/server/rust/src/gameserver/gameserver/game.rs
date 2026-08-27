@@ -16574,6 +16574,11 @@ impl CGame {
         let removal = owner
             .base_mut()
             .remove_object(player.movement_shape_mut(), facts);
+        if removal.is_ok()
+            && let ServerRegionOwner::GodsBattle(region) = &mut owner
+        {
+            self.finish_gods_battle_player_leave(region_id, region, player_id);
+        }
         self.restore_region_owner(owner);
         Some(removal)
     }
@@ -16933,6 +16938,7 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         if membership.is_ok() {
+            let _ = self.enter_gods_battle_player(region_id, player_id);
             context.publish_changed_player_region_entry(
                 self,
                 player_id,
@@ -21968,19 +21974,17 @@ impl CGame {
         true
     }
 
-    /// Общий player-tail `RemoveObject/DelObj` после spatial/base удаления.
-    pub(crate) fn leave_gods_battle_player(&mut self, region_id: i32, player_id: i32) -> bool {
-        let Some(owner) = self.take_region_owner(region_id) else {
-            return false;
-        };
-        let ServerRegionOwner::GodsBattle(mut region) = owner else {
-            self.restore_region_owner(owner);
-            return false;
-        };
+    /// Завершает удаление из `CServerGodsBattleRegion` после пространственной
+    /// части базового региона и до дальнейших действий вызывающей стороны.
+    fn finish_gods_battle_player_leave(
+        &mut self,
+        region_id: i32,
+        region: &mut CServerGodsBattleRegion,
+        player_id: i32,
+    ) {
         let membership_changed = region.remove_faction_player(player_id);
         let region_state_delivery = gods_battle_property_message(player_id, b"m_lIsInGodRegion", 0)
             .send_to_player(self.net_server(), player_id);
-        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
         tracing::trace!(
             region_id,
             player_id,
@@ -21988,7 +21992,6 @@ impl CGame {
             region_state_delivery,
             "игрок удалён из фракции битвы богов"
         );
-        true
     }
 
     /// NPC-tail concrete GodsBattle `AddObject`: membership предшествует
@@ -27388,6 +27391,7 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
         membership.map_err(GamePlayerLoginBlock::Membership)?;
+        let _ = self.enter_gods_battle_player(region_id, expected_player_id);
         let team_snapshot_queued = team_id != 0 && !team_session_found;
         if team_snapshot_queued {
             self.team_snapshot_queries
@@ -39278,7 +39282,15 @@ impl CGame {
                             .base_mut()
                             .remove_object(player.movement_shape_mut(), facts)
                             .map(|()| true);
-                        if result.is_err() {
+                        if result.is_ok()
+                            && let ServerRegionOwner::GodsBattle(region) = &mut owner
+                        {
+                            self.finish_gods_battle_player_leave(
+                                region_id,
+                                region,
+                                identity.id,
+                            );
+                        } else if result.is_err() {
                             self.players.insert(identity.id, player);
                         }
                         result
@@ -39347,7 +39359,15 @@ impl CGame {
                             .base_mut()
                             .remove_object(player.movement_shape_mut(), facts)
                             .map(|()| true);
-                        if result.is_err() {
+                        if result.is_ok()
+                            && let ServerRegionOwner::GodsBattle(region) = &mut owner
+                        {
+                            self.finish_gods_battle_player_leave(
+                                region_id,
+                                region,
+                                identity.id,
+                            );
+                        } else if result.is_err() {
                             self.players.insert(identity.id, player);
                         }
                         result
@@ -39453,6 +39473,15 @@ impl CGame {
                     let removal = owner
                         .base_mut()
                         .remove_object(player.movement_shape_mut(), facts);
+                    if removal.is_ok()
+                        && let ServerRegionOwner::GodsBattle(region) = &mut owner
+                    {
+                        self.finish_gods_battle_player_leave(
+                            region_id,
+                            region,
+                            identity.id,
+                        );
+                    }
                     let destination = player.apply_staged_local_region_change();
                     self.players.insert(identity.id, player);
                     Some(GameLocalRegionChange {

@@ -45,9 +45,10 @@
 //! остаются у runtime owner-а и разрешаются через `ShapeResolver`. Это
 //! сознательная смена формы API без копии shared/derived семантики. Player
 //! registry сохраняет vector и first-erase, остальные map assignment —
-//! уникальные keys. `CArea::PlayerEnter`, move-shape callback и GodsBattle
-//! message остаются у внешних owners через `ServerRegionMembershipContext` и
-//! вызываются в исходном порядке.
+//! уникальные ключи. `CArea::PlayerEnter` и обратный вызов `CMoveShape`
+//! остаются у внешнего владельца через `ServerRegionMembershipContext`.
+//! Завершающую часть GodsBattle для игрока выполняет `CGame` через конкретный
+//! подтип после успешного базового пространственного добавления либо удаления.
 //! `SetPosXY` только пишет `CS_CHANGEAREA`; ИИ региона не допускает повторных
 //! указателей, сбрасывает состояние лишь после первого добавления и применяет
 //! очередь после очередей удаления и отсоединения. `OnShapeChangeArea` строит
@@ -579,11 +580,6 @@ pub(crate) trait ServerRegionMembershipContext:
 {
     /// Материализует достигнутый virtual `CMoveShape` area-enter callback.
     fn move_shape_entered_area(&mut self, identity: ShapeIdentity);
-
-    fn is_gods_battle_region(&self, region_id: i32) -> bool;
-
-    /// Отправляет исходный `0xBF80C` player message после входа не в GodsBattle.
-    fn notify_player_left_gods_region(&mut self, player_id: i32);
 }
 
 pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
@@ -2549,12 +2545,6 @@ impl CServerRegion {
             self.remove_object(shape, facts)?;
         }
 
-        if identity.object_type == PLAYER_TYPE
-            && facts.is_player
-            && !context.is_gods_battle_region(self.id)
-        {
-            context.notify_player_left_gods_region(identity.id);
-        }
         Ok(())
     }
 
