@@ -76,6 +76,8 @@ pub(crate) mod appserver {
         pub(crate) mod enlargefullmiss;
         pub(crate) mod enlargefullmissstate;
         pub(crate) mod fightdefense;
+        pub(crate) mod hearten;
+        pub(crate) mod heartenstate;
         pub(crate) mod kernel;
         pub(crate) mod natural;
         pub(crate) mod origin;

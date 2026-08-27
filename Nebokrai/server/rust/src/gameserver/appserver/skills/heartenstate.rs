@@ -1,6 +1,43 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое достигнутое состояние `CHeartenState`.
+//!
+//! Состояние `324` хранит wrapping-часы и прибавляет знаковый параметр к
+//! максимальному HP через `u32`, затем ограничивает результат `i32::MAX`.
+//! Начальный визуальный пакет повторяется при каждом пересчёте свойств;
+//! завершение публикуется при замене или строгом истечении срока.
+
+use super::hearten::HEARTEN_SKILL_ID;
+
+pub(crate) const HEARTEN_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+pub(crate) const HEARTEN_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HeartenState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    max_hp_gain: i32,
+}
+
+impl HeartenState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, max_hp_gain: i32) -> Self {
+        Self { started_at_ms, keep_time_ms, max_hp_gain }
+    }
+    pub(crate) const fn skill_id(self) -> u32 { HEARTEN_SKILL_ID }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
+    }
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
+        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
+        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
+    }
+    pub(crate) const fn apply(self, value: u32) -> u32 {
+        let result = value.wrapping_add(self.max_hp_gain as u32);
+        if result > i32::MAX as u32 { i32::MAX as u32 } else { result }
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

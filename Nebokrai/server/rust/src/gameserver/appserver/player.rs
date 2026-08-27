@@ -4281,6 +4281,31 @@ impl CPlayer {
         properties
     }
 
+    pub(crate) fn replace_hearten_state(
+        &mut self,
+        state: super::skills::heartenstate::HeartenState,
+    ) -> Option<super::skills::heartenstate::HeartenState> {
+        self.move_shape.replace_hearten_state(state)
+    }
+
+    pub(crate) fn take_expired_hearten_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::heartenstate::HeartenState> {
+        self.move_shape.take_expired_hearten_state(now_ms)
+    }
+
+    pub(crate) fn apply_hearten_state(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> (PlayerCombatProperties, Option<super::skills::heartenstate::HeartenState>) {
+        let state = self.move_shape.hearten_state();
+        if let Some(state) = state {
+            properties.maximum_hp = state.apply(properties.maximum_hp);
+        }
+        (properties, state)
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,
