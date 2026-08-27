@@ -10,8 +10,21 @@
 //! `CanonicalStateStorage` и вызывающему `CGame`, а не общему
 //! `SkillExecutionKernel`.
 
-use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+use super::agilitystate::{
+    send_agility_family_state_visual, AgilityState, PersistentAgilityFamilyState,
+};
+use super::baseattack::time_reached;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::natural::{NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN};
+use super::naturalstate::NaturalState;
+use super::rapture::{RAPTURE_SKILL_ID, SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN};
+use super::rapturestate::RaptureState;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
 
 pub(crate) const AGILITY_SKILL_ID: u32 = 218;
 pub(crate) const AGILITY_2_SKILL_ID: u32 = 129;
@@ -44,9 +57,250 @@ impl AgilityFamilyExecutionState {
     }
 }
 
-// Статус сохранённых метаданных: UNKNOWN; полный декомпилят хранится локально
+fn finish_movement(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
+
+pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let terminal = |state| QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    };
+    let skill_id = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. }
+            if matches!(
+                skill_id,
+                AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
+            ) => skill_id,
+        _ => return terminal(QueuedSkillExecutionState::Rejected),
+    };
+    let Some(player) = game.find_player(player_id) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if player.server_region_id().is_none() {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let skill_level = player.learned_skill_level(skill_id);
+    let initial_mana = player.mana();
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level)
+    else {
+        if player_ai.agility_family().is_some()
+            && let Some(player) = game.find_player_mut(player_id)
+        {
+            player.set_skill_moveable(true);
+            player.set_current_skill_id(None);
+        }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    enum FamilyBonus {
+        FullMiss(u16),
+        ElementResistance(u16),
+        BlastAttack(u16),
+    }
+    let (bonus, insufficient_mana_message): (FamilyBonus, &[u8]) = match skill_id {
+        NATURAL_SKILL_ID => (
+            FamilyBonus::ElementResistance(
+                properties.query_property(SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN) as u16,
+            ),
+            b"GS0288",
+        ),
+        RAPTURE_SKILL_ID => (
+            FamilyBonus::BlastAttack(
+                properties.query_property(SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN) as u16,
+            ),
+            b"GS0279",
+        ),
+        _ => (
+            FamilyBonus::FullMiss(properties.query_property(SKILL_USAGE_TARGET_FULL_MISS_GAIN) as u16),
+            b"GS0279",
+        ),
+    };
+    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME) as i32;
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+
+    if player_ai.agility_family().is_none() {
+        let started_at_ms = runtime.now_milliseconds();
+        game.enter_player_combat_state(player_id);
+        let cooldown_now_ms = runtime.now_milliseconds();
+        let last_used_ms = player_ai.agility_family_last_used_ms(skill_id);
+        if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
+            game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"GS0278");
+            finish_movement(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss != 0 && initial_mana < mp_loss {
+            game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
+            game.send_skill_system_info_with_unsigned(
+                player_id,
+                insufficient_mana_message,
+                mp_loss,
+            );
+            finish_movement(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            if mp_loss != 0 {
+                player.set_skill_moveable(false);
+            }
+            player.set_current_skill_id(Some(skill_id));
+        }
+        player_ai.begin_agility_family(AgilityFamilyExecutionState::begin(
+            dispatch,
+            started_at_ms,
+        ));
+    } else if player_ai
+        .agility_family()
+        .is_none_or(|state| state.kernel().dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
+        game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 2);
+        finish_movement(game, player_id);
+        player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if player_ai
+        .agility_family()
+        .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
+    {
+        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if current_mana < mp_loss {
+            game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
+            game.send_skill_system_info_with_unsigned(
+                player_id,
+                insufficient_mana_message,
+                mp_loss,
+            );
+            finish_movement(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(current_mana.wrapping_sub(mp_loss));
+        }
+        let _ = game.update_player_current_state(
+            player_id,
+            GamePlayerFightStatePhase::MoveShapeAi,
+        );
+        let _ = game.update_player_criminal_state(
+            player_id,
+            GamePlayerFightStatePhase::MoveShapeAi,
+            runtime,
+        );
+        game.send_self_state_skill_cast(
+            AGILITY_EFFECT_MESSAGE,
+            player_id,
+            skill_id,
+            skill_level,
+            1,
+        );
+        if let Some(state) = player_ai.agility_family_mut() {
+            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+
+    let started_at_ms = player_ai
+        .agility_family()
+        .map(|state| state.kernel().started_at_ms())
+        .expect("исполнение семейства ловкости создано или восстановлено");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    game.send_self_state_skill_cast(
+        AGILITY_EFFECT_MESSAGE,
+        player_id,
+        skill_id,
+        skill_level,
+        2,
+    );
+
+    let removed_skill_id = if skill_id == AGILITY_2_SKILL_ID {
+        game.find_player_mut(player_id)
+            .and_then(|player| player.take_agility_state(skill_id))
+            .map(|state| state.skill_id())
+    } else {
+        game.find_player_mut(player_id)
+            .and_then(CPlayer::take_persistent_agility_family_state)
+            .map(PersistentAgilityFamilyState::skill_id)
+    };
+    if let Some(removed_skill_id) = removed_skill_id {
+        if removed_skill_id != AGILITY_2_SKILL_ID {
+            send_agility_family_state_visual(
+                game,
+                player_id,
+                removed_skill_id,
+                false,
+                0,
+            );
+        }
+        let _ = game.publish_player_states(player_id);
+    }
+
+    let state_started_at_ms = runtime.now_milliseconds();
+    let client_time = if skill_id == AGILITY_2_SKILL_ID {
+        let FamilyBonus::FullMiss(full_miss) = bonus else { unreachable!() };
+        let state = AgilityState::timed(full_miss, state_started_at_ms, keep_time_ms);
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.begin_agility_state(state);
+        }
+        let first_now_ms = runtime.now_milliseconds();
+        let second_now_ms = if state.client_time_needs_second_clock(first_now_ms) {
+            runtime.now_milliseconds()
+        } else {
+            first_now_ms
+        };
+        state.client_time(first_now_ms, second_now_ms)
+    } else {
+        let state = match bonus {
+            FamilyBonus::FullMiss(full_miss) => PersistentAgilityFamilyState::Agility(
+                AgilityState::persistent(full_miss),
+            ),
+            FamilyBonus::ElementResistance(gain) => {
+                PersistentAgilityFamilyState::Natural(NaturalState::new(gain))
+            }
+            FamilyBonus::BlastAttack(gain) => {
+                PersistentAgilityFamilyState::Rapture(RaptureState::new(gain))
+            }
+        };
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.begin_persistent_agility_family_state(state);
+        }
+        0
+    };
+    send_agility_family_state_visual(game, player_id, skill_id, true, client_time);
+    let _ = game.publish_player_states(player_id);
+    if let Some(state) = player_ai.agility_family_mut() {
+        let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
+    finish_movement(game, player_id);
+    terminal(QueuedSkillExecutionState::Completed)
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Сохранён только посторонний недостигнутый callback контейнера; skill-путь материализован полностью.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -54,132 +308,6 @@ impl AgilityFamilyExecutionState {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.h
-
-// ============================================================================
-// FUNCTION: CAgility::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:153
-// RVA: 0x00146090
-// ADDRESS: 00546090
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgility::CAgility
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:18
-// RVA: 0x0016CEA0
-// ADDRESS: 0056cea0
-// PROTOTYPE: undefined __thiscall CAgility(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgility::~CAgility
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:26
-// RVA: 0x0016CF10
-// ADDRESS: 0056cf10
-// PROTOTYPE: void __thiscall ~CAgility(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgility::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:121
-// RVA: 0x0016CF30
-// ADDRESS: 0056cf30
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgility::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:137
-// RVA: 0x0016D000
-// ADDRESS: 0056d000
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgility::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:104
-// RVA: 0x0016D0F0
-// ADDRESS: 0056d0f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:292
-// RVA: 0x0016D1B0
-// ADDRESS: 0056d1b0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgility::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:38
-// RVA: 0x0016D4D0
-// ADDRESS: 0056d4d0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgility::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agility.cpp:167
-// RVA: 0x0016D6B0
-// ADDRESS: 0056d6b0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CContainerListener::OnTraversingContainer
@@ -194,6 +322,7 @@ impl AgilityFamilyExecutionState {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+
 
 
 

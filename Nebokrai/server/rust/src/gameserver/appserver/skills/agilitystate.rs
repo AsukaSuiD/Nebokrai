@@ -12,6 +12,8 @@ use super::natural::NATURAL_SKILL_ID;
 use super::naturalstate::NaturalState;
 use super::rapture::RAPTURE_SKILL_ID;
 use super::rapturestate::RaptureState;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const AGILITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const AGILITY_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -87,9 +89,35 @@ impl PersistentAgilityFamilyState {
     }
 }
 
-// Статус сохранённых метаданных: UNKNOWN; полный декомпилят хранится локально
+pub(crate) fn send_agility_family_state_visual(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    begin: bool,
+    client_time: i32,
+) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(if begin {
+        AGILITY_STATE_BEGIN_MESSAGE
+    } else {
+        AGILITY_STATE_END_MESSAGE
+    });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(skill_id as i32);
+    if begin {
+        message.add_long(client_time);
+        message.add_long(0);
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Сохранены посторонний недостигнутый helper, конструктор по умолчанию и сериализация.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -111,47 +139,6 @@ impl PersistentAgilityFamilyState {
 //
 //
 
-// ============================================================================
-// FUNCTION: CAgilityState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:38
-// RVA: 0x001F02F0
-// ADDRESS: 005f02f0
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:156
-// RVA: 0x001F3E40
-// ADDRESS: 005f3e40
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState::CAgilityState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:15
-// RVA: 0x001F40D0
-// ADDRESS: 005f40d0
-// PROTOTYPE: undefined __thiscall CAgilityState(ushort param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CAgilityState::CAgilityState
@@ -167,61 +154,21 @@ impl PersistentAgilityFamilyState {
 //
 //
 
+
 // ============================================================================
-// FUNCTION: CAgilityState::~CAgilityState
+// FUNCTION: CAgilityState::Serialize
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:33
-// RVA: 0x001F41B0
-// ADDRESS: 005f41b0
-// PROTOTYPE: void __thiscall ~CAgilityState(void)
+// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:156
+// RVA: 0x001F3E40
+// ADDRESS: 005f3e40
+// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
 
-// ============================================================================
-// FUNCTION: CAgilityState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:91
-// RVA: 0x001F41C0
-// ADDRESS: 005f41c0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:109
-// RVA: 0x001F4280
-// ADDRESS: 005f4280
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:76
-// RVA: 0x001F4370
-// ADDRESS: 005f4370
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CAgilityState::Unserialize
@@ -236,35 +183,6 @@ impl PersistentAgilityFamilyState {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CAgilityStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:176
-// RVA: 0x001F4440
-// ADDRESS: 005f4440
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:127
-// RVA: 0x001FD420
-// ADDRESS: 005fd420
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 
 // COMPONENT_VARIANT_END: GameServer
