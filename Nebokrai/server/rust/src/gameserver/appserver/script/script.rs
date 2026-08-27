@@ -64,6 +64,7 @@ use super::function::{
     run_add_time_goods_script_function, script_function_parameter_kind,
     script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
+use super::parser;
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
@@ -449,7 +450,7 @@ impl<'a> CScript<'a> {
             }
             if name.eq_ignore_ascii_case(b"<begin>")
                 || name.eq_ignore_ascii_case(b"<end>")
-                || command.ends_with(b":")
+                || parser::label(command).is_some()
             {
                 continue;
             }
@@ -1098,48 +1099,26 @@ impl<'a> CScript<'a> {
     }
 
     fn read_command(&mut self) -> Option<Vec<u8>> {
-        let length = self.source.len();
-        while self.point < length {
-            if self.source.get(self.point..self.point + 2) == Some(b"//") {
-                self.point += 2;
-                while self.point < length && !matches!(self.source[self.point], b'\n' | b'\r') {
-                    self.point += 1;
-                }
-                continue;
+        match parser::next_command(self.source, self.point) {
+            Ok(Some(command)) => {
+                self.point = command.next_point;
+                Some(command.bytes)
             }
-            if self.source.get(self.point..self.point + 2) == Some(b"/*") {
-                self.point += 2;
-                while self.point + 1 < length
-                    && self.source.get(self.point..self.point + 2) != Some(b"*/")
-                {
-                    self.point += 1;
-                }
-                self.point = (self.point + 2).min(length);
-                continue;
+            Ok(None) => {
+                self.point = self.source.len();
+                None
             }
-            if is_command_start(self.source[self.point]) {
-                break;
+            Err(error) => {
+                tracing::debug!(
+                    script_id = self.script_id,
+                    parse_offset = error.offset,
+                    parse_kind = ?error.kind,
+                    "структурный разбор сценарной команды остановлен"
+                );
+                self.point = self.source.len();
+                None
             }
-            self.point += 1;
         }
-        if self.point >= length {
-            return None;
-        }
-        let start = self.point;
-        let mut quoted = false;
-        while self.point < length {
-            let byte = self.source[self.point];
-            if byte == b'"' {
-                quoted = !quoted;
-            }
-            if !quoted && matches!(byte, b';' | b'\t' | b'\n' | b'\r') {
-                let end = self.point;
-                self.point += 1;
-                return Some(self.source[start..end].to_vec());
-            }
-            self.point += 1;
-        }
-        Some(self.source[start..].to_vec())
     }
 
     fn run_assignment<Runtime: ScriptFunctionRuntime>(
@@ -1245,7 +1224,7 @@ impl<'a> CScript<'a> {
         self.point = 0;
         while let Some(command) = self.read_command() {
             let command = trim_ascii(&command);
-            if command.ends_with(b":") && trim_ascii(&command[..command.len() - 1]) == target {
+            if parser::label(command).is_some_and(|label| label == target) {
                 return true;
             }
         }
@@ -1301,36 +1280,7 @@ fn strip_wrapped_parentheses(value: &[u8]) -> &[u8] {
 }
 
 fn split_function(expression: &[u8]) -> Option<(&[u8], Vec<&[u8]>)> {
-    let expression = trim_ascii(expression);
-    let open = expression.iter().position(|byte| *byte == b'(')?;
-    let name = trim_ascii(&expression[..open]);
-    if name.is_empty() {
-        return None;
-    }
-    let mut parameters = Vec::new();
-    let mut start = open + 1;
-    let mut depth = 0_i32;
-    let mut quoted = false;
-    for position in open + 1..expression.len() {
-        match expression[position] {
-            b'"' => quoted = !quoted,
-            b'(' if !quoted => depth += 1,
-            b')' if !quoted && depth == 0 => {
-                let parameter = trim_ascii(&expression[start..position]);
-                if !parameter.is_empty() {
-                    parameters.push(parameter);
-                }
-                return Some((name, parameters));
-            }
-            b')' if !quoted => depth -= 1,
-            b',' if !quoted && depth == 0 => {
-                parameters.push(trim_ascii(&expression[start..position]));
-                start = position + 1;
-            }
-            _ => {}
-        }
-    }
-    None
+    parser::function(expression).ok()
 }
 
 fn function_parameters(expression: &[u8]) -> Option<Vec<&[u8]>> {
@@ -1338,11 +1288,7 @@ fn function_parameters(expression: &[u8]) -> Option<Vec<&[u8]>> {
 }
 
 fn command_name(command: &[u8]) -> &[u8] {
-    let end = command
-        .iter()
-        .position(|byte| byte.is_ascii_whitespace() || matches!(*byte, b'(' | b';'))
-        .unwrap_or(command.len());
-    &command[..end]
+    parser::command_name(command).unwrap_or_default()
 }
 
 fn unquote(value: &[u8]) -> &[u8] {
@@ -1450,10 +1396,6 @@ fn split_variable_reference(value: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
         )),
         Some(_) => None,
     }
-}
-
-fn is_command_start(value: u8) -> bool {
-    matches!(value, b'{' | b'}' | b'<' | b'>' | b'#' | b'$') || value.is_ascii_alphabetic()
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
