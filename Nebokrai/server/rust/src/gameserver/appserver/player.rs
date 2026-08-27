@@ -8044,6 +8044,38 @@ impl CPlayer {
         )
     }
 
+    /// Изменяет `GAP_BF_HP` owned боевого духа и формирует тот же полный
+    /// old-client payload, который исходный навык отправляет после лечения.
+    pub(crate) fn restore_war_soul_health(
+        &mut self,
+        amount: u32,
+        factory: &CGoodsFactory,
+        da_kong_key: bool,
+    ) -> Option<super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate> {
+        let player_id = self.player_id();
+        let goods = self.equipment_mut().get_goods_mut(10)?;
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            return None;
+        }
+        let current = goods.addon_property_value(factory, GAP_BF_HP, 1);
+        let maximum = goods.addon_property_value(factory, GAP_BF_MAX_HP, 1);
+        let restored = (current as u32).wrapping_add(amount).min(maximum as u32) as i32;
+        let _ = goods.set_addon_property_value_core(GAP_BF_HP, 1, restored);
+        let identity = goods.identity();
+        let mut old_client_payload = Vec::new();
+        if !goods.serialize_for_old_client(&mut old_client_payload, factory, da_kong_key) {
+            return None;
+        }
+        Some(
+            super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                message_type: 0x0b_f918,
+                player_id,
+                goods: identity,
+                old_client_payload,
+            },
+        )
+    }
+
     /// Exact `GetGoodsById` lookup order для goods-message `0x8FC2E`.
     /// Locked hand/packet/auction goods скрываются container `find`, equipment
     /// использует собственный positional storage.

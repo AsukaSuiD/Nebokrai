@@ -776,6 +776,9 @@ use crate::gameserver::appserver::skills::hearten::{
     execute_player_hearten, HEARTEN_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
+use crate::gameserver::appserver::skills::huoxieshu::{
+    execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::immediatestate::execute_player_immediate_state;
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::skills::lifeshield::{
@@ -36598,6 +36601,20 @@ impl CGame {
             );
             let outcome = if concrete_life_shield {
                 execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
+                BattleFairySkillDispatch::SelfTarget {
+                    skill_id: HUOXIESHU_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Point {
+                    skill_id: HUOXIESHU_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Object {
+                    skill_id: HUOXIESHU_SKILL_ID,
+                    ..
+                }
+            ) {
+                execute_battle_fairy_huoxieshu(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
                 BattleFairySkillDispatch::Object {

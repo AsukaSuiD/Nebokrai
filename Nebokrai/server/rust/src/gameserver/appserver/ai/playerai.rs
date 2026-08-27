@@ -62,6 +62,8 @@ pub(crate) struct CPlayerAI {
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     life_shield_last_used_ms: u32,
+    huoxieshu: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    huoxieshu_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -136,6 +138,7 @@ impl CPlayerAI {
         self.battle_fairy_skills.clear();
         self.battle_fairy_base_magic = None;
         self.life_shield = None;
+        self.huoxieshu = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -465,6 +468,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение щита жизни завершено");
         }
+        if let Some(mut execution) = self.huoxieshu.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение переноса здоровья боевому духу завершено");
+        }
         true
     }
 
@@ -520,6 +527,33 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_life_shield_used(&mut self, now_ms: u32) {
         self.life_shield_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn huoxieshu(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.huoxieshu
+    }
+
+    pub(crate) const fn begin_huoxieshu(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.huoxieshu = Some(state);
+    }
+
+    pub(crate) fn huoxieshu_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.huoxieshu.as_mut()
+    }
+
+    pub(crate) const fn huoxieshu_last_used_ms(&self) -> u32 {
+        self.huoxieshu_last_used_ms
+    }
+
+    pub(crate) const fn mark_huoxieshu_used(&mut self, now_ms: u32) {
+        self.huoxieshu_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]
