@@ -735,6 +735,18 @@ use crate::gameserver::appserver::skills::baseattack::{
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     real_distance, time_reached,
 };
+use crate::gameserver::appserver::skills::agility::{
+    AGILITY_2_SKILL_ID, AGILITY_EFFECT_MESSAGE, AGILITY_SKILL_ID, AgilityExecutionState,
+    SKILL_USAGE_CAN_BE_BREAKED as AGILITY_CAN_BE_BREAKED,
+    SKILL_USAGE_DELAY_TIME as AGILITY_DELAY_TIME,
+    SKILL_USAGE_REUSE_DELAY_TIME as AGILITY_REUSE_DELAY_TIME,
+    SKILL_USAGE_STATE_PERSIST_TIME as AGILITY_STATE_PERSIST_TIME,
+    SKILL_USAGE_TARGET_FULL_MISS_GAIN as AGILITY_FULL_MISS_GAIN,
+    SKILL_USAGE_USER_MP_LOSE as AGILITY_MP_LOSE,
+};
+use crate::gameserver::appserver::skills::agilitystate::{
+    AGILITY_STATE_BEGIN_MESSAGE, AGILITY_STATE_END_MESSAGE, AgilityState,
+};
 use crate::gameserver::appserver::skills::archery::{ARCHERY_SKILL_ID, ArcheryExecutionState};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     ArcheryPhalanxTick, CArcheryPhalanx,
@@ -4916,6 +4928,12 @@ impl CGame {
         player_id: i32,
         properties: PlayerCombatProperties,
     ) -> bool {
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| player.apply_agility_state_properties(properties))
+        else {
+            return false;
+        };
         let Some((properties, callosity_visual)) = self
             .find_player(player_id)
             .map(|player| player.apply_callosity_state_properties(properties))
@@ -4955,6 +4973,30 @@ impl CGame {
         message.add_long(state.skill_id() as i32);
         message.add_long(state.client_state_time());
         message.add_ulong(state.additional_data());
+        self.send_player_shape_around(player_id, None, &message)
+    }
+
+    fn send_agility_state_visual(
+        &mut self,
+        player_id: i32,
+        state: AgilityState,
+        begin: bool,
+        client_time: i32,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player(player_id)?;
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(if begin {
+            AGILITY_STATE_BEGIN_MESSAGE
+        } else {
+            AGILITY_STATE_END_MESSAGE
+        });
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(state.skill_id() as i32);
+        if begin {
+            message.add_long(client_time);
+            message.add_long(0);
+        }
         self.send_player_shape_around(player_id, None, &message)
     }
 
@@ -25904,6 +25946,13 @@ impl CGame {
         let Some(now_ms) = sampled_at_ms else {
             return self.find_player(player_id).map(|_| ());
         };
+        let agility_state_2_ended = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.take_expired_agility_state_2(now_ms))
+            .is_some();
+        if agility_state_2_ended {
+            let _ = self.publish_player_states(player_id);
+        }
         let change_body_states_ended =
             self.update_player_change_body_states(player_id, now_ms, runtime);
         let (extended_states_ended, extended_items_consumed) =
@@ -25920,6 +25969,7 @@ impl CGame {
             appellation_states_ended,
             appellation_items_consumed,
             ride_ended,
+            agility_state_2_ended,
             "обновлены временные состояния игрока"
         );
         Some(())
@@ -32935,12 +32985,18 @@ impl CGame {
                         .players
                         .get_mut(&player_id)
                         .expect("skill dispatch сохраняет canonical player");
+                    let interrupted_agility = player.player_ai().agility().is_some()
+                        && player.player_ai().next_player_skill() != Some(dispatch);
                     let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
                         || player.player_ai().archery().is_some()
+                        || player.player_ai().agility().is_some()
                         || player.player_ai().callosity().is_some())
                         && player.player_ai().next_player_skill() != Some(dispatch);
                     if interrupted_delayed_skill {
                         player.set_skill_moveable(true);
+                        if interrupted_agility {
+                            player.set_skill_moveable(true);
+                        }
                         player.set_current_skill_id(None);
                     }
                     let rejected = player.player_ai_mut().queue_player_skill(dispatch);
@@ -33360,13 +33416,18 @@ impl CGame {
 
     fn release_reciprocal_player_target(&mut self, player_id: i32, target: ShapeIdentity) {
         let released = self.find_player_mut(player_id).is_some_and(|player| {
+            let interrupted_agility = player.player_ai().agility().is_some();
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
+                || player.player_ai().agility().is_some()
                 || player.player_ai().callosity().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
                 if interrupted_delayed_skill {
                     player.set_skill_moveable(true);
+                    if interrupted_agility {
+                        player.set_skill_moveable(true);
+                    }
                 }
                 player.set_current_skill_id(None);
             }
@@ -35405,19 +35466,34 @@ impl CGame {
         path
     }
 
-    fn send_callosity_failure(&self, player_id: i32, action: u8) {
-        let mut message = CMessage::new(CALLOSITY_EFFECT_MESSAGE);
+    fn send_self_state_skill_failure(&self, message_type: i32, player_id: i32, action: u8) {
+        let mut message = CMessage::new(message_type);
         message.add_byte(0);
         message.add_byte(action);
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    fn send_callosity_cast(&mut self, player_id: i32, skill_id: u32, skill_level: i32, action: u8) {
+    fn finish_agility_movement(&mut self, player_id: i32) {
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_skill_moveable(true);
+            player.set_skill_moveable(true);
+            player.set_current_skill_id(None);
+        }
+    }
+
+    fn send_self_state_skill_cast(
+        &mut self,
+        message_type: i32,
+        player_id: i32,
+        skill_id: u32,
+        skill_level: i32,
+        action: u8,
+    ) {
         let Some(player) = self.find_player(player_id) else {
             return;
         };
         let identity = player.shape().identity();
-        let mut message = CMessage::new(CALLOSITY_EFFECT_MESSAGE);
+        let mut message = CMessage::new(message_type);
         message.add_byte(action);
         message.add_long(skill_id as i32);
         message.base_mut().add_short(skill_level as i16);
@@ -35491,17 +35567,17 @@ impl CGame {
             let cooldown_now_ms = runtime.now_milliseconds();
             let last_used_ms = player_ai.callosity_last_used_ms(skill_id);
             if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
-                self.send_callosity_failure(player_id, 0x0d);
+                self.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 0x0d);
                 self.send_skill_system_info(player_id, b"GS0278");
                 return rejected();
             }
             if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
-                self.send_callosity_failure(player_id, 7);
+                self.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 7);
                 self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
                 return rejected();
             }
             if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 {
-                self.send_callosity_failure(player_id, 8);
+                self.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 8);
                 self.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss);
                 return rejected();
             }
@@ -35519,7 +35595,7 @@ impl CGame {
         }
 
         if self.find_player(player_id).is_some_and(CPlayer::is_dead) {
-            self.send_callosity_failure(player_id, 2);
+            self.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 2);
             if let Some(player) = self.find_player_mut(player_id) {
                 player.set_skill_moveable(true);
                 player.set_current_skill_id(None);
@@ -35534,7 +35610,7 @@ impl CGame {
         {
             let current_mp = self.find_player(player_id).map_or(0, CPlayer::mana);
             if (current_mp.wrapping_sub(mp_loss) as i32) < 0 {
-                self.send_callosity_failure(player_id, 7);
+                self.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 7);
                 self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
                 if let Some(player) = self.find_player_mut(player_id) {
                     player.set_skill_moveable(true);
@@ -35547,7 +35623,7 @@ impl CGame {
             }
             let current_rp = self.find_player(player_id).map_or(0, CPlayer::rp);
             if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
-                self.send_callosity_failure(player_id, 8);
+                self.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 8);
                 self.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss);
                 if let Some(player) = self.find_player_mut(player_id) {
                     player.set_skill_moveable(true);
@@ -35558,7 +35634,7 @@ impl CGame {
             if let Some(player) = self.find_player_mut(player_id) {
                 player.set_rp(current_rp.wrapping_sub(rp_loss as u16));
             }
-            self.send_callosity_cast(player_id, skill_id, skill_level, 1);
+            self.send_self_state_skill_cast(CALLOSITY_EFFECT_MESSAGE, player_id, skill_id, skill_level, 1);
             if let Some(state) = player_ai.callosity_mut() {
                 let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
             }
@@ -35573,7 +35649,7 @@ impl CGame {
             return pending();
         }
 
-        self.send_callosity_cast(player_id, skill_id, skill_level, 2);
+        self.send_self_state_skill_cast(CALLOSITY_EFFECT_MESSAGE, player_id, skill_id, skill_level, 2);
         let removed = self.find_player_mut(player_id).and_then(|player| {
             player
                 .take_callosity_state(CALLOSITY_SKILL_ID)
@@ -35603,6 +35679,180 @@ impl CGame {
             first_contact: false,
             killing_blow: None,
         }
+    }
+
+    fn execute_player_agility<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let terminal = |state| QueuedSkillExecutionOutcome {
+            state,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let skill_id = match dispatch {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. }
+                if matches!(skill_id, AGILITY_SKILL_ID | AGILITY_2_SKILL_ID) => skill_id,
+            _ => return terminal(QueuedSkillExecutionState::Rejected),
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if player.server_region_id().is_none() {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let skill_level = player.learned_skill_level(skill_id);
+        let initial_mana = player.mana();
+        let Some(properties) = self.skill_factory.query_skill_base_properties(skill_id, skill_level)
+        else {
+            if player_ai.agility().is_some()
+                && let Some(player) = self.find_player_mut(player_id)
+            {
+                player.set_skill_moveable(true);
+                player.set_current_skill_id(None);
+            }
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let mp_loss = properties.query_property(AGILITY_MP_LOSE);
+        let delay_ms = properties.query_property(AGILITY_DELAY_TIME);
+        let reuse_delay_ms = properties.query_property(AGILITY_REUSE_DELAY_TIME);
+        let full_miss = properties.query_property(AGILITY_FULL_MISS_GAIN) as u16;
+        let keep_time_ms = properties.query_property(AGILITY_STATE_PERSIST_TIME) as i32;
+        let _can_be_breaked = properties.query_property(AGILITY_CAN_BE_BREAKED);
+
+        if player_ai.agility().is_none() {
+            let started_at_ms = runtime.now_milliseconds();
+            self.enter_player_combat_state(player_id);
+            let cooldown_now_ms = runtime.now_milliseconds();
+            let last_used_ms = player_ai.agility_last_used_ms(skill_id);
+            if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
+                self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 0x0d);
+                self.send_skill_system_info(player_id, b"GS0278");
+                self.finish_agility_movement(player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            if mp_loss != 0 && initial_mana < mp_loss {
+                self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
+                self.send_skill_system_info_with_unsigned(player_id, b"GS0279", mp_loss);
+                self.finish_agility_movement(player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            if let Some(player) = self.find_player_mut(player_id) {
+                if mp_loss != 0 {
+                    player.set_skill_moveable(false);
+                }
+                player.set_current_skill_id(Some(skill_id));
+            }
+            player_ai.begin_agility(AgilityExecutionState::begin(dispatch, started_at_ms));
+        } else if player_ai
+            .agility()
+            .is_none_or(|state| state.kernel().dispatch() != dispatch)
+        {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+
+        if self.find_player(player_id).is_some_and(CPlayer::is_dead) {
+            self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 2);
+            self.finish_agility_movement(player_id);
+            player_ai.mark_agility_used(skill_id, runtime.now_milliseconds());
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+
+        if player_ai
+            .agility()
+            .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
+        {
+            let current_mana = self.find_player(player_id).map_or(0, CPlayer::mana);
+            if current_mana < mp_loss {
+                self.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 7);
+                self.send_skill_system_info_with_unsigned(player_id, b"GS0279", mp_loss);
+                self.finish_agility_movement(player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_mana(current_mana.wrapping_sub(mp_loss));
+            }
+            let _ = self.update_player_current_state(
+                player_id,
+                GamePlayerFightStatePhase::MoveShapeAi,
+            );
+            let _ = self.update_player_criminal_state(
+                player_id,
+                GamePlayerFightStatePhase::MoveShapeAi,
+                runtime,
+            );
+            self.send_self_state_skill_cast(
+                AGILITY_EFFECT_MESSAGE,
+                player_id,
+                skill_id,
+                skill_level,
+                1,
+            );
+            if let Some(state) = player_ai.agility_mut() {
+                let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+            }
+        }
+
+        let started_at_ms = player_ai
+            .agility()
+            .map(|state| state.kernel().started_at_ms())
+            .expect("исполнение ловкости создано или восстановлено");
+        if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+            return terminal(QueuedSkillExecutionState::Pending);
+        }
+        self.send_self_state_skill_cast(
+            AGILITY_EFFECT_MESSAGE,
+            player_id,
+            skill_id,
+            skill_level,
+            2,
+        );
+
+        let removed = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.take_agility_state(skill_id));
+        if let Some(state) = removed {
+            if skill_id == AGILITY_SKILL_ID {
+                let _ = self.send_agility_state_visual(player_id, state, false, 0);
+            }
+            let _ = self.publish_player_states(player_id);
+        }
+
+        let state_started_at_ms = runtime.now_milliseconds();
+        let state = if skill_id == AGILITY_2_SKILL_ID {
+            AgilityState::timed(full_miss, state_started_at_ms, keep_time_ms)
+        } else {
+            AgilityState::persistent(full_miss)
+        };
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.begin_agility_state(state);
+        }
+        let client_time = if state.is_timed() {
+            let first_now_ms = runtime.now_milliseconds();
+            let second_now_ms = if state.client_time_needs_second_clock(first_now_ms) {
+                runtime.now_milliseconds()
+            } else {
+                first_now_ms
+            };
+            state.client_time(first_now_ms, second_now_ms)
+        } else {
+            0
+        };
+        let _ = self.send_agility_state_visual(player_id, state, true, client_time);
+        let _ = self.publish_player_states(player_id);
+        if let Some(state) = player_ai.agility_mut() {
+            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+            let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+            let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        player_ai.mark_agility_used(skill_id, runtime.now_milliseconds());
+        self.finish_agility_movement(player_id);
+        terminal(QueuedSkillExecutionState::Completed)
     }
 
     fn execute_player_archery<Runtime: GameMainLoopRuntime>(
@@ -37319,6 +37569,13 @@ impl CGame {
                     matches!(skill_id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID)
                 }
             };
+            let concrete_agility = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => {
+                    matches!(skill_id, AGILITY_SKILL_ID | AGILITY_2_SKILL_ID)
+                }
+            };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
             } else if concrete_archery {
@@ -37327,6 +37584,8 @@ impl CGame {
                 self.execute_player_base_magic(player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
                 self.execute_player_callosity(player_id, dispatch, player_ai, runtime)
+            } else if concrete_agility {
+                self.execute_player_agility(player_id, dispatch, player_ai, runtime)
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };

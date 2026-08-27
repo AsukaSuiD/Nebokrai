@@ -9,8 +9,8 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба, парная закалка и атака боевой феи сохраняют незавершённое
-//! состояние между проходами ИИ. Хвост `CPlayerAI::Run` хранит часы
+//! стрельба, парные ловкость и закалка, а также атака боевой феи сохраняют
+//! незавершённое состояние между проходами ИИ. Хвост `CPlayerAI::Run` хранит часы
 //! автоматического прироста,
 //! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
 //! проверку срока. Прирост опыта возвращается в полный `CGame::CheckLevel`,
@@ -24,6 +24,7 @@ use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
 use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
+use crate::gameserver::appserver::skills::agility::AgilityExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
@@ -45,6 +46,8 @@ pub(crate) struct CPlayerAI {
     base_attack_last_used_ms: u32,
     archery: Option<ArcheryExecutionState>,
     archery_last_used_ms: u32,
+    agility: Option<AgilityExecutionState>,
+    agility_last_used_ms: [u32; 2],
     base_magic: Option<BaseMagicExecutionState>,
     base_magic_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
@@ -97,6 +100,7 @@ impl CPlayerAI {
         self.player_skills.clear();
         self.base_attack = None;
         self.archery = None;
+        self.agility = None;
         self.base_magic = None;
         self.callosity = None;
         self.player_skills.push_back(dispatch);
@@ -144,6 +148,10 @@ impl CPlayerAI {
                 "выполнение базовой стрельбы завершено"
             );
         }
+        if let Some(mut execution) = self.agility.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка ловкости завершено");
+        }
         if let Some(mut execution) = self.base_magic.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой магии завершено");
@@ -172,6 +180,7 @@ impl CPlayerAI {
         self.player_skills.pop_front();
         self.base_attack = None;
         self.archery = None;
+        self.agility = None;
         self.base_magic = None;
         self.callosity = None;
         true
@@ -195,6 +204,21 @@ impl CPlayerAI {
 
     pub(crate) const fn archery_last_used_ms(&self) -> u32 {
         self.archery_last_used_ms
+    }
+
+    pub(crate) const fn agility(&self) -> Option<AgilityExecutionState> { self.agility }
+    pub(crate) const fn begin_agility(&mut self, state: AgilityExecutionState) { self.agility = Some(state); }
+    pub(crate) fn agility_mut(&mut self) -> Option<&mut AgilityExecutionState> { self.agility.as_mut() }
+    pub(crate) const fn agility_last_used_ms(&self, skill_id: u32) -> u32 {
+        if skill_id == crate::gameserver::appserver::skills::agility::AGILITY_2_SKILL_ID {
+            self.agility_last_used_ms[1]
+        } else {
+            self.agility_last_used_ms[0]
+        }
+    }
+    pub(crate) fn mark_agility_used(&mut self, skill_id: u32, now_ms: u32) {
+        let index = if skill_id == crate::gameserver::appserver::skills::agility::AGILITY_2_SKILL_ID { 1 } else { 0 };
+        self.agility_last_used_ms[index] = now_ms;
     }
 
     pub(crate) const fn mark_archery_used(&mut self, now_ms: u32) {

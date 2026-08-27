@@ -1,6 +1,66 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Канонические состояния `CAgilityState/CAgilityState2`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
+//! `agilitystate.cpp` и `agilitystate2.cpp`. Постоянное состояние `0xda`
+//! публикует begin/end, временное `0x81` публикует только begin и завершается
+//! при строгом `started + keep < now`. Оба добавляют `full_miss` сложением
+//! с переполнением при общем пересчёте свойств. Поля и часы принадлежат
+//! `CanonicalStateStorage`; сырой сохранённый псевдокод оставлен ниже.
+
+use super::agility::{AGILITY_2_SKILL_ID, AGILITY_SKILL_ID};
+
+pub(crate) const AGILITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+pub(crate) const AGILITY_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AgilityState {
+    skill_id: u32,
+    full_miss: u16,
+    started_at_ms: u32,
+    keep_time_ms: i32,
+}
+
+impl AgilityState {
+    pub(crate) const fn persistent(full_miss: u16) -> Self {
+        Self {
+            skill_id: AGILITY_SKILL_ID,
+            full_miss,
+            started_at_ms: 0,
+            keep_time_ms: 0,
+        }
+    }
+
+    pub(crate) const fn timed(full_miss: u16, started_at_ms: u32, keep_time_ms: i32) -> Self {
+        Self {
+            skill_id: AGILITY_2_SKILL_ID,
+            full_miss,
+            started_at_ms,
+            keep_time_ms,
+        }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
+    pub(crate) const fn full_miss(self) -> u16 { self.full_miss }
+    pub(crate) const fn is_timed(self) -> bool { self.skill_id == AGILITY_2_SKILL_ID }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.is_timed() && self.started_at_ms.wrapping_add(self.keep_time_ms as u32) < now_ms
+    }
+    pub(crate) const fn client_time_needs_second_clock(self, first_now_ms: u32) -> bool {
+        self.is_timed()
+            && first_now_ms < self.started_at_ms.wrapping_add(self.keep_time_ms as u32)
+    }
+    pub(crate) const fn client_time(self, first_now_ms: u32, second_now_ms: u32) -> i32 {
+        if !self.is_timed() || self.started_at_ms.wrapping_add(self.keep_time_ms as u32) <= first_now_ms {
+            0
+        } else {
+            self.started_at_ms.wrapping_sub(second_now_ms).wrapping_add(self.keep_time_ms as u32) as i32
+        }
+    }
+}
+
+// Статус сохранённых метаданных: UNKNOWN; полный декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

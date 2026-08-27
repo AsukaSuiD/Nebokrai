@@ -58,6 +58,8 @@ pub(crate) mod appserver {
         pub(crate) mod fairyproperties;
     }
     pub(crate) mod skills {
+        pub(crate) mod agility;
+        pub(crate) mod agilitystate;
         pub(crate) mod baseattack;
         pub(crate) mod archery;
         pub(crate) mod archeryphalanx;

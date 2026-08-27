@@ -1,6 +1,50 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Исполнение пары `CAgility/CAgility2`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
+//! `appserver/skills/agility.cpp` и `agility2.cpp`. Общая часть сохраняет
+//! отдельные часы восстановления, повторную проверку и расход MP, дополнительный
+//! `UpdateCurrentState`, задержку и сетевой формат навыка на себя. Нулевая цена MP
+//! намеренно не ставит запрет движения, хотя завершение всё равно снимает его.
+//! Различающиеся замена и жизненный цикл состояний принадлежат каноническому
+//! владельцу и вызывающему `CGame`, а не общему `SkillExecutionKernel`.
+
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+
+pub(crate) const AGILITY_SKILL_ID: u32 = 218;
+pub(crate) const AGILITY_2_SKILL_ID: u32 = 129;
+pub(crate) const AGILITY_EFFECT_MESSAGE: i32 = 0x000b_fe01;
+pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+pub(crate) const SKILL_USAGE_TARGET_FULL_MISS_GAIN: u32 = 127;
+pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
+pub(crate) const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
+pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AgilityExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+}
+
+impl AgilityExecutionState {
+    pub(crate) const fn begin(dispatch: PlayerSkillDispatch, started_at_ms: u32) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+        }
+    }
+
+    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
+        self.kernel
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+}
+
+// Статус сохранённых метаданных: UNKNOWN; полный декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

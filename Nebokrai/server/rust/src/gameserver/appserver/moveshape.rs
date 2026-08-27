@@ -38,6 +38,7 @@ use super::shape::{
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::callositystate::CallosityState;
+use crate::gameserver::appserver::skills::agilitystate::AgilityState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -435,6 +436,8 @@ impl DerefMut for LegacyStateCodec {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CanonicalStateStorage {
+    agility_state: Option<AgilityState>,
+    agility_state_2: Option<AgilityState>,
     callosity_state: Option<CallosityState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
@@ -610,6 +613,8 @@ impl CMoveShape {
         self.current_skill_id = None;
         self.item_skill_ids.clear();
         self.ex_states.clear();
+        self.agility_state = None;
+        self.agility_state_2 = None;
         self.callosity_state = None;
         self.change_body_states.clear();
         self.extended_states.clear();
@@ -633,7 +638,8 @@ impl CMoveShape {
     }
 
     pub(crate) const fn has_materialized_abnormality(&self) -> bool {
-        !self.state_storage.change_body_states.is_empty()
+        self.state_storage.agility_state_2.is_some()
+            || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
             || !self.state_storage.undead_states.is_empty()
             || self.state_storage.ride_state.is_some()
@@ -700,7 +706,15 @@ impl CMoveShape {
             self.callosity_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let agility = usize::from(
+            self.agility_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        ) + usize::from(
+            self.agility_state_2
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         scripted
+            .saturating_add(agility)
             .saturating_add(callosity)
             .saturating_add(change_body)
             .saturating_add(extended)
@@ -712,7 +726,12 @@ impl CMoveShape {
     /// `GetStateBySkillID` просматривает канонические типизированные состояния
     /// по фактическому идентификатору навыка, а не по классу сетевой записи.
     pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {
-        self.callosity_state
+        self.agility_state
+            .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .agility_state_2
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self.callosity_state
             .is_some_and(|state| state.skill_id() == state_id)
             || self.script_states
             .iter()
@@ -744,6 +763,41 @@ impl CMoveShape {
     pub(crate) fn begin_callosity_state(&mut self, state: CallosityState) {
         debug_assert!(self.callosity_state.is_none());
         self.callosity_state = Some(state);
+    }
+
+    pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {
+        match skill_id {
+            crate::gameserver::appserver::skills::agility::AGILITY_SKILL_ID => self.agility_state,
+            crate::gameserver::appserver::skills::agility::AGILITY_2_SKILL_ID => self.agility_state_2,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn take_agility_state(&mut self, skill_id: u32) -> Option<AgilityState> {
+        match skill_id {
+            crate::gameserver::appserver::skills::agility::AGILITY_SKILL_ID => self.agility_state.take(),
+            crate::gameserver::appserver::skills::agility::AGILITY_2_SKILL_ID => self.agility_state_2.take(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn begin_agility_state(&mut self, state: AgilityState) {
+        match state.skill_id() {
+            crate::gameserver::appserver::skills::agility::AGILITY_SKILL_ID => {
+                debug_assert!(self.agility_state.is_none());
+                self.agility_state = Some(state);
+            }
+            crate::gameserver::appserver::skills::agility::AGILITY_2_SKILL_ID => {
+                debug_assert!(self.agility_state_2.is_none());
+                self.agility_state_2 = Some(state);
+            }
+            _ => unreachable!("каноническое состояние ловкости имеет известный ID"),
+        }
+    }
+
+    pub(crate) fn take_expired_agility_state_2(&mut self, now_ms: u32) -> Option<AgilityState> {
+        self.agility_state_2.filter(|state| state.expired(now_ms))?;
+        self.agility_state_2.take()
     }
 
     pub(crate) fn take_first_script_state(&mut self, state_id: i32) -> Option<ScriptMoveState> {

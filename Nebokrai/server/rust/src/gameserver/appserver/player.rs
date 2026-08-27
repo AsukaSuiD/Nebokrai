@@ -4130,6 +4130,49 @@ impl CPlayer {
         (properties, state)
     }
 
+    pub(crate) fn agility_state(
+        &self,
+        skill_id: u32,
+    ) -> Option<super::skills::agilitystate::AgilityState> {
+        self.move_shape.agility_state(skill_id)
+    }
+
+    pub(crate) fn take_agility_state(
+        &mut self,
+        skill_id: u32,
+    ) -> Option<super::skills::agilitystate::AgilityState> {
+        self.move_shape.take_agility_state(skill_id)
+    }
+
+    pub(crate) fn begin_agility_state(
+        &mut self,
+        state: super::skills::agilitystate::AgilityState,
+    ) {
+        self.move_shape.begin_agility_state(state);
+    }
+
+    pub(crate) fn take_expired_agility_state_2(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::agilitystate::AgilityState> {
+        self.move_shape.take_expired_agility_state_2(now_ms)
+    }
+
+    pub(crate) fn apply_agility_state_properties(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        for skill_id in [
+            super::skills::agility::AGILITY_SKILL_ID,
+            super::skills::agility::AGILITY_2_SKILL_ID,
+        ] {
+            if let Some(state) = self.agility_state(skill_id) {
+                properties.full_miss = properties.full_miss.wrapping_add(state.full_miss());
+            }
+        }
+        properties
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,
