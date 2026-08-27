@@ -787,6 +787,9 @@ use crate::gameserver::appserver::skills::lifeshield::{
 use crate::gameserver::appserver::skills::lifeshieldstate::{
     finish_life_shield_state,
 };
+use crate::gameserver::appserver::skills::lingzhishu::{
+    execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::machineshield::{
     execute_player_machine_shield, MACHINE_SHIELD_SKILL_ID,
 };
@@ -36615,6 +36618,20 @@ impl CGame {
                 }
             ) {
                 execute_battle_fairy_huoxieshu(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
+                BattleFairySkillDispatch::SelfTarget {
+                    skill_id: LINGZHISHU_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Point {
+                    skill_id: LINGZHISHU_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Object {
+                    skill_id: LINGZHISHU_SKILL_ID,
+                    ..
+                }
+            ) {
+                execute_battle_fairy_lingzhishu(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
                 BattleFairySkillDispatch::Object {

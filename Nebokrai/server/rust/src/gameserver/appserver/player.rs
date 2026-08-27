@@ -8052,15 +8052,47 @@ impl CPlayer {
         factory: &CGoodsFactory,
         da_kong_key: bool,
     ) -> Option<super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate> {
+        self.restore_war_soul_property(
+            amount,
+            GAP_BF_HP,
+            GAP_BF_MAX_HP,
+            factory,
+            da_kong_key,
+        )
+    }
+
+    pub(crate) fn restore_war_soul_mana(
+        &mut self,
+        amount: u32,
+        factory: &CGoodsFactory,
+        da_kong_key: bool,
+    ) -> Option<super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate> {
+        self.restore_war_soul_property(
+            amount,
+            GAP_BF_MP,
+            GAP_BF_MAX_MP,
+            factory,
+            da_kong_key,
+        )
+    }
+
+    fn restore_war_soul_property(
+        &mut self,
+        amount: u32,
+        property: i32,
+        maximum_property: i32,
+        factory: &CGoodsFactory,
+        da_kong_key: bool,
+    ) -> Option<super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate> {
         let player_id = self.player_id();
         let goods = self.equipment_mut().get_goods_mut(10)?;
         if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
             return None;
         }
-        let current = goods.addon_property_value(factory, GAP_BF_HP, 1);
-        let maximum = goods.addon_property_value(factory, GAP_BF_MAX_HP, 1);
+        let current = goods.addon_property_value(factory, property, 1);
+        let maximum = goods.addon_property_value(factory, maximum_property, 1);
         let restored = (current as u32).wrapping_add(amount).min(maximum as u32) as i32;
-        let _ = goods.set_addon_property_value_core(GAP_BF_HP, 1, restored);
+        let _ = goods.set_addon_property_value_core(property, 1, restored);
         let identity = goods.identity();
         let mut old_client_payload = Vec::new();
         if !goods.serialize_for_old_client(&mut old_client_payload, factory, da_kong_key) {

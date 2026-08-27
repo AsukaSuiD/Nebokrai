@@ -67,6 +67,7 @@ pub(crate) mod appserver {
         pub(crate) mod basemagicphalanx;
         pub(crate) mod battlefairybasemagic;
         pub(crate) mod battlefairybasemagicphalanx;
+        pub(crate) mod battlefairytransfer;
         pub(crate) mod callosity;
         pub(crate) mod callositystate;
         pub(crate) mod curestate;
@@ -84,6 +85,7 @@ pub(crate) mod appserver {
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod lifeshieldstate;
+        pub(crate) mod lingzhishu;
         pub(crate) mod machineshield;
         pub(crate) mod machineshieldstate;
         pub(crate) mod manashield;

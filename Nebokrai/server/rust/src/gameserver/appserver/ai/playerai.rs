@@ -32,6 +32,7 @@ use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
+use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransferKind;
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
@@ -62,8 +63,8 @@ pub(crate) struct CPlayerAI {
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     life_shield_last_used_ms: u32,
-    huoxieshu: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
-    huoxieshu_last_used_ms: u32,
+    battle_fairy_transfer: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    battle_fairy_transfer_last_used_ms: [u32; 2],
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -138,7 +139,7 @@ impl CPlayerAI {
         self.battle_fairy_skills.clear();
         self.battle_fairy_base_magic = None;
         self.life_shield = None;
-        self.huoxieshu = None;
+        self.battle_fairy_transfer = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -468,7 +469,7 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение щита жизни завершено");
         }
-        if let Some(mut execution) = self.huoxieshu.take() {
+        if let Some(mut execution) = self.battle_fairy_transfer.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение переноса здоровья боевому духу завершено");
         }
@@ -529,31 +530,45 @@ impl CPlayerAI {
         self.life_shield_last_used_ms = now_ms;
     }
 
-    pub(crate) const fn huoxieshu(
+    pub(crate) const fn battle_fairy_transfer(
         &self,
     ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.huoxieshu
+        self.battle_fairy_transfer
     }
 
-    pub(crate) const fn begin_huoxieshu(
+    pub(crate) const fn begin_battle_fairy_transfer(
         &mut self,
         state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
-        self.huoxieshu = Some(state);
+        self.battle_fairy_transfer = Some(state);
     }
 
-    pub(crate) fn huoxieshu_mut(
+    pub(crate) fn battle_fairy_transfer_mut(
         &mut self,
     ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
-        self.huoxieshu.as_mut()
+        self.battle_fairy_transfer.as_mut()
     }
 
-    pub(crate) const fn huoxieshu_last_used_ms(&self) -> u32 {
-        self.huoxieshu_last_used_ms
+    const fn battle_fairy_transfer_index(kind: BattleFairyTransferKind) -> usize {
+        match kind {
+            BattleFairyTransferKind::Health => 0,
+            BattleFairyTransferKind::Mana => 1,
+        }
     }
 
-    pub(crate) const fn mark_huoxieshu_used(&mut self, now_ms: u32) {
-        self.huoxieshu_last_used_ms = now_ms;
+    pub(crate) const fn battle_fairy_transfer_last_used_ms(
+        &self,
+        kind: BattleFairyTransferKind,
+    ) -> u32 {
+        self.battle_fairy_transfer_last_used_ms[Self::battle_fairy_transfer_index(kind)]
+    }
+
+    pub(crate) fn mark_battle_fairy_transfer_used(
+        &mut self,
+        kind: BattleFairyTransferKind,
+        now_ms: u32,
+    ) {
+        self.battle_fairy_transfer_last_used_ms[Self::battle_fairy_transfer_index(kind)] = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]
