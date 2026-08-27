@@ -51,6 +51,13 @@ impl AttackInformation {
             .map(|power| power.hp_damage.max(0) as u32)
             .fold(self.damage_modifier.max(0) as u32, u32::saturating_add)
     }
+
+    pub(crate) fn mp_damage(&self) -> u32 {
+        self.damages
+            .iter()
+            .map(|power| power.mp_damage.max(0) as u32)
+            .fold(0, u32::saturating_add)
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

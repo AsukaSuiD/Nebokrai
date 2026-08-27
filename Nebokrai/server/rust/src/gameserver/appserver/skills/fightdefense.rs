@@ -6,11 +6,13 @@
 //! удары, уклонение и коэффициент PvP. Для монстров сохраняются отдельные
 //! ограничения попадания, защита и сопротивления без коэффициента PvP.
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
-//! или порядок обращений к RNG. Ещё не восстановленные классы щитов не
-//! подменяются этой обычной защитой.
+//! или порядок обращений к RNG. Канонический мана-щит вызывается в исходной
+//! точке `PreDefense`, до обычной защиты; прочие ещё не восстановленные щиты
+//! не подменяются этой реализацией.
 
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPowerType};
 use crate::setup::globesetup::GlobeSetupSnapshot;
 
@@ -143,8 +145,10 @@ pub(crate) fn defend_player_base_attack(
     attacker: PlayerCombatProperties,
     attacker_occupation: u8,
     target: PlayerCombatProperties,
+    target_mana: u32,
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
+    mut mana_shield: Option<&mut ManaShieldState>,
 ) {
     let (minimum_hit, maximum_hit) = setup.player_hit_limits(attacker_occupation);
     let hit = maximum_hit
@@ -174,6 +178,9 @@ pub(crate) fn defend_player_base_attack(
     }
 
     for power in &mut attack.damages {
+        if let Some(state) = mana_shield.as_deref_mut() {
+            state.absorb_damage(attack.skill_id, attack.damage_factor, target_mana, power);
+        }
         match power.kind {
             AttackPowerType::Physical => {
                 let defense = target.defense as i32;
@@ -257,8 +264,10 @@ pub(crate) fn defend_player_base_attack(
 pub(crate) fn defend_player_from_monster_base_attack(
     attack: &mut AttackInformation,
     target: PlayerCombatProperties,
+    target_mana: u32,
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
+    mut mana_shield: Option<&mut ManaShieldState>,
 ) {
     let (minimum_hit, maximum_hit) = setup.monster_hit_limits();
     let hit = maximum_hit
@@ -275,6 +284,9 @@ pub(crate) fn defend_player_from_monster_base_attack(
     }
 
     for power in &mut attack.damages {
+        if let Some(state) = mana_shield.as_deref_mut() {
+            state.absorb_damage(attack.skill_id, attack.damage_factor, target_mana, power);
+        }
         match power.kind {
             AttackPowerType::Physical => {
                 power.hp_damage = power.hp_damage.wrapping_sub(target.defense as i32 / 2);

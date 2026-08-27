@@ -44,6 +44,7 @@ use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissS
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
+use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
@@ -453,6 +454,7 @@ pub(crate) struct CanonicalStateStorage {
     enlarge_max_mp_state: Option<EnlargeMaxMpState>,
     origin_state: Option<OriginState>,
     hearten_state: Option<HeartenState>,
+    mana_shield_state: Option<ManaShieldState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
@@ -636,6 +638,7 @@ impl CMoveShape {
         self.enlarge_max_mp_state = None;
         self.origin_state = None;
         self.hearten_state = None;
+        self.mana_shield_state = None;
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
@@ -660,6 +663,7 @@ impl CMoveShape {
     pub(crate) const fn has_materialized_abnormality(&self) -> bool {
         self.state_storage.agility_state_2.is_some()
             || self.state_storage.hearten_state.is_some()
+            || self.state_storage.mana_shield_state.is_some()
             || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
             || !self.state_storage.undead_states.is_empty()
@@ -758,6 +762,10 @@ impl CMoveShape {
             self.hearten_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let mana_shield = usize::from(
+            self.mana_shield_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         scripted
             .saturating_add(agility)
             .saturating_add(callosity)
@@ -767,6 +775,7 @@ impl CMoveShape {
             .saturating_add(enlarge_max_mp)
             .saturating_add(origin)
             .saturating_add(hearten)
+            .saturating_add(mana_shield)
             .saturating_add(change_body)
             .saturating_add(extended)
             .saturating_add(undead)
@@ -802,6 +811,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .hearten_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .mana_shield_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .script_states
@@ -896,6 +908,28 @@ impl CMoveShape {
     pub(crate) fn take_expired_hearten_state(&mut self, now_ms: u32) -> Option<HeartenState> {
         self.hearten_state.filter(|state| state.expired(now_ms))?;
         self.hearten_state.take()
+    }
+
+    pub(crate) fn replace_mana_shield_state(
+        &mut self,
+        state: ManaShieldState,
+    ) -> Option<ManaShieldState> {
+        self.mana_shield_state.replace(state)
+    }
+
+    pub(crate) fn take_mana_shield_state(&mut self) -> Option<ManaShieldState> {
+        self.mana_shield_state.take()
+    }
+
+    pub(crate) fn take_expired_mana_shield_state(
+        &mut self,
+        now_ms: u32,
+        player_mana: u32,
+        player_dead: bool,
+    ) -> Option<ManaShieldState> {
+        self.mana_shield_state
+            .filter(|state| state.expired(now_ms, player_mana, player_dead))?;
+        self.mana_shield_state.take()
     }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {

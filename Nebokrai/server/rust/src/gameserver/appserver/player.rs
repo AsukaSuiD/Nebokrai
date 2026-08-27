@@ -4306,6 +4306,29 @@ impl CPlayer {
         (properties, state)
     }
 
+    pub(crate) fn replace_mana_shield_state(
+        &mut self,
+        state: super::skills::manashieldstate::ManaShieldState,
+    ) -> Option<super::skills::manashieldstate::ManaShieldState> {
+        self.move_shape.replace_mana_shield_state(state)
+    }
+
+    pub(crate) fn take_mana_shield_state(
+        &mut self,
+    ) -> Option<super::skills::manashieldstate::ManaShieldState> {
+        self.move_shape.take_mana_shield_state()
+    }
+
+    pub(crate) fn take_expired_mana_shield_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::manashieldstate::ManaShieldState> {
+        let mana = self.mana();
+        let dead = self.is_dead();
+        self.move_shape
+            .take_expired_mana_shield_state(now_ms, mana, dead)
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,

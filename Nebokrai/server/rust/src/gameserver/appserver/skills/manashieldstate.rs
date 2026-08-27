@@ -1,6 +1,133 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние `CManaShieldState`.
+//!
+//! Щит `321` хранит срок, остаток прочности, две защиты и WORD-факторы
+//! преобразования урона. `absorb_damage` вызывается в исходной позиции
+//! `CFightDefense::PreDefense`, до обычной защиты и финального damage factor.
+
+use super::manashield::MANA_SHIELD_SKILL_ID;
+use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
+
+pub(crate) const MANA_SHIELD_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+pub(crate) const MANA_SHIELD_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ManaShieldState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    life: i32,
+    physical_defense: i32,
+    element_defense: i32,
+    hp_factor: u16,
+    mp_factor: u16,
+}
+
+fn round_original(value: f32) -> i32 {
+    value.round_ties_even() as i32
+}
+
+impl ManaShieldState {
+    pub(crate) const fn new(
+        started_at_ms: u32,
+        keep_time_ms: u32,
+        life: i32,
+        physical_defense: i32,
+        element_defense: i32,
+        hp_factor: u16,
+        mp_factor: u16,
+    ) -> Self {
+        Self {
+            started_at_ms,
+            keep_time_ms,
+            life,
+            physical_defense,
+            element_defense,
+            hp_factor,
+            mp_factor,
+        }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        MANA_SHIELD_SKILL_ID
+    }
+
+    pub(crate) const fn life(self) -> i32 {
+        self.life
+    }
+
+    pub(crate) const fn expired(self, now_ms: u32, player_mana: u32, player_dead: bool) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
+            || self.life < 1
+            || player_dead
+            || player_mana == 0
+    }
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
+        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
+        if deadline <= now_ms {
+            0
+        } else {
+            deadline.wrapping_sub(now_ms) as i32
+        }
+    }
+    pub(crate) fn absorb_damage(
+        &mut self,
+        skill_id: u32,
+        damage_factor: f32,
+        player_mana: u32,
+        power: &mut AttackPower,
+    ) {
+        if ((530..=545).contains(&skill_id) && skill_id != 544)
+            || self.life <= 0
+            || player_mana == 0
+            || power.hp_damage <= 0
+        {
+            return;
+        }
+        let factor = if damage_factor == 0.0 {
+            1.0
+        } else {
+            damage_factor
+        };
+        power.hp_damage = round_original(power.hp_damage as f32 * factor);
+        match power.kind {
+            AttackPowerType::Physical => {
+                power.hp_damage = power.hp_damage.wrapping_sub(self.physical_defense / 2);
+            }
+            AttackPowerType::Element => {
+                power.hp_damage = power.hp_damage.wrapping_sub(self.element_defense / 2);
+            }
+            AttackPowerType::Soul => {}
+        }
+        power.hp_damage = power.hp_damage.max(0);
+        let hp_factor = self.hp_factor as f32 * 0.01;
+        let mp_factor = self.mp_factor as f32 * 0.01;
+        if hp_factor <= 0.0 || mp_factor <= 0.0 {
+            power.hp_damage = round_original(power.hp_damage as f32 / factor);
+            return;
+        }
+        let hp_shield = round_original(hp_factor * power.hp_damage as f32);
+        let mp_damage = round_original(mp_factor * power.hp_damage as f32);
+        if self.life < hp_shield {
+            let old_life = self.life;
+            self.life = 0;
+            power.mp_damage = mp_damage;
+            power.hp_damage = round_original((hp_shield - old_life) as f32 / hp_factor);
+        } else if ((player_mana & 0xffff) as i32) < mp_damage {
+            let available_mana = (player_mana & 0xffff) as i32;
+            self.life = 0;
+            power.mp_damage = mp_damage;
+            power.hp_damage = round_original((mp_damage - available_mana) as f32 / mp_factor);
+        } else {
+            self.life = self.life.wrapping_sub(hp_shield);
+            power.hp_damage = 0;
+            power.mp_damage = mp_damage;
+        }
+        power.hp_damage = round_original(power.hp_damage as f32 / factor);
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

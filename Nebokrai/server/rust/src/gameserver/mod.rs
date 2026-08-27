@@ -79,6 +79,8 @@ pub(crate) mod appserver {
         pub(crate) mod hearten;
         pub(crate) mod heartenstate;
         pub(crate) mod kernel;
+        pub(crate) mod manashield;
+        pub(crate) mod manashieldstate;
         pub(crate) mod natural;
         pub(crate) mod origin;
         pub(crate) mod originstate;

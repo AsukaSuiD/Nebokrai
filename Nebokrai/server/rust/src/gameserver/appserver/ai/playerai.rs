@@ -9,8 +9,9 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба, семейство ловкости, парная закалка, воодушевление и атака боевой феи сохраняют
-//! незавершённое состояние между проходами ИИ. Хвост `CPlayerAI::Run` хранит часы
+//! стрельба, семейство ловкости, парная закалка, воодушевление, мана-щит и атака
+//! боевой феи сохраняют незавершённое состояние между проходами ИИ. Хвост
+//! `CPlayerAI::Run` хранит часы
 //! автоматического прироста,
 //! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
 //! проверку срока. Прирост опыта возвращается в полный `CGame::CheckLevel`,
@@ -62,6 +63,8 @@ pub(crate) struct CPlayerAI {
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     hearten_last_used_ms: u32,
+    mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    mana_shield_last_used_ms: u32,
     immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
@@ -113,6 +116,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.callosity = None;
         self.hearten = None;
+        self.mana_shield = None;
         self.immediate_state = None;
         self.player_skills.push_back(dispatch);
         rejected
@@ -175,6 +179,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение воодушевления завершено");
         }
+        if let Some(mut execution) = self.mana_shield.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение мана-щита завершено");
+        }
         if let Some(mut execution) = self.immediate_state.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение немедленного состояния завершено");
@@ -203,6 +211,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.callosity = None;
         self.hearten = None;
+        self.mana_shield = None;
         self.immediate_state = None;
         true
     }
@@ -347,6 +356,30 @@ impl CPlayerAI {
     pub(crate) const fn hearten_last_used_ms(&self) -> u32 { self.hearten_last_used_ms }
     pub(crate) const fn mark_hearten_used(&mut self, now_ms: u32) {
         self.hearten_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn mana_shield(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.mana_shield
+    }
+
+    pub(crate) const fn begin_mana_shield(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.mana_shield = Some(state);
+    }
+    pub(crate) fn mana_shield_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.mana_shield.as_mut()
+    }
+
+    pub(crate) const fn mana_shield_last_used_ms(&self) -> u32 {
+        self.mana_shield_last_used_ms
+    }
+
+    pub(crate) const fn mark_mana_shield_used(&mut self, now_ms: u32) {
+        self.mana_shield_last_used_ms = now_ms;
     }
 
     pub(crate) const fn immediate_state(
