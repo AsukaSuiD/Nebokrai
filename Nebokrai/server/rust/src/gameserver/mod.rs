@@ -79,6 +79,8 @@ pub(crate) mod appserver {
         pub(crate) mod hearten;
         pub(crate) mod heartenstate;
         pub(crate) mod kernel;
+        pub(crate) mod machineshield;
+        pub(crate) mod machineshieldstate;
         pub(crate) mod manashield;
         pub(crate) mod manashieldstate;
         pub(crate) mod natural;
@@ -90,6 +92,7 @@ pub(crate) mod appserver {
         pub(crate) mod realmappellation;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
+        pub(crate) mod shieldstate;
         pub(crate) mod taiji;
         pub(crate) mod taijistate;
     }

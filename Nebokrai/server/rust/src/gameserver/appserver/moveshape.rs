@@ -44,9 +44,11 @@ use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissS
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
+use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
@@ -454,7 +456,7 @@ pub(crate) struct CanonicalStateStorage {
     enlarge_max_mp_state: Option<EnlargeMaxMpState>,
     origin_state: Option<OriginState>,
     hearten_state: Option<HeartenState>,
-    mana_shield_state: Option<ManaShieldState>,
+    defense_shields: Vec<DefenseShieldState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
@@ -638,7 +640,7 @@ impl CMoveShape {
         self.enlarge_max_mp_state = None;
         self.origin_state = None;
         self.hearten_state = None;
-        self.mana_shield_state = None;
+        self.defense_shields.clear();
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
@@ -663,7 +665,7 @@ impl CMoveShape {
     pub(crate) const fn has_materialized_abnormality(&self) -> bool {
         self.state_storage.agility_state_2.is_some()
             || self.state_storage.hearten_state.is_some()
-            || self.state_storage.mana_shield_state.is_some()
+            || !self.state_storage.defense_shields.is_empty()
             || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
             || !self.state_storage.undead_states.is_empty()
@@ -762,10 +764,11 @@ impl CMoveShape {
             self.hearten_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
-        let mana_shield = usize::from(
-            self.mana_shield_state
-                .is_some_and(|state| state.skill_id() as i32 == state_id),
-        );
+        let shields = self
+            .defense_shields
+            .iter()
+            .filter(|state| state.skill_id() as i32 == state_id)
+            .count();
         scripted
             .saturating_add(agility)
             .saturating_add(callosity)
@@ -775,7 +778,7 @@ impl CMoveShape {
             .saturating_add(enlarge_max_mp)
             .saturating_add(origin)
             .saturating_add(hearten)
-            .saturating_add(mana_shield)
+            .saturating_add(shields)
             .saturating_add(change_body)
             .saturating_add(extended)
             .saturating_add(undead)
@@ -813,8 +816,9 @@ impl CMoveShape {
                 .hearten_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
-                .mana_shield_state
-                .is_some_and(|state| state.skill_id() == state_id)
+                .defense_shields
+                .iter()
+                .any(|state| state.skill_id() == state_id)
             || self
                 .script_states
                 .iter()
@@ -914,22 +918,61 @@ impl CMoveShape {
         &mut self,
         state: ManaShieldState,
     ) -> Option<ManaShieldState> {
-        self.mana_shield_state.replace(state)
+        let previous = self
+            .defense_shields
+            .iter()
+            .position(|candidate| candidate.skill_id() == state.skill_id())
+            .map(|position| self.defense_shields.remove(position))
+            .and_then(|candidate| match candidate {
+                DefenseShieldState::Mana(previous) => Some(previous),
+                DefenseShieldState::Machine(_) => None,
+            });
+        self.defense_shields.push(DefenseShieldState::Mana(state));
+        previous
     }
 
-    pub(crate) fn take_mana_shield_state(&mut self) -> Option<ManaShieldState> {
-        self.mana_shield_state.take()
+    pub(crate) fn replace_machine_shield_state(
+        &mut self,
+        state: MachineShieldState,
+    ) -> Option<MachineShieldState> {
+        let previous = self
+            .defense_shields
+            .iter()
+            .position(|candidate| candidate.skill_id() == state.skill_id())
+            .map(|position| self.defense_shields.remove(position))
+            .and_then(|candidate| match candidate {
+                DefenseShieldState::Machine(previous) => Some(previous),
+                DefenseShieldState::Mana(_) => None,
+            });
+        self.defense_shields
+            .push(DefenseShieldState::Machine(state));
+        previous
     }
 
-    pub(crate) fn take_expired_mana_shield_state(
+    pub(crate) fn take_expired_defense_shields(
         &mut self,
         now_ms: u32,
         player_mana: u32,
         player_dead: bool,
-    ) -> Option<ManaShieldState> {
-        self.mana_shield_state
-            .filter(|state| state.expired(now_ms, player_mana, player_dead))?;
-        self.mana_shield_state.take()
+    ) -> Vec<DefenseShieldState> {
+        let mut expired = Vec::new();
+        let mut position = 0;
+        while position < self.defense_shields.len() {
+            if self.defense_shields[position].expired(now_ms, player_mana, player_dead) {
+                expired.push(self.defense_shields.remove(position));
+            } else {
+                position += 1;
+            }
+        }
+        expired
+    }
+
+    pub(crate) fn take_defense_shields(&mut self) -> Vec<DefenseShieldState> {
+        std::mem::take(&mut self.defense_shields)
+    }
+
+    pub(crate) fn restore_defense_shields(&mut self, states: Vec<DefenseShieldState>) {
+        self.defense_shields = states;
     }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {

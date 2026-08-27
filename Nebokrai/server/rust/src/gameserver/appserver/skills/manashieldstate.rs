@@ -2,7 +2,8 @@
 //!
 //! Щит `321` хранит срок, остаток прочности, две защиты и WORD-факторы
 //! преобразования урона. `absorb_damage` вызывается в исходной позиции
-//! `CFightDefense::PreDefense`, до обычной защиты и финального damage factor.
+//! `CFightDefense::PreDefense`, до обычной защиты и итогового коэффициента
+//! `damage_factor`.
 
 use super::manashield::MANA_SHIELD_SKILL_ID;
 use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
@@ -70,13 +71,11 @@ impl ManaShieldState {
     }
     pub(crate) fn absorb_damage(
         &mut self,
-        skill_id: u32,
         damage_factor: f32,
         player_mana: u32,
         power: &mut AttackPower,
     ) {
-        if ((530..=545).contains(&skill_id) && skill_id != 544)
-            || self.life <= 0
+        if self.life <= 0
             || player_mana == 0
             || power.hp_damage <= 0
         {

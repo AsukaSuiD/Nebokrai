@@ -12,7 +12,7 @@
 
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
+use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPowerType};
 use crate::setup::globesetup::GlobeSetupSnapshot;
 
@@ -148,7 +148,7 @@ pub(crate) fn defend_player_base_attack(
     target_mana: u32,
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
-    mut mana_shield: Option<&mut ManaShieldState>,
+    defense_shields: &mut [DefenseShieldState],
 ) {
     let (minimum_hit, maximum_hit) = setup.player_hit_limits(attacker_occupation);
     let hit = maximum_hit
@@ -178,7 +178,7 @@ pub(crate) fn defend_player_base_attack(
     }
 
     for power in &mut attack.damages {
-        if let Some(state) = mana_shield.as_deref_mut() {
+        for state in defense_shields.iter_mut() {
             state.absorb_damage(attack.skill_id, attack.damage_factor, target_mana, power);
         }
         match power.kind {
@@ -267,7 +267,7 @@ pub(crate) fn defend_player_from_monster_base_attack(
     target_mana: u32,
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
-    mut mana_shield: Option<&mut ManaShieldState>,
+    defense_shields: &mut [DefenseShieldState],
 ) {
     let (minimum_hit, maximum_hit) = setup.monster_hit_limits();
     let hit = maximum_hit
@@ -284,7 +284,7 @@ pub(crate) fn defend_player_from_monster_base_attack(
     }
 
     for power in &mut attack.damages {
-        if let Some(state) = mana_shield.as_deref_mut() {
+        for state in defense_shields.iter_mut() {
             state.absorb_damage(attack.skill_id, attack.damage_factor, target_mana, power);
         }
         match power.kind {

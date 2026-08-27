@@ -4313,20 +4313,34 @@ impl CPlayer {
         self.move_shape.replace_mana_shield_state(state)
     }
 
-    pub(crate) fn take_mana_shield_state(
+    pub(crate) fn replace_machine_shield_state(
         &mut self,
-    ) -> Option<super::skills::manashieldstate::ManaShieldState> {
-        self.move_shape.take_mana_shield_state()
+        state: super::skills::machineshieldstate::MachineShieldState,
+    ) -> Option<super::skills::machineshieldstate::MachineShieldState> {
+        self.move_shape.replace_machine_shield_state(state)
     }
 
-    pub(crate) fn take_expired_mana_shield_state(
+    pub(crate) fn take_expired_defense_shields(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::manashieldstate::ManaShieldState> {
+    ) -> Vec<super::skills::shieldstate::DefenseShieldState> {
         let mana = self.mana();
         let dead = self.is_dead();
         self.move_shape
-            .take_expired_mana_shield_state(now_ms, mana, dead)
+            .take_expired_defense_shields(now_ms, mana, dead)
+    }
+
+    pub(crate) fn take_defense_shields(
+        &mut self,
+    ) -> Vec<super::skills::shieldstate::DefenseShieldState> {
+        self.move_shape.take_defense_shields()
+    }
+
+    pub(crate) fn restore_defense_shields(
+        &mut self,
+        states: Vec<super::skills::shieldstate::DefenseShieldState>,
+    ) {
+        self.move_shape.restore_defense_shields(states);
     }
 
     pub(crate) fn add_script_move_state(
