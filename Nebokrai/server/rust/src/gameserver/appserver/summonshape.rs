@@ -11,11 +11,13 @@ pub(crate) const SUMMON_SHAPE_TYPE: i32 = 1000;
 
 use crate::gameserver::appserver::skills::basemagicphalanx::CBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
+use crate::gameserver::appserver::skills::archeryphalanx::CArcheryPhalanx;
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SummonedSkillShape {
+    Archery(CArcheryPhalanx),
     BaseMagic(CBaseMagicPhalanx),
     BattleFairyBaseMagic(CBattleFairyBaseMagicPhalanx),
 }
@@ -23,6 +25,7 @@ pub(crate) enum SummonedSkillShape {
 impl SummonedSkillShape {
     pub(crate) const fn shape(&self) -> &CShape {
         match self {
+            Self::Archery(shape) => shape.shape(),
             Self::BaseMagic(shape) => shape.shape(),
             Self::BattleFairyBaseMagic(shape) => shape.shape(),
         }
@@ -30,6 +33,7 @@ impl SummonedSkillShape {
 
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape {
         match self {
+            Self::Archery(shape) => shape.shape_mut(),
             Self::BaseMagic(shape) => shape.shape_mut(),
             Self::BattleFairyBaseMagic(shape) => shape.shape_mut(),
         }
@@ -37,6 +41,7 @@ impl SummonedSkillShape {
 
     pub(crate) const fn master(&self) -> MasterInfo {
         match self {
+            Self::Archery(shape) => shape.master(),
             Self::BaseMagic(shape) => shape.master(),
             Self::BattleFairyBaseMagic(shape) => shape.master(),
         }

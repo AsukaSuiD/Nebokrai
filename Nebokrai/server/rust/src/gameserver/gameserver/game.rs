@@ -559,7 +559,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_MODULE, GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_CIQING_PROPERTY1,
     GAP_DAKONG_1, GAP_EQUIP_ACTIVE, GAP_EQUIP_STATE, GAP_GOODS_AUCTION_SCALE, GAP_GOODS_BIND,
     GAP_GOODS_PACKAGE_EXTENTION, GAP_ITEM_QUALITY, GAP_PARTICULAR_ATTRIBUTE,
-    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_DAMAGE_LEVEL, GAP_BF_SPRITE, GOODS_TYPE_CONSUMABLE,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_CATEGORY, GAP_WEAPON_DAMAGE_LEVEL, GAP_BF_SPRITE, GOODS_TYPE_CONSUMABLE,
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
@@ -734,6 +734,10 @@ use crate::gameserver::appserver::skills::baseattack::{
     BASE_ATTACK_SKILL_ID, BaseAttackExecutionState, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     real_distance, time_reached,
+};
+use crate::gameserver::appserver::skills::archery::{ARCHERY_SKILL_ID, ArcheryExecutionState};
+use crate::gameserver::appserver::skills::archeryphalanx::{
+    ArcheryPhalanxTick, CArcheryPhalanx,
 };
 use crate::gameserver::appserver::skills::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, BASE_MAGIC_SKILL_ID, BaseMagicExecutionState,
@@ -32893,9 +32897,10 @@ impl CGame {
                         .players
                         .get_mut(&player_id)
                         .expect("skill dispatch сохраняет canonical player");
-                    let interrupted_base_magic = player.player_ai().base_magic().is_some()
+                    let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
+                        || player.player_ai().archery().is_some())
                         && player.player_ai().next_player_skill() != Some(dispatch);
-                    if interrupted_base_magic {
+                    if interrupted_delayed_skill {
                         player.set_skill_moveable(true);
                         player.set_current_skill_id(None);
                     }
@@ -33316,10 +33321,11 @@ impl CGame {
 
     fn release_reciprocal_player_target(&mut self, player_id: i32, target: ShapeIdentity) {
         let released = self.find_player_mut(player_id).is_some_and(|player| {
-            let interrupted_base_magic = player.player_ai().base_magic().is_some();
+            let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
+                || player.player_ai().archery().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
-                if interrupted_base_magic {
+                if interrupted_delayed_skill {
                     player.set_skill_moveable(true);
                 }
                 player.set_current_skill_id(None);
@@ -35257,6 +35263,19 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
+    fn send_skill_system_info_with_text(
+        &self,
+        player_id: i32,
+        string_id: &[u8],
+        value: &[u8],
+    ) {
+        let text = format_legacy_text_fields(self.get_string_by_id(string_id), &[value], 0xff);
+        let mut message = CMessage::new(0x000b_f807);
+        message.add_ulong(CSkillFactory::get_skill_failed_message_color());
+        add_legacy_c_string(message.base_mut(), &text);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
     fn base_magic_target_view(
         &self,
         region_id: i32,
@@ -35327,6 +35346,316 @@ impl CGame {
             path.push((x, y, block));
         }
         path
+    }
+
+    fn execute_player_archery<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: PlayerSkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let rejected = || QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Rejected,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let pending = || QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Pending,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return rejected();
+        };
+        let Some(region_id) = player.server_region_id() else {
+            return rejected();
+        };
+        let skill_level = player.learned_skill_level(ARCHERY_SKILL_ID);
+        let Some(properties) = self
+            .skill_factory
+            .query_skill_base_properties(ARCHERY_SKILL_ID, skill_level)
+        else {
+            return rejected();
+        };
+        let delay_ms = properties.query_property(BASE_MAGIC_DELAY_TIME);
+        let reuse_delay_ms = properties.query_property(BASE_MAGIC_REUSE_DELAY_TIME);
+        let maximum_distance = properties.query_property(BASE_MAGIC_TARGET_MAX_DISTANCE);
+        let summoned_speed = properties.query_property(BASE_MAGIC_SUMMONED_SPEED);
+        let summoned_lifetime = properties.query_property(BASE_MAGIC_SUMMONED_LIFETIME);
+        let _can_be_breaked = properties.query_property(BASE_MAGIC_CAN_BE_BREAKED);
+        let now_ms = runtime.now_milliseconds();
+        let target = match dispatch {
+            PlayerSkillDispatch::Object { target, .. } => target,
+            _ => {
+                self.send_base_magic_failure(player_id, 10);
+                return rejected();
+            }
+        };
+
+        if player_ai.archery().is_none() {
+            let cooldown_now_ms = runtime.now_milliseconds();
+            if player_ai.archery_last_used_ms() != 0
+                && !time_reached(
+                    cooldown_now_ms,
+                    player_ai.archery_last_used_ms(),
+                    reuse_delay_ms,
+                )
+            {
+                self.send_base_magic_failure(player_id, 0x0d);
+                return rejected();
+            }
+            let Some(target_view) = self.base_magic_target_view(region_id, target) else {
+                self.send_base_magic_failure(player_id, 10);
+                return rejected();
+            };
+            let (source_x, source_y) = match (
+                player.shape().get_tile_x(),
+                player.shape().get_tile_y(),
+            ) {
+                (Ok(x), Ok(y)) => (x, y),
+                _ => return rejected(),
+            };
+            let path = self.base_magic_path(
+                region_id,
+                source_x,
+                source_y,
+                target_view.tile_x,
+                target_view.tile_y,
+                None,
+            );
+            if maximum_distance != 0 && path.len() > maximum_distance as usize + 1 {
+                self.send_base_magic_failure(player_id, 0x0b);
+                let target_name = match target.object_type {
+                    PLAYER_TYPE => self
+                        .find_player(target.id)
+                        .map(CPlayer::player_name)
+                        .unwrap_or_default(),
+                    MONSTER_TYPE => self
+                        .find_region(region_id)
+                        .and_then(|owner| owner.base().find_monster_by_id(target.id))
+                        .map(CMonster::display_name)
+                        .unwrap_or_default(),
+                    _ => &[],
+                };
+                self.send_skill_system_info_with_text(player_id, b"GS0280", target_name);
+                return rejected();
+            }
+            if path.iter().any(|cell| cell.2 == 2) {
+                self.send_base_magic_failure(player_id, 0x0f);
+                self.send_skill_system_info(player_id, b"GS0282");
+                return rejected();
+            }
+            let weapon_category = player
+                .equipment()
+                .get_goods(2)
+                .map(|weapon| {
+                    weapon.addon_property_value(&self.goods_factory, GAP_WEAPON_CATEGORY, 1)
+                });
+            match weapon_category {
+                None => {
+                    self.send_base_magic_failure(player_id, 0x0e);
+                    self.send_skill_system_info(player_id, b"GS0283");
+                    return rejected();
+                }
+                Some(3 | 4) => {}
+                Some(_) => {
+                    self.send_base_magic_failure(player_id, 0x0e);
+                    self.send_skill_system_info(player_id, b"GS0284");
+                    return rejected();
+                }
+            }
+            let target_dead = match target.object_type {
+                PLAYER_TYPE => self.find_player(target.id).is_none_or(CPlayer::is_dead),
+                MONSTER_TYPE => self
+                    .find_region(region_id)
+                    .and_then(|owner| owner.base().find_monster_by_id(target.id))
+                    .is_none_or(|monster| monster.hit_points() == 0),
+                _ => true,
+            };
+            if target_dead {
+                self.send_base_magic_failure(player_id, 10);
+                self.send_skill_system_info(player_id, b"GS0285");
+                return rejected();
+            }
+            if target.object_type == PLAYER_TYPE && target.id == player_id {
+                self.send_base_magic_failure(player_id, 10);
+                self.send_base_magic_failure(player_id, 10);
+                self.send_skill_system_info(player_id, b"GS0286");
+                return rejected();
+            }
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.movement_shape_mut().set_direction(get_line_direction(
+                    source_x,
+                    source_y,
+                    target_view.tile_x,
+                    target_view.tile_y,
+                ));
+                player.set_skill_moveable(false);
+                player.set_current_skill_id(Some(ARCHERY_SKILL_ID));
+            }
+            let direction = self
+                .find_player(player_id)
+                .map(|player| player.shape().get_direction())
+                .unwrap_or_default();
+            let mut start = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+            start.add_byte(1);
+            start.add_long(ARCHERY_SKILL_ID as i32);
+            start.base_mut().add_short(skill_level as i16);
+            start.add_long(PLAYER_TYPE);
+            start.add_long(player_id);
+            start.add_long(direction);
+            let _ = self.send_player_shape_around(player_id, None, &start);
+            let mut execution = ArcheryExecutionState::begin(dispatch, target, now_ms);
+            let _ = execution
+                .kernel_mut()
+                .advance(SkillStage::Begin, SkillStage::Check);
+            player_ai.begin_archery(execution);
+            let first_ai_now_ms = runtime.now_milliseconds();
+            if !time_reached(first_ai_now_ms, now_ms, delay_ms) {
+                return pending();
+            }
+        } else if player_ai
+            .archery()
+            .is_none_or(|state| state.kernel().dispatch() != dispatch)
+        {
+            return rejected();
+        } else if !time_reached(
+            now_ms,
+            player_ai
+                .archery()
+                .map_or(now_ms, |state| state.kernel().started_at_ms()),
+            delay_ms,
+        ) {
+            return pending();
+        }
+
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_skill_moveable(true);
+        }
+        let Some(target_view) = self.base_magic_target_view(region_id, target) else {
+            self.send_base_magic_failure(player_id, 10);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_current_skill_id(None);
+            }
+            return rejected();
+        };
+        let target_dead = match target.object_type {
+            PLAYER_TYPE => self.find_player(target.id).is_none_or(CPlayer::is_dead),
+            MONSTER_TYPE => self
+                .find_region(region_id)
+                .and_then(|owner| owner.base().find_monster_by_id(target.id))
+                .is_none_or(|monster| monster.hit_points() == 0),
+            _ => true,
+        };
+        if target_dead {
+            self.send_base_magic_failure(player_id, 10);
+            self.send_skill_system_info(player_id, b"GS0285");
+            self.send_base_magic_failure(player_id, 10);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.set_current_skill_id(None);
+            }
+            return rejected();
+        }
+        let Some(source_view) = self.find_player(player_id).and_then(CPlayer::shape_view) else {
+            return rejected();
+        };
+        let attack_time = real_distance(
+            source_view.tile_x,
+            source_view.tile_y,
+            target_view.tile_x,
+            target_view.tile_y,
+        )
+        .wrapping_mul(summoned_speed as i32);
+        let mut fire = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+        fire.add_byte(2);
+        fire.add_long(ARCHERY_SKILL_ID as i32);
+        fire.base_mut().add_short(skill_level as i16);
+        fire.add_long(PLAYER_TYPE);
+        fire.add_long(player_id);
+        fire.add_long(target.object_type);
+        fire.add_long(target.id);
+        fire.add_long(target_view.tile_x);
+        fire.add_long(target_view.tile_y);
+        fire.add_long(attack_time);
+        let _ = self.send_player_shape_around(player_id, None, &fire);
+
+        let forced_distance = real_distance(
+            source_view.tile_x,
+            source_view.tile_y,
+            target_view.tile_x,
+            target_view.tile_y,
+        ) as u32;
+        let path = self.base_magic_path(
+            region_id,
+            source_view.tile_x,
+            source_view.tile_y,
+            target_view.tile_x,
+            target_view.tile_y,
+            Some(forced_distance),
+        );
+        if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {
+            let player = self.find_player(player_id).expect("стрелок сохранён");
+            let permissions = player.pk_permissions();
+            let master = MasterInfo {
+                master_type: PLAYER_TYPE,
+                master_id: player_id,
+                master_guild_id: player.faction_id(),
+                master_team_id: player.team_id(),
+                master_union_id: player.union_id(),
+                master_country_id: 0,
+                permitted_to_kill_player: i32::from(permissions.player),
+                permitted_to_kill_teammate: i32::from(permissions.teammate),
+                permitted_to_kill_guild_member: i32::from(permissions.guild_member),
+                permitted_to_kill_criminal: i32::from(permissions.criminal),
+            };
+            let summon_id = self.next_summon_shape_id.take();
+            let summon_started_at_ms = runtime.now_milliseconds();
+            let mut phalanx = CArcheryPhalanx::new(
+                summon_id,
+                master,
+                summon_started_at_ms,
+                summoned_lifetime,
+                skill_level,
+                attack_time as u32,
+                target,
+            );
+            phalanx.shape_mut().set_region_id(region_id);
+            if let Some(mut owner) = self.take_region_owner(region_id) {
+                let (tile_x, tile_y, _) = path[0];
+                let result = owner.base_mut().add_archery_phalanx(
+                    phalanx,
+                    tile_x,
+                    tile_y,
+                    self.area_width,
+                    self.area_height,
+                    summon_started_at_ms,
+                    runtime,
+                );
+                self.restore_region_owner(owner);
+                tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд базовой стрельбы");
+            }
+        }
+        if let Some(state) = player_ai.archery_mut() {
+            let _ = state
+                .kernel_mut()
+                .advance(SkillStage::Check, SkillStage::Calculate);
+            let _ = state
+                .kernel_mut()
+                .advance(SkillStage::Calculate, SkillStage::Attack);
+            let _ = state
+                .kernel_mut()
+                .advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        player_ai.mark_archery_used(runtime.now_milliseconds());
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.set_current_skill_id(None);
+        }
+        QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Completed,
+            first_contact: false,
+            killing_blow: None,
+        }
     }
 
     fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
@@ -36719,8 +37048,17 @@ impl CGame {
                 }
                 _ => false,
             };
+            let concrete_archery = match dispatch {
+                PlayerSkillDispatch::Object { skill_id, target } => {
+                    skill_id == ARCHERY_SKILL_ID
+                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                }
+                _ => false,
+            };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
+            } else if concrete_archery {
+                self.execute_player_archery(player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 self.execute_player_base_magic(player_id, dispatch, player_ai, runtime)
             } else {
@@ -39582,12 +39920,118 @@ impl CGame {
         Some((attack, combat, occupation, attacker_level))
     }
 
+    fn calculate_archery_attack(
+        &mut self,
+        phalanx: &CArcheryPhalanx,
+        target_level: u8,
+    ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+        let master = phalanx.master();
+        if master.master_type != PLAYER_TYPE || master.master_id == 0 {
+            return None;
+        }
+        let player = self.find_player(master.master_id)?;
+        let properties = self
+            .skill_factory
+            .query_skill_base_properties(ARCHERY_SKILL_ID, phalanx.skill_level())?;
+        let mut combat = player.combat_properties();
+        let occupation = player.occupation();
+        let attacker_level = player.level();
+        let weapon_level = player
+            .equipment()
+            .get_goods(2)
+            .map_or(0, |goods| {
+                goods.addon_property_value(&self.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
+            });
+        let (weapon_divisor, weapon_minimum) = self.globe_setup.weapon_damage_factors();
+        let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
+        let mut damage_factor = if weapon_divisor == 0.0 {
+            1.0
+        } else {
+            delta as f32 / weapon_divisor
+        };
+        damage_factor = damage_factor.min(1.0).max(weapon_minimum);
+        let minimum = combat.minimum_attack as i32;
+        let maximum = combat.maximum_attack as i32;
+        let width_delta = maximum.wrapping_sub(minimum);
+        let width = if width_delta < 0 {
+            width_delta.wrapping_neg()
+        } else {
+            width_delta
+        }
+        .wrapping_add(1);
+        let physical = minimum.wrapping_add(game_legacy_random(&mut self.random_state, width));
+        let mut attack = AttackInformation {
+            skill_id: ARCHERY_SKILL_ID,
+            skill_level: phalanx.skill_level() as u8,
+            attacker_type: master.master_type,
+            attacker_id: master.master_id,
+            attacker_team_id: master.master_team_id,
+            attacker_faction_id: master.master_guild_id,
+            attacker_union_id: master.master_union_id,
+            hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
+            damage_factor,
+            damage_modifier: 0,
+            critical: false,
+            blast_attack: false,
+            full_miss: 0,
+            damages: vec![
+                AttackPower {
+                    kind: AttackPowerType::Physical,
+                    hp_damage: physical.max(0),
+                    mp_damage: 0,
+                },
+                AttackPower {
+                    kind: AttackPowerType::Element,
+                    hp_damage: combat.add_element_attack as i32,
+                    mp_damage: 0,
+                },
+                AttackPower {
+                    kind: AttackPowerType::Soul,
+                    hp_damage: i32::from(combat.add_soul_attack),
+                    mp_damage: 0,
+                },
+            ],
+        };
+        if game_legacy_random(&mut self.random_state, 100) < i32::from(combat.cch) {
+            attack.critical = true;
+            let critical_rate = self.globe_setup.critical_rate();
+            for power in &mut attack.damages {
+                power.hp_damage =
+                    ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+            }
+        }
+        let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
+            self.globe_setup.base_combat_scales();
+        if combat.blast_attack_scale() < 1.0 {
+            combat.blast_attack_scale_bits = blast_attack.max(1.0).to_bits();
+        }
+        if combat.blast_defense_scale() < 0.01 {
+            combat.blast_defense_scale_bits = blast_defense.max(0.01).to_bits();
+        }
+        if combat.element_blast_attack_scale() < 1.0 {
+            combat.element_blast_attack_scale_bits = element_blast_attack.max(1.0).to_bits();
+        }
+        if combat.element_blast_defense_scale() < 0.01 {
+            combat.element_blast_defense_scale_bits = element_blast_defense.max(0.01).to_bits();
+        }
+        if combat.full_miss_scale() < 0.01 {
+            combat.full_miss_scale_bits = full_miss.max(0.01).to_bits();
+        }
+        if combat.critical_rate() < 1.0 {
+            combat.critical_rate_bits = self.globe_setup.critical_rate().max(1.0).to_bits();
+        }
+        Some((attack, combat, occupation, attacker_level))
+    }
+
     fn calculate_summoned_skill_attack(
         &mut self,
         phalanx: &SummonedSkillShape,
         target_level: u8,
     ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
         match phalanx {
+            SummonedSkillShape::Archery(phalanx) => {
+                self.calculate_archery_attack(phalanx, target_level)
+            }
             SummonedSkillShape::BaseMagic(phalanx) => {
                 self.calculate_base_magic_attack(phalanx, target_level)
             }
@@ -39903,6 +40347,16 @@ impl CGame {
             .base_mut()
             .find_skill_phalanx_mut(phalanx_id)
             .map(|phalanx| match phalanx {
+                SummonedSkillShape::Archery(phalanx) => {
+                    match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
+                        ArcheryPhalanxTick::Pending => Some(None),
+                        ArcheryPhalanxTick::Attack {
+                            target,
+                            sampled_at_ms,
+                        } => Some(Some((target, sampled_at_ms))),
+                        ArcheryPhalanxTick::Expired => None,
+                    }
+                }
                 SummonedSkillShape::BaseMagic(phalanx) => {
                     match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
                         BaseMagicPhalanxTick::Pending => Some(None),
@@ -39951,7 +40405,9 @@ impl CGame {
                 }
             }
         }
-        if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+        if !matches!(&phalanx, SummonedSkillShape::Archery(_))
+            && let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
+        {
             let _ = self.send_shape_exit_around(region, phalanx.shape());
         }
         true

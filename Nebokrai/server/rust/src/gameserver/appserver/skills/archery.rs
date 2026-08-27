@@ -1,6 +1,48 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Базовая стрельба GameServer (`SKILL_BASE_ARCHERY`, ID `2`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/archery.cpp`. Навык исполняется из обычной очереди
+//! `CPlayerAI`: проверяет дальность, непролётные клетки и оружие категории
+//! лука либо арбалета, блокирует движение на задержку и передаёт попадание
+//! региональному `CArcheryPhalanx`. Формулы и порядок RNG применяются только
+//! при достижении цели снарядом.
+
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+
+pub(crate) const ARCHERY_SKILL_ID: u32 = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ArcheryExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    target: ShapeIdentity,
+}
+
+impl ArcheryExecutionState {
+    pub(crate) const fn begin(
+        dispatch: PlayerSkillDispatch,
+        target: ShapeIdentity,
+        started_at_ms: u32,
+    ) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
+            target,
+        }
+    }
+
+    pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
+        self.kernel
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+
+    pub(crate) const fn target(self) -> ShapeIdentity {
+        self.target
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

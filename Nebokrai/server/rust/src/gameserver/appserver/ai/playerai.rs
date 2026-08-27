@@ -1,20 +1,20 @@
-//! Достигнутая client-destination часть `CPlayerAI` GameServer.
+//! Достигнутая часть очередей и исполнения `CPlayerAI` GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/ai/playerai.cpp`. Трёхаргументный virtual `MoveTo` RVA
-//! `0x0010A480` для живого player owner-а очищает emotion, удаляет старейшие
-//! destination до длины не более трёх и затем добавляет `(direction, is_run)`;
-//! так очередь после вызова содержит не более четырёх элементов. Owner/health
-//! и ClearEmotion остаются у caller-а, чтобы не хранить raw pointers внутри AI.
-//! Owner теперь принадлежит canonical `CPlayer`: quest movement и оба skill
-//! message family кладут typed dispatch в его FIFO, а reached `CMoveShape::AI`
-//! передаёт front actual execution owner-у и удаляет его только по terminal
-//! outcome. Это сохраняет pending-команду между AI tick-ами без shadow map.
-//! Хвост `CPlayerAI::Run` после ещё внешнего `CBaseAI::Run` теперь хранит оба
-//! auto-inc clock, использует persisted player/faction facts и exact unsigned
-//! due-check. Auto-exp возвращает mutation в полный `CGame::CheckLevel` caller,
-//! energy — в адресный `0xBF72C` tail.
-//! Четырёхаргументный pathfinding `MoveTo`, target/skill execution и остальные
+//! `0x0010A480` для живого игрока очищает эмоцию, удаляет старейшие назначения
+//! до длины не более трёх и затем добавляет `(direction, is_run)`;
+//! так очередь после вызова содержит не более четырёх элементов. Здоровье
+//! владельца и `ClearEmotion` остаются у вызывающей стороны, чтобы не хранить сырые
+//! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
+//! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
+//! его только после завершения либо отказа. Базовая атака, базовая магия,
+//! стрельба и атака боевой феи сохраняют незавершённое состояние между
+//! проходами ИИ. Хвост `CPlayerAI::Run` хранит часы автоматического прироста,
+//! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
+//! проверку срока. Прирост опыта возвращается в полный `CGame::CheckLevel`,
+//! энергия публикуется адресным сообщением `0xBF72C`.
+//! Четырёхаргументный поиск пути `MoveTo` и остальные
 //! методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
@@ -22,6 +22,7 @@ use std::collections::VecDeque;
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
+use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
@@ -40,6 +41,8 @@ pub(crate) struct CPlayerAI {
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
     base_attack: Option<BaseAttackExecutionState>,
     base_attack_last_used_ms: u32,
+    archery: Option<ArcheryExecutionState>,
+    archery_last_used_ms: u32,
     base_magic: Option<BaseMagicExecutionState>,
     base_magic_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
@@ -89,6 +92,7 @@ impl CPlayerAI {
         let rejected = self.player_skills.len();
         self.player_skills.clear();
         self.base_attack = None;
+        self.archery = None;
         self.base_magic = None;
         self.player_skills.push_back(dispatch);
         rejected
@@ -126,6 +130,15 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
         }
+        if let Some(mut execution) = self.archery.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(
+                ?expected,
+                ?termination,
+                stage = ?execution.kernel().stage(),
+                "выполнение базовой стрельбы завершено"
+            );
+        }
         if let Some(mut execution) = self.base_magic.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой магии завершено");
@@ -149,12 +162,33 @@ impl CPlayerAI {
         }
         self.player_skills.pop_front();
         self.base_attack = None;
+        self.archery = None;
         self.base_magic = None;
         true
     }
 
     pub(crate) const fn base_attack(&self) -> Option<BaseAttackExecutionState> {
         self.base_attack
+    }
+
+    pub(crate) const fn archery(&self) -> Option<ArcheryExecutionState> {
+        self.archery
+    }
+
+    pub(crate) const fn begin_archery(&mut self, state: ArcheryExecutionState) {
+        self.archery = Some(state);
+    }
+
+    pub(crate) fn archery_mut(&mut self) -> Option<&mut ArcheryExecutionState> {
+        self.archery.as_mut()
+    }
+
+    pub(crate) const fn archery_last_used_ms(&self) -> u32 {
+        self.archery_last_used_ms
+    }
+
+    pub(crate) const fn mark_archery_used(&mut self, now_ms: u32) {
+        self.archery_last_used_ms = now_ms;
     }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {

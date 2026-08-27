@@ -1,6 +1,90 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Региональный снаряд базовой стрельбы GameServer.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/archeryphalanx.cpp`. Два раздельных чтения часов,
+//! строгие границы срока жизни и задержки атаки сохранены. В отличие от
+//! базовой магии `End` лишь ставит `CS_DELETE`: отдельный немедленный пакет
+//! выхода здесь не отправляется. Расчёт трёх типов урона и RNG принадлежит
+//! `CGame`, где доступен живой владелец-игрок.
+
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::public::guid::CGuid;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ArcheryPhalanxTick {
+    Pending,
+    Attack {
+        target: ShapeIdentity,
+        sampled_at_ms: u32,
+    },
+    Expired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CArcheryPhalanx {
+    shape: CShape,
+    master: MasterInfo,
+    started_at_ms: u32,
+    lifetime_ms: u32,
+    skill_level: i32,
+    attack_delay_ms: u32,
+    target: ShapeIdentity,
+}
+
+impl CArcheryPhalanx {
+    pub(crate) fn new(
+        id: i32,
+        master: MasterInfo,
+        started_at_ms: u32,
+        lifetime_ms: u32,
+        skill_level: i32,
+        attack_delay_ms: u32,
+        target: ShapeIdentity,
+    ) -> Self {
+        let mut shape = CShape::with_constructor_defaults();
+        shape.set_identity(ShapeIdentity {
+            object_type: SUMMON_SHAPE_TYPE,
+            id,
+            ex_id: CGuid::GUID_INVALID,
+        });
+        Self {
+            shape,
+            master,
+            started_at_ms,
+            lifetime_ms,
+            skill_level,
+            attack_delay_ms,
+            target,
+        }
+    }
+
+    pub(crate) const fn shape(&self) -> &CShape { &self.shape }
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
+    pub(crate) const fn master(&self) -> MasterInfo { self.master }
+    pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
+
+    pub(crate) fn tick(
+        &mut self,
+        lifetime_now_ms: u32,
+        get_attack_now_ms: impl FnOnce() -> u32,
+    ) -> ArcheryPhalanxTick {
+        if lifetime_now_ms.wrapping_sub(self.started_at_ms) > self.lifetime_ms {
+            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
+            return ArcheryPhalanxTick::Expired;
+        }
+        let attack_now_ms = get_attack_now_ms();
+        if attack_now_ms.wrapping_sub(self.started_at_ms) > self.attack_delay_ms {
+            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
+            return ArcheryPhalanxTick::Attack {
+                target: self.target,
+                sampled_at_ms: attack_now_ms,
+            };
+        }
+        ArcheryPhalanxTick::Pending
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

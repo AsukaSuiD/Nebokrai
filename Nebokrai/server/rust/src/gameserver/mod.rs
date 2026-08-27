@@ -59,6 +59,8 @@ pub(crate) mod appserver {
     }
     pub(crate) mod skills {
         pub(crate) mod baseattack;
+        pub(crate) mod archery;
+        pub(crate) mod archeryphalanx;
         pub(crate) mod basemagic;
         pub(crate) mod basemagicphalanx;
         pub(crate) mod battlefairybasemagic;

@@ -23,6 +23,7 @@ pub(crate) const GOODS_TYPE_CONSUMABLE: i32 = 1;
 pub(crate) const GOODS_TYPE_EQUIPMENT: i32 = 2;
 pub(crate) const GAP_GOODS_AUCTION_SCALE: i32 = 235;
 pub(crate) const GAP_ROLE_MINIMUM_LEVEL_LIMIT: i32 = 6;
+pub(crate) const GAP_WEAPON_CATEGORY: i32 = 5;
 pub(crate) const GAP_ROLE_MINIMUM_STRENGTH_LIMIT: i32 = 7;
 pub(crate) const GAP_ROLE_MINIMUM_AGILITY_LIMIT: i32 = 8;
 pub(crate) const GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT: i32 = 9;
