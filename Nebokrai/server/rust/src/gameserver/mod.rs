@@ -99,6 +99,7 @@ pub(crate) mod appserver {
     #[path = "message packaging/cs2ccontainerobjectmove.rs"]
     pub(crate) mod cs2ccontainerobjectmove;
     pub(crate) mod monster;
+    pub(crate) mod monsterworld;
     pub(crate) mod moveshape;
     pub(crate) mod npc;
     pub(crate) mod pksys;

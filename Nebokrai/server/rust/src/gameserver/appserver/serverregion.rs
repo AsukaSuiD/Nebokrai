@@ -145,6 +145,7 @@ use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
 use super::goods::cgoods::CGoods;
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
+use super::monsterworld::MonsterWorld;
 use super::moveshape::{
     MoveShapeCommandBlock, MoveShapePositionBlock, MoveShapePositionDispatch,
     MoveShapePositionFacts, MoveShapeResolver,
@@ -773,7 +774,7 @@ pub(crate) struct CServerRegion {
     area_y: i32,
     areas: Vec<CArea>,
     registry: ServerRegionRegistry,
-    owned_monsters: BTreeMap<i32, CMonster>,
+    owned_monsters: MonsterWorld,
     total_spawned_monsters: i32,
     next_monster_id: NextMonsterId,
     owned_npcs: BTreeMap<i32, CNpc>,
@@ -1215,23 +1216,23 @@ impl CServerRegion {
 
     pub(crate) fn set_owned_pets_mode(&mut self, player_id: i32, mode: i32) -> usize {
         let mut changed = 0usize;
-        for monster in self.owned_monsters.values_mut() {
+        self.owned_monsters.for_each_mut(|_, monster| {
             if monster.is_owned_pet(player_id) {
                 monster.set_pet_mode(mode);
                 changed = changed.wrapping_add(1);
             }
-        }
+        });
         changed
     }
 
     pub(crate) fn set_owned_pets_action(&mut self, player_id: i32, action: i32) -> usize {
         let mut changed = 0usize;
-        for monster in self.owned_monsters.values_mut() {
+        self.owned_monsters.for_each_mut(|_, monster| {
             if monster.is_owned_pet(player_id) {
                 monster.set_pet_action(action);
                 changed = changed.wrapping_add(1);
             }
-        }
+        });
         changed
     }
 
@@ -1240,12 +1241,12 @@ impl CServerRegion {
             return 0;
         }
         let mut changed = 0usize;
-        for monster in self.owned_monsters.values_mut() {
+        self.owned_monsters.for_each_mut(|_, monster| {
             if monster.is_owned_pet(player_id) {
                 monster.set_pet_target(target);
                 changed = changed.wrapping_add(1);
             }
-        }
+        });
         changed
     }
 
@@ -1686,7 +1687,7 @@ impl CServerRegion {
         id: i32,
         figure: ShapeFigure,
     ) -> Result<bool, RegionMembershipBlock> {
-        let Some(mut monster) = self.owned_monsters.remove(&id) else {
+        let Some(mut taken) = self.owned_monsters.take(id) else {
             return Ok(false);
         };
         let facts = ShapeRuntimeFacts {
@@ -1695,10 +1696,13 @@ impl CServerRegion {
             figure,
             ..ShapeRuntimeFacts::default()
         };
-        if let Err(error) = self.remove_object(monster.move_shape_mut().shape_mut(), facts) {
-            self.owned_monsters.insert(id, monster);
+        if let Err(error) =
+            self.remove_object(taken.monster_mut().move_shape_mut().shape_mut(), facts)
+        {
+            self.owned_monsters.restore(taken);
             return Err(error);
         }
+        self.owned_monsters.discard(taken);
         Ok(true)
     }
 
@@ -1709,7 +1713,7 @@ impl CServerRegion {
         id: i32,
         figure: ShapeFigure,
     ) -> Result<bool, RegionMembershipBlock> {
-        let Some(mut monster) = self.owned_monsters.remove(&id) else {
+        let Some(mut taken) = self.owned_monsters.take(id) else {
             return Ok(false);
         };
         let facts = ShapeRuntimeFacts {
@@ -1719,9 +1723,9 @@ impl CServerRegion {
             ..ShapeRuntimeFacts::default()
         };
         let result = self
-            .remove_object(monster.move_shape_mut().shape_mut(), facts)
+            .remove_object(taken.monster_mut().move_shape_mut().shape_mut(), facts)
             .map(|()| true);
-        self.owned_monsters.insert(id, monster);
+        self.owned_monsters.restore(taken);
         result
     }
 
@@ -2594,7 +2598,7 @@ impl CServerRegion {
             .map_err(RegionMembershipBlock::MoveShape)
     }
 
-    /// Временно вынимает concrete monster owner из map, чтобы его virtual
+    /// Временно освобождает значение generational slot, чтобы его virtual
     /// `OnMove` мог одновременно изменить region membership и отправить wire.
     pub(crate) fn move_owned_monster(
         &mut self,
@@ -2607,9 +2611,11 @@ impl CServerRegion {
         area_height: i32,
         around: &GameServerAroundRuntime<'_>,
     ) -> Option<Result<(), MoveShapeCommandBlock>> {
-        let mut monster = self.owned_monsters.remove(&monster_id)?;
-        let facts = monster.movement_position_facts(figure, area_width, area_height);
-        let result = monster.move_shape_mut().on_move(
+        let mut taken = self.owned_monsters.take(monster_id)?;
+        let facts = taken
+            .monster_mut()
+            .movement_position_facts(figure, area_width, area_height);
+        let result = taken.monster_mut().move_shape_mut().on_move(
             Some(self),
             destination_x,
             destination_y,
@@ -2617,7 +2623,7 @@ impl CServerRegion {
             facts,
             around,
         );
-        self.owned_monsters.insert(monster_id, monster);
+        self.owned_monsters.restore(taken);
         Some(result)
     }
 
@@ -2633,16 +2639,18 @@ impl CServerRegion {
         area_height: i32,
         around: &GameServerAroundRuntime<'_>,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
-        let mut monster = self.owned_monsters.remove(&monster_id)?;
-        let facts = monster.movement_position_facts(figure, area_width, area_height);
-        let result = monster.move_shape_mut().on_set_position(
+        let mut taken = self.owned_monsters.take(monster_id)?;
+        let facts = taken
+            .monster_mut()
+            .movement_position_facts(figure, area_width, area_height);
+        let result = taken.monster_mut().move_shape_mut().on_set_position(
             Some(self),
             destination_x,
             destination_y,
             facts,
             around,
         );
-        self.owned_monsters.insert(monster_id, monster);
+        self.owned_monsters.restore(taken);
         Some(result)
     }
 
@@ -2790,9 +2798,9 @@ impl CServerRegion {
         resolver: &Resolver,
         context: &mut Context,
     ) -> Option<Result<bool, AreaTransitionBlock>> {
-        let mut monster = self.owned_monsters.remove(&monster_id)?;
+        let mut taken = self.owned_monsters.take(monster_id)?;
         let result = self.apply_area_transition(
-            monster.move_shape_mut().shape_mut(),
+            taken.monster_mut().move_shape_mut().shape_mut(),
             ShapeRuntimeFacts {
                 monster: Some(super::shape::MonsterAreaClass::Active),
                 is_move_shape: true,
@@ -2803,7 +2811,7 @@ impl CServerRegion {
             resolver,
             context,
         );
-        self.owned_monsters.insert(monster_id, monster);
+        self.owned_monsters.restore(taken);
         Some(result)
     }
 

@@ -48,6 +48,7 @@ quick-xml = "0.39.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls", "system-proxy"] }
 rustix = { version = "1.1.4", features = ["system", "time"] }
 socket2 = "0.6.5"
+slotmap = "1.1.1"
 tiberius = { version = "0.12.3", default-features = false, features = ["chrono", "tds73"] }
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.16", features = ["compat"] }
