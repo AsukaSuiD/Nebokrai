@@ -1,125 +1,183 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Восстановление здоровья игрока за ману боевого духа (`CWangsheng`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/wangsheng.cpp`. Мана owned боевого духа списывается и
+//! рассылается до задержки; после задержки здоровье игрока увеличивается через
+//! ограничивающий `SetHP`. Повтор при исчезнувшем equipment-owner-е, порядок
+//! visual packets и отдельные часы восстановления сохранены.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.h
+use super::baseattack::time_reached;
+use super::basemagic::{
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
+};
+use super::battlefairytransfer::{send_failure, send_goods_update, send_transfer_cast};
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{
+    BattleFairyManaSpendOutcome, BattleFairySkillDispatch,
+};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 
-// ============================================================================
-// FUNCTION: CWangsheng::CWangsheng
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:37
-// RVA: 0x0011D4B0
-// ADDRESS: 0051d4b0
-// PROTOTYPE: undefined __thiscall CWangsheng(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const WANGSHENG_SKILL_ID: u32 = 0x221;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+const SKILL_USAGE_TARGET_HP_GAIN: u32 = 31;
 
-// ============================================================================
-// FUNCTION: CWangsheng::~CWangsheng
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:45
-// RVA: 0x0011D520
-// ADDRESS: 0051d520
-// PROTOTYPE: void __thiscall ~CWangsheng(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const fn mana_cost_unavailable(current: i32, cost: u32) -> bool {
+    (current.wrapping_sub(cost as i32)) < 0
+}
 
-// ============================================================================
-// FUNCTION: CWangsheng::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:144
-// RVA: 0x0011D540
-// ADDRESS: 0051d540
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: BattleFairySkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let terminal = |state| QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    };
+    let skill_level = match dispatch {
+        BattleFairySkillDispatch::SelfTarget {
+            skill_id,
+            skill_level,
+            ..
+        }
+        | BattleFairySkillDispatch::Point {
+            skill_id,
+            skill_level,
+            ..
+        }
+        | BattleFairySkillDispatch::Object {
+            skill_id,
+            skill_level,
+            ..
+        } if skill_id == WANGSHENG_SKILL_ID => skill_level,
+        _ => return terminal(QueuedSkillExecutionState::Rejected),
+    };
+    let Some(properties) = game.skill_base_properties(WANGSHENG_SKILL_ID, skill_level) else {
+        send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let hp_gain = properties.query_property(SKILL_USAGE_TARGET_HP_GAIN);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-// ============================================================================
-// FUNCTION: CWangsheng::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:162
-// RVA: 0x0011D610
-// ADDRESS: 0051d610
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if player_ai.wangsheng().is_none() {
+        let Some(player) = game.find_player(player_id) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let started_at_ms = runtime.now_milliseconds();
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if player_ai.wangsheng_last_used_ms() != 0
+            && !time_reached(
+                cooldown_now_ms,
+                player_ai.wangsheng_last_used_ms(),
+                reuse_delay_ms,
+            )
+        {
+            send_failure(game, player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"ZHGS0048");
+            send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss != 0
+            && player
+                .war_soul_mana(game.goods_factory())
+                .is_some_and(|current| mana_cost_unavailable(current, mp_loss))
+        {
+            send_failure(game, player_id, 7);
+            let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+            game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
+            send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        player_ai.begin_wangsheng(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai
+        .wangsheng()
+        .is_none_or(|state| state.dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if game
+        .find_player(player_id)
+        .and_then(|player| player.server_region_id())
+        .is_none()
+    {
+        send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
 
-// ============================================================================
-// FUNCTION: CWangsheng::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:126
-// RVA: 0x0011D700
-// ADDRESS: 0051d700
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if player_ai
+        .wangsheng()
+        .is_some_and(|state| state.stage() == SkillStage::Begin)
+    {
+        let Some(current_mana) = game
+            .find_player(player_id)
+            .and_then(|player| player.equipped_battle_fairy_mana(game.goods_factory()))
+        else {
+            return terminal(QueuedSkillExecutionState::Pending);
+        };
+        if mana_cost_unavailable(current_mana, mp_loss) {
+            send_failure(game, player_id, 7);
+            let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+            game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
+            send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let goods_factory = game.goods_factory().clone();
+        let da_kong_key = game.globe_setup().da_kong_key();
+        let spend = game
+            .find_player_mut(player_id)
+            .map(|player| {
+                player.spend_equipped_battle_fairy_mana(
+                    mp_loss,
+                    &goods_factory,
+                    da_kong_key,
+                )
+            })
+            .unwrap_or(BattleFairyManaSpendOutcome::MissingEquipment);
+        let update = match spend {
+            BattleFairyManaSpendOutcome::MissingEquipment
+            | BattleFairyManaSpendOutcome::SpentWithoutWarSoul => {
+                return terminal(QueuedSkillExecutionState::Pending);
+            }
+            BattleFairyManaSpendOutcome::Spent { update } => update,
+        };
+        if let Some(update) = update.as_ref() {
+            send_goods_update(game, update);
+        } else {
+            tracing::warn!(player_id, "не удалось сериализовать боевой дух после расхода маны");
+        }
+        send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 1);
+        if let Some(state) = player_ai.wangsheng_mut() {
+            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CWangshengEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:302
-// RVA: 0x0011D7C0
-// ADDRESS: 0051d7c0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWangsheng::ConditionCheck
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:53
-// RVA: 0x0011DBD0
-// ADDRESS: 0051dbd0
-// PROTOTYPE: bool __thiscall ConditionCheck(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWangsheng::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\wangsheng.cpp:193
-// RVA: 0x0011DE00
-// ADDRESS: 0051de00
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
+    let started_at_ms = player_ai
+        .wangsheng()
+        .map(SkillExecutionKernel::started_at_ms)
+        .expect("исполнение восстановления здоровья создано или восстановлено");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 2);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_health(player.health().wrapping_add(hp_gain));
+    }
+    let _ = game.update_player_properties(player_id, runtime);
+    if let Some(state) = player_ai.wangsheng_mut() {
+        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_wangsheng_used(runtime.now_milliseconds());
+    send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
+    terminal(QueuedSkillExecutionState::Completed)
+}

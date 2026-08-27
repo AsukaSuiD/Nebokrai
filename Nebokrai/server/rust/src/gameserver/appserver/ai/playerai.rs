@@ -65,6 +65,8 @@ pub(crate) struct CPlayerAI {
     life_shield_last_used_ms: u32,
     battle_fairy_transfer: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     battle_fairy_transfer_last_used_ms: [u32; 2],
+    wangsheng: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    wangsheng_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -140,6 +142,7 @@ impl CPlayerAI {
         self.battle_fairy_base_magic = None;
         self.life_shield = None;
         self.battle_fairy_transfer = None;
+        self.wangsheng = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -473,6 +476,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение переноса здоровья боевому духу завершено");
         }
+        if let Some(mut execution) = self.wangsheng.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение восстановления здоровья игрока завершено");
+        }
         true
     }
 
@@ -569,6 +576,33 @@ impl CPlayerAI {
         now_ms: u32,
     ) {
         self.battle_fairy_transfer_last_used_ms[Self::battle_fairy_transfer_index(kind)] = now_ms;
+    }
+
+    pub(crate) const fn wangsheng(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.wangsheng
+    }
+
+    pub(crate) const fn begin_wangsheng(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.wangsheng = Some(state);
+    }
+
+    pub(crate) fn wangsheng_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.wangsheng.as_mut()
+    }
+
+    pub(crate) const fn wangsheng_last_used_ms(&self) -> u32 {
+        self.wangsheng_last_used_ms
+    }
+
+    pub(crate) const fn mark_wangsheng_used(&mut self, now_ms: u32) {
+        self.wangsheng_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]

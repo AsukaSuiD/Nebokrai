@@ -103,6 +103,7 @@ pub(crate) mod appserver {
         pub(crate) mod selfshield;
         pub(crate) mod taiji;
         pub(crate) mod taijistate;
+        pub(crate) mod wangsheng;
     }
     pub(crate) mod states {
         pub(crate) mod attackpower;

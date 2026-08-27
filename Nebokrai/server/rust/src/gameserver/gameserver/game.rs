@@ -744,6 +744,9 @@ use crate::gameserver::appserver::skills::origin::ORIGIN_SKILL_ID;
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
 use crate::gameserver::appserver::skills::taiji::TAIJI_SKILL_ID;
+use crate::gameserver::appserver::skills::wangsheng::{
+    execute_battle_fairy_wangsheng, WANGSHENG_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::archery::{
     execute_player_archery, ARCHERY_SKILL_ID,
 };
@@ -36604,6 +36607,20 @@ impl CGame {
             );
             let outcome = if concrete_life_shield {
                 execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
+                BattleFairySkillDispatch::SelfTarget {
+                    skill_id: WANGSHENG_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Point {
+                    skill_id: WANGSHENG_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Object {
+                    skill_id: WANGSHENG_SKILL_ID,
+                    ..
+                }
+            ) {
+                execute_battle_fairy_wangsheng(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
                 BattleFairySkillDispatch::SelfTarget {

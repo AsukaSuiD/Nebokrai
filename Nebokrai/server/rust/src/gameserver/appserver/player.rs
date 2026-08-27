@@ -992,6 +992,15 @@ pub(crate) enum BattleFairySkillDispatch {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairyManaSpendOutcome {
+    MissingEquipment,
+    SpentWithoutWarSoul,
+    Spent {
+        update: Option<BattleFairyDefaultGoodsUpdate>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct BattleFairyGearAddons {
     attack: i32,
@@ -8016,6 +8025,47 @@ impl CPlayer {
     pub(crate) fn war_soul_mana(&self, factory: &CGoodsFactory) -> Option<i32> {
         self.war_soul_goods(factory)
             .map(|goods| goods.addon_property_value(factory, GAP_BF_MP, 1))
+    }
+
+    pub(crate) fn equipped_battle_fairy_mana(&self, factory: &CGoodsFactory) -> Option<i32> {
+        self.equipment
+            .get_goods(10)
+            .map(|goods| goods.addon_property_value(factory, GAP_BF_MP, 1))
+    }
+
+    /// `CWangsheng::AI` сначала необратимо списывает MP у slot 10 и лишь
+    /// затем проверяет `GetWarSoulGoods`; отдельный исход сохраняет эту
+    /// malformed-item границу без повторного описания уже выполненного расхода.
+    pub(crate) fn spend_equipped_battle_fairy_mana(
+        &mut self,
+        amount: u32,
+        factory: &CGoodsFactory,
+        da_kong_key: bool,
+    ) -> BattleFairyManaSpendOutcome {
+        let player_id = self.player_id();
+        let Some(goods) = self.equipment_mut().get_goods_mut(10) else {
+            return BattleFairyManaSpendOutcome::MissingEquipment;
+        };
+        let current = goods.addon_property_value(factory, GAP_BF_MP, 1);
+        let _ = goods.set_addon_property_value_core(
+            GAP_BF_MP,
+            1,
+            current.wrapping_sub(amount as i32),
+        );
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 {
+            return BattleFairyManaSpendOutcome::SpentWithoutWarSoul;
+        }
+        let identity = goods.identity();
+        let mut old_client_payload = Vec::new();
+        let update = goods
+            .serialize_for_old_client(&mut old_client_payload, factory, da_kong_key)
+            .then_some(BattleFairyDefaultGoodsUpdate {
+                message_type: 0x0b_f918,
+                player_id,
+                goods: identity,
+                old_client_payload,
+            });
+        BattleFairyManaSpendOutcome::Spent { update }
     }
 
     pub(crate) fn spend_war_soul_mana(
