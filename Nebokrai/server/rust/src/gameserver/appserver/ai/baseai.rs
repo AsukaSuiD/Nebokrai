@@ -83,6 +83,41 @@ impl CBaseAI {
         }
     }
 
+    /// Точный достигнутый префикс `WhenBeenHurted`: `Defense` всегда
+    /// становится в очередь `passive_actions`. Ненулевая длительность
+    /// оглушения потребует второго отдельного замера часов; материализованные
+    /// боевые вызовы передают ноль и не создают `Stiffen`.
+    pub(crate) fn when_been_hurted(&mut self, now_ms: u32) {
+        self.add_ai_event(AiShapeAction::Defense, 0, 0, now_ms);
+    }
+
+    /// Точный достигнутый префикс `WhenBeenKilled`: событие смерти сохраняет
+    /// место относительно уже поставленных пассивных действий.
+    pub(crate) fn when_been_killed(&mut self, now_ms: u32) {
+        self.add_ai_event(AiShapeAction::Died, 0, 0, now_ms);
+    }
+
+    /// Выполняет материализованный `Defense`-участок `ProcessPassiveAction`.
+    /// Последовательные события снимаются FIFO; `OnBeenHurted` удаляет только
+    /// префикс `active_actions` до первого `Attack` либо `Move`.
+    pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
+        let mut processed = 0usize;
+        while self
+            .passive_actions
+            .front()
+            .is_some_and(|event| event.action == AiShapeAction::Defense && event.handling == 0)
+        {
+            while self.active_actions.front().is_some_and(|event| {
+                !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
+            }) {
+                self.active_actions.pop_front();
+            }
+            self.passive_actions.pop_front();
+            processed = processed.wrapping_add(1);
+        }
+        processed
+    }
+
     pub(crate) fn active_actions(&self) -> &VecDeque<AiEvent> {
         &self.active_actions
     }

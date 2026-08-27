@@ -13,12 +13,14 @@
 //! (имя, graphics, HP, speed) остаётся в concrete object, как в `AddMonster`.
 //! `InitSkills/InitAI`, serialization и полный autonomous AI остаются RAW
 //! ниже. Достигнутая player base-attack цепочка теперь хранит canonical HP,
-//! first-attacker protection, killed attack snapshot и combat AI target/event;
+//! защиту первого нападающего, снимок смертельной атаки и цель боевого ИИ;
 //! `CGame` исполняет hurt/death, Nation/GodsBattle, reward/drop/script и
-//! region-delete tails. Для ordinary monster с единственным skill `1` тот же
-//! owner хранит target, cast/reuse и передаёт monster-to-player удар в живой
-//! region/player/network/death проход. Очередь `CBaseAI` заменена typed
-//! single-event handoff только для этих синхронных combat caller-ов. Для
+//! завершающие действия удаления из региона. `Defense` и `Died` идут через
+//! каноническую очередь `passive_actions` владельца `CBaseAI`; достигнутый
+//! `Defense` обрабатывается до активного хода монстра без отдельной
+//! диагностической передачи. Для обычного монстра с
+//! единственным skill `1` тот же owner хранит target, cast/reuse и передаёт
+//! удар монстра по игроку в живой проход region/player/network/death. Для
 //! aggressive melee AI `0/3` player/pet search и blocked-step tracing хранят
 //! здесь target/move delay; pet hurt/death сохраняют target priority и master
 //! unlink. Passive/command pet target теперь доходит через pet-scaled
@@ -83,7 +85,6 @@ pub(crate) struct CMonster {
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
     ai_target: Option<ShapeIdentity>,
-    last_combat_ai_event: Option<MonsterCombatAiEvent>,
     base_attack_cast: Option<MonsterBaseAttackCast>,
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
@@ -118,12 +119,6 @@ pub(crate) struct MonsterKillingAttack {
     pub(crate) skill_level: u8,
     pub(crate) critical: bool,
     pub(crate) blast_attack: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MonsterCombatAiEvent {
-    Defense,
-    Died,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,7 +215,6 @@ impl CMonster {
             last_attack_timer_ms: 0,
             killed_by: None,
             ai_target: None,
-            last_combat_ai_event: None,
             base_attack_cast: None,
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
@@ -635,15 +629,15 @@ impl CMonster {
         self.killed_by
     }
 
-    pub(crate) fn when_been_hurted_by(&mut self, attacker: ShapeIdentity) {
-        self.last_combat_ai_event = Some(MonsterCombatAiEvent::Defense);
+    pub(crate) fn when_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
+        self.base_ai.when_been_hurted(now_ms);
         if self.ai_target.is_none() && matches!(attacker.object_type, 400 | 600) {
             self.ai_target = Some(attacker);
         }
     }
 
-    pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity) {
-        self.last_combat_ai_event = Some(MonsterCombatAiEvent::Defense);
+    pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
+        self.base_ai.when_been_hurted(now_ms);
         if self.ai_target.is_none()
             || self
                 .ai_target
@@ -656,19 +650,13 @@ impl CMonster {
         }
     }
 
-    pub(crate) fn when_been_killed(&mut self) {
-        self.last_combat_ai_event = Some(MonsterCombatAiEvent::Died);
+    pub(crate) fn when_been_killed(&mut self, now_ms: u32) {
+        self.base_ai.when_been_killed(now_ms);
         self.ai_target = None;
     }
 
-    /// Typed replacement for the reached `CBaseAI` combat-event pop. The
-    /// target selected by `CMonsterAI::WhenBeenHurted` remains canonical.
-    pub(crate) fn consume_combat_ai_event(
-        &mut self,
-    ) -> Option<(MonsterCombatAiEvent, Option<ShapeIdentity>)> {
-        self.last_combat_ai_event
-            .take()
-            .map(|event| (event, self.ai_target))
+    pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
+        self.base_ai.process_reached_defense_actions()
     }
 
     pub(crate) const fn ai_target(&self) -> Option<ShapeIdentity> {

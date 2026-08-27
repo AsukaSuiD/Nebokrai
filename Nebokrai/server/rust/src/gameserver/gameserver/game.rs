@@ -30287,7 +30287,7 @@ impl CGame {
                 .shape_mut()
                 .set_action(if current_health == 0 { 6 } else { 5 });
             if current_health == 0 {
-                monster.when_been_killed();
+                monster.when_been_killed(now_ms);
                 monster.set_killed_by(MonsterKillingAttack {
                     attacker_type: PLAYER_TYPE,
                     attacker_id: player_id,
@@ -30297,11 +30297,14 @@ impl CGame {
                     blast_attack: false,
                 });
             } else {
-                monster.when_been_hurted_by(ShapeIdentity {
-                    object_type: PLAYER_TYPE,
-                    id: player_id,
-                    ex_id: CGuid::GUID_INVALID,
-                });
+                monster.when_been_hurted_by(
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    now_ms,
+                );
             }
         }
         self.restore_region_owner(owner);
@@ -30336,13 +30339,6 @@ impl CGame {
         died.add_long(0);
         died.add_byte(0);
         let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &died);
-        if let Some(mut owner) = self.take_region_owner(region_id) {
-            let _ = owner
-                .base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .and_then(CMonster::consume_combat_ai_event);
-            self.restore_region_owner(owner);
-        }
         let _ = self.gods_battle_monster_died(region_id, monster_id, PLAYER_TYPE, player_id);
         let _ = self.monster_on_died(region_id, monster_id, player_id, runtime);
         if carriage {
@@ -34879,7 +34875,7 @@ impl CGame {
                         .shape_mut()
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
-                        pet.when_been_killed();
+                        pet.when_been_killed(now_ms);
                         if !target_tamed && !target_carriage {
                             pet.set_killed_by(MonsterKillingAttack {
                                 attacker_type: MONSTER_TYPE,
@@ -34897,9 +34893,9 @@ impl CGame {
                             ex_id: CGuid::GUID_INVALID,
                         };
                         if target_tamed {
-                            pet.when_pet_been_hurted_by(attacker);
+                            pet.when_pet_been_hurted_by(attacker, now_ms);
                         } else {
-                            pet.when_been_hurted_by(attacker);
+                            pet.when_been_hurted_by(attacker, now_ms);
                         }
                     }
                     if !target_tamed
@@ -35801,13 +35797,16 @@ impl CGame {
                         .shape_mut()
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
-                        monster.when_been_killed();
+                        monster.when_been_killed(now_ms);
                     } else {
-                        monster.when_been_hurted_by(ShapeIdentity {
-                            object_type: PLAYER_TYPE,
-                            id: player_id,
-                            ex_id: CGuid::GUID_INVALID,
-                        });
+                        monster.when_been_hurted_by(
+                            ShapeIdentity {
+                                object_type: PLAYER_TYPE,
+                                id: player_id,
+                                ex_id: CGuid::GUID_INVALID,
+                            },
+                            now_ms,
+                        );
                     }
                 }
                 if current_health == 0 {
@@ -35840,13 +35839,6 @@ impl CGame {
                     died.base_mut().add_char(1);
                     Self::append_base_attack_tail(&mut died, &attack);
                     let _ = self.send_shape_position_around(region_id, target_x, target_y, &died);
-                    if let Some(mut owner) = self.take_region_owner(region_id) {
-                        let _ = owner
-                            .base_mut()
-                            .find_monster_by_id_mut(target_id)
-                            .and_then(CMonster::consume_combat_ai_event);
-                        self.restore_region_owner(owner);
-                    }
                     let _ =
                         self.gods_battle_monster_died(region_id, target_id, PLAYER_TYPE, player_id);
                     let _ = self.monster_on_died(region_id, target_id, player_id, runtime);
@@ -35913,13 +35905,6 @@ impl CGame {
                     hurt.add_ulong(current_health);
                     Self::append_base_attack_tail(&mut hurt, &attack);
                     let _ = self.send_shape_position_around(region_id, target_x, target_y, &hurt);
-                    if let Some(mut owner) = self.take_region_owner(region_id) {
-                        let _ = owner
-                            .base_mut()
-                            .find_monster_by_id_mut(target_id)
-                            .and_then(CMonster::consume_combat_ai_event);
-                        self.restore_region_owner(owner);
-                    }
                     let _ =
                         self.monster_on_been_hurted(region_id, target_id, PLAYER_TYPE, player_id);
                     if let Some(mut owner) = self.take_region_owner(region_id) {
@@ -39240,6 +39225,20 @@ impl CGame {
             for monster_id in monster_ids {
                 if self.run_owned_carriage_lifecycle(region_id, monster_id, runtime) {
                     continue;
+                }
+                if let Some(mut owner) = self.take_region_owner(region_id) {
+                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        let processed = monster.process_reached_defense_actions();
+                        if processed != 0 {
+                            tracing::trace!(
+                                region_id,
+                                monster_id,
+                                processed,
+                                "обработаны пассивные Defense-события монстра"
+                            );
+                        }
+                    }
+                    self.restore_region_owner(owner);
                 }
                 if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
