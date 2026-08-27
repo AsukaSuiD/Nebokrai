@@ -750,7 +750,7 @@ use crate::gameserver::appserver::skills::archeryphalanx::{
     ArcheryPhalanxTick, CArcheryPhalanx,
 };
 use crate::gameserver::appserver::skills::basemagic::{
-    BASE_MAGIC_EFFECT_MESSAGE, BASE_MAGIC_SKILL_ID, BaseMagicExecutionState,
+    execute_player_base_magic, BASE_MAGIC_EFFECT_MESSAGE, BASE_MAGIC_SKILL_ID,
     SKILL_USAGE_CAN_BE_BREAKED as BASE_MAGIC_CAN_BE_BREAKED,
     SKILL_USAGE_DELAY_TIME as BASE_MAGIC_DELAY_TIME,
     SKILL_USAGE_ELEMENT_MODIFIER as BASE_MAGIC_ELEMENT_MODIFIER,
@@ -762,7 +762,7 @@ use crate::gameserver::appserver::skills::basemagic::{
     SKILL_USAGE_TARGET_MAX_DISTANCE as BASE_MAGIC_TARGET_MAX_DISTANCE,
 };
 use crate::gameserver::appserver::skills::basemagicphalanx::{
-    BaseMagicPhalanxTick, CBaseMagicPhalanx,
+    calculate_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
 };
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     BATTLE_FAIRY_BASE_MAGIC_SKILL_ID, BATTLE_FAIRY_VISUAL_OBJECT_TYPE,
@@ -35451,7 +35451,7 @@ impl CGame {
         handled
     }
 
-    fn send_base_magic_failure(&self, player_id: i32, action: u8) {
+    pub(crate) fn send_base_magic_failure(&self, player_id: i32, action: u8) {
         let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
         message.add_byte(0);
         message.add_byte(action);
@@ -35495,7 +35495,7 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    fn base_magic_target_view(
+    pub(crate) fn base_magic_target_view(
         &self,
         region_id: i32,
         target: ShapeIdentity,
@@ -35565,6 +35565,33 @@ impl CGame {
             path.push((x, y, block));
         }
         path
+    }
+
+    pub(crate) fn allocate_summon_shape_id(&mut self) -> i32 {
+        self.next_summon_shape_id.take()
+    }
+
+    pub(crate) fn add_base_magic_phalanx<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        phalanx: CBaseMagicPhalanx,
+        tile_x: i32,
+        tile_y: i32,
+        started_at_ms: u32,
+        runtime: &mut Runtime,
+    ) -> Option<Result<i32, RegionMembershipBlock>> {
+        let mut owner = self.take_region_owner(region_id)?;
+        let result = owner.base_mut().add_base_magic_phalanx(
+            phalanx,
+            tile_x,
+            tile_y,
+            self.area_width,
+            self.area_height,
+            started_at_ms,
+            runtime,
+        );
+        self.restore_region_owner(owner);
+        Some(result)
     }
 
     pub(crate) fn send_self_state_skill_failure(
@@ -35915,293 +35942,6 @@ impl CGame {
                 .advance(SkillStage::Attack, SkillStage::Apply);
         }
         player_ai.mark_archery_used(runtime.now_milliseconds());
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.set_current_skill_id(None);
-        }
-        QueuedSkillExecutionOutcome {
-            state: QueuedSkillExecutionState::Completed,
-            first_contact: false,
-            killing_blow: None,
-        }
-    }
-
-    fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        dispatch: PlayerSkillDispatch,
-        player_ai: &mut CPlayerAI,
-        runtime: &mut Runtime,
-    ) -> QueuedSkillExecutionOutcome {
-        let rejected = || QueuedSkillExecutionOutcome {
-            state: QueuedSkillExecutionState::Rejected,
-            first_contact: false,
-            killing_blow: None,
-        };
-        let pending = || QueuedSkillExecutionOutcome {
-            state: QueuedSkillExecutionState::Pending,
-            first_contact: false,
-            killing_blow: None,
-        };
-        let Some(player) = self.find_player(player_id) else {
-            return rejected();
-        };
-        let Some(region_id) = player.server_region_id() else {
-            return rejected();
-        };
-        let skill_level = player.learned_skill_level(BASE_MAGIC_SKILL_ID);
-        let Some(properties) = self
-            .skill_factory
-            .query_skill_base_properties(BASE_MAGIC_SKILL_ID, skill_level)
-        else {
-            return rejected();
-        };
-        let delay_ms = properties.query_property(BASE_MAGIC_DELAY_TIME);
-        let reuse_delay_ms = properties.query_property(BASE_MAGIC_REUSE_DELAY_TIME);
-        let maximum_distance = properties.query_property(BASE_MAGIC_TARGET_MAX_DISTANCE);
-        let summoned_speed = properties.query_property(BASE_MAGIC_SUMMONED_SPEED);
-        let summoned_lifetime = properties.query_property(BASE_MAGIC_SUMMONED_LIFETIME);
-        let minimum_attack = properties.query_property(BASE_MAGIC_MIN_ATTACK) as i32;
-        let maximum_attack = properties.query_property(BASE_MAGIC_MAX_ATTACK) as i32;
-        let element_modifier = properties.query_property(BASE_MAGIC_ELEMENT_MODIFIER) as i32;
-        let _can_be_breaked = properties.query_property(BASE_MAGIC_CAN_BE_BREAKED);
-        let now_ms = runtime.now_milliseconds();
-        let target = match dispatch {
-            PlayerSkillDispatch::Object { target, .. } => target,
-            _ => {
-                self.send_base_magic_failure(player_id, 10);
-                return rejected();
-            }
-        };
-
-        if player_ai.base_magic().is_none() {
-            if target.object_type == PLAYER_TYPE && target.id == player_id {
-                self.send_base_magic_failure(player_id, 10);
-                self.send_skill_system_info(player_id, b"GS0286");
-                return rejected();
-            }
-            let cooldown_now_ms = runtime.now_milliseconds();
-            if player_ai.base_magic_last_used_ms() != 0
-                && !time_reached(
-                    cooldown_now_ms,
-                    player_ai.base_magic_last_used_ms(),
-                    reuse_delay_ms,
-                )
-            {
-                self.send_base_magic_failure(player_id, 0x0d);
-                self.send_skill_system_info(player_id, b"GS0278");
-                return rejected();
-            }
-            let Some(target_view) = self.base_magic_target_view(region_id, target) else {
-                self.send_base_magic_failure(player_id, 10);
-                return rejected();
-            };
-            let (source_x, source_y) = match (
-                player.shape().get_tile_x(),
-                player.shape().get_tile_y(),
-            ) {
-                (Ok(x), Ok(y)) => (x, y),
-                _ => return rejected(),
-            };
-            let path = self.base_magic_path(
-                region_id,
-                source_x,
-                source_y,
-                target_view.tile_x,
-                target_view.tile_y,
-                None,
-            );
-            if maximum_distance != 0 && path.len() > maximum_distance as usize {
-                self.send_base_magic_failure(player_id, 0x0b);
-                self.send_skill_system_info(player_id, b"GS0290");
-                return rejected();
-            }
-            let target_dead = match target.object_type {
-                PLAYER_TYPE => self.find_player(target.id).is_none_or(CPlayer::is_dead),
-                MONSTER_TYPE => self
-                    .find_region(region_id)
-                    .and_then(|owner| owner.base().find_monster_by_id(target.id))
-                    .is_none_or(|monster| monster.hit_points() == 0),
-                _ => true,
-            };
-            if target_dead {
-                self.send_base_magic_failure(player_id, 10);
-                self.send_skill_system_info(player_id, b"GS0285");
-                return rejected();
-            }
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.movement_shape_mut().set_direction(get_line_direction(
-                    source_x,
-                    source_y,
-                    target_view.tile_x,
-                    target_view.tile_y,
-                ));
-                player.set_skill_moveable(false);
-                player.set_current_skill_id(Some(BASE_MAGIC_SKILL_ID));
-            }
-            let direction = self
-                .find_player(player_id)
-                .map(|player| player.shape().get_direction())
-                .unwrap_or_default();
-            let mut start = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-            start.add_byte(1);
-            start.add_long(BASE_MAGIC_SKILL_ID as i32);
-            start.base_mut().add_short(skill_level as i16);
-            start.add_long(PLAYER_TYPE);
-            start.add_long(player_id);
-            start.add_long(direction);
-            let _ = self.send_player_shape_around(player_id, None, &start);
-            let mut execution = BaseMagicExecutionState::begin(dispatch, target, now_ms);
-            let _ = execution
-                .kernel_mut()
-                .advance(SkillStage::Begin, SkillStage::Check);
-            execution.mark_condition_checked();
-            player_ai.begin_base_magic(execution);
-            let first_ai_now_ms = runtime.now_milliseconds();
-            if !time_reached(first_ai_now_ms, now_ms, delay_ms) {
-                return pending();
-            }
-        } else if player_ai
-            .base_magic()
-            .is_none_or(|state| state.kernel().dispatch() != dispatch)
-        {
-            return rejected();
-        } else if !time_reached(
-            now_ms,
-            player_ai
-                .base_magic()
-                .map_or(now_ms, |state| state.kernel().started_at_ms()),
-            delay_ms,
-        ) {
-            return pending();
-        }
-
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.set_skill_moveable(true);
-        }
-        let Some(target_view) = self.base_magic_target_view(region_id, target) else {
-            self.send_base_magic_failure(player_id, 10);
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_current_skill_id(None);
-            }
-            return rejected();
-        };
-        let target_dead = match target.object_type {
-            PLAYER_TYPE => self.find_player(target.id).is_none_or(CPlayer::is_dead),
-            MONSTER_TYPE => self
-                .find_region(region_id)
-                .and_then(|owner| owner.base().find_monster_by_id(target.id))
-                .is_none_or(|monster| monster.hit_points() == 0),
-            _ => true,
-        };
-        if target_dead {
-            self.send_base_magic_failure(player_id, 10);
-            self.send_skill_system_info(player_id, b"GS0285");
-            self.send_base_magic_failure(player_id, 10);
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_current_skill_id(None);
-            }
-            return rejected();
-        }
-        let Some(source_view) = self.find_player(player_id).and_then(CPlayer::shape_view) else {
-            return rejected();
-        };
-        let attack_time = real_distance(
-            source_view.tile_x,
-            source_view.tile_y,
-            target_view.tile_x,
-            target_view.tile_y,
-        )
-        .wrapping_mul(summoned_speed as i32);
-        let mut fire = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-        fire.add_byte(2);
-        fire.add_long(BASE_MAGIC_SKILL_ID as i32);
-        fire.base_mut().add_short(skill_level as i16);
-        fire.add_long(PLAYER_TYPE);
-        fire.add_long(player_id);
-        fire.add_long(target.object_type);
-        fire.add_long(target.id);
-        fire.add_long(target_view.tile_x);
-        fire.add_long(target_view.tile_y);
-        fire.add_long(attack_time);
-        let _ = self.send_player_shape_around(player_id, None, &fire);
-
-        let forced_distance = real_distance(
-            source_view.tile_x,
-            source_view.tile_y,
-            target_view.tile_x,
-            target_view.tile_y,
-        ) as u32;
-        let path = self.base_magic_path(
-            region_id,
-            source_view.tile_x,
-            source_view.tile_y,
-            target_view.tile_x,
-            target_view.tile_y,
-            Some(forced_distance),
-        );
-        if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {
-            let permissions = self
-                .find_player(player_id)
-                .map(CPlayer::pk_permissions)
-                .unwrap_or_default();
-            let master = self
-                .find_player(player_id)
-                .map(|player| MasterInfo {
-                    master_type: PLAYER_TYPE,
-                    master_id: player_id,
-                    master_guild_id: player.faction_id(),
-                    master_team_id: player.team_id(),
-                    master_union_id: player.union_id(),
-                    master_country_id: 0,
-                    permitted_to_kill_player: i32::from(permissions.player),
-                    permitted_to_kill_teammate: i32::from(permissions.teammate),
-                    permitted_to_kill_guild_member: i32::from(permissions.guild_member),
-                    permitted_to_kill_criminal: i32::from(permissions.criminal),
-                })
-                .unwrap_or_default();
-            let summon_id = self.next_summon_shape_id.take();
-            let summon_started_at_ms = runtime.now_milliseconds();
-            let mut phalanx = CBaseMagicPhalanx::new(
-                summon_id,
-                master,
-                summon_started_at_ms,
-                summoned_lifetime,
-                skill_level,
-                minimum_attack,
-                maximum_attack,
-                element_modifier,
-                attack_time as u32,
-                target,
-            );
-            phalanx.shape_mut().set_region_id(region_id);
-            if let Some(mut owner) = self.take_region_owner(region_id) {
-                let (tile_x, tile_y, _) = path[0];
-                let result = owner.base_mut().add_base_magic_phalanx(
-                    phalanx,
-                    tile_x,
-                    tile_y,
-                    self.area_width,
-                    self.area_height,
-                    summon_started_at_ms,
-                    runtime,
-                );
-                self.restore_region_owner(owner);
-                tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд базовой магии");
-            }
-        }
-
-        if let Some(state) = player_ai.base_magic_mut() {
-            let _ = state
-                .kernel_mut()
-                .advance(SkillStage::Check, SkillStage::Calculate);
-            let _ = state
-                .kernel_mut()
-                .advance(SkillStage::Calculate, SkillStage::Attack);
-            let _ = state
-                .kernel_mut()
-                .advance(SkillStage::Attack, SkillStage::Apply);
-        }
-        player_ai.mark_base_magic_used(runtime.now_milliseconds());
         if let Some(player) = self.find_player_mut(player_id) {
             player.set_current_skill_id(None);
         }
@@ -37391,7 +37131,7 @@ impl CGame {
             } else if concrete_archery {
                 self.execute_player_archery(player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
-                self.execute_player_base_magic(player_id, dispatch, player_ai, runtime)
+                execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
                 execute_player_callosity(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_agility_family {
@@ -40106,96 +39846,31 @@ impl CGame {
         &mut self,
         phalanx: &CBaseMagicPhalanx,
         target_level: u8,
-    ) -> Option<(AttackInformation, crate::gameserver::appserver::player::PlayerCombatProperties, u8, u8)> {
+    ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
         let master = phalanx.master();
-        if master.master_type != PLAYER_TYPE || master.master_id == 0 {
-            return None;
-        }
         let player = self.find_player(master.master_id)?;
-        let mut combat = player.combat_properties();
+        let combat = player.combat_properties();
         let occupation = player.occupation();
         let attacker_level = player.level();
-        let weapon_level = player
-            .equipment()
-            .get_goods(2)
-            .map_or(0, |goods| {
-                goods.addon_property_value(&self.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
-            });
-        let (weapon_divisor, weapon_minimum) = self.globe_setup.weapon_damage_factors();
-        let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-        let mut damage_factor = if weapon_divisor == 0.0 {
-            1.0
-        } else {
-            delta as f32 / weapon_divisor
-        };
-        damage_factor = damage_factor.min(1.0).max(weapon_minimum);
-        let width_delta = phalanx
-            .maximum_attack()
-            .wrapping_sub(phalanx.minimum_attack());
-        let width = if width_delta < 0 {
-            width_delta.wrapping_neg()
-        } else {
-            width_delta
-        }
-        .wrapping_add(1);
-        let random_damage = game_legacy_random(&mut self.random_state, width);
-        let element_damage = phalanx
-            .element_modifier()
-            .wrapping_mul(combat.element_modify)
-            .wrapping_div(100)
-            .wrapping_add(combat.add_element_attack as i32)
-            .wrapping_add(random_damage)
-            .wrapping_add(phalanx.minimum_attack())
-            .max(0);
-        let mut attack = AttackInformation {
-            skill_id: BASE_MAGIC_SKILL_ID,
-            skill_level: phalanx.skill_level() as u8,
-            attacker_type: master.master_type,
-            attacker_id: master.master_id,
-            attacker_team_id: master.master_team_id,
-            attacker_faction_id: master.master_guild_id,
-            attacker_union_id: master.master_union_id,
-            hit_modifier: 100,
-            damage_factor,
-            damage_modifier: 0,
-            critical: false,
-            blast_attack: false,
-            full_miss: 0,
-            damages: vec![AttackPower {
-                kind: AttackPowerType::Element,
-                hp_damage: element_damage,
-                mp_damage: 0,
-            }],
-        };
-        if game_legacy_random(&mut self.random_state, 100) < i32::from(combat.cch) {
-            attack.critical = true;
-            let critical_rate = self.globe_setup.critical_rate();
-            for power in &mut attack.damages {
-                power.hp_damage =
-                    ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
-            }
-        }
-        let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
-            self.globe_setup.base_combat_scales();
-        if combat.blast_attack_scale() < 1.0 {
-            combat.blast_attack_scale_bits = blast_attack.max(1.0).to_bits();
-        }
-        if combat.blast_defense_scale() < 0.01 {
-            combat.blast_defense_scale_bits = blast_defense.max(0.01).to_bits();
-        }
-        if combat.element_blast_attack_scale() < 1.0 {
-            combat.element_blast_attack_scale_bits = element_blast_attack.max(1.0).to_bits();
-        }
-        if combat.element_blast_defense_scale() < 0.01 {
-            combat.element_blast_defense_scale_bits = element_blast_defense.max(0.01).to_bits();
-        }
-        if combat.full_miss_scale() < 0.01 {
-            combat.full_miss_scale_bits = full_miss.max(0.01).to_bits();
-        }
-        if combat.critical_rate() < 1.0 {
-            combat.critical_rate_bits = self.globe_setup.critical_rate().max(1.0).to_bits();
-        }
-        Some((attack, combat, occupation, attacker_level))
+        let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
+            goods.addon_property_value(&self.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
+        });
+        let weapon_damage_factors = self.globe_setup.weapon_damage_factors();
+        let critical_rate = self.globe_setup.critical_rate();
+        let combat_scales = self.globe_setup.base_combat_scales();
+        let mut random_below = |maximum| game_legacy_random(&mut self.random_state, maximum);
+        calculate_base_magic_attack(
+            phalanx,
+            target_level,
+            combat,
+            occupation,
+            attacker_level,
+            weapon_level,
+            weapon_damage_factors,
+            critical_rate,
+            combat_scales,
+            &mut random_below,
+        )
     }
 
     fn calculate_battle_fairy_base_magic_attack(
