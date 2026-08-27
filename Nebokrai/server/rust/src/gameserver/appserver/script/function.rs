@@ -5343,13 +5343,11 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = request.send(game, false);
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
-            let (area_width, area_height) = game.area_dimensions();
-            let spawn = owner.base_mut().add_npc_with_clock(
+            let spawn = game.add_region_npc_with_clock(
+                &mut owner,
                 &setup,
                 false,
                 true,
-                area_width,
-                area_height,
                 runtime,
                 |runtime| runtime.now_milliseconds(),
             );

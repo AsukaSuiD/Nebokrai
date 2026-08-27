@@ -44,7 +44,10 @@ use crate::setup::godsbattleconf::{
 use std::collections::BTreeSet;
 use thiserror::Error;
 
-use super::serverregion::ServerRegionDecodeError;
+use super::serverregion::{
+    CServerRegion, ServerRegionDecodeError, ServerRegionNpcContext, ServerRegionNpcSetup,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome,
+};
 use super::legacycodec::LegacyReader;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
@@ -332,15 +335,74 @@ pub(crate) struct GodsBattleContendAdvance {
 }
 
 impl CServerGodsBattleRegion {
-    pub(crate) fn decord_from_byte_array<Context: WarRegionDecodeContext>(
+    pub(crate) fn decord_from_byte_array_with_npc_entry<Context: WarRegionDecodeContext>(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
+        mut after_npc_entry: impl FnMut(
+            &mut CServerRegion,
+            &mut [BTreeSet<i32>; 3],
+            i32,
+            &mut Context,
+        ),
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+        let faction_npcs = &mut self.faction_npcs;
         self.war
-            .decord_from_byte_array(source, cursor, include_child, context)
+            .decord_from_byte_array_with_npc_entry(
+                source,
+                cursor,
+                include_child,
+                context,
+                |region, npc_id, context| {
+                    after_npc_entry(region, faction_npcs, npc_id, context);
+                },
+            )
+    }
+
+    pub(crate) fn add_faction_npc_membership(
+        faction_npcs: &mut [BTreeSet<i32>; 3],
+        npc_id: i32,
+        faction: i32,
+    ) -> bool {
+        let Some(index) = gods_battle_faction_index(faction) else {
+            return false;
+        };
+        faction_npcs[index].insert(npc_id)
+    }
+
+    /// Создаёт NPC через базовый регион и выполняет подтверждённое завершение
+    /// `AddObject` до круговой публикации и до следующего создания объекта.
+    pub(crate) fn add_npc_with_clock_and_entry<Context: ServerRegionNpcContext>(
+        &mut self,
+        setup: &ServerRegionNpcSetup,
+        remember_setup: bool,
+        send_around: bool,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+        now_ms: impl FnMut(&mut Context) -> u32,
+        mut after_npc_entry: impl FnMut(
+            &mut CServerRegion,
+            &mut [BTreeSet<i32>; 3],
+            i32,
+            &mut Context,
+        ),
+    ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
+        let faction_npcs = &mut self.faction_npcs;
+        self.war.base.add_npc_with_clock_and_entry(
+            setup,
+            remember_setup,
+            send_around,
+            area_width,
+            area_height,
+            context,
+            now_ms,
+            |region, npc_id, context| {
+                after_npc_entry(region, faction_npcs, npc_id, context);
+            },
+        )
     }
 
     pub(crate) fn add_faction_player(&mut self, player_id: i32, faction: i32) -> bool {
@@ -366,13 +428,6 @@ impl CServerGodsBattleRegion {
             _ => return None,
         };
         Some(self.faction_players[index].iter().copied().collect())
-    }
-
-    pub(crate) fn add_faction_npc(&mut self, npc_id: i32, faction: i32) -> bool {
-        let Some(index) = gods_battle_faction_index(faction) else {
-            return false;
-        };
-        self.faction_npcs[index].insert(npc_id)
     }
 
     pub(crate) fn npc_faction_index(&self, npc_id: i32) -> Option<usize> {
@@ -565,7 +620,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::DelObj
-// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_AND_NPC_TAIL
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:183
@@ -621,7 +676,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::RemoveObject
-// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_AND_NPC_TAIL
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:138
@@ -901,7 +956,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::AddObject
-// STATUS: PARTIALLY_IMPLEMENTED_PLAYER_AND_NPC_TAIL
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:24

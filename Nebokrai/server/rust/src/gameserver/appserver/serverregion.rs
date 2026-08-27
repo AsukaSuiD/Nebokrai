@@ -1770,7 +1770,34 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
         context: &mut Context,
+        now_ms: impl FnMut(&mut Context) -> u32,
+    ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
+        self.add_npc_with_clock_and_entry(
+            setup,
+            remember_setup,
+            send_around,
+            area_width,
+            area_height,
+            context,
+            now_ms,
+            |_, _, _| {},
+        )
+    }
+
+    /// Вариант для производного региона: завершающая часть виртуального
+    /// `AddObject` вызывается после появления NPC в каноническом хранилище и
+    /// до следующего NPC, круговой публикации и следующего обращения к
+    /// генератору случайных чисел.
+    pub(crate) fn add_npc_with_clock_and_entry<Context: ServerRegionNpcContext>(
+        &mut self,
+        setup: &ServerRegionNpcSetup,
+        remember_setup: bool,
+        send_around: bool,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
         mut now_ms: impl FnMut(&mut Context) -> u32,
+        mut after_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
     ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
         if remember_setup {
             self.npc_setups.push(setup.clone());
@@ -1834,6 +1861,7 @@ impl CServerRegion {
             .map_err(ServerRegionNpcSpawnBlock::Membership)?;
 
             self.owned_npcs.insert(id, npc);
+            after_entry(self, id, context);
             created = created.wrapping_add(1);
             first_created_id.get_or_insert(id);
             if send_around {
@@ -1933,6 +1961,25 @@ impl CServerRegion {
         include_child: bool,
         context: &mut Context,
     ) -> Result<bool, ServerRegionDecodeError<Context::RuntimeError>> {
+        self.decord_from_byte_array_with_npc_entry(
+            source,
+            cursor,
+            include_child,
+            context,
+            |_, _, _| {},
+        )
+    }
+
+    pub(crate) fn decord_from_byte_array_with_npc_entry<
+        Context: ServerRegionDecodeContext,
+    >(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        context: &mut Context,
+        mut after_npc_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
+    ) -> Result<bool, ServerRegionDecodeError<Context::RuntimeError>> {
         self.region
             .decord_from_byte_array(source, cursor, include_child)
             .map_err(ServerRegionDecodeError::Region)?;
@@ -1982,8 +2029,17 @@ impl CServerRegion {
             };
             // Wire lTime принудительно равен нулю, поэтому AddNpc не читает
             // clock; `now_ms` не участвует ни в одном NPC side effect.
-            self.add_npc(&setup, true, false, 0, area_width, area_height, context)
-                .map_err(ServerRegionDecodeError::Npc)?;
+            self.add_npc_with_clock_and_entry(
+                &setup,
+                true,
+                false,
+                area_width,
+                area_height,
+                context,
+                |_| 0,
+                &mut after_npc_entry,
+            )
+            .map_err(ServerRegionDecodeError::Npc)?;
         }
 
         // Compatibility quirk: decoder сбрасывает count, но не очищает bytes

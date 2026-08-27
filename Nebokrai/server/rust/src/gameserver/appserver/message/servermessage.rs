@@ -55,7 +55,8 @@ use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GameNetworkInitializationError, ServerRegionOwner,
+    CGame, GameMainLoopRuntime, GameNetworkInitializationError, GodsBattleNpcContendContext,
+    ServerRegionOwner,
     colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::gameserver::gameserver::honorranks::HonorRanksDecodeError;
@@ -943,13 +944,11 @@ where
             tracing::warn!(kind, region_id, "runtime-создание NPC пропущено: регион отсутствует");
             return Some(Ok(()));
         };
-        let (area_width, area_height) = game.area_dimensions();
-        let spawn = owner.base_mut().add_npc_with_clock(
+        let spawn = game.add_region_npc_with_clock(
+            &mut owner,
             &setup,
             true,
             true,
-            area_width,
-            area_height,
             script_context,
             |context| now_ms(context),
         );
@@ -2482,7 +2481,7 @@ fn read_start_long(
 }
 
 pub(crate) trait InitialRegionStartupContext:
-    CityRegionDecodeContext + CountryRegionDecodeContext
+    CityRegionDecodeContext + CountryRegionDecodeContext + GodsBattleNpcContendContext
 {
 }
 
@@ -2565,7 +2564,9 @@ where
         }
         5 => {
             let mut region = CServerGodsBattleRegion::default();
-            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+            if let Err(error) =
+                game.decode_initial_gods_battle_region(&mut region, source, cursor, true, context)
+            {
                 return Some(Err(InitialRegionStartupError::War(error)));
             }
             ServerRegionOwner::GodsBattle(region)

@@ -690,15 +690,15 @@ use crate::gameserver::appserver::servernationregion::{
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin, RegionTaxSessionEndpoint,
     RegionTaxSessionKind, ServerRegionAreaTransitionContext, ServerRegionClearPlayerTick,
-    ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionMonsterRectBlock,
-    ServerRegionNpcContext, ServerRegionNpcSetup, ServerRegionNpcSpawnBlock,
-    ServerRegionNpcSpawnOutcome, ServerRegionWeather, ServerRegionWeatherTick, ServerReturnPlayer,
-    ServerReturnSetupBlock,
+    ServerRegionDecodeError, ServerRegionMembershipContext, ServerRegionMonsterContext,
+    ServerRegionMonsterRectBlock, ServerRegionNpcContext, ServerRegionNpcSetup,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome, ServerRegionWeather,
+    ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, SymbolCaptureLog, WarContendContext, WarContendEntryContext,
-    WarRegionContext, WarRegionOwnership,
+    WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError, WarRegionOwnership,
 };
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
@@ -11596,7 +11596,7 @@ impl CGame {
             tick_interval_ms,
             runtime,
         ) {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::Nation(region));
                 tracing::warn!(
@@ -21924,6 +21924,119 @@ impl CGame {
         true
     }
 
+    /// Декодирует GodsBattle-регион так, чтобы производная завершающая часть
+    /// `AddObject` выполнялась после каждого созданного NPC, а не поздним
+    /// повторным проходом. Тем самым сохраняется взаимный порядок обращений к
+    /// генератору случайных чисел для NPC региона и порождаемых ими монстров.
+    pub(crate) fn decode_initial_gods_battle_region<Context>(
+        &mut self,
+        region: &mut CServerGodsBattleRegion,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        context: &mut Context,
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>>
+    where
+        Context: WarRegionDecodeContext + GodsBattleNpcContendContext,
+    {
+        region.decord_from_byte_array_with_npc_entry(
+            source,
+            cursor,
+            include_child,
+            context,
+            |base, faction_npcs, npc_id, context| {
+                self.finish_gods_battle_npc_entry(
+                    base,
+                    faction_npcs,
+                    npc_id,
+                    context,
+                );
+            },
+        )
+    }
+
+    fn finish_gods_battle_npc_entry<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        region: &mut CServerRegion,
+        faction_npcs: &mut [BTreeSet<i32>; 3],
+        npc_id: i32,
+        context: &mut Context,
+    ) {
+        let Some((npc_name, configuration)) = region.find_npc_by_id(npc_id).and_then(|npc| {
+            let name = npc.name().to_vec();
+            self.gods_battle_mgr
+                .npc_configuration(&name)
+                .cloned()
+                .map(|configuration| (name, configuration))
+        }) else {
+            return;
+        };
+        let faction = configuration.faction;
+        if !CServerGodsBattleRegion::add_faction_npc_membership(
+            faction_npcs,
+            npc_id,
+            faction,
+        ) {
+            return;
+        }
+        let (spawned_monsters, blocked_spawns) =
+            self.spawn_gods_battle_npc_monsters(region, &configuration, faction, context);
+        self.gods_battle_mgr
+            .reset_npc_killed_monster_count(&npc_name);
+        tracing::debug!(
+            region_id = region.id,
+            npc_id,
+            faction,
+            spawned_monsters,
+            blocked_spawns,
+            npc_name_bytes = npc_name.len(),
+            "NPC добавлен во фракцию битвы богов"
+        );
+    }
+
+    /// Создаёт NPC через конкретного владельца региона. Для битвы богов
+    /// производное завершение `AddObject` остаётся внутри базовой операции и
+    /// предшествует круговой публикации созданного NPC.
+    pub(crate) fn add_region_npc_with_clock<Context: GodsBattleNpcContendContext>(
+        &mut self,
+        owner: &mut ServerRegionOwner,
+        setup: &ServerRegionNpcSetup,
+        remember_setup: bool,
+        send_around: bool,
+        context: &mut Context,
+        now_ms: impl FnMut(&mut Context) -> u32,
+    ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
+        let (area_width, area_height) = self.area_dimensions();
+        match owner {
+            ServerRegionOwner::GodsBattle(region) => region.add_npc_with_clock_and_entry(
+                setup,
+                remember_setup,
+                send_around,
+                area_width,
+                area_height,
+                context,
+                now_ms,
+                |base, faction_npcs, npc_id, context| {
+                    self.finish_gods_battle_npc_entry(
+                        base,
+                        faction_npcs,
+                        npc_id,
+                        context,
+                    );
+                },
+            ),
+            _ => owner.base_mut().add_npc_with_clock(
+                setup,
+                remember_setup,
+                send_around,
+                area_width,
+                area_height,
+                context,
+                now_ms,
+            ),
+        }
+    }
+
     /// Точный player-tail после успешного base `CServerRegion::AddObject`.
     pub(crate) fn enter_gods_battle_player(&mut self, region_id: i32, player_id: i32) -> bool {
         let Some((country, previous_faction)) = self
@@ -21994,59 +22107,9 @@ impl CGame {
         );
     }
 
-    /// NPC-tail concrete GodsBattle `AddObject`: membership предшествует
-    /// guard spawn, затем kill counter сбрасывается без World publication.
-    pub(crate) fn enter_gods_battle_npc<Context: GodsBattleNpcContendContext>(
-        &mut self,
-        region_id: i32,
-        npc_id: i32,
-        context: &mut Context,
-    ) -> bool {
-        let Some(owner) = self.take_region_owner(region_id) else {
-            return false;
-        };
-        let ServerRegionOwner::GodsBattle(mut region) = owner else {
-            self.restore_region_owner(owner);
-            return false;
-        };
-        let Some((npc_name, configuration)) =
-            region.war.base.find_npc_by_id(npc_id).and_then(|npc| {
-                let name = npc.name().to_vec();
-                self.gods_battle_mgr
-                    .npc_configuration(&name)
-                    .cloned()
-                    .map(|configuration| (name, configuration))
-            })
-        else {
-            self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return false;
-        };
-        let faction = configuration.faction;
-        if !region.add_faction_npc(npc_id, faction) {
-            self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return false;
-        }
-
-        let (spawned_monsters, blocked_spawns) =
-            self.spawn_gods_battle_npc_monsters(&mut region, &configuration, faction, context);
-        self.gods_battle_mgr
-            .reset_npc_killed_monster_count(&npc_name);
-        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        tracing::debug!(
-            region_id,
-            npc_id,
-            faction,
-            spawned_monsters,
-            blocked_spawns,
-            npc_name_bytes = npc_name.len(),
-            "NPC добавлен во фракцию битвы богов"
-        );
-        true
-    }
-
     fn spawn_gods_battle_npc_monsters<Context: GodsBattleNpcContendContext>(
         &mut self,
-        region: &mut CServerGodsBattleRegion,
+        region: &mut CServerRegion,
         configuration: &crate::setup::godsbattleconf::GodsBattleFactionNpcName,
         faction: i32,
         context: &mut Context,
@@ -22091,7 +22154,7 @@ impl CGame {
                 );
                 continue;
             };
-            let spawn = region.war.base.add_monster(
+            let spawn = region.add_monster(
                 &property,
                 legacy_atoi_i32(fields[1]),
                 legacy_atoi_i32(fields[2]),
@@ -22156,7 +22219,12 @@ impl CGame {
             return false;
         }
         let (spawned_monsters, blocked_spawns) =
-            self.spawn_gods_battle_npc_monsters(&mut region, &configuration, faction, context);
+            self.spawn_gods_battle_npc_monsters(
+                &mut region.war.base,
+                &configuration,
+                faction,
+                context,
+            );
         self.gods_battle_mgr
             .reset_npc_killed_monster_count(&npc_name);
         let world_delivery = self
@@ -22187,17 +22255,11 @@ impl CGame {
         true
     }
 
-    pub(crate) fn leave_gods_battle_npc(&mut self, region_id: i32, npc_id: i32) -> bool {
-        let Some(owner) = self.take_region_owner(region_id) else {
-            return false;
-        };
-        let ServerRegionOwner::GodsBattle(mut region) = owner else {
-            self.restore_region_owner(owner);
-            return false;
-        };
-        let removed = region.remove_faction_npc(npc_id);
-        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        removed
+    fn finish_gods_battle_npc_leave(
+        region: &mut CServerGodsBattleRegion,
+        npc_id: i32,
+    ) -> bool {
+        region.remove_faction_npc(npc_id)
     }
 
     /// Concrete GodsBattle virtual `GetReturnPoint`: faction-specific entry
@@ -22957,13 +23019,13 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        match self.run_server_region_base_ai(
+        let removed_npcs = match self.run_server_region_base_ai(
             &mut region.war.base,
             ai_tick,
             tick_interval_ms,
             runtime,
         ) {
-            Ok(()) => {}
+            Ok(removed_npcs) => removed_npcs,
             Err(error) => {
                 self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
                 tracing::warn!(
@@ -22974,6 +23036,9 @@ impl CGame {
                 );
                 return Some(());
             }
+        };
+        for npc_id in removed_npcs {
+            Self::finish_gods_battle_npc_leave(&mut region, npc_id);
         }
         let advance = region.advance_contenders(runtime.now_milliseconds());
         let progress_count = advance.progress.len();
@@ -30096,11 +30161,16 @@ impl CGame {
         let result = (|| {
             let npc = owner.base().find_npc_by_id(npc_id)?;
             let delivery = self.send_shape_exit_around(owner.base(), npc.move_shape().shape())?;
-            owner
+            let removed = owner
                 .base_mut()
                 .remove_owned_npc_by_id(npc_id)
-                .ok()?
-                .then_some(delivery)
+                .ok()?;
+            if removed
+                && let ServerRegionOwner::GodsBattle(region) = &mut owner
+            {
+                Self::finish_gods_battle_npc_leave(region, npc_id);
+            }
+            removed.then_some(delivery)
         })();
         self.restore_region_owner(owner);
         result
@@ -30409,11 +30479,16 @@ impl CGame {
             let npc = owner.base().find_npc_by_name(name).ok()??;
             let npc_id = npc.move_shape().shape().identity().id;
             let delivery = self.send_shape_exit_around(owner.base(), npc.move_shape().shape())?;
-            owner
+            let removed = owner
                 .base_mut()
                 .remove_owned_npc_by_id(npc_id)
-                .ok()?
-                .then_some(delivery)
+                .ok()?;
+            if removed
+                && let ServerRegionOwner::GodsBattle(region) = &mut owner
+            {
+                Self::finish_gods_battle_npc_leave(region, npc_id);
+            }
+            removed.then_some(delivery)
         })();
         self.restore_region_owner(owner);
         result
@@ -38602,7 +38677,7 @@ impl CGame {
         region: &mut CServerRegion,
         npc_id: i32,
         now_ms: u32,
-    ) -> Option<()> {
+    ) -> Option<bool> {
         let npc = region.find_npc_by_id(npc_id)?;
         if !npc.lifetime_expired(now_ms) || !npc.move_shape().shape().is_assigned_to_server_region()
         {
@@ -38617,14 +38692,14 @@ impl CGame {
             ?removal,
             "завершён срок жизни NPC"
         );
-        Some(())
+        Some(matches!(removal, Ok(true)))
     }
 
     fn run_region_shape_scan<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
         runtime: &mut Runtime,
-    ) {
+    ) -> Vec<i32> {
         let mut areas = 0usize;
         let mut area_ai_passes = 0usize;
         let mut ground_goods_expirations = 0usize;
@@ -38632,6 +38707,7 @@ impl CGame {
         let mut resolved_shapes = 0usize;
         let mut shape_ai_calls = 0usize;
         let mut stale_memberships = 0usize;
+        let mut removed_npcs = Vec::new();
         let goods_disappear_timer_ms = self.globe_setup.goods_disappear_timer_ms();
         let goods_protected_timer_ms = self.globe_setup.goods_protected_timer_ms();
         for area_index in 0..region.area_count() {
@@ -38744,11 +38820,13 @@ impl CGame {
                     _ => {
                         if identity.object_type == NPC_TYPE {
                             let now_ms = runtime.now_milliseconds();
-                            if self
-                                .run_region_npc_ai(region, identity.id, now_ms)
-                                .is_some()
+                            if let Some(removed) =
+                                self.run_region_npc_ai(region, identity.id, now_ms)
                             {
                                 npc_expirations = npc_expirations.wrapping_add(1);
+                                if removed {
+                                    removed_npcs.push(identity.id);
+                                }
                             }
                         } else if identity.object_type == MONSTER_TYPE
                             && region
@@ -38780,6 +38858,7 @@ impl CGame {
             stale_memberships,
             "завершено сканирование форм региона"
         );
+        removed_npcs
     }
 
     fn run_server_region_base_ai<Runtime: GameMainLoopRuntime>(
@@ -38788,7 +38867,7 @@ impl CGame {
         ai_tick: i32,
         tick_interval_ms: i32,
         runtime: &mut Runtime,
-    ) -> Result<(), ServerRegionMonsterRectBlock> {
+    ) -> Result<Vec<i32>, ServerRegionMonsterRectBlock> {
         let period = (1_000i32 / tick_interval_ms) as u32;
         let periodic_due = (ai_tick as u32) % period == 0;
         if periodic_due {
@@ -38803,14 +38882,14 @@ impl CGame {
         if periodic_due {
             self.run_region_weather_tick(region, runtime);
         }
-        self.run_region_shape_scan(region, runtime);
+        let removed_npcs = self.run_region_shape_scan(region, runtime);
         tracing::trace!(
             region_id = region.id,
             ai_tick,
             periodic_due,
             "завершён базовый проход ИИ региона"
         );
-        Ok(())
+        Ok(removed_npcs)
     }
 
     /// Достигнутый prefix `CServerRegion::AI` для concrete Base owner-а;
@@ -39306,7 +39385,15 @@ impl CGame {
                                 .remove_owned_monster_by_id(identity.id, figure),
                         )
                     }
-                    NPC_TYPE => Some(owner.base_mut().remove_owned_npc_by_id(identity.id)),
+                    NPC_TYPE => {
+                        let result = owner.base_mut().remove_owned_npc_by_id(identity.id);
+                        if matches!(result, Ok(true))
+                            && let ServerRegionOwner::GodsBattle(region) = &mut owner
+                        {
+                            Self::finish_gods_battle_npc_leave(region, identity.id);
+                        }
+                        Some(result)
+                    }
                     GOODS_TYPE => {
                         let particular_attribute = owner
                             .base()
@@ -39383,7 +39470,15 @@ impl CGame {
                                 .detach_owned_monster_by_id(identity.id, figure),
                         )
                     }
-                    NPC_TYPE => Some(owner.base_mut().detach_owned_npc_by_id(identity.id)),
+                    NPC_TYPE => {
+                        let result = owner.base_mut().detach_owned_npc_by_id(identity.id);
+                        if matches!(result, Ok(true))
+                            && let ServerRegionOwner::GodsBattle(region) = &mut owner
+                        {
+                            Self::finish_gods_battle_npc_leave(region, identity.id);
+                        }
+                        Some(result)
+                    }
                     _ => runtime.remove_external_region_shape(self, owner.base_mut(), identity),
                 };
                 removals = removals.wrapping_add(1);

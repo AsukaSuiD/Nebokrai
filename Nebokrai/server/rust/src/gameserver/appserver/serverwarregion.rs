@@ -207,9 +207,32 @@ impl CServerWarRegion {
         include_child: bool,
         context: &mut Context,
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+        self.decord_from_byte_array_with_npc_entry(
+            source,
+            cursor,
+            include_child,
+            context,
+            |_, _, _| {},
+        )
+    }
+
+    pub(crate) fn decord_from_byte_array_with_npc_entry<Context: WarRegionDecodeContext>(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+        context: &mut Context,
+        after_npc_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
         let _ = self
             .base
-            .decord_from_byte_array(source, cursor, include_child, context)
+            .decord_from_byte_array_with_npc_entry(
+                source,
+                cursor,
+                include_child,
+                context,
+                after_npc_entry,
+            )
             .map_err(WarRegionDecodeError::Base)?;
 
         self.symbol_total_num = read_region_i32(source, cursor, "m_lSymbolTotalNum")
