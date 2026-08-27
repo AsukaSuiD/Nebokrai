@@ -31,6 +31,7 @@ use std::path::Path;
 use chrono::{Datelike, Local, Timelike};
 use parking_lot::Mutex;
 use rustix::time::{ClockId, clock_gettime};
+use thiserror::Error as ThisError;
 
 use crate::dbaccess::logindb::rscdkey::MatrixValidation;
 use crate::loginserver::applogin::validcode::{CValidCode, ValidCodeError};
@@ -476,45 +477,18 @@ pub(crate) struct NoQueueAccountsLoadReport {
     pub(crate) unique_accounts: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, ThisError)]
 pub(crate) enum NoQueueAccountsLoadError {
-    Io(io::Error),
+    #[error("не прочитан NoQueueAccounts.conf: {0}")]
+    Io(#[from] io::Error),
+    #[error(
+        "token {token_index} NoQueueAccounts.conf имеет {actual} байт при пределе {maximum}"
+    )]
     TokenTooLong {
         token_index: usize,
         actual: usize,
         maximum: usize,
     },
-}
-
-impl fmt::Display for NoQueueAccountsLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => write!(formatter, "не прочитан NoQueueAccounts.conf: {error}"),
-            Self::TokenTooLong {
-                token_index,
-                actual,
-                maximum,
-            } => write!(
-                formatter,
-                "token {token_index} NoQueueAccounts.conf имеет {actual} байт при пределе {maximum}",
-            ),
-        }
-    }
-}
-
-impl Error for NoQueueAccountsLoadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::TokenTooLong { .. } => None,
-        }
-    }
-}
-
-impl From<io::Error> for NoQueueAccountsLoadError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
 }
 
 pub(crate) struct CLoginQueue {

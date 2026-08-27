@@ -10,11 +10,11 @@
 //! singleton заменён единственным owned `CSetup`; файловый ввод и память
 //! переданы стандартной библиотеке.
 
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use thiserror::Error;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct IpPortSetup {
@@ -48,27 +48,12 @@ pub(crate) struct SetupLoadReport {
     pub(crate) stopped_at_pair: Option<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("не удалось открыть MiscServer setup {}: {source}", path.display())]
 pub(crate) struct SetupOpenError {
     pub(crate) path: PathBuf,
+    #[source]
     pub(crate) source: io::Error,
-}
-
-impl fmt::Display for SetupOpenError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "не удалось открыть MiscServer setup {}: {}",
-            self.path.display(),
-            self.source
-        )
-    }
-}
-
-impl Error for SetupOpenError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 #[derive(Debug, Default)]

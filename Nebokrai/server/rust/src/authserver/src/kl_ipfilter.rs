@@ -8,39 +8,20 @@
 //! байта; переполнение безопасно насыщается в `i32`, поскольку исходная CRT/UB-
 //! граница не имела подтверждённого сетевого результата.
 
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
 
-#[derive(Debug)]
+use thiserror::Error;
+
+#[derive(Debug, Error)]
 pub(crate) enum IpFilterLoadError {
-    Io(io::Error),
+    #[error("не удалось прочитать список IP: {0}")]
+    Io(#[source] io::Error),
+    #[error("IP-token {token_index} не содержит ровно четыре части")]
     InvalidPattern {
         token_index: usize,
     },
-}
-
-impl fmt::Display for IpFilterLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(error) => write!(formatter, "не удалось прочитать список IP: {error}"),
-            Self::InvalidPattern { token_index } => write!(
-                formatter,
-                "IP-token {token_index} не содержит ровно четыре части"
-            ),
-        }
-    }
-}
-
-impl Error for IpFilterLoadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::InvalidPattern { .. } => None,
-        }
-    }
 }
 
 pub(crate) fn load_ip_patterns(path: impl AsRef<Path>) -> Result<Vec<[u8; 4]>, IpFilterLoadError> {

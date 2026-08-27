@@ -8,9 +8,7 @@
 //! Win32 thread API и ADO заменены owned `JoinHandle` и Tiberius.
 
 use std::collections::VecDeque;
-use std::error::Error;
 use std::ffi::CString;
-use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use thiserror::Error;
 
 use crate::dbaccess::dbbilling::rsplayeraccount::{
     BillingDatabaseSettings, RsPlayerAccountInitializationError, RsPlayerAccountNotice,
@@ -50,20 +49,9 @@ pub(crate) enum PlayerFillNotice {
     WorkerPanicked,
 }
 
-#[derive(Debug)]
-pub(crate) struct StartPlayerFillError(io::Error);
-
-impl fmt::Display for StartPlayerFillError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "не создан PlayerFill worker: {}", self.0)
-    }
-}
-
-impl Error for StartPlayerFillError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
+#[derive(Debug, Error)]
+#[error("не создан PlayerFill worker: {0}")]
+pub(crate) struct StartPlayerFillError(#[source] io::Error);
 
 #[derive(Default)]
 pub(crate) struct CPlayerFillMgr {

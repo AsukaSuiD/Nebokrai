@@ -90,11 +90,10 @@
 //! template-тел удалены как compiler/library noise. Полный сырой экспорт
 //! остаётся в истории Git и воспроизводится из архивных EXE/PDB.
 
-use std::error::Error;
-use std::fmt;
 use std::io;
 use std::mem;
 
+use thiserror::Error;
 use tokio::net::TcpStream;
 
 use crate::transport::write_once_tcp;
@@ -107,26 +106,15 @@ pub(crate) const DEFAULT_PERMITTED_SEND_BYTES: i32 = 0xC800;
 const RECEIVE_RATE_SAMPLE_THRESHOLD: i32 = 0xC7FF;
 
 /// Ошибка размера за пределами безопасной signed 32-битной модели оригинала.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, Error, PartialEq)]
 pub(crate) enum ServerClientSizeError {
     /// Сумма входящих TCP-фрагментов переполнила бы исходный `m_nSize`.
+    #[error("размер входного буфера вышел за signed 32-битную границу оригинала")]
     ReceiveSizeOverflowReactionUnknown,
     /// Сумма исходящих данных переполнила бы исходный signed размер buffer.
+    #[error("размер исходного буфера вышел за signed 32-битную границу оригинала")]
     SendSizeOverflowReactionUnknown,
 }
-
-impl fmt::Display for ServerClientSizeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ReceiveSizeOverflowReactionUnknown => formatter
-                .write_str("размер входного буфера вышел за signed 32-битную границу оригинала"),
-            Self::SendSizeOverflowReactionUnknown => formatter
-                .write_str("размер исходного буфера вышел за signed 32-битную границу оригинала"),
-        }
-    }
-}
-
-impl Error for ServerClientSizeError {}
 
 /// Metadata, которыми `CServerClient::OnReceive` дополнял готовое сообщение.
 #[derive(Clone, Copy)]

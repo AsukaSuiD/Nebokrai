@@ -124,8 +124,6 @@
 //! существующего listener, второй меняет таймаут первого сообщения.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -133,6 +131,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::nets::clients::TransferCounter;
@@ -578,35 +577,14 @@ impl<ComponentError> ServerSnapshot<ComponentError> {
 }
 
 /// Ошибка создания Linux listener из доказанных параметров `Host`.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum ServerHostError {
     /// Все найденные call sites передают `SOCK_STREAM`; другой тип не доказан.
+    #[error("для CServer не восстановлен socket type {0}")]
     UnsupportedSocketType(i32),
     /// Transport не смог bind-нуть либо перевести socket в listen.
-    Io(io::Error),
-}
-
-impl fmt::Display for ServerHostError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnsupportedSocketType(socket_type) => {
-                write!(
-                    formatter,
-                    "для CServer не восстановлен socket type {socket_type}"
-                )
-            }
-            Self::Io(error) => write!(formatter, "не удалось создать TCP listener: {error}"),
-        }
-    }
-}
-
-impl Error for ServerHostError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::UnsupportedSocketType(_) => None,
-            Self::Io(error) => Some(error),
-        }
-    }
+    #[error("не удалось создать TCP listener: {0}")]
+    Io(#[source] io::Error),
 }
 
 /// Результат попытки начать единственный исходный blocking accept.

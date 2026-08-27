@@ -13,7 +13,6 @@
 //! это безопасная техническая граница вместо зависания `Release`, не rollback
 //! потерянной команды и не изменение SQL.
 
-use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,6 +26,7 @@ use tiberius::Query;
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
+use thiserror::Error;
 
 use crate::dbaccess::worlddb::rssetup::{WorldDatabaseSettings, WorldTdsClient};
 use crate::dbaccess::worlddb::writelogqueue::WorldWriteLogQueue;
@@ -424,28 +424,12 @@ fn run_world_write_log_worker(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum WorldWriteLogConnectionError {
-    Connect(io::Error),
-    Tds(tiberius::error::Error),
-}
-
-impl fmt::Display for WorldWriteLogConnectionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Connect(error) => write!(formatter, "не открыто соединение Log DB: {error}"),
-            Self::Tds(error) => write!(formatter, "ошибка TDS Log DB: {error}"),
-        }
-    }
-}
-
-impl Error for WorldWriteLogConnectionError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Connect(error) => Some(error),
-            Self::Tds(error) => Some(error),
-        }
-    }
+    #[error("не открыто соединение Log DB: {0}")]
+    Connect(#[source] io::Error),
+    #[error("ошибка TDS Log DB: {0}")]
+    Tds(#[source] tiberius::error::Error),
 }
 
 #[derive(Debug)]
