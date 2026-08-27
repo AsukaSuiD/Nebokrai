@@ -1,15 +1,94 @@
-//! Borrow-координация периодического состояния ядовитой стрелы.
+//! Общая координация заимствований для периодических атак состояний.
 //!
-//! Конкретные формулы, периодический шаг и визуальный wire принадлежат модулям
-//! навыка и состояния. Этот дочерний runtime-модуль временно извлекает игрока,
-//! монстра и регион, проводит обычный `OnBeenAttacked` через общую защиту и
+//! Конкретные формулы, периодический шаг и визуальное wire-представление
+//! принадлежат модулям навыка и состояния. Этот дочерний исполняющий модуль
+//! временно извлекает игрока, монстра и регион, проводит обычный
+//! `OnBeenAttacked` через общую защиту и
 //! выполняет обработку смерти и сетевые побочные эффекты, требующие нескольких
 //! независимых владельцев `CGame`.
 
 use super::*;
 
 impl CGame {
-    fn poison_arrow_player_attackable(
+    fn player_on_periodic_state_attack<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        attacker_id: i32,
+        victim_id: i32,
+        region_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<()> {
+        let attacker_country_identity = self.player_country_identity(attacker_id);
+        let attacker = self.find_player(attacker_id)?;
+        let victim = self.find_player(victim_id)?;
+        let victim_x = victim.shape().get_tile_x().ok()?;
+        let victim_y = victim.shape().get_tile_y().ok()?;
+        let owner = self.find_region(region_id)?;
+        let security = owner.get_security(victim_x, victim_y).ok()?;
+        let attacker_faction = attacker.faction_id();
+        let victim_faction = victim.faction_id();
+        let disposition = CPKSys::on_kill(KillPkFacts {
+            victim_is_badman: victim.is_badman(self.globe_setup.pk_count_per_kill()),
+            security,
+            city_war_enemies: attacker_faction > 0
+                && victim_faction > 0
+                && (attacker.is_city_war_enemy_faction_member(victim_faction)
+                    || victim.is_city_war_enemy_faction_member(attacker_faction)),
+            faction_war_enemies: attacker_faction > 0
+                && victim_faction > 0
+                && (attacker.is_enemy_faction_member(victim_faction)
+                    || victim.is_enemy_faction_member(attacker_faction)),
+            gods_battle_region: owner.is_gods_battle(),
+            same_gods_battle_faction: attacker.gods_battle_faction()
+                == victim.gods_battle_faction(),
+            same_country: attacker.country() == victim.country(),
+            attacker_country_identity,
+            attacker_kill_count: attacker.kill_count(),
+        });
+        let victim_level = victim.level();
+        let murderer_delivery = if disposition == KillPkDisposition::ReportMurderer {
+            let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
+            let (pk_count, kill_count) = {
+                let attacker = self.find_player_mut(attacker_id)?;
+                let pk_count = attacker.report_murderer(pk_count_per_kill, || {
+                    runtime.now_milliseconds()
+                });
+                (pk_count, attacker.kill_count())
+            };
+            let mut message = CMessage::new(0x000b_f70e);
+            message.add_long(attacker_id);
+            message.base_mut().add_short(pk_count as i16);
+            message.add_ulong(kill_count);
+            self.send_player_shape_around(attacker_id, None, &message)
+        } else {
+            None
+        };
+        let eligible = matches!(
+            disposition,
+            KillPkDisposition::AllowedCombat | KillPkDisposition::ReportMurderer
+        );
+        let world_log_delivery =
+            (eligible && self.log_system.player_killer_log_enabled()).then(|| {
+                let mut message = CMessage::new(0x0006_020a);
+                message.add_byte(0);
+                message.add_long(victim_id);
+                message.add_long(attacker_id);
+                message.add_ulong(u32::from(victim_level));
+                message.add_long(victim_x);
+                message.add_long(victim_y);
+                message.send(self, false)
+            });
+        tracing::debug!(
+            attacker_id,
+            victim_id,
+            ?disposition,
+            ?murderer_delivery,
+            ?world_log_delivery,
+            "обработан удар периодического состояния по игроку"
+        );
+        Some(())
+    }
+
+    fn periodic_state_player_attackable(
         &self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         victim_id: i32,
@@ -74,7 +153,7 @@ impl CGame {
         master.permitted_to_kill_criminal != 0 || !victim_badman
     }
 
-    fn apply_poison_arrow_to_player<Runtime: GameMainLoopRuntime>(
+    pub(super) fn apply_periodic_state_attack_to_player<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -82,7 +161,7 @@ impl CGame {
         mut attack: AttackInformation,
         runtime: &mut Runtime,
     ) {
-        if !self.poison_arrow_player_attackable(master, target_id, region_id) {
+        if !self.periodic_state_player_attackable(master, target_id, region_id) {
             return;
         }
         let Some((attacker_properties, attacker_occupation, target_properties, target_health, target_mana, target_war_soul_mana)) =
@@ -100,7 +179,12 @@ impl CGame {
         else {
             return;
         };
-        let _ = self.player_on_first_skill(master.master_id, target_id, Some(region_id), runtime);
+        let _ = self.player_on_periodic_state_attack(
+            master.master_id,
+            target_id,
+            region_id,
+            runtime,
+        );
         let mut defense_shields = self
             .find_player_mut(target_id)
             .map(CPlayer::take_defense_shields)
@@ -210,9 +294,18 @@ impl CGame {
                 if let Some(player) = self.find_player_mut(player_id) {
                     let _ = player.replace_poison_arrow_state(state);
                 }
-                self.apply_poison_arrow_to_player(master, player_id, region_id, attack, runtime);
+                self.apply_periodic_state_attack_to_player(
+                    master,
+                    player_id,
+                    region_id,
+                    attack,
+                    runtime,
+                );
             }
             PoisonArrowStateTick::Ended => {
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.finish_periodic_attack_state(state.skill_id());
+                }
                 send_poison_arrow_state_visual(
                     self,
                     region_id,
@@ -229,7 +322,7 @@ impl CGame {
         true
     }
 
-    fn poison_arrow_owned_monster_attackable(
+    fn periodic_state_owned_monster_attackable(
         &self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         owner: crate::gameserver::appserver::masterinfo::MasterInfo,
@@ -272,7 +365,7 @@ impl CGame {
             || owner.master_id == master.master_id
     }
 
-    fn apply_poison_arrow_to_monster<Runtime: GameMainLoopRuntime>(
+    pub(super) fn apply_periodic_state_attack_to_monster<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -313,7 +406,7 @@ impl CGame {
             || god
             || !self.guard_monster_attackable(master.master_id, region_id, &property)
             || ((tamed || carriage)
-                && !self.poison_arrow_owned_monster_attackable(master, target_master))
+                && !self.periodic_state_owned_monster_attackable(master, target_master))
         {
             return;
         }
@@ -532,7 +625,7 @@ impl CGame {
                     }
                     self.restore_region_owner(owner);
                 }
-                self.apply_poison_arrow_to_monster(
+                self.apply_periodic_state_attack_to_monster(
                     master,
                     monster_id,
                     region_id,
@@ -540,16 +633,26 @@ impl CGame {
                     runtime,
                 );
             }
-            PoisonArrowStateTick::Ended => send_poison_arrow_state_visual(
-                self,
-                region_id,
-                identity,
-                x,
-                y,
-                state,
-                false,
-                lifetime_now_ms,
-            ),
+            PoisonArrowStateTick::Ended => {
+                if let Some(mut owner) = self.take_region_owner(region_id) {
+                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        monster
+                            .move_shape_mut()
+                            .finish_periodic_attack_state(state.skill_id());
+                    }
+                    self.restore_region_owner(owner);
+                }
+                send_poison_arrow_state_visual(
+                    self,
+                    region_id,
+                    identity,
+                    x,
+                    y,
+                    state,
+                    false,
+                    lifetime_now_ms,
+                );
+            }
         }
         true
     }

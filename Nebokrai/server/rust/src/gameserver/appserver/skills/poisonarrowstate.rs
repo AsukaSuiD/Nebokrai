@@ -21,6 +21,7 @@ use crate::nets::netserver::message::CMessage;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
+const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PoisonArrowStateTick {
@@ -93,7 +94,7 @@ impl PoisonArrowState {
 
     fn attack(self) -> AttackInformation {
         AttackInformation {
-            skill_id: POISON_ARROW_SKILL_ID,
+            skill_id: LEGACY_UNKNOWN_SKILL_ID,
             skill_level: 0,
             attacker_type: self.master.master_type,
             attacker_id: self.master.master_id,

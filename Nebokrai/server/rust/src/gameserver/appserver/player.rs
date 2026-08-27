@@ -4386,6 +4386,27 @@ impl CPlayer {
         self.move_shape.take_poison_arrow_state_for_ai()
     }
 
+    pub(crate) fn replace_blood_loss_state(
+        &mut self,
+        state: super::skills::bloodlossstate::BloodLossState,
+    ) -> Option<super::skills::bloodlossstate::BloodLossState> {
+        self.move_shape.replace_blood_loss_state(state)
+    }
+
+    pub(crate) fn take_blood_loss_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::bloodlossstate::BloodLossState> {
+        self.move_shape.take_blood_loss_state_for_ai()
+    }
+
+    pub(crate) fn periodic_attack_state_ids(&self) -> Vec<u32> {
+        self.move_shape.periodic_attack_state_ids()
+    }
+
+    pub(crate) fn finish_periodic_attack_state(&mut self, skill_id: u32) {
+        self.move_shape.finish_periodic_attack_state(skill_id);
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,
@@ -8038,6 +8059,11 @@ impl CPlayer {
     pub(crate) fn war_soul_mana(&self, factory: &CGoodsFactory) -> Option<i32> {
         self.war_soul_goods(factory)
             .map(|goods| goods.addon_property_value(factory, GAP_BF_MP, 1))
+    }
+
+    pub(crate) fn war_soul_attack(&self, factory: &CGoodsFactory) -> Option<i32> {
+        self.war_soul_goods(factory)
+            .map(|goods| goods.addon_property_value(factory, GAP_BF_ATTACK, 1))
     }
 
     pub(crate) fn equipped_battle_fairy_mana(&self, factory: &CGoodsFactory) -> Option<i32> {

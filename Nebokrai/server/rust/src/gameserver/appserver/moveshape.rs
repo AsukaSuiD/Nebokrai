@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
+use indexmap::IndexSet;
 
 use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyMutation, ChangeBodyState};
@@ -50,6 +51,7 @@ use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
+use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
@@ -461,6 +463,8 @@ pub(crate) struct CanonicalStateStorage {
     hearten_state: Option<HeartenState>,
     cure_state: Option<CureState>,
     poison_arrow_state: Option<PoisonArrowState>,
+    blood_loss_state: Option<BloodLossState>,
+    periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
@@ -647,6 +651,8 @@ impl CMoveShape {
         self.hearten_state = None;
         self.cure_state = None;
         self.poison_arrow_state = None;
+        self.blood_loss_state = None;
+        self.periodic_attack_order.clear();
         self.defense_shields.clear();
         self.change_body_states.clear();
         self.extended_states.clear();
@@ -674,6 +680,7 @@ impl CMoveShape {
             || self.state_storage.hearten_state.is_some()
             || self.state_storage.cure_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
+            || self.state_storage.blood_loss_state.is_some()
             || !self.state_storage.defense_shields.is_empty()
             || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
@@ -781,6 +788,10 @@ impl CMoveShape {
             self.poison_arrow_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let blood_loss = usize::from(
+            self.blood_loss_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let shields = self
             .defense_shields
             .iter()
@@ -797,6 +808,7 @@ impl CMoveShape {
             .saturating_add(hearten)
             .saturating_add(cure)
             .saturating_add(poison_arrow)
+            .saturating_add(blood_loss)
             .saturating_add(shields)
             .saturating_add(change_body)
             .saturating_add(extended)
@@ -839,6 +851,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .poison_arrow_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .blood_loss_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .defense_shields
@@ -1037,11 +1052,32 @@ impl CMoveShape {
         &mut self,
         state: PoisonArrowState,
     ) -> Option<PoisonArrowState> {
+        self.periodic_attack_order.insert(state.skill_id());
         self.poison_arrow_state.replace(state)
     }
 
     pub(crate) fn take_poison_arrow_state_for_ai(&mut self) -> Option<PoisonArrowState> {
         self.poison_arrow_state.take()
+    }
+
+    pub(crate) fn replace_blood_loss_state(
+        &mut self,
+        state: BloodLossState,
+    ) -> Option<BloodLossState> {
+        self.periodic_attack_order.insert(state.skill_id());
+        self.blood_loss_state.replace(state)
+    }
+
+    pub(crate) fn take_blood_loss_state_for_ai(&mut self) -> Option<BloodLossState> {
+        self.blood_loss_state.take()
+    }
+
+    pub(crate) fn periodic_attack_state_ids(&self) -> Vec<u32> {
+        self.periodic_attack_order.iter().copied().collect()
+    }
+
+    pub(crate) fn finish_periodic_attack_state(&mut self, skill_id: u32) {
+        self.periodic_attack_order.shift_remove(&skill_id);
     }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {

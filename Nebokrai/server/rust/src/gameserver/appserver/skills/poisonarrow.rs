@@ -195,7 +195,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info_with_text(
                 player_id,
                 b"ZHGS0051",
-                game.poison_arrow_target_name(region_id, target),
+                game.periodic_state_target_name(region_id, target),
             );
             send_failure(game, player_id, 2);
             send_cast(game, player_id, skill_level, 3, None);
@@ -236,21 +236,30 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
     {
         let target_alive = game
             .base_magic_target_view(region_id, target)
-            .is_some_and(|_| !game.poison_arrow_target_dead(region_id, target));
+            .is_some_and(|_| !game.periodic_state_target_dead(region_id, target));
         if !target_alive {
             send_failure(game, player_id, 10);
             send_cast(game, player_id, skill_level, 3, None);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let goods_factory = game.goods_factory().clone();
-        let da_kong_key = game.globe_setup().da_kong_key();
-        let update = game.find_player_mut(player_id).and_then(|player| {
-            player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
-        });
-        let Some(update) = update else {
-            return terminal(QueuedSkillExecutionState::Pending);
-        };
-        send_goods_update(game, &update);
+        if mp_loss != 0 {
+            let goods_factory = game.goods_factory().clone();
+            let da_kong_key = game.globe_setup().da_kong_key();
+            let update = game.find_player_mut(player_id).and_then(|player| {
+                player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
+            });
+            let Some(update) = update else {
+                send_failure(game, player_id, 7);
+                game.send_skill_system_info_with_unsigned(
+                    player_id,
+                    b"ZHGS0052",
+                    (f64::from(mp_loss) * 0.0001).round() as u32,
+                );
+                send_cast(game, player_id, skill_level, 3, None);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            send_goods_update(game, &update);
+        }
         send_cast(game, player_id, skill_level, 1, None);
         if let Some(state) = player_ai.poison_arrow_mut() {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
@@ -269,7 +278,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         send_cast(game, player_id, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if game.poison_arrow_target_dead(region_id, target) {
+    if game.periodic_state_target_dead(region_id, target) {
         send_failure(game, player_id, 10);
         send_cast(game, player_id, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -301,7 +310,7 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info_with_text(
                 player_id,
                 b"ZHGS0051",
-                game.poison_arrow_target_name(region_id, target),
+                game.periodic_state_target_name(region_id, target),
             );
         }
         send_cast(game, player_id, skill_level, 3, None);
@@ -314,6 +323,9 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         2,
         Some((target, target_view.tile_x, target_view.tile_y)),
     );
+    if target.object_type == PLAYER_TYPE {
+        let _ = game.player_on_first_skill(player_id, target.id, Some(region_id), runtime);
+    }
     let master = game
         .find_player(player_id)
         .map(master_info)
