@@ -2703,8 +2703,14 @@ struct GameMainLoopProfile {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameMainLoopOutcome {
-    Continue,
+    Continue(GameLoopPacing),
     ExitRequested,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GameLoopPacing {
+    pacing_tick_ms: u32,
+    delay_ms: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39539,10 +39545,10 @@ impl CGame {
         );
     }
 
-    /// Один exact `CGame::MainLoop` turn. Wrapping DWORD clocks, strict
-    /// interval comparisons, profiling reads и pacing deadline сохраняют
-    /// наблюдаемый Win32 порядок; `Sleep` заменён стандартным
-    /// блокирующим sleep того же game thread-а.
+    /// Один точный ход `CGame::MainLoop`. Переполняющиеся часы `DWORD`, строгие
+    /// сравнения интервалов, чтения профиля и срок следующего хода сохраняют
+    /// наблюдаемый порядок Win32. Само ожидание возвращается асинхронному
+    /// `game_thread_func`, а завершение арифметики срока выполняется после него.
     pub(crate) fn main_loop<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
@@ -39666,17 +39672,39 @@ impl CGame {
         let pacing_tick_ms = runtime.now_milliseconds();
         state.current_tick_ms = pacing_tick_ms;
         let interval_ms = GAME_TICK_INTERVAL_MS;
-        if pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) < interval_ms {
-            let duration_ms = state
+        let delay_ms = if pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) < interval_ms {
+            Some(
+                state
                 .pacing_deadline_ms
                 .wrapping_sub(pacing_tick_ms)
-                .wrapping_add(interval_ms);
-            std::thread::sleep(Duration::from_millis(u64::from(duration_ms)));
+                .wrapping_add(interval_ms),
+            )
+        } else {
+            None
+        };
+
+        self.main_loop_state = state;
+        GameMainLoopOutcome::Continue(GameLoopPacing {
+            pacing_tick_ms,
+            delay_ms,
+        })
+    }
+
+    /// Завершает исходную арифметику тактового срока после ожидания между ходами.
+    fn finish_main_loop_pacing<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+        pacing: GameLoopPacing,
+    ) {
+        let mut state = self.main_loop_state;
+        if let Some(duration_ms) = pacing.delay_ms {
             trace!(target: "miracle_server::gameserver::main_loop", duration_ms, "игровой цикл выдержал тактовую паузу");
         }
-
+        let interval_ms = GAME_TICK_INTERVAL_MS;
         state.pacing_deadline_ms = state.pacing_deadline_ms.wrapping_add(interval_ms);
-        let signed_lag_ms = pacing_tick_ms.wrapping_sub(state.pacing_deadline_ms) as i32;
+        let signed_lag_ms = pacing
+            .pacing_tick_ms
+            .wrapping_sub(state.pacing_deadline_ms) as i32;
         if 1_000 < signed_lag_ms {
             let resync_tick_ms = runtime.now_milliseconds();
             state.pacing_deadline_ms = resync_tick_ms;
@@ -39689,7 +39717,6 @@ impl CGame {
         }
 
         self.main_loop_state = state;
-        GameMainLoopOutcome::Continue
     }
 
     /// Исполняет один исходный snapshot входящих FIFO в порядке WS, BS, GS.
@@ -39914,8 +39941,18 @@ pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
         loop {
             let turn = game.main_loop(runtime);
             main_loop_calls = main_loop_calls.wrapping_add(1);
-            if turn == GameMainLoopOutcome::ExitRequested {
-                break;
+            match turn {
+                GameMainLoopOutcome::ExitRequested => break,
+                GameMainLoopOutcome::Continue(pacing) => {
+                    if let Some(delay_ms) = pacing.delay_ms {
+                        tokio::time::sleep_until(
+                            tokio::time::Instant::now()
+                                + Duration::from_millis(u64::from(delay_ms)),
+                        )
+                        .await;
+                    }
+                    game.finish_main_loop_pacing(runtime, pacing);
+                }
             }
         }
     }
