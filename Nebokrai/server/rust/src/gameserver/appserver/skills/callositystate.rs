@@ -11,6 +11,8 @@
 //! `OnUpdateProperties`.
 
 use super::callosity::{CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID};
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const CALLOSITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 
@@ -52,43 +54,33 @@ impl CallosityState {
     }
 }
 
-// Статус сохранённых метаданных: UNKNOWN; полный декомпилят хранится локально
+pub(crate) fn send_callosity_state_begin(
+    game: &mut CGame,
+    player_id: i32,
+    state: CallosityState,
+) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(CALLOSITY_STATE_BEGIN_MESSAGE);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    message.add_long(state.client_state_time());
+    message.add_ulong(state.additional_data());
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Сохранён только не подключённый конструктор по умолчанию.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp
-
-// ============================================================================
-// FUNCTION: CCallosityState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp:46
-// RVA: 0x001F10B0
-// ADDRESS: 005f10b0
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCallosityState::CCallosityState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp:15
-// RVA: 0x001F4580
-// ADDRESS: 005f4580
-// PROTOTYPE: undefined __thiscall CCallosityState(ushort param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CCallosityState::CCallosityState
@@ -103,78 +95,6 @@ impl CallosityState {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CCallosityState::~CCallosityState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp:35
-// RVA: 0x001F4670
-// ADDRESS: 005f4670
-// PROTOTYPE: void __thiscall ~CCallosityState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCallosityState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp:98
-// RVA: 0x001F4680
-// ADDRESS: 005f4680
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCallosityState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp:117
-// RVA: 0x001F4740
-// ADDRESS: 005f4740
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCallosityState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp:82
-// RVA: 0x001F4830
-// ADDRESS: 005f4830
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCallosityStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\callositystate.cpp:195
-// RVA: 0x001F4920
-// ADDRESS: 005f4920
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 
 
 // COMPONENT_VARIANT_END: GameServer
