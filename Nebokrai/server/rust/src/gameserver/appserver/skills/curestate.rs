@@ -1,6 +1,35 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое краткоживущее состояние `CCureState`.
+//!
+//! Источник: `gameserver.exe + GameServer.pdb`, владелец
+//! `appserver/skills/curestate.cpp`. Класс не переопределяет `AI`, поэтому
+//! унаследованный `CState::AI` завершает его на следующем снимке
+//! `UpdateAbnormality`; состояние успевает участвовать в `OnChangeStates`.
+
+pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CureState {
+    keep_time_ms: u32,
+}
+
+impl CureState {
+    pub(crate) const fn new(keep_time_ms: u32) -> Self {
+        Self { keep_time_ms }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        CURE_STATE_SKILL_ID
+    }
+
+    pub(crate) const fn client_time(self) -> i32 {
+        let _ = self.keep_time_ms;
+        0
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

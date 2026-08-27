@@ -1,6 +1,24 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутый контракт навыка боевого духа `CLifeShield`.
+//!
+//! Навык `544` расходует `GAP_BF_MP` экипированного боевого духа, немедленно
+//! рассылает изменённый товар, затем создаёт упорядоченное защитное состояние.
+//! Любое завершение состояния добавляет краткоживущий `CCureState`.
+
+pub(crate) const LIFE_SHIELD_SKILL_ID: u32 = 544;
+pub(crate) const LIFE_SHIELD_EFFECT_MESSAGE: i32 = 0x000b_fe01;
+pub(crate) const LIFE_SHIELD_VISUAL_OBJECT_TYPE: i32 = 700;
+pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+pub(crate) const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
+pub(crate) const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
+pub(crate) const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
+pub(crate) const SKILL_USAGE_STATE_HP: u32 = 10_010;
+pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
+pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

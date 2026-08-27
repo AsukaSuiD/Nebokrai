@@ -146,6 +146,7 @@ pub(crate) fn defend_player_base_attack(
     attacker_occupation: u8,
     target: PlayerCombatProperties,
     target_mana: u32,
+    target_war_soul_mana: Option<i32>,
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
     defense_shields: &mut [DefenseShieldState],
@@ -179,7 +180,13 @@ pub(crate) fn defend_player_base_attack(
 
     for power in &mut attack.damages {
         for state in defense_shields.iter_mut() {
-            state.absorb_damage(attack.skill_id, attack.damage_factor, target_mana, power);
+            state.absorb_damage(
+                attack.skill_id,
+                attack.damage_factor,
+                target_mana,
+                target_war_soul_mana,
+                power,
+            );
         }
         match power.kind {
             AttackPowerType::Physical => {
@@ -265,6 +272,7 @@ pub(crate) fn defend_player_from_monster_base_attack(
     attack: &mut AttackInformation,
     target: PlayerCombatProperties,
     target_mana: u32,
+    target_war_soul_mana: Option<i32>,
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
     defense_shields: &mut [DefenseShieldState],
@@ -285,7 +293,13 @@ pub(crate) fn defend_player_from_monster_base_attack(
 
     for power in &mut attack.damages {
         for state in defense_shields.iter_mut() {
-            state.absorb_damage(attack.skill_id, attack.damage_factor, target_mana, power);
+            state.absorb_damage(
+                attack.skill_id,
+                attack.damage_factor,
+                target_mana,
+                target_war_soul_mana,
+                power,
+            );
         }
         match power.kind {
             AttackPowerType::Physical => {

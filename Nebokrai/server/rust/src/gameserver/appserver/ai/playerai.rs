@@ -60,6 +60,8 @@ pub(crate) struct CPlayerAI {
     base_magic_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
+    life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    life_shield_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -133,6 +135,7 @@ impl CPlayerAI {
         let replaced = self.battle_fairy_skills.len();
         self.battle_fairy_skills.clear();
         self.battle_fairy_base_magic = None;
+        self.life_shield = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -458,6 +461,10 @@ impl CPlayerAI {
                 .terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой атаки боевой феи завершено");
         }
+        if let Some(mut execution) = self.life_shield.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение щита жизни завершено");
+        }
         true
     }
 
@@ -486,6 +493,33 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_battle_fairy_base_magic_used(&mut self, now_ms: u32) {
         self.battle_fairy_base_magic_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn life_shield(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.life_shield
+    }
+
+    pub(crate) const fn begin_life_shield(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.life_shield = Some(state);
+    }
+
+    pub(crate) fn life_shield_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.life_shield.as_mut()
+    }
+
+    pub(crate) const fn life_shield_last_used_ms(&self) -> u32 {
+        self.life_shield_last_used_ms
+    }
+
+    pub(crate) const fn mark_life_shield_used(&mut self, now_ms: u32) {
+        self.life_shield_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -816,6 +816,7 @@ use crate::gameserver::appserver::skills::callosity::{
 use crate::gameserver::appserver::skills::callositystate::{
     CALLOSITY_STATE_BEGIN_MESSAGE, CallosityState,
 };
+use crate::gameserver::appserver::skills::curestate::{CURE_STATE_SKILL_ID, CureState};
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_monster_from_monster_base_attack, defend_player_base_attack,
     defend_player_from_monster_base_attack,
@@ -836,6 +837,18 @@ use crate::gameserver::appserver::skills::heartenstate::{
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
+use crate::gameserver::appserver::skills::lifeshield::{
+    LIFE_SHIELD_EFFECT_MESSAGE, LIFE_SHIELD_SKILL_ID, LIFE_SHIELD_VISUAL_OBJECT_TYPE,
+    SKILL_USAGE_CAN_BE_BREAKED as LIFE_SHIELD_CAN_BE_BREAKED,
+    SKILL_USAGE_DELAY_TIME as LIFE_SHIELD_DELAY_TIME,
+    SKILL_USAGE_REUSE_DELAY_TIME as LIFE_SHIELD_REUSE_DELAY_TIME,
+    SKILL_USAGE_STATE_HP as LIFE_SHIELD_STATE_HP,
+    SKILL_USAGE_STATE_PERSIST_TIME as LIFE_SHIELD_STATE_PERSIST_TIME,
+    SKILL_USAGE_TARGET_HP_DECREASE_FACTOR as LIFE_SHIELD_HP_FACTOR,
+    SKILL_USAGE_TARGET_MP_DECREASE_FACTOR as LIFE_SHIELD_MP_FACTOR,
+    SKILL_USAGE_USER_MP_LOSE as LIFE_SHIELD_MP_LOSE,
+};
+use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshield::{
     MACHINE_SHIELD_EFFECT_MESSAGE, MACHINE_SHIELD_SKILL_ID,
     SKILL_USAGE_CAN_BE_BREAKED as MACHINE_SHIELD_CAN_BE_BREAKED,
@@ -5177,6 +5190,78 @@ impl CGame {
             message.add_long(state.life());
         }
         self.send_player_shape_around(player_id, None, &message)
+    }
+
+    fn send_life_shield_state_visual(
+        &mut self,
+        player_id: i32,
+        state: LifeShieldState,
+        begin: bool,
+        now_ms: u32,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player(player_id)?;
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(if begin {
+            MANA_SHIELD_STATE_BEGIN_MESSAGE
+        } else {
+            MANA_SHIELD_STATE_END_MESSAGE
+        });
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(state.skill_id() as i32);
+        if begin {
+            message.add_long(state.client_time(now_ms));
+            message.add_long(state.life());
+        }
+        self.send_player_shape_around(player_id, None, &message)
+    }
+
+    fn send_cure_state_visual(
+        &mut self,
+        player_id: i32,
+        state: CureState,
+        begin: bool,
+        _now_ms: u32,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let player = self.find_player(player_id)?;
+        let identity = player.shape().identity();
+        let mut message = CMessage::new(if begin {
+            MANA_SHIELD_STATE_BEGIN_MESSAGE
+        } else {
+            MANA_SHIELD_STATE_END_MESSAGE
+        });
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(CURE_STATE_SKILL_ID as i32);
+        if begin {
+            message.add_long(state.client_time());
+            message.add_long(0);
+        }
+        self.send_player_shape_around(player_id, None, &message)
+    }
+
+    fn finish_life_shield_state(
+        &mut self,
+        player_id: i32,
+        state: LifeShieldState,
+        now_ms: u32,
+    ) {
+        if let Some(properties) = self
+            .skill_factory
+            .query_skill_base_properties(state.skill_id(), state.skill_level())
+        {
+            let keep_time_ms = properties.query_property(LIFE_SHIELD_STATE_PERSIST_TIME);
+            let cure = CureState::new(keep_time_ms);
+            let previous = self
+                .find_player_mut(player_id)
+                .and_then(|player| player.replace_cure_state(cure));
+            if let Some(previous) = previous {
+                let _ = self.send_cure_state_visual(player_id, previous, false, now_ms);
+            }
+            let _ = self.send_cure_state_visual(player_id, cure, true, now_ms);
+            let _ = self.publish_player_states(player_id);
+        }
+        let _ = self.send_life_shield_state_visual(player_id, state, false, now_ms);
     }
 
     fn send_script_move_state_visual(
@@ -26125,6 +26210,12 @@ impl CGame {
         let Some(now_ms) = sampled_at_ms else {
             return self.find_player(player_id).map(|_| ());
         };
+        let expired_cure = self
+            .find_player_mut(player_id)
+            .and_then(CPlayer::take_cure_state_for_ai);
+        if let Some(state) = expired_cure {
+            let _ = self.send_cure_state_visual(player_id, state, false, now_ms);
+        }
         let agility_state_2_ended = self
             .find_player_mut(player_id)
             .and_then(|player| player.take_expired_agility_state_2(now_ms))
@@ -26139,21 +26230,30 @@ impl CGame {
             let _ = self.send_hearten_state_visual(player_id, state, false, now_ms);
             let _ = self.publish_player_states(player_id);
         }
+        let war_soul_mana = self
+            .find_player(player_id)
+            .and_then(|player| player.war_soul_mana(&self.goods_factory));
         let expired_defense_shields = self
             .find_player_mut(player_id)
-            .map(|player| player.take_expired_defense_shields(now_ms))
+            .map(|player| player.take_expired_defense_shields(now_ms, war_soul_mana))
             .unwrap_or_default();
+        let mut ordinary_shield_ended = false;
         for state in expired_defense_shields.iter().copied() {
             match state {
+                DefenseShieldState::Life(state) => {
+                    self.finish_life_shield_state(player_id, state, now_ms);
+                }
                 DefenseShieldState::Machine(state) => {
+                    ordinary_shield_ended = true;
                     let _ = self.send_machine_shield_state_visual(player_id, state, false, now_ms);
                 }
                 DefenseShieldState::Mana(state) => {
+                    ordinary_shield_ended = true;
                     let _ = self.send_mana_shield_state_visual(player_id, state, false, now_ms);
                 }
             }
         }
-        if !expired_defense_shields.is_empty() {
+        if ordinary_shield_ended {
             let _ = self.publish_player_states(player_id);
         }
         let change_body_states_ended =
@@ -26174,6 +26274,7 @@ impl CGame {
             ride_ended,
             agility_state_2_ended,
             hearten_ended = expired_hearten.is_some(),
+            cure_ended = expired_cure.is_some(),
             defense_shields_ended = expired_defense_shields.len(),
             "обновлены временные состояния игрока"
         );
@@ -34983,6 +35084,7 @@ impl CGame {
                         player.shape().clone(),
                         player.health(),
                         player.mana(),
+                        player.war_soul_mana(&self.goods_factory),
                         Some(player.combat_properties()),
                         None,
                         player.is_dead(),
@@ -35030,6 +35132,7 @@ impl CGame {
                             target_monster.hit_points(),
                             0,
                             None,
+                            None,
                             Some(target_monster.combat_properties(target_property)),
                             CMoveShape::is_died(target_monster.hit_points()),
                             target_monster.move_shape().is_god(),
@@ -35048,6 +35151,7 @@ impl CGame {
             target_shape,
             target_health,
             target_mana,
+            target_war_soul_mana,
             target_player_properties,
             target_monster_properties,
             target_dead,
@@ -35223,6 +35327,7 @@ impl CGame {
                     &mut attack,
                     target_properties,
                     target_mana,
+                    target_war_soul_mana,
                     &self.globe_setup,
                     &mut random,
                     &mut defense_shields,
@@ -37608,6 +37713,7 @@ impl CGame {
                 target_level,
                 target_health,
                 target_mana,
+                target_war_soul_mana,
             ) = {
                 let attacker = self
                     .find_player(player_id)
@@ -37625,6 +37731,7 @@ impl CGame {
                     target.level(),
                     target.health(),
                     target.mana(),
+                    target.war_soul_mana(&self.goods_factory),
                 )
             };
             let [
@@ -37725,6 +37832,7 @@ impl CGame {
                 attacker_occupation,
                 target_properties,
                 target_mana,
+                target_war_soul_mana,
                 &self.globe_setup,
                 &mut random,
                 &mut defense_shields,
@@ -38137,11 +38245,42 @@ impl CGame {
         }
     }
 
-    fn send_battle_fairy_base_magic_failure(&self, player_id: i32, action: u8) {
+    fn send_battle_fairy_skill_failure(&self, player_id: i32, action: u8) {
         let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
         message.add_byte(4);
         message.add_byte(action);
         let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    fn send_life_shield_cast(&mut self, player_id: i32, skill_level: i32, action: u8) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        let mut message = CMessage::new(LIFE_SHIELD_EFFECT_MESSAGE);
+        message.add_byte(action);
+        message.add_long(LIFE_SHIELD_SKILL_ID as i32);
+        message.base_mut().add_short(skill_level as i16);
+        message.add_long(LIFE_SHIELD_VISUAL_OBJECT_TYPE);
+        message.add_long(player_id);
+        if action == 2 {
+            message.add_long(0);
+            message.add_long(0);
+        } else {
+            message.add_long(player.shape().get_direction());
+        }
+        let _ = self.send_player_shape_around(player_id, None, &message);
+    }
+
+    fn send_life_shield_goods_update(
+        &mut self,
+        update: &crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate,
+    ) {
+        let mut message = CMessage::new(update.message_type as i32);
+        message.add_long(update.player_id);
+        message.base_mut().add_guid(update.goods.ex_id);
+        message.add_ulong(update.old_client_payload.len() as u32);
+        message.base_mut().add(&update.old_client_payload);
+        let _ = self.send_player_shape_around(update.player_id, None, &message);
     }
 
     fn send_battle_fairy_base_magic_end(&mut self, player_id: i32, skill_level: i32) {
@@ -38174,6 +38313,163 @@ impl CGame {
                 .is_some_and(|monster| monster.move_shape().has_state_by_skill_id(state_id)),
             _ => false,
         }
+    }
+
+    fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: BattleFairySkillDispatch,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> QueuedSkillExecutionOutcome {
+        let terminal = |state| QueuedSkillExecutionOutcome {
+            state,
+            first_contact: false,
+            killing_blow: None,
+        };
+        let (skill_id, skill_level) = match dispatch {
+            BattleFairySkillDispatch::SelfTarget { skill_id, skill_level, .. }
+            | BattleFairySkillDispatch::Point { skill_id, skill_level, .. }
+            | BattleFairySkillDispatch::Object { skill_id, skill_level, .. }
+                if skill_id == LIFE_SHIELD_SKILL_ID => (skill_id, skill_level),
+            _ => return terminal(QueuedSkillExecutionState::Rejected),
+        };
+        if self.find_player(player_id).is_none() {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(properties) = self
+            .skill_factory
+            .query_skill_base_properties(skill_id, skill_level)
+        else {
+            self.send_battle_fairy_skill_failure(player_id, 2);
+            self.send_life_shield_cast(player_id, skill_level, 3);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let mp_loss = properties.query_property(LIFE_SHIELD_MP_LOSE);
+        let delay_ms = properties.query_property(LIFE_SHIELD_DELAY_TIME);
+        let reuse_delay_ms = properties.query_property(LIFE_SHIELD_REUSE_DELAY_TIME);
+        let keep_time_ms = properties.query_property(LIFE_SHIELD_STATE_PERSIST_TIME);
+        let state_life = properties.query_property(LIFE_SHIELD_STATE_HP) as i32;
+        let hp_factor = properties.query_property(LIFE_SHIELD_HP_FACTOR) as u16;
+        let mp_factor = properties.query_property(LIFE_SHIELD_MP_FACTOR) as u16;
+        let _can_be_breaked = properties.query_property(LIFE_SHIELD_CAN_BE_BREAKED);
+
+        if player_ai.life_shield().is_none() {
+            let started_at_ms = runtime.now_milliseconds();
+            let cooldown_now_ms = runtime.now_milliseconds();
+            if player_ai.life_shield_last_used_ms() != 0
+                && !time_reached(
+                    cooldown_now_ms,
+                    player_ai.life_shield_last_used_ms(),
+                    reuse_delay_ms,
+                )
+            {
+                self.send_battle_fairy_skill_failure(player_id, 0x0d);
+                self.send_skill_system_info(player_id, b"ZHGS0048");
+                self.send_battle_fairy_skill_failure(player_id, 2);
+                self.send_life_shield_cast(player_id, skill_level, 3);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            if mp_loss != 0 {
+                let Some(current) = self
+                    .find_player(player_id)
+                    .and_then(|player| player.war_soul_mana(&self.goods_factory))
+                else {
+                    self.send_battle_fairy_skill_failure(player_id, 2);
+                    self.send_life_shield_cast(player_id, skill_level, 3);
+                    return terminal(QueuedSkillExecutionState::Rejected);
+                };
+                if i64::from(current) - i64::from(mp_loss) < 0 {
+                    self.send_battle_fairy_skill_failure(player_id, 7);
+                    let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+                    self.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
+                    self.send_battle_fairy_skill_failure(player_id, 2);
+                    self.send_life_shield_cast(player_id, skill_level, 3);
+                    return terminal(QueuedSkillExecutionState::Rejected);
+                }
+            }
+            player_ai.begin_life_shield(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        } else if player_ai
+            .life_shield()
+            .is_none_or(|state| state.dispatch() != dispatch)
+        {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+
+        if player_ai
+            .life_shield()
+            .is_some_and(|state| state.stage() == SkillStage::Begin)
+        {
+            if self
+                .find_player(player_id)
+                .and_then(CPlayer::server_region_id)
+                .is_none()
+            {
+                self.send_life_shield_cast(player_id, skill_level, 3);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            let Some(current) = self
+                .find_player(player_id)
+                .and_then(|player| player.war_soul_mana(&self.goods_factory))
+            else {
+                return terminal(QueuedSkillExecutionState::Pending);
+            };
+            if i64::from(current) - i64::from(mp_loss) < 0 {
+                self.send_battle_fairy_skill_failure(player_id, 7);
+                let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+                self.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
+                self.send_life_shield_cast(player_id, skill_level, 3);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            let goods_factory = self.goods_factory.clone();
+            let da_kong_key = self.globe_setup.da_kong_key();
+            let update = self
+                .find_player_mut(player_id)
+                .and_then(|player| {
+                    player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
+                });
+            if let Some(update) = update.as_ref() {
+                self.send_life_shield_goods_update(update);
+            }
+            self.send_life_shield_cast(player_id, skill_level, 1);
+            if let Some(state) = player_ai.life_shield_mut() {
+                let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+            }
+        }
+
+        let started_at_ms = player_ai
+            .life_shield()
+            .map(SkillExecutionKernel::started_at_ms)
+            .expect("выполнение щита жизни создано или восстановлено");
+        if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+            return terminal(QueuedSkillExecutionState::Pending);
+        }
+
+        self.send_life_shield_cast(player_id, skill_level, 2);
+        let state = LifeShieldState::new(
+            runtime.now_milliseconds(),
+            keep_time_ms,
+            state_life,
+            hp_factor,
+            mp_factor,
+            skill_level,
+        );
+        let removed = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.replace_life_shield_state(state));
+        if let Some(removed) = removed {
+            self.finish_life_shield_state(player_id, removed, runtime.now_milliseconds());
+        }
+        let state_now_ms = runtime.now_milliseconds();
+        let _ = self.send_life_shield_state_visual(player_id, state, true, state_now_ms);
+        if let Some(state) = player_ai.life_shield_mut() {
+            let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
+            let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
+            let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        player_ai.mark_life_shield_used(runtime.now_milliseconds());
+        self.send_life_shield_cast(player_id, skill_level, 3);
+        terminal(QueuedSkillExecutionState::Completed)
     }
 
     fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
@@ -38223,7 +38519,7 @@ impl CGame {
         let target = match dispatch {
             BattleFairySkillDispatch::Object { target, .. } => target,
             _ => {
-                self.send_battle_fairy_base_magic_failure(player_id, 10);
+                self.send_battle_fairy_skill_failure(player_id, 10);
                 self.send_skill_system_info(player_id, b"ZHGS0045");
                 self.send_battle_fairy_base_magic_end(player_id, skill_level);
                 return rejected();
@@ -38232,7 +38528,7 @@ impl CGame {
 
         if player_ai.battle_fairy_base_magic().is_none() {
             if target.object_type == PLAYER_TYPE && target.id == player_id {
-                self.send_battle_fairy_base_magic_failure(player_id, 10);
+                self.send_battle_fairy_skill_failure(player_id, 10);
                 self.send_skill_system_info(player_id, b"ZHGS0045");
                 self.send_battle_fairy_base_magic_end(player_id, skill_level);
                 return rejected();
@@ -38263,13 +38559,13 @@ impl CGame {
                     reuse_delay_ms,
                 )
             {
-                self.send_battle_fairy_base_magic_failure(player_id, 0x0d);
+                self.send_battle_fairy_skill_failure(player_id, 0x0d);
                 self.send_skill_system_info(player_id, b"ZHGS0048");
                 self.send_battle_fairy_base_magic_end(player_id, skill_level);
                 return rejected();
             }
             let Some(target_view) = self.base_magic_target_view(region_id, target) else {
-                self.send_battle_fairy_base_magic_failure(player_id, 10);
+                self.send_battle_fairy_skill_failure(player_id, 10);
                 self.send_skill_system_info(player_id, b"ZHGS0050");
                 self.send_battle_fairy_base_magic_end(player_id, skill_level);
                 return rejected();
@@ -38290,7 +38586,7 @@ impl CGame {
                 None,
             );
             if maximum_distance != 0 && path.len() > maximum_distance as usize {
-                self.send_battle_fairy_base_magic_failure(player_id, 0x0b);
+                self.send_battle_fairy_skill_failure(player_id, 0x0b);
                 self.send_skill_system_info(player_id, b"ZHGS0049");
                 self.send_battle_fairy_base_magic_end(player_id, skill_level);
                 return rejected();
@@ -38304,7 +38600,7 @@ impl CGame {
                 _ => true,
             };
             if target_dead {
-                self.send_battle_fairy_base_magic_failure(player_id, 10);
+                self.send_battle_fairy_skill_failure(player_id, 10);
                 self.send_skill_system_info(player_id, b"ZHGS0050");
                 self.send_battle_fairy_base_magic_end(player_id, skill_level);
                 return rejected();
@@ -38347,7 +38643,7 @@ impl CGame {
         }
 
         let Some(target_view) = self.base_magic_target_view(region_id, target) else {
-            self.send_battle_fairy_base_magic_failure(player_id, 10);
+            self.send_battle_fairy_skill_failure(player_id, 10);
             self.send_skill_system_info(player_id, b"ZHGS0050");
             self.send_battle_fairy_base_magic_end(player_id, skill_level);
             return rejected();
@@ -38361,7 +38657,7 @@ impl CGame {
             _ => true,
         };
         if target_dead {
-            self.send_battle_fairy_base_magic_failure(player_id, 10);
+            self.send_battle_fairy_skill_failure(player_id, 10);
             self.send_skill_system_info(player_id, b"ZHGS0050");
             self.send_battle_fairy_base_magic_end(player_id, skill_level);
             return rejected();
@@ -38617,7 +38913,24 @@ impl CGame {
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
         if let Some(dispatch) = player_ai.next_battle_fairy_skill() {
-            let outcome = if matches!(
+            let concrete_life_shield = matches!(
+                dispatch,
+                BattleFairySkillDispatch::SelfTarget {
+                    skill_id: LIFE_SHIELD_SKILL_ID,
+                    ..
+                }
+                    | BattleFairySkillDispatch::Point {
+                        skill_id: LIFE_SHIELD_SKILL_ID,
+                        ..
+                    }
+                    | BattleFairySkillDispatch::Object {
+                        skill_id: LIFE_SHIELD_SKILL_ID,
+                        ..
+                    }
+            );
+            let outcome = if concrete_life_shield {
+                self.execute_battle_fairy_life_shield(player_id, dispatch, player_ai, runtime)
+            } else if matches!(
                 dispatch,
                 BattleFairySkillDispatch::Object {
                     skill_id: BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
@@ -41572,7 +41885,13 @@ impl CGame {
         runtime: &mut Runtime,
     ) {
         let master = phalanx.master();
-        let Some((target_properties, target_level, target_health, target_mana)) = self
+        let Some((
+            target_properties,
+            target_level,
+            target_health,
+            target_mana,
+            target_war_soul_mana,
+        )) = self
             .find_player(target_id)
             .filter(|target| !target.is_dead() && target.server_region_id() == Some(region_id))
             .map(|target| {
@@ -41581,6 +41900,7 @@ impl CGame {
                     target.level(),
                     target.health(),
                     target.mana(),
+                    target.war_soul_mana(&self.goods_factory),
                 )
             })
         else {
@@ -41607,6 +41927,7 @@ impl CGame {
             attacker_occupation,
             target_properties,
             target_mana,
+            target_war_soul_mana,
             &self.globe_setup,
             &mut random,
             &mut defense_shields,

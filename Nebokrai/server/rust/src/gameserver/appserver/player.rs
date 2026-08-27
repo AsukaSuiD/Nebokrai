@@ -4320,14 +4320,22 @@ impl CPlayer {
         self.move_shape.replace_machine_shield_state(state)
     }
 
+    pub(crate) fn replace_life_shield_state(
+        &mut self,
+        state: super::skills::lifeshieldstate::LifeShieldState,
+    ) -> Option<super::skills::lifeshieldstate::LifeShieldState> {
+        self.move_shape.replace_life_shield_state(state)
+    }
+
     pub(crate) fn take_expired_defense_shields(
         &mut self,
         now_ms: u32,
+        war_soul_mana: Option<i32>,
     ) -> Vec<super::skills::shieldstate::DefenseShieldState> {
         let mana = self.mana();
         let dead = self.is_dead();
         self.move_shape
-            .take_expired_defense_shields(now_ms, mana, dead)
+            .take_expired_defense_shields(now_ms, mana, dead, war_soul_mana)
     }
 
     pub(crate) fn take_defense_shields(
@@ -4341,6 +4349,19 @@ impl CPlayer {
         states: Vec<super::skills::shieldstate::DefenseShieldState>,
     ) {
         self.move_shape.restore_defense_shields(states);
+    }
+
+    pub(crate) fn replace_cure_state(
+        &mut self,
+        state: super::skills::curestate::CureState,
+    ) -> Option<super::skills::curestate::CureState> {
+        self.move_shape.replace_cure_state(state)
+    }
+
+    pub(crate) fn take_cure_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::curestate::CureState> {
+        self.move_shape.take_cure_state_for_ai()
     }
 
     pub(crate) fn add_script_move_state(
@@ -7990,6 +8011,37 @@ impl CPlayer {
         self.equipment
             .get_goods(10)
             .filter(|goods| goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 1)
+    }
+
+    pub(crate) fn war_soul_mana(&self, factory: &CGoodsFactory) -> Option<i32> {
+        self.war_soul_goods(factory)
+            .map(|goods| goods.addon_property_value(factory, GAP_BF_MP, 1))
+    }
+
+    pub(crate) fn spend_war_soul_mana(
+        &mut self,
+        amount: u32,
+        factory: &CGoodsFactory,
+        da_kong_key: bool,
+    ) -> Option<super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate> {
+        let current = self.war_soul_mana(factory)?;
+        let next = current.wrapping_sub(amount as i32);
+        let player_id = self.player_id();
+        let goods = self.equipment_mut().get_goods_mut(10)?;
+        let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, next);
+        let identity = goods.identity();
+        let mut old_client_payload = Vec::new();
+        if !goods.serialize_for_old_client(&mut old_client_payload, factory, da_kong_key) {
+            return None;
+        }
+        Some(
+            super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                message_type: 0x0b_f918,
+                player_id,
+                goods: identity,
+                old_client_payload,
+            },
+        )
     }
 
     /// Exact `GetGoodsById` lookup order для goods-message `0x8FC2E`.
