@@ -24,16 +24,21 @@
 //! unlink. Passive/command pet target теперь доходит через pet-scaled
 //! base-attack до wild monster death/beneficiary owner-а; pet schedule хранит
 //! one-second master checks, 6-hour age counter и wild-timeout state, а
-//! `CGame` завершает active-mode master-centered target search и
-//! reclaim/notice/evanish effects. Idle wandering, специальные guard AI и
-//! multi-skill decision tree этим не подменяются. Carriage owner хранит
-//! following/staying, one-second master binding и invalid-master timeout;
-//! `CGame` исполняет движение, notices и unlink/delete wire.
+//! `CGame` завершает поиск целей активного режима относительно хозяина,
+//! возврат питомца, уведомления и исчезновение. Случайное перемещение без цели,
+//! специальные сторожевые AI и выбор между несколькими навыками этим не
+//! подменяются. Для достигнутого обычного
+//! пути бездействия `CBaseAI` хранит время начала и интервал сна; `CGame`
+//! восстанавливает HP и рассылает `OnChangeStates` до возврата ID в список
+//! активных объектов области. Владелец повозки хранит режимы следования и
+//! ожидания, ежесекундную привязку к хозяину и срок ожидания недействительного
+//! хозяина; `CGame` исполняет движение, уведомления, отвязку и пакет удаления.
 //! Login pet restoration и client control используют owned `tagMasterInfo`,
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
 //! async CPet decision tree этим не подменяется.
 
+use super::ai::baseai::CBaseAI;
 use super::masterinfo::MasterInfo;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
@@ -83,6 +88,7 @@ pub(crate) struct CMonster {
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
+    base_ai: CBaseAI,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -140,6 +146,12 @@ pub(crate) type MonsterBaseAttackCast = SkillExecutionKernel<MonsterBaseAttackDi
 pub(crate) struct MonsterTraceMoveDelay {
     pub(crate) started_at_ms: u32,
     pub(crate) delay_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonsterWakeMutation {
+    pub(crate) hit_points: u32,
+    pub(crate) publish_states: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -213,6 +225,7 @@ impl CMonster {
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
             trace_move_delay: None,
+            base_ai: CBaseAI::default(),
         }
     }
 
@@ -498,6 +511,51 @@ impl CMonster {
 
     pub(crate) const fn set_hit_points(&mut self, hit_points: u32) {
         self.hit_points = hit_points;
+    }
+
+    pub(crate) fn hibernate_ai(&mut self, now_ms: u32) {
+        self.base_ai.hibernate(now_ms);
+    }
+
+    pub(crate) const fn is_ai_hibernated(&self) -> bool {
+        self.base_ai.is_hibernated()
+    }
+
+    /// `CMonsterAI::WakeUp` сначала завершает сон, затем восстанавливает
+    /// HP с точной DWORD-арифметикой и вызывает `OnChangeStates`, если до
+    /// пробуждения HP отличался от максимума. Сам круговой пакет шлёт `CGame`.
+    pub(crate) fn wake_ai(
+        &mut self,
+        now_ms: u32,
+        resume_timer_ms: u32,
+        property: &MonsterProperties,
+    ) -> MonsterWakeMutation {
+        let dormancy_interval_ms = self.base_ai.wake_up(now_ms);
+        let maximum_hp = if self.tamed {
+            self.pet_maximum_hp(property)
+        } else {
+            property.maximum_hp
+        };
+        let publish_states = self.hit_points != maximum_hp;
+        if publish_states {
+            if resume_timer_ms == 0 {
+                tracing::warn!(
+                    monster_id = self.move_shape.shape().identity().id,
+                    "нулевой интервал восстановления монстра не допускает деление"
+                );
+            } else {
+                let recovery_steps = dormancy_interval_ms / resume_timer_ms;
+                let recovery_speed = (property.hp_recover_speed as i32).max(1) as u16 as u32;
+                self.hit_points = self
+                    .hit_points
+                    .wrapping_add(recovery_speed.wrapping_mul(recovery_steps))
+                    .min(maximum_hp);
+            }
+        }
+        MonsterWakeMutation {
+            hit_points: self.hit_points,
+            publish_states,
+        }
     }
 
     pub(crate) fn combat_properties(

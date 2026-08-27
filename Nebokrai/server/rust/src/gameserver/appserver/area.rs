@@ -22,9 +22,9 @@
 //! `CServerRegion::FindChildObject`; pointer ownership в `CArea` не вводится.
 //! `PlayerEnter` RVA `0x00075580` сохраняет точный девяти-area traversal.
 //! `WakeUpMonsters` RVA `0x00073A70` атомарно забирает sleeping storage;
-//! owning region передаёт actual monster в AI Reset/classification callback и
-//! возвращает его в active/pet/carriage vector либо оставляет вне area при
-//! stale owner/отсутствующем AI.
+//! владеющий `CGame` выполняет `CMonsterAI::WakeUp`, публикует изменение HP и
+//! возвращает монстра в список активных, питомцев или повозок либо оставляет
+//! вне области при устаревшем владельце или отсутствующем AI.
 //! Nation `OnClearWar` достигает ordered type `600` и sleeping-only views;
 //! они возвращают owned ID в исходном active/sleep/pet/carriage порядке без
 //! введения второго pointer owner-а.
@@ -39,7 +39,7 @@
 //! carriage переклассификацию только в area без игроков. Ground-goods wire и
 //! state принадлежат actual Game/region owner-у; после их публикации caller
 //! завершает удаление deadline через отдельный reached tail. Derived monster
-//! AI facts приходят узким callback из actual Game runtime.
+//! Сведения AI читаются из канонического владельца `CMonster`.
 //! `OnRefreshMonster` RVA `0x00101A70`, вызываемый region AI только для area
 //! без plug-ов, в точном EXE является намеренным no-op (`ret 4`). Метод
 //! оставлен явным, чтобы не потерять подтверждённую границу owner-а и аргумент
@@ -835,7 +835,8 @@ impl CSession {
 // FUNCTION: CArea::WakeUpMonsters
 // STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // IMPLEMENTED: storage transition в `take_sleeping_monster_ids`/
-// `push_woken_monster`, actual owner caller — `CServerRegion`.
+// `push_woken_monster`; фактический вызывающий владелец — `CGame` через
+// `CServerRegion`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\area.cpp:100

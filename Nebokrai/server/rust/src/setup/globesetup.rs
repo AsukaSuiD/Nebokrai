@@ -152,6 +152,7 @@ const REPAIR_FACTOR_OFFSET: usize = 0x2F4;
 // `CGlobeSetup::m_stSetup = 0xEF3DC0`.
 const GOODS_DISAPPEAR_TIMER_OFFSET: usize = 0x34C;
 const GOODS_PROTECTED_TIMER_OFFSET: usize = 0x350;
+const MONSTER_RESUME_TIMER_OFFSET: usize = 0x360;
 // `CPlayerAI::Run` читает DWORD по VA `0xEF45E8` при том же base
 // `0xEF3DC0`; это exact interval между попытками восстановления energy.
 const AUTO_INC_ENERGY_TIME_OFFSET: usize = 0x828;
@@ -583,6 +584,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn goods_protected_timer_ms(&self) -> u32 {
         self.read_u32(GOODS_PROTECTED_TIMER_OFFSET)
+    }
+
+    pub(crate) fn monster_resume_timer_ms(&self) -> u32 {
+        self.read_u32(MONSTER_RESUME_TIMER_OFFSET)
     }
 
     pub(crate) fn auto_inc_energy_time_ms(&self) -> u32 {

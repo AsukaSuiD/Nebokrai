@@ -108,7 +108,8 @@
 
 // ============================================================================
 // FUNCTION: CMonsterAI::Hibernate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: `CMonster::hibernate_ai` делегирует canonical `CBaseAI`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:284
@@ -116,10 +117,6 @@
 // ADDRESS: 005dcc50
 // PROTOTYPE: void __thiscall Hibernate(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CMonsterAI::OnIdle
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -164,7 +161,8 @@
 
 // ============================================================================
 // FUNCTION: CMonsterAI::WakeUp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: `CMonster::wake_ai` и `CGame::wake_owned_monsters_around_area`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:296
@@ -172,10 +170,6 @@
 // ADDRESS: 005dcee0
 // PROTOTYPE: void __thiscall WakeUp(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CMonsterAI::OnSchedule
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

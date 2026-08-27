@@ -500,7 +500,9 @@ use thiserror::Error;
 use tracing::{debug, info, trace, warn};
 
 use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerAutoProgress};
-use crate::gameserver::appserver::area::{AreaAiContext, AreaMonsterAiFacts};
+use crate::gameserver::appserver::area::{
+    AreaAiContext, AreaMonsterAiFacts, AreaWokenMonsterClass,
+};
 use crate::gameserver::appserver::chbystate::ChangeBodyState;
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsTaken,
@@ -3530,14 +3532,6 @@ pub(crate) trait GameMainLoopRuntime:
         player_id: i32,
         player_ai: &mut CPlayerAI,
     ) -> Option<bool>;
-    /// Возвращает actual derived AI/tamed/carriage facts одного monster-а.
-    fn area_monster_ai_facts(
-        &mut self,
-        game: &mut CGame,
-        region_id: i32,
-        area_index: usize,
-        monster: &CMonster,
-    ) -> Option<AreaMonsterAiFacts>;
     /// Разрешает state ground goods и прочих external shape owners, которых
     /// нет в player/monster/NPC Rust storage.
     fn external_region_shape_change_state(
@@ -12010,6 +12004,71 @@ impl CGame {
         message.send_to_around(Some(region), origin, excluded_player_id, &runtime)
     }
 
+    /// Завершает exact `CArea::WakeUpMonsters → CMonsterAI::WakeUp` для
+    /// областей, которые увидел вошедший игрок. Хранилище спящих уже изъято;
+    /// состояние рассылается до возврата ID в список активных, питомцев или
+    /// повозок.
+    fn wake_owned_monsters_around_area(
+        &mut self,
+        region: &mut CServerRegion,
+        center_area_index: usize,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) {
+        let resume_timer_ms = self.globe_setup.monster_resume_timer_ms();
+        for (area_index, monster_id) in
+            region.take_sleeping_monsters_around_area(center_area_index)
+        {
+            let Some(property) = region.find_monster_by_id(monster_id).and_then(|monster| {
+                self.find_monster_property_by_origin_name(monster.base_property_key()?)
+                    .cloned()
+            }) else {
+                tracing::warn!(
+                    region_id = region.id,
+                    area_index,
+                    monster_id,
+                    "спящий монстр не разрешён при пробуждении"
+                );
+                continue;
+            };
+            let Some((shape, class, mutation)) = region
+                .find_monster_by_id_mut(monster_id)
+                .map(|monster| {
+                    let mutation =
+                        monster.wake_ai(now_milliseconds(), resume_timer_ms, &property);
+                    let class = if monster.is_tamed() {
+                        AreaWokenMonsterClass::Pet
+                    } else if monster.is_carriage(&property) {
+                        AreaWokenMonsterClass::Carriage
+                    } else {
+                        AreaWokenMonsterClass::Active
+                    };
+                    (monster.move_shape().shape().clone(), class, mutation)
+                })
+            else {
+                continue;
+            };
+            if mutation.publish_states {
+                let mut states = CMessage::new(0x000b_fe02);
+                states.add_long(MONSTER_TYPE);
+                states.add_long(monster_id);
+                states.add_ulong(mutation.hit_points);
+                states.add_long(0);
+                states.add_long(0);
+                states.add_long(0);
+                let delivery = self.send_game_shape_around(region, &shape, None, &states);
+                tracing::trace!(
+                    region_id = region.id,
+                    area_index,
+                    monster_id,
+                    hit_points = mutation.hit_points,
+                    ?delivery,
+                    "опубликовано восстановление монстра после сна"
+                );
+            }
+            region.restore_woken_monster(area_index, monster_id, class);
+        }
+    }
+
     fn set_nation_player_contend_state(
         &mut self,
         region: &CServerRegion,
@@ -16858,13 +16917,18 @@ impl CGame {
             is_move_shape: true,
             figure: player.figure(),
         };
-        let membership = owner.base_mut().add_object(
+        let membership = owner.base_mut().add_object_with_area_entry(
             player.movement_shape_mut(),
             facts,
             self.globe_setup.area_width(),
             self.globe_setup.area_height(),
             context.now_milliseconds(),
             context,
+            |region, area_index, context| {
+                self.wake_owned_monsters_around_area(region, area_index, || {
+                    context.now_milliseconds()
+                });
+            },
         );
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
@@ -27308,13 +27372,18 @@ impl CGame {
             is_move_shape: true,
             figure: player.figure(),
         };
-        let membership = owner.base_mut().add_object(
+        let membership = owner.base_mut().add_object_with_area_entry(
             player.movement_shape_mut(),
             facts,
             self.globe_setup.area_width(),
             self.globe_setup.area_height(),
             context.now_milliseconds(),
             context,
+            |region, area_index, context| {
+                self.wake_owned_monsters_around_area(region, area_index, || {
+                    context.now_milliseconds()
+                });
+            },
         );
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
@@ -34427,6 +34496,18 @@ impl CGame {
                 target = Some(selected);
             }
         }
+        if target.is_none()
+            && cast.is_none()
+            && !tamed
+            && matches!(property.ai, 0 | 3)
+            && let Some(area_index) = area_index
+            && region.player_ids_around_area(area_index).is_empty()
+        {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.hibernate_ai(runtime.now_milliseconds());
+                return true;
+            }
+        }
         let target = cast.map(|cast| cast.dispatch().target).or(target);
         let Some(target) =
             target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE))
@@ -38558,7 +38639,13 @@ impl CGame {
                 .filter(|identity| identity.object_type == MONSTER_TYPE)
             {
                 let facts = region.find_monster_by_id(identity.id).and_then(|monster| {
-                    runtime.area_monster_ai_facts(self, region.id, area_index, monster)
+                    let property = self
+                        .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                    Some(AreaMonsterAiFacts {
+                        hibernated: monster.is_ai_hibernated(),
+                        tamed: monster.is_tamed(),
+                        carriage: monster.is_carriage(property),
+                    })
                 });
                 monster_facts.insert(identity.id, facts);
             }
@@ -39306,6 +39393,15 @@ impl CGame {
                             &area_resolver,
                             runtime,
                         );
+                        if matches!(result, Ok(true))
+                            && let Some(area_index) = player.shape().area_index()
+                        {
+                            self.wake_owned_monsters_around_area(
+                                owner.base_mut(),
+                                area_index,
+                                || runtime.now_milliseconds(),
+                            );
+                        }
                         self.players.insert(identity.id, player);
                         result
                     }),

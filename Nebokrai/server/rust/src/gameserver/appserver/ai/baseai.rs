@@ -14,8 +14,9 @@
 //! wrapping. `STIFFEN/DIED/OPEN/DEFENSE` всегда идут в passive, остальные —
 //! в war-soul при любом ненулевом флаге и иначе в active.
 //!
-//! Это только достигнутая queue-проекция, а не общий AI tick: owner pointer,
-//! target, dormancy, обработчики и остальные методы ниже остаются
+//! Состояние сна также принадлежит этому владельцу: `Hibernate` запоминает
+//! оборачивающийся счётчик времени, а `WakeUp` один раз вычисляет интервал сна.
+//! Указатель владельца, цель, обработчики и остальные методы ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
@@ -48,6 +49,9 @@ pub(crate) struct CBaseAI {
     active_actions: VecDeque<AiEvent>,
     passive_actions: VecDeque<AiEvent>,
     active_war_soul_actions: VecDeque<AiEvent>,
+    is_dormant: bool,
+    dormancy_time_ms: u32,
+    dormancy_interval_ms: u32,
 }
 
 impl CBaseAI {
@@ -90,6 +94,23 @@ impl CBaseAI {
     pub(crate) fn active_war_soul_actions(&self) -> &VecDeque<AiEvent> {
         &self.active_war_soul_actions
     }
+
+    pub(crate) fn hibernate(&mut self, now_ms: u32) {
+        self.is_dormant = true;
+        self.dormancy_time_ms = now_ms;
+        self.dormancy_interval_ms = 0;
+    }
+
+    pub(crate) fn wake_up(&mut self, now_ms: u32) -> u32 {
+        self.dormancy_interval_ms = now_ms.wrapping_sub(self.dormancy_time_ms);
+        self.dormancy_time_ms = 0;
+        self.is_dormant = false;
+        self.dormancy_interval_ms
+    }
+
+    pub(crate) const fn is_hibernated(&self) -> bool {
+        self.is_dormant
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -100,7 +121,8 @@ impl CBaseAI {
 
 // ============================================================================
 // FUNCTION: CBaseAI::Hibernate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: `CBaseAI::hibernate`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:86
@@ -108,13 +130,10 @@ impl CBaseAI {
 // ADDRESS: 004c7c10
 // PROTOTYPE: void __thiscall Hibernate(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CBaseAI::WakeUp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: `CBaseAI::wake_up`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:100
@@ -122,13 +141,10 @@ impl CBaseAI {
 // ADDRESS: 004c7c30
 // PROTOTYPE: void __thiscall WakeUp(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CBaseAI::IsHibernated
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: `CBaseAI::is_hibernated`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:113
@@ -136,10 +152,6 @@ impl CBaseAI {
 // ADDRESS: 004c7c50
 // PROTOTYPE: int __thiscall IsHibernated(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CBaseAI::SetTarget
 // STATUS: UNKNOWN (сохранены только метаданные исследования)

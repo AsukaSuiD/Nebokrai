@@ -29,6 +29,8 @@
 //! `i32/u32` сохраняют x86 `long/DWORD`; `String` и owned fields заменяют
 //! MFC/STL storage без изменения достигнутых эффектов. `timeGetTime` передаётся
 //! явным wrapping `now_ms`, пока GameServer runtime-clock owner не подключён.
+//! Вход игрока атомарно изымает ID спящих монстров в порядке девяти областей;
+//! `CGame` выполняет `WakeUp` и возвращает классифицированный ID после пакета.
 //! Встроенный `CRegion` сохраняет исходную inheritance-границу и является
 //! владельцем byte-exact tile/security storage; subtype-ы не дублируют клетки.
 //! `Save/New` являются точными tail-jump в `CRegion`; `Load` создаёт area-grid
@@ -570,16 +572,11 @@ pub(crate) trait ServerRegionAreaTransitionContext {
 
     /// Шлёт player-у `0xBF502` одного уже присутствующего shape новой area.
     fn send_area_shape_to_player(&mut self, player_id: i32, shape: ShapeView, payload: &[u8]);
-
-    /// Выполняет `GetAI/Reset` и derived pet/carriage classification.
-    fn wake_up_monster(&mut self, monster: &mut CMonster) -> Option<AreaWokenMonsterClass>;
 }
 
 pub(crate) trait ServerRegionMembershipContext:
     RegionRandomContext + ShapePositionDispatch<Error = RegionMembershipBlock>
 {
-    fn wake_up_monster(&mut self, monster: &mut CMonster) -> Option<AreaWokenMonsterClass>;
-
     /// Материализует достигнутый virtual `CMoveShape` area-enter callback.
     fn move_shape_entered_area(&mut self, identity: ShapeIdentity);
 
@@ -1564,24 +1561,43 @@ impl CServerRegion {
         Ok(Some(goods))
     }
 
-    fn wake_up_area_monsters(
+    /// Атомарно изымает ID спящих монстров в точном порядке текущей и восьми
+    /// соседних областей. `CGame` выполняет `WakeUp` у владельца и возвращает
+    /// живые сущности через `restore_woken_monster` после кругового пакета.
+    pub(crate) fn take_sleeping_monsters_around_area(
         &mut self,
-        area_x: i32,
-        area_y: i32,
-        mut wake: impl FnMut(&mut CMonster) -> Option<AreaWokenMonsterClass>,
-    ) {
-        let Some(area_index) = self.area_index_by_coordinates(ShapeAreaCoordinates {
-            x: area_x,
-            y: area_y,
-        }) else {
-            return;
+        center_area_index: usize,
+    ) -> Vec<(usize, i32)> {
+        let Some(center) = self.areas.get(center_area_index) else {
+            return Vec::new();
         };
-        let sleeping = self.areas[area_index].take_sleeping_monster_ids();
-        for monster_id in sleeping {
-            let class = self.owned_monsters.get_mut(&monster_id).and_then(&mut wake);
-            if let Some(class) = class {
-                self.areas[area_index].push_woken_monster(monster_id, class);
-            }
+        let neighbors = center.player_enter_neighbors();
+        let mut sleeping = Vec::new();
+        for (area_x, area_y) in neighbors {
+            let Some(area_index) = self.area_index_by_coordinates(ShapeAreaCoordinates {
+                x: area_x,
+                y: area_y,
+            }) else {
+                continue;
+            };
+            sleeping.extend(
+                self.areas[area_index]
+                    .take_sleeping_monster_ids()
+                    .into_iter()
+                    .map(|monster_id| (area_index, monster_id)),
+            );
+        }
+        sleeping
+    }
+
+    pub(crate) fn restore_woken_monster(
+        &mut self,
+        area_index: usize,
+        monster_id: i32,
+        class: AreaWokenMonsterClass,
+    ) {
+        if let Some(area) = self.areas.get_mut(area_index) {
+            area.push_woken_monster(monster_id, class);
         }
     }
 
@@ -2476,6 +2492,27 @@ impl CServerRegion {
         now_ms: u32,
         context: &mut Context,
     ) -> Result<(), RegionMembershipBlock> {
+        self.add_object_with_area_entry(
+            shape,
+            facts,
+            area_width,
+            area_height,
+            now_ms,
+            context,
+            |_, _, _| {},
+        )
+    }
+
+    pub(crate) fn add_object_with_area_entry<Context: ServerRegionMembershipContext>(
+        &mut self,
+        shape: &mut CShape,
+        facts: ShapeRuntimeFacts,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+        mut before_move_shape_entry: impl FnMut(&mut CServerRegion, usize, &mut Context),
+    ) -> Result<(), RegionMembershipBlock> {
         validate_area_span(area_width, area_height)?;
         let mut tile_x = shape
             .get_tile_x()
@@ -2504,16 +2541,7 @@ impl CServerRegion {
             self.areas[area_index].add_object(identity, facts, now_ms);
             shape.set_area_index(Some(area_index));
 
-            if identity.object_type == PLAYER_TYPE {
-                let neighbors = self.areas[area_index].player_enter_neighbors();
-                for (area_x, area_y) in neighbors {
-                    if self.get_area(area_x, area_y).is_some() {
-                        self.wake_up_area_monsters(area_x, area_y, |monster| {
-                            context.wake_up_monster(monster)
-                        });
-                    }
-                }
-            }
+            before_move_shape_entry(self, area_index, context);
             if facts.is_move_shape {
                 context.move_shape_entered_area(identity);
             }
@@ -2763,15 +2791,6 @@ impl CServerRegion {
         self.areas[target_index].add_object(moving, facts, now_ms);
         shape.set_area_index(Some(target_index));
 
-        if moving.object_type == PLAYER_TYPE {
-            for (area_x, area_y) in self.areas[target_index].player_enter_neighbors() {
-                if self.get_area(area_x, area_y).is_some() {
-                    self.wake_up_area_monsters(area_x, area_y, |monster| {
-                        context.wake_up_monster(monster)
-                    });
-                }
-            }
-        }
         Ok(true)
     }
 
