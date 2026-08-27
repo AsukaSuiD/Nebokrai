@@ -78,6 +78,8 @@ pub(crate) mod appserver {
         pub(crate) mod fightdefense;
         pub(crate) mod kernel;
         pub(crate) mod natural;
+        pub(crate) mod origin;
+        pub(crate) mod originstate;
         pub(crate) mod naturalstate;
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;

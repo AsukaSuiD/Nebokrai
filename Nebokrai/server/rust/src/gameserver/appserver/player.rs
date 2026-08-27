@@ -4264,6 +4264,23 @@ impl CPlayer {
         properties
     }
 
+    pub(crate) fn replace_origin_state(
+        &mut self,
+        state: super::skills::originstate::OriginState,
+    ) -> Option<super::skills::originstate::OriginState> {
+        self.move_shape.replace_origin_state(state)
+    }
+
+    pub(crate) fn apply_origin_state(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        if let Some(state) = self.move_shape.origin_state() {
+            properties.element_modify = state.apply_to_player(properties.element_modify);
+        }
+        properties
+    }
+
     pub(crate) fn add_script_move_state(
         &mut self,
         state_id: i32,

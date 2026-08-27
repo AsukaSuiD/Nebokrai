@@ -761,6 +761,10 @@ use crate::gameserver::appserver::skills::enlargemaxmp::{
     ENLARGE_MAX_MP_SKILL_ID, SKILL_USAGE_MAX_MP_GAIN,
 };
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
+use crate::gameserver::appserver::skills::origin::{
+    ORIGIN_SKILL_ID, SKILL_USAGE_ELEMENT_MODIFY_GAIN,
+};
+use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::natural::{
     NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN,
 };
@@ -4977,6 +4981,12 @@ impl CGame {
         let Some(properties) = self
             .find_player(player_id)
             .map(|player| player.apply_enlarge_full_miss_state(properties))
+        else {
+            return false;
+        };
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| player.apply_origin_state(properties))
         else {
             return false;
         };
@@ -35981,6 +35991,7 @@ impl CGame {
                         | ENLARGE_MAX_HP_SKILL_ID
                         | ENLARGE_MAX_MP_SKILL_ID
                         | ENLARGE_FULL_MISS_SKILL_ID
+                        | ORIGIN_SKILL_ID
                 ) => skill_id,
             _ => return terminal(QueuedSkillExecutionState::Rejected),
         };
@@ -36020,6 +36031,7 @@ impl CGame {
             EnlargeFullMiss,
             EnlargeMaxHp,
             EnlargeMaxMp,
+            Origin,
         }
         let (usage, state_kind) = match skill_id {
             TAIJI_SKILL_ID => (TAIJI_ELEMENT_RESISTANT_GAIN, ImmediateStateKind::TaiJi),
@@ -36029,6 +36041,7 @@ impl CGame {
             ),
             ENLARGE_MAX_HP_SKILL_ID => (SKILL_USAGE_MAX_HP_GAIN, ImmediateStateKind::EnlargeMaxHp),
             ENLARGE_MAX_MP_SKILL_ID => (SKILL_USAGE_MAX_MP_GAIN, ImmediateStateKind::EnlargeMaxMp),
+            ORIGIN_SKILL_ID => (SKILL_USAGE_ELEMENT_MODIFY_GAIN, ImmediateStateKind::Origin),
             _ => unreachable!(),
         };
         let gain = properties.query_property(usage) as i32;
@@ -36047,6 +36060,9 @@ impl CGame {
                 }
                 ImmediateStateKind::EnlargeMaxMp => {
                     let _ = player.replace_enlarge_max_mp_state(EnlargeMaxMpState::new(gain));
+                }
+                ImmediateStateKind::Origin => {
+                    let _ = player.replace_origin_state(OriginState::new(gain));
                 }
             }
         }
@@ -37798,6 +37814,7 @@ impl CGame {
                         | ENLARGE_MAX_HP_SKILL_ID
                         | ENLARGE_MAX_MP_SKILL_ID
                         | ENLARGE_FULL_MISS_SKILL_ID
+                        | ORIGIN_SKILL_ID
                 ),
             };
             let outcome = if concrete_base_attack {

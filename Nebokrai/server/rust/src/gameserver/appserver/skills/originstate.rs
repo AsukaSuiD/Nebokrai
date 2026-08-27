@@ -1,6 +1,27 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническая достигнутая player-часть `COriginState`.
+//!
+//! Игрок получает знаково расширенные младшие 16 бит параметра через
+//! wrapping-сложение с `element_modify`. Состояние `304` не имеет собственного
+//! таймера или визуального сообщения.
+
+use super::origin::ORIGIN_SKILL_ID;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OriginState {
+    element_modify_gain: i32,
+}
+
+impl OriginState {
+    pub(crate) const fn new(element_modify_gain: i32) -> Self { Self { element_modify_gain } }
+    pub(crate) const fn skill_id(self) -> u32 { ORIGIN_SKILL_ID }
+    pub(crate) const fn apply_to_player(self, value: i32) -> i32 {
+        value.wrapping_add((self.element_modify_gain as i16) as i32)
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сырой C++ ниже является комментарием, а не Rust-реализацией.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

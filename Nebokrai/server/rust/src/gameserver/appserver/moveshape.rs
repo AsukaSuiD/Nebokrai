@@ -43,6 +43,7 @@ use crate::gameserver::appserver::skills::callositystate::CallosityState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
+use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
@@ -449,6 +450,7 @@ pub(crate) struct CanonicalStateStorage {
     enlarge_full_miss_state: Option<EnlargeFullMissState>,
     enlarge_max_hp_state: Option<EnlargeMaxHpState>,
     enlarge_max_mp_state: Option<EnlargeMaxMpState>,
+    origin_state: Option<OriginState>,
     ex_states: LegacyStateCodec,
     change_body_states: Vec<ChangeBodyState>,
     extended_states: Vec<ExtendedState>,
@@ -630,6 +632,7 @@ impl CMoveShape {
         self.enlarge_full_miss_state = None;
         self.enlarge_max_hp_state = None;
         self.enlarge_max_mp_state = None;
+        self.origin_state = None;
         self.change_body_states.clear();
         self.extended_states.clear();
         self.undead_states.clear();
@@ -743,6 +746,10 @@ impl CMoveShape {
             self.enlarge_max_mp_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let origin = usize::from(
+            self.origin_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         scripted
             .saturating_add(agility)
             .saturating_add(callosity)
@@ -750,6 +757,7 @@ impl CMoveShape {
             .saturating_add(enlarge_full_miss)
             .saturating_add(enlarge_max_hp)
             .saturating_add(enlarge_max_mp)
+            .saturating_add(origin)
             .saturating_add(change_body)
             .saturating_add(extended)
             .saturating_add(undead)
@@ -779,6 +787,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .enlarge_max_mp_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .origin_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .script_states
@@ -852,6 +863,14 @@ impl CMoveShape {
 
     pub(crate) const fn enlarge_max_mp_state(&self) -> Option<EnlargeMaxMpState> {
         self.state_storage.enlarge_max_mp_state
+    }
+
+    pub(crate) fn replace_origin_state(&mut self, state: OriginState) -> Option<OriginState> {
+        self.origin_state.replace(state)
+    }
+
+    pub(crate) const fn origin_state(&self) -> Option<OriginState> {
+        self.state_storage.origin_state
     }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {
