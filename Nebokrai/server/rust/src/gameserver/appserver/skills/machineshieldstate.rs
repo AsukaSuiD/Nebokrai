@@ -3,9 +3,16 @@
 //! Состояние хранится в общей упорядоченной ветви щитов и исполняется в
 //! исходной точке `CFightDefense::PreDefense`. Формула не подменяет MP игрока:
 //! рассчитанный `lMPDamage` применяется позднее обычным владельцем атаки.
+//! Не достигнуты только восстановление временного состояния из DB/wire-формата
+//! и его конструктор по умолчанию; соответствующий RAW сохранён ниже.
 
 use super::machineshield::MACHINE_SHIELD_SKILL_ID;
+use super::manashieldstate::{
+    MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
+};
 use crate::gameserver::appserver::states::attackpower::AttackPower;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MachineShieldState {
@@ -103,9 +110,35 @@ impl MachineShieldState {
     }
 }
 
+pub(crate) fn send_machine_shield_state_visual(
+    game: &mut CGame,
+    player_id: i32,
+    state: MachineShieldState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(if begin {
+        MANA_SHIELD_STATE_BEGIN_MESSAGE
+    } else {
+        MANA_SHIELD_STATE_END_MESSAGE
+    });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(state.life());
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Ниже сохранены только ещё не подключённые функции конструктора и сериализации.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -116,144 +149,31 @@ impl MachineShieldState {
 // ============================================================================
 // FUNCTION: CMachineShieldState::CMachineShieldState
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:15
-// RVA: 0x001F1C40
-// ADDRESS: 005f1c40
-// PROTOTYPE: undefined __thiscall CMachineShieldState(long param_1, long param_2, ushort param_3, ushort param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::CMachineShieldState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:27
 // RVA: 0x001F1CD0
 // ADDRESS: 005f1cd0
 // PROTOTYPE: undefined __thiscall CMachineShieldState(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::~CMachineShieldState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:39
-// RVA: 0x001F1D50
-// ADDRESS: 005f1d50
-// PROTOTYPE: void __thiscall ~CMachineShieldState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:67
-// RVA: 0x001F1D60
-// ADDRESS: 005f1d60
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:81
-// RVA: 0x001F1E20
-// ADDRESS: 005f1e20
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMachineShieldState::Serialize
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:155
 // RVA: 0x001F1EE0
 // ADDRESS: 005f1ee0
 // PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:56
-// RVA: 0x001F1F50
-// ADDRESS: 005f1f50
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMachineShieldState::Unserialize
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:168
 // RVA: 0x001F2000
 // ADDRESS: 005f2000
 // PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineShieldStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:181
-// RVA: 0x001F2050
-// ADDRESS: 005f2050
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:110
-// RVA: 0x001F34B0
-// ADDRESS: 005f34b0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

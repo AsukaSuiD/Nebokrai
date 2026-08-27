@@ -3,7 +3,8 @@
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/manashield.cpp`. Навык `321` сохраняет две проверки и
 //! необратимый расход MP, задержку, пакеты применения, замену щита и отдельное
-//! время восстановления; поглощение урона принадлежит состоянию.
+//! время восстановления. Общие с `CMachineShield` стадии исполняет узкий
+//! `selfshield`; физическая и стихийная защита принадлежат этому owner-у.
 
 pub(crate) const MANA_SHIELD_SKILL_ID: u32 = 321;
 pub(crate) const MANA_SHIELD_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -18,142 +19,101 @@ pub(crate) const SKILL_USAGE_STATE_ELEMENT_DEF: u32 = 10_012;
 pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
 pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
 
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+use super::kernel::SkillExecutionKernel;
+use super::manashieldstate::{send_mana_shield_state_visual, ManaShieldState};
+use super::selfshield::{execute_player_self_shield, SelfShieldOwner};
+use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
+};
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.h
+pub(crate) struct ManaShieldOwner;
 
-// ============================================================================
-// FUNCTION: CManaShield::CManaShield
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:20
-// RVA: 0x00169580
-// ADDRESS: 00569580
-// PROTOTYPE: undefined __thiscall CManaShield(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl SelfShieldOwner for ManaShieldOwner {
+    type State = ManaShieldState;
+    type Extra = (i32, i32);
 
-// ============================================================================
-// FUNCTION: CManaShield::~CManaShield
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:28
-// RVA: 0x001695F0
-// ADDRESS: 005695f0
-// PROTOTYPE: void __thiscall ~CManaShield(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    const SKILL_ID: u32 = MANA_SHIELD_SKILL_ID;
+    const EFFECT_MESSAGE: i32 = MANA_SHIELD_EFFECT_MESSAGE;
 
-// ============================================================================
-// FUNCTION: CManaShield::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:118
-// RVA: 0x00169610
-// ADDRESS: 00569610
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn read_extra(properties: &CSkillBaseProperties) -> Self::Extra {
+        (
+            properties.query_property(SKILL_USAGE_STATE_DEF) as i32,
+            properties.query_property(SKILL_USAGE_STATE_ELEMENT_DEF) as i32,
+        )
+    }
 
-// ============================================================================
-// FUNCTION: CManaShield::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:134
-// RVA: 0x001696E0
-// ADDRESS: 005696e0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn create_state(
+        started_at_ms: u32,
+        keep_time_ms: u32,
+        life: i32,
+        hp_factor: u16,
+        mp_factor: u16,
+        (physical_defense, element_defense): Self::Extra,
+    ) -> Self::State {
+        ManaShieldState::new(
+            started_at_ms,
+            keep_time_ms,
+            life,
+            physical_defense,
+            element_defense,
+            hp_factor,
+            mp_factor,
+        )
+    }
 
-// ============================================================================
-// FUNCTION: CManaShield::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:101
-// RVA: 0x001697D0
-// ADDRESS: 005697d0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn replace_state(player: &mut CPlayer, state: Self::State) -> Option<Self::State> {
+        player.replace_mana_shield_state(state)
+    }
 
-// ============================================================================
-// FUNCTION: CManaShieldEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:293
-// RVA: 0x00169890
-// ADDRESS: 00569890
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn send_state_visual(
+        game: &mut CGame,
+        player_id: i32,
+        state: Self::State,
+        begin: bool,
+        now_ms: u32,
+    ) {
+        send_mana_shield_state_visual(game, player_id, state, begin, now_ms);
+    }
 
-// ============================================================================
-// FUNCTION: CManaShield::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:39
-// RVA: 0x00169C30
-// ADDRESS: 00569c30
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn execution(
+        player_ai: &CPlayerAI,
+    ) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        player_ai.mana_shield()
+    }
 
-// ============================================================================
-// FUNCTION: CManaShield::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashield.cpp:167
-// RVA: 0x00169DF0
-// ADDRESS: 00569df0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn execution_mut(
+        player_ai: &mut CPlayerAI,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        player_ai.mana_shield_mut()
+    }
 
+    fn begin_execution(
+        player_ai: &mut CPlayerAI,
+        execution: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        player_ai.begin_mana_shield(execution);
+    }
 
+    fn last_used_ms(player_ai: &CPlayerAI) -> u32 {
+        player_ai.mana_shield_last_used_ms()
+    }
 
+    fn mark_used(player_ai: &mut CPlayerAI, now_ms: u32) {
+        player_ai.mark_mana_shield_used(now_ms);
+    }
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_mana_shield<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    execute_player_self_shield::<ManaShieldOwner, Runtime>(
+        game, player_id, dispatch, player_ai, runtime,
+    )
+}

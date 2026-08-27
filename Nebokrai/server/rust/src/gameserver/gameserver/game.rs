@@ -850,35 +850,19 @@ use crate::gameserver::appserver::skills::lifeshield::{
 };
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshield::{
-    MACHINE_SHIELD_EFFECT_MESSAGE, MACHINE_SHIELD_SKILL_ID,
-    SKILL_USAGE_CAN_BE_BREAKED as MACHINE_SHIELD_CAN_BE_BREAKED,
-    SKILL_USAGE_DELAY_TIME as MACHINE_SHIELD_DELAY_TIME,
-    SKILL_USAGE_REUSE_DELAY_TIME as MACHINE_SHIELD_REUSE_DELAY_TIME,
-    SKILL_USAGE_STATE_HP as MACHINE_SHIELD_STATE_HP,
-    SKILL_USAGE_STATE_PERSIST_TIME as MACHINE_SHIELD_STATE_PERSIST_TIME,
-    SKILL_USAGE_TARGET_HP_DECREASE_FACTOR as MACHINE_SHIELD_HP_FACTOR,
-    SKILL_USAGE_TARGET_MP_DECREASE_FACTOR as MACHINE_SHIELD_MP_FACTOR,
-    SKILL_USAGE_USER_MP_LOSE as MACHINE_SHIELD_MP_LOSE,
+    execute_player_machine_shield, MACHINE_SHIELD_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
+use crate::gameserver::appserver::skills::machineshieldstate::send_machine_shield_state_visual;
 use crate::gameserver::appserver::skills::manashield::{
-    MANA_SHIELD_EFFECT_MESSAGE, MANA_SHIELD_SKILL_ID,
-    SKILL_USAGE_CAN_BE_BREAKED as MANA_SHIELD_CAN_BE_BREAKED,
-    SKILL_USAGE_DELAY_TIME as MANA_SHIELD_DELAY_TIME,
-    SKILL_USAGE_REUSE_DELAY_TIME as MANA_SHIELD_REUSE_DELAY_TIME,
-    SKILL_USAGE_STATE_DEF as MANA_SHIELD_STATE_DEF,
-    SKILL_USAGE_STATE_ELEMENT_DEF as MANA_SHIELD_STATE_ELEMENT_DEF,
-    SKILL_USAGE_STATE_HP as MANA_SHIELD_STATE_HP,
-    SKILL_USAGE_STATE_PERSIST_TIME as MANA_SHIELD_STATE_PERSIST_TIME,
-    SKILL_USAGE_TARGET_HP_DECREASE_FACTOR as MANA_SHIELD_HP_FACTOR,
-    SKILL_USAGE_TARGET_MP_DECREASE_FACTOR as MANA_SHIELD_MP_FACTOR,
-    SKILL_USAGE_USER_MP_LOSE as MANA_SHIELD_MP_LOSE,
+    execute_player_mana_shield, MANA_SHIELD_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::manashieldstate::{
-    MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE, ManaShieldState,
+    send_mana_shield_state_visual, MANA_SHIELD_STATE_BEGIN_MESSAGE,
+    MANA_SHIELD_STATE_END_MESSAGE,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
+use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
@@ -5140,54 +5124,6 @@ impl CGame {
         if begin {
             message.add_long(state.client_time(now_ms));
             message.add_long(0);
-        }
-        self.send_player_shape_around(player_id, None, &message)
-    }
-
-    fn send_mana_shield_state_visual(
-        &mut self,
-        player_id: i32,
-        state: ManaShieldState,
-        begin: bool,
-        now_ms: u32,
-    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
-        let player = self.find_player(player_id)?;
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(if begin {
-            MANA_SHIELD_STATE_BEGIN_MESSAGE
-        } else {
-            MANA_SHIELD_STATE_END_MESSAGE
-        });
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(state.skill_id() as i32);
-        if begin {
-            message.add_long(state.client_time(now_ms));
-            message.add_long(state.life());
-        }
-        self.send_player_shape_around(player_id, None, &message)
-    }
-
-    fn send_machine_shield_state_visual(
-        &mut self,
-        player_id: i32,
-        state: MachineShieldState,
-        begin: bool,
-        now_ms: u32,
-    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
-        let player = self.find_player(player_id)?;
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(if begin {
-            MANA_SHIELD_STATE_BEGIN_MESSAGE
-        } else {
-            MANA_SHIELD_STATE_END_MESSAGE
-        });
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(state.skill_id() as i32);
-        if begin {
-            message.add_long(state.client_time(now_ms));
-            message.add_long(state.life());
         }
         self.send_player_shape_around(player_id, None, &message)
     }
@@ -23041,7 +22977,7 @@ impl CGame {
         Some(())
     }
 
-    fn update_player_current_state(
+    pub(crate) fn update_player_current_state(
         &mut self,
         player_id: i32,
         phase: GamePlayerFightStatePhase,
@@ -26245,11 +26181,11 @@ impl CGame {
                 }
                 DefenseShieldState::Machine(state) => {
                     ordinary_shield_ended = true;
-                    let _ = self.send_machine_shield_state_visual(player_id, state, false, now_ms);
+                    send_machine_shield_state_visual(self, player_id, state, false, now_ms);
                 }
                 DefenseShieldState::Mana(state) => {
                     ordinary_shield_ended = true;
-                    let _ = self.send_mana_shield_state_visual(player_id, state, false, now_ms);
+                    send_mana_shield_state_visual(self, player_id, state, false, now_ms);
                 }
             }
         }
@@ -29700,6 +29636,15 @@ impl CGame {
 
     pub(crate) fn find_player_mut(&mut self, player_id: i32) -> Option<&mut CPlayer> {
         self.players.get_mut(&player_id)
+    }
+
+    pub(crate) fn skill_base_properties(
+        &self,
+        skill_id: u32,
+        skill_level: i32,
+    ) -> Option<&CSkillBaseProperties> {
+        self.skill_factory
+            .query_skill_base_properties(skill_id, skill_level)
     }
 
     pub(crate) fn queue_player_ai_destination(
@@ -33690,7 +33635,7 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    fn enter_player_combat_state(&mut self, player_id: i32) {
+    pub(crate) fn enter_player_combat_state(&mut self, player_id: i32) {
         let fight_timer = self.globe_setup.fight_state_timer_ms();
         let (transition, had_auto_protect) = self
             .find_player_mut(player_id)
@@ -35707,7 +35652,7 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    fn send_skill_system_info(&self, player_id: i32, string_id: &[u8]) {
+    pub(crate) fn send_skill_system_info(&self, player_id: i32, string_id: &[u8]) {
         let mut message = CMessage::new(0x000b_f807);
         message.add_ulong(CSkillFactory::get_skill_failed_message_color());
         add_legacy_c_string(message.base_mut(), self.get_string_by_id(string_id));
@@ -35727,7 +35672,7 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
-    fn send_skill_system_info_with_unsigned(
+    pub(crate) fn send_skill_system_info_with_unsigned(
         &self,
         player_id: i32,
         string_id: &[u8],
@@ -35816,7 +35761,12 @@ impl CGame {
         path
     }
 
-    fn send_self_state_skill_failure(&self, message_type: i32, player_id: i32, action: u8) {
+    pub(crate) fn send_self_state_skill_failure(
+        &self,
+        message_type: i32,
+        player_id: i32,
+        action: u8,
+    ) {
         let mut message = CMessage::new(message_type);
         message.add_byte(0);
         message.add_byte(action);
@@ -35903,45 +35853,7 @@ impl CGame {
         }
     }
 
-    fn send_mana_shield_cast(&mut self, player_id: i32, skill_level: i32, action: u8) {
-        let Some(player) = self.find_player(player_id) else { return };
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(MANA_SHIELD_EFFECT_MESSAGE);
-        message.add_byte(action);
-        message.add_long(MANA_SHIELD_SKILL_ID as i32);
-        message.base_mut().add_short(skill_level as i16);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        if action == 1 {
-            message.add_long(player.shape().get_direction());
-        } else {
-            message.add_long(0);
-            message.add_long(0);
-        }
-        let _ = self.send_player_shape_around(player_id, None, &message);
-    }
-
-    fn send_machine_shield_cast(&mut self, player_id: i32, skill_level: i32, action: u8) {
-        let Some(player) = self.find_player(player_id) else {
-            return;
-        };
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(MACHINE_SHIELD_EFFECT_MESSAGE);
-        message.add_byte(action);
-        message.add_long(MACHINE_SHIELD_SKILL_ID as i32);
-        message.base_mut().add_short(skill_level as i16);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        if action == 1 {
-            message.add_long(player.shape().get_direction());
-        } else {
-            message.add_long(0);
-            message.add_long(0);
-        }
-        let _ = self.send_player_shape_around(player_id, None, &message);
-    }
-
-    fn finish_self_shield_movement(&mut self, player_id: i32) {
+    pub(crate) fn finish_self_shield_movement(&mut self, player_id: i32) {
         if let Some(player) = self.find_player_mut(player_id) {
             player.set_skill_moveable(true);
             player.set_current_skill_id(None);
@@ -36520,274 +36432,6 @@ impl CGame {
         }
         player_ai.mark_hearten_used(runtime.now_milliseconds());
         self.finish_hearten_movement(player_id);
-        terminal(QueuedSkillExecutionState::Completed)
-    }
-
-    fn execute_player_machine_shield<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        dispatch: PlayerSkillDispatch,
-        player_ai: &mut CPlayerAI,
-        runtime: &mut Runtime,
-    ) -> QueuedSkillExecutionOutcome {
-        let terminal = |state| QueuedSkillExecutionOutcome {
-            state,
-            first_contact: false,
-            killing_blow: None,
-        };
-        let skill_id = match dispatch {
-            PlayerSkillDispatch::SelfTarget { skill_id, .. }
-            | PlayerSkillDispatch::Point { skill_id, .. }
-            | PlayerSkillDispatch::Object { skill_id, .. }
-                if skill_id == MACHINE_SHIELD_SKILL_ID => skill_id,
-            _ => return terminal(QueuedSkillExecutionState::Rejected),
-        };
-        let Some(player) = self.find_player(player_id) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let skill_level = player.learned_skill_level(skill_id);
-        let initial_mana = player.mana();
-        let Some(properties) = self
-            .skill_factory
-            .query_skill_base_properties(skill_id, skill_level)
-        else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let mp_loss = properties.query_property(MACHINE_SHIELD_MP_LOSE);
-        let delay_ms = properties.query_property(MACHINE_SHIELD_DELAY_TIME);
-        let reuse_delay_ms = properties.query_property(MACHINE_SHIELD_REUSE_DELAY_TIME);
-        let keep_time_ms = properties.query_property(MACHINE_SHIELD_STATE_PERSIST_TIME);
-        let state_life = properties.query_property(MACHINE_SHIELD_STATE_HP) as i32;
-        let hp_factor = properties.query_property(MACHINE_SHIELD_HP_FACTOR) as u16;
-        let mp_factor = properties.query_property(MACHINE_SHIELD_MP_FACTOR) as u16;
-        let _can_be_breaked = properties.query_property(MACHINE_SHIELD_CAN_BE_BREAKED);
-
-        if player_ai.machine_shield().is_none() {
-            let started_at_ms = runtime.now_milliseconds();
-            self.enter_player_combat_state(player_id);
-            let cooldown_now_ms = runtime.now_milliseconds();
-            if player_ai.machine_shield_last_used_ms() != 0
-                && !time_reached(
-                    cooldown_now_ms,
-                    player_ai.machine_shield_last_used_ms(),
-                    reuse_delay_ms,
-                )
-            {
-                self.send_self_state_skill_failure(MACHINE_SHIELD_EFFECT_MESSAGE, player_id, 0x0d);
-                self.send_skill_system_info(player_id, b"GS0278");
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if initial_mana < mp_loss {
-                self.send_self_state_skill_failure(MACHINE_SHIELD_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_skill_moveable(false);
-                player.set_current_skill_id(Some(skill_id));
-            }
-            player_ai.begin_machine_shield(SkillExecutionKernel::begin(dispatch, started_at_ms));
-        } else if player_ai
-            .machine_shield()
-            .is_none_or(|state| state.dispatch() != dispatch)
-        {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-
-        if player_ai
-            .machine_shield()
-            .is_some_and(|state| state.stage() == SkillStage::Begin)
-        {
-            let current_mana = self.find_player(player_id).map_or(0, CPlayer::mana);
-            if current_mana < mp_loss {
-                self.send_self_state_skill_failure(MACHINE_SHIELD_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-                self.finish_self_shield_movement(player_id);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_mana(current_mana.wrapping_sub(mp_loss));
-            }
-            let _ = self.update_player_current_state(
-                player_id,
-                GamePlayerFightStatePhase::MoveShapeAi,
-            );
-            self.send_machine_shield_cast(player_id, skill_level, 1);
-            if let Some(state) = player_ai.machine_shield_mut() {
-                let _ = state.advance(SkillStage::Begin, SkillStage::Check);
-            }
-        }
-
-        let started_at_ms = player_ai
-            .machine_shield()
-            .map(SkillExecutionKernel::started_at_ms)
-            .expect("выполнение машинного щита создано или восстановлено");
-        if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
-            return terminal(QueuedSkillExecutionState::Pending);
-        }
-
-        self.send_machine_shield_cast(player_id, skill_level, 2);
-        let state = MachineShieldState::new(
-            runtime.now_milliseconds(),
-            keep_time_ms,
-            state_life,
-            hp_factor,
-            mp_factor,
-        );
-        let removed = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.replace_machine_shield_state(state));
-        if let Some(removed) = removed {
-            let _ = self.send_machine_shield_state_visual(player_id, removed, false, 0);
-        }
-        let state_now_ms = runtime.now_milliseconds();
-        let _ = self.send_machine_shield_state_visual(player_id, state, true, state_now_ms);
-        let _ = self.update_player_current_state(
-            player_id,
-            GamePlayerFightStatePhase::MoveShapeAi,
-        );
-        if let Some(state) = player_ai.machine_shield_mut() {
-            let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-            let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-            let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
-        }
-        player_ai.mark_machine_shield_used(runtime.now_milliseconds());
-        self.finish_self_shield_movement(player_id);
-        terminal(QueuedSkillExecutionState::Completed)
-    }
-
-    fn execute_player_mana_shield<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        dispatch: PlayerSkillDispatch,
-        player_ai: &mut CPlayerAI,
-        runtime: &mut Runtime,
-    ) -> QueuedSkillExecutionOutcome {
-        let terminal = |state| QueuedSkillExecutionOutcome {
-            state,
-            first_contact: false,
-            killing_blow: None,
-        };
-        let skill_id = match dispatch {
-            PlayerSkillDispatch::SelfTarget { skill_id, .. }
-            | PlayerSkillDispatch::Point { skill_id, .. }
-            | PlayerSkillDispatch::Object { skill_id, .. }
-                if skill_id == MANA_SHIELD_SKILL_ID => skill_id,
-            _ => return terminal(QueuedSkillExecutionState::Rejected),
-        };
-        let Some(player) = self.find_player(player_id) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let skill_level = player.learned_skill_level(skill_id);
-        let initial_mana = player.mana();
-        let Some(properties) = self.skill_factory.query_skill_base_properties(skill_id, skill_level)
-        else {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        let mp_loss = properties.query_property(MANA_SHIELD_MP_LOSE);
-        let delay_ms = properties.query_property(MANA_SHIELD_DELAY_TIME);
-        let reuse_delay_ms = properties.query_property(MANA_SHIELD_REUSE_DELAY_TIME);
-        let keep_time_ms = properties.query_property(MANA_SHIELD_STATE_PERSIST_TIME);
-        let state_life = properties.query_property(MANA_SHIELD_STATE_HP) as i32;
-        let state_defense = properties.query_property(MANA_SHIELD_STATE_DEF) as i32;
-        let state_element_defense = properties.query_property(MANA_SHIELD_STATE_ELEMENT_DEF) as i32;
-        let hp_factor = properties.query_property(MANA_SHIELD_HP_FACTOR) as u16;
-        let mp_factor = properties.query_property(MANA_SHIELD_MP_FACTOR) as u16;
-        let _can_be_breaked = properties.query_property(MANA_SHIELD_CAN_BE_BREAKED);
-
-        if player_ai.mana_shield().is_none() {
-            let started_at_ms = runtime.now_milliseconds();
-            self.enter_player_combat_state(player_id);
-            let cooldown_now_ms = runtime.now_milliseconds();
-            if player_ai.mana_shield_last_used_ms() != 0
-                && !time_reached(
-                    cooldown_now_ms,
-                    player_ai.mana_shield_last_used_ms(),
-                    reuse_delay_ms,
-                )
-            {
-                self.send_self_state_skill_failure(MANA_SHIELD_EFFECT_MESSAGE, player_id, 0x0d);
-                self.send_skill_system_info(player_id, b"GS0278");
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if initial_mana < mp_loss {
-                self.send_self_state_skill_failure(MANA_SHIELD_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_skill_moveable(false);
-                player.set_current_skill_id(Some(skill_id));
-            }
-            player_ai.begin_mana_shield(SkillExecutionKernel::begin(dispatch, started_at_ms));
-        } else if player_ai
-            .mana_shield()
-            .is_none_or(|state| state.dispatch() != dispatch)
-        {
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
-
-        if player_ai
-            .mana_shield()
-            .is_some_and(|state| state.stage() == SkillStage::Begin)
-        {
-            let current_mana = self.find_player(player_id).map_or(0, CPlayer::mana);
-            if current_mana < mp_loss {
-                self.send_self_state_skill_failure(MANA_SHIELD_EFFECT_MESSAGE, player_id, 7);
-                self.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-                self.finish_self_shield_movement(player_id);
-                return terminal(QueuedSkillExecutionState::Rejected);
-            }
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_mana(current_mana.wrapping_sub(mp_loss));
-            }
-            let _ = self.update_player_current_state(
-                player_id,
-                GamePlayerFightStatePhase::MoveShapeAi,
-            );
-            self.send_mana_shield_cast(player_id, skill_level, 1);
-            if let Some(state) = player_ai.mana_shield_mut() {
-                let _ = state.advance(SkillStage::Begin, SkillStage::Check);
-            }
-        }
-
-        let started_at_ms = player_ai
-            .mana_shield()
-            .map(SkillExecutionKernel::started_at_ms)
-            .expect("выполнение мана-щита создано или восстановлено");
-        if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
-            return terminal(QueuedSkillExecutionState::Pending);
-        }
-
-        self.send_mana_shield_cast(player_id, skill_level, 2);
-        let state = ManaShieldState::new(
-            runtime.now_milliseconds(),
-            keep_time_ms,
-            state_life,
-            state_defense,
-            state_element_defense,
-            hp_factor,
-            mp_factor,
-        );
-        let removed = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.replace_mana_shield_state(state));
-        if let Some(removed) = removed {
-            let _ = self.send_mana_shield_state_visual(player_id, removed, false, 0);
-        }
-        let state_now_ms = runtime.now_milliseconds();
-        let _ = self.send_mana_shield_state_visual(player_id, state, true, state_now_ms);
-        let _ = self.update_player_current_state(
-            player_id,
-            GamePlayerFightStatePhase::MoveShapeAi,
-        );
-        if let Some(state) = player_ai.mana_shield_mut() {
-            let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
-            let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
-            let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
-        }
-        player_ai.mark_mana_shield_used(runtime.now_milliseconds());
-        self.finish_self_shield_movement(player_id);
         terminal(QueuedSkillExecutionState::Completed)
     }
 
@@ -38875,9 +38519,9 @@ impl CGame {
             } else if concrete_hearten {
                 self.execute_player_hearten(player_id, dispatch, player_ai, runtime)
             } else if concrete_machine_shield {
-                self.execute_player_machine_shield(player_id, dispatch, player_ai, runtime)
+                execute_player_machine_shield(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mana_shield {
-                self.execute_player_mana_shield(player_id, dispatch, player_ai, runtime)
+                execute_player_mana_shield(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
                 self.execute_player_immediate_state(player_id, dispatch, player_ai, runtime)
             } else {

@@ -96,6 +96,7 @@ pub(crate) mod appserver {
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
         pub(crate) mod shieldstate;
+        pub(crate) mod selfshield;
         pub(crate) mod taiji;
         pub(crate) mod taijistate;
     }

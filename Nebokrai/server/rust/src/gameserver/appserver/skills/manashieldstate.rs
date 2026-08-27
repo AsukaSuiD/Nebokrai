@@ -3,10 +3,13 @@
 //! Щит `321` хранит срок, остаток прочности, две защиты и WORD-факторы
 //! преобразования урона. `absorb_damage` вызывается в исходной позиции
 //! `CFightDefense::PreDefense`, до обычной защиты и итогового коэффициента
-//! `damage_factor`.
+//! `damage_factor`. Не достигнуты только конструктор по умолчанию и сохранение
+//! временного состояния; их RAW сохранён ниже без параллельного runtime-пути.
 
 use super::manashield::MANA_SHIELD_SKILL_ID;
 use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const MANA_SHIELD_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const MANA_SHIELD_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -61,6 +64,7 @@ impl ManaShieldState {
             || player_dead
             || player_mana == 0
     }
+
     pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
         let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
         if deadline <= now_ms {
@@ -69,16 +73,14 @@ impl ManaShieldState {
             deadline.wrapping_sub(now_ms) as i32
         }
     }
+
     pub(crate) fn absorb_damage(
         &mut self,
         damage_factor: f32,
         player_mana: u32,
         power: &mut AttackPower,
     ) {
-        if self.life <= 0
-            || player_mana == 0
-            || power.hp_damage <= 0
-        {
+        if self.life <= 0 || player_mana == 0 || power.hp_damage <= 0 {
             return;
         }
         let factor = if damage_factor == 0.0 {
@@ -124,9 +126,35 @@ impl ManaShieldState {
     }
 }
 
+pub(crate) fn send_mana_shield_state_visual(
+    game: &mut CGame,
+    player_id: i32,
+    state: ManaShieldState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(if begin {
+        MANA_SHIELD_STATE_BEGIN_MESSAGE
+    } else {
+        MANA_SHIELD_STATE_END_MESSAGE
+    });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(state.life());
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Ниже сохранены только ещё не подключённые функции конструктора и сериализации.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -139,69 +167,12 @@ impl ManaShieldState {
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:17
-// RVA: 0x001F30D0
-// ADDRESS: 005f30d0
-// PROTOTYPE: undefined __thiscall CManaShieldState(long param_1, long param_2, long param_3, long param_4, ushort param_5, ushort param_6)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldState::CManaShieldState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:31
 // RVA: 0x001F3170
 // ADDRESS: 005f3170
 // PROTOTYPE: undefined __thiscall CManaShieldState(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldState::~CManaShieldState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:45
-// RVA: 0x001F31F0
-// ADDRESS: 005f31f0
-// PROTOTYPE: void __thiscall ~CManaShieldState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:77
-// RVA: 0x001F3200
-// ADDRESS: 005f3200
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:91
-// RVA: 0x001F32C0
-// ADDRESS: 005f32c0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
 //
 
 // ============================================================================
@@ -216,21 +187,6 @@ impl ManaShieldState {
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:66
-// RVA: 0x001F3400
-// ADDRESS: 005f3400
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CManaShieldState::Unserialize
@@ -244,24 +200,5 @@ impl ManaShieldState {
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:195
-// RVA: 0x001F3590
-// ADDRESS: 005f3590
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
