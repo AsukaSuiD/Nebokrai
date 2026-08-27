@@ -22,7 +22,7 @@ impl EnlargeMaxHpState {
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Сохранён только не подключённый конструктор по умолчанию.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -36,52 +36,10 @@ impl EnlargeMaxHpState {
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\enlargemaxhpstate.cpp:15
-// RVA: 0x001E22E0
-// ADDRESS: 005e22e0
-// PROTOTYPE: undefined __thiscall CEnlargeMaxHpState(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnlargeMaxHpState::CEnlargeMaxHpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\enlargemaxhpstate.cpp:24
 // RVA: 0x001E2350
 // ADDRESS: 005e2350
 // PROTOTYPE: undefined __thiscall CEnlargeMaxHpState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnlargeMaxHpState::~CEnlargeMaxHpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\enlargemaxhpstate.cpp:33
-// RVA: 0x001E23C0
-// ADDRESS: 005e23c0
-// PROTOTYPE: void __thiscall ~CEnlargeMaxHpState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnlargeMaxHpState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\enlargemaxhpstate.cpp:37
-// RVA: 0x001E2420
-// ADDRESS: 005e2420
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

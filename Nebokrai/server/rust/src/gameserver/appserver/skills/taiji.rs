@@ -12,7 +12,7 @@ pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Сохранена только смешанная player/monster-функция `AI`: player-ветвь подключена, monster-ветвь ещё не достигнута.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -20,34 +20,6 @@ pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taiji.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taiji.h
-
-// ============================================================================
-// FUNCTION: CTaiJi::CTaiJi
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taiji.cpp:17
-// RVA: 0x001AF6C0
-// ADDRESS: 005af6c0
-// PROTOTYPE: undefined __thiscall CTaiJi(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTaiJi::~CTaiJi
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taiji.cpp:24
-// RVA: 0x001AF730
-// ADDRESS: 005af730
-// PROTOTYPE: void __thiscall ~CTaiJi(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CTaiJi::AI
@@ -62,6 +34,7 @@ pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+
 
 
 

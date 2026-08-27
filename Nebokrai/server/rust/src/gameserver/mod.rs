@@ -79,6 +79,7 @@ pub(crate) mod appserver {
         pub(crate) mod fightdefense;
         pub(crate) mod hearten;
         pub(crate) mod heartenstate;
+        pub(crate) mod immediatestate;
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod lifeshieldstate;

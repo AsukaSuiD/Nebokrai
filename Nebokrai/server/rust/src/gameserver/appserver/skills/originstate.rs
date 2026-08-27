@@ -21,7 +21,7 @@ impl OriginState {
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сырой C++ ниже является комментарием, а не Rust-реализацией.
+// Сохранены конструктор по умолчанию и смешанная player/monster-функция свойств; player-ветвь подключена.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -29,20 +29,6 @@ impl OriginState {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\originstate.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\originstate.h
-
-// ============================================================================
-// FUNCTION: COriginState::COriginState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\originstate.cpp:15
-// RVA: 0x00201190
-// ADDRESS: 00601190
-// PROTOTYPE: undefined __thiscall COriginState(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: COriginState::COriginState
@@ -58,19 +44,6 @@ impl OriginState {
 //
 //
 
-// ============================================================================
-// FUNCTION: COriginState::~COriginState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\originstate.cpp:33
-// RVA: 0x00201280
-// ADDRESS: 00601280
-// PROTOTYPE: void __thiscall ~COriginState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: COriginState::OnUpdateProperties
@@ -85,6 +58,7 @@ impl OriginState {
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
+
 
 
 
