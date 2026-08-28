@@ -68,7 +68,7 @@ impl CGame {
         }).collect()
     }
 
-    fn lighting_arrow_monster_attackable(&self, region_id: i32, master: MasterInfo, monster_id: i32) -> bool {
+    pub(super) fn lighting_arrow_monster_attackable(&self, region_id: i32, master: MasterInfo, monster_id: i32) -> bool {
         let Some((property, monster)) = self.find_region(region_id).and_then(|owner| {
             let monster = owner.base().find_monster_by_id(monster_id)?;
             let property = monster.base_property_key().and_then(|key| self.find_monster_property_by_origin_name(key))?;

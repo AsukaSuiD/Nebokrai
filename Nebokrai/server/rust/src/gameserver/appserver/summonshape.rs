@@ -13,6 +13,7 @@ use crate::gameserver::appserver::skills::basemagicphalanx::CBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::archeryphalanx::CArcheryPhalanx;
 use crate::gameserver::appserver::skills::lightingarrowphalanx::CLightingArrowPhalanx;
+use crate::gameserver::appserver::skills::meteorarrowphalanx::CMeteorArrowPhalanx;
 use crate::gameserver::appserver::skills::fatalblowphalanx::CFatalBlowPhalanx;
 use crate::gameserver::appserver::skills::fireboltphalanx::CFireBoltPhalanx;
 use crate::gameserver::appserver::skills::fireballphalanx::CFireBallPhalanx;
@@ -38,6 +39,7 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 pub(crate) enum SummonedSkillShape {
     Archery(CArcheryPhalanx),
     LightingArrow(CLightingArrowPhalanx),
+    MeteorArrow(CMeteorArrowPhalanx),
     BaseMagic(CBaseMagicPhalanx),
     BattleFairyBaseMagic(CBattleFairyBaseMagicPhalanx),
     FatalBlow(CFatalBlowPhalanx),
@@ -65,6 +67,7 @@ impl SummonedSkillShape {
         match self {
             Self::Archery(shape) => shape.shape(),
             Self::LightingArrow(shape) => shape.shape(),
+            Self::MeteorArrow(shape) => shape.shape(),
             Self::BaseMagic(shape) => shape.shape(),
             Self::BattleFairyBaseMagic(shape) => shape.shape(),
             Self::FatalBlow(shape) => shape.shape(),
@@ -92,6 +95,7 @@ impl SummonedSkillShape {
         match self {
             Self::Archery(shape) => shape.shape_mut(),
             Self::LightingArrow(shape) => shape.shape_mut(),
+            Self::MeteorArrow(shape) => shape.shape_mut(),
             Self::BaseMagic(shape) => shape.shape_mut(),
             Self::BattleFairyBaseMagic(shape) => shape.shape_mut(),
             Self::FatalBlow(shape) => shape.shape_mut(),
@@ -119,6 +123,7 @@ impl SummonedSkillShape {
         match self {
             Self::Archery(shape) => shape.master(),
             Self::LightingArrow(shape) => shape.master(),
+            Self::MeteorArrow(shape) => shape.master(),
             Self::BaseMagic(shape) => shape.master(),
             Self::BattleFairyBaseMagic(shape) => shape.master(),
             Self::FatalBlow(shape) => shape.master(),

@@ -4471,6 +4471,9 @@ impl CPlayer {
     pub(crate) fn replace_poison_fog_state(&mut self, state: super::skills::poisonfogstate::PoisonFogState, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.replace_poison_fog_state(state, now_ms) }
     pub(crate) fn take_expired_poison_fog_state(&mut self, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_expired_poison_fog_state(now_ms) }
     pub(crate) fn take_poison_fog_state(&mut self) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_poison_fog_state() }
+    pub(crate) fn meteor_arrow_state(&self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.meteor_arrow_state() }
+    pub(crate) fn add_meteor_arrows(&mut self, maximum: u32, amount: u32) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.add_meteor_arrows(maximum, amount) }
+    pub(crate) fn take_meteor_arrow_state(&mut self) -> Option<super::skills::meteorarrowstate::MeteorArrowState> { self.move_shape.take_meteor_arrow_state() }
     pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.activate_loaded_poison_fog_state(now_ms) }
 
     pub(crate) fn take_poison_arrow_state_for_ai(

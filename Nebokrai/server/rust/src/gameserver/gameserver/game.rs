@@ -493,6 +493,7 @@ mod godthunder;
 mod chaossphere;
 mod fireball;
 mod lightingarrow;
+mod meteorarrow;
 mod thunderblow;
 mod thunderslash;
 mod thunderblow2;
@@ -782,6 +783,15 @@ use crate::gameserver::appserver::skills::lightingarrow::{
 };
 use crate::gameserver::appserver::skills::lightingarrowphalanx::{
     calculate_owned_lighting_arrow_attack, LightingArrowPhalanxTick,
+};
+use crate::gameserver::appserver::skills::meteorarrow::{
+    execute_player_meteor_arrow, is_meteor_arrow_dispatch,
+};
+use crate::gameserver::appserver::skills::meteorarrowmass::{
+    execute_player_meteor_arrow_mass, is_meteor_arrow_mass_dispatch,
+};
+use crate::gameserver::appserver::skills::meteorarrowphalanx::{
+    calculate_meteor_arrow_attack, MeteorArrowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -33627,6 +33637,8 @@ impl CGame {
                             || player.player_ai().archery().is_some()
                             || player.player_ai().heartless_arrow().is_some()
                             || player.player_ai().lighting_arrow().is_some()
+                            || player.player_ai().meteor_arrow_mass().is_some()
+                            || player.player_ai().meteor_arrow().is_some()
                             || player.player_ai().agility_family().is_some()
                             || player.player_ai().callosity().is_some()
                             || player.player_ai().ju_cut().is_some()
@@ -34293,6 +34305,8 @@ impl CGame {
                 || player.player_ai().archery().is_some()
                 || player.player_ai().heartless_arrow().is_some()
                 || player.player_ai().lighting_arrow().is_some()
+                || player.player_ai().meteor_arrow_mass().is_some()
+                || player.player_ai().meteor_arrow().is_some()
                 || player.player_ai().agility_family().is_some()
                 || player.player_ai().callosity().is_some()
                 || player.player_ai().mosou().is_some()
@@ -36960,6 +36974,8 @@ impl CGame {
             };
             let concrete_heartless_arrow = is_heartless_arrow_dispatch(dispatch);
             let concrete_lighting_arrow = is_lighting_arrow_dispatch(dispatch);
+            let concrete_meteor_arrow_mass = is_meteor_arrow_mass_dispatch(dispatch);
+            let concrete_meteor_arrow = is_meteor_arrow_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37071,6 +37087,10 @@ impl CGame {
                 execute_player_heartless_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lighting_arrow {
                 execute_player_lighting_arrow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_meteor_arrow_mass {
+                execute_player_meteor_arrow_mass(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_meteor_arrow {
+                execute_player_meteor_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
@@ -40085,6 +40105,7 @@ impl CGame {
             SummonedSkillShape::LightingArrow(phalanx) => {
                 calculate_owned_lighting_arrow_attack(self, phalanx, target_level)
             }
+            SummonedSkillShape::MeteorArrow(phalanx) => Some(calculate_meteor_arrow_attack(self, phalanx)),
             SummonedSkillShape::BaseMagic(phalanx) => {
                 calculate_owned_base_magic_attack(self, phalanx, target_level)
             }
@@ -40506,6 +40527,7 @@ impl CGame {
         let mut chaos_tick = None;
         let mut fire_ball_tick = None;
         let mut lighting_arrow_tick = None;
+        let mut meteor_arrow_tick = None;
         let tick = owner
             .base_mut()
             .find_skill_phalanx_mut(phalanx_id)
@@ -40522,6 +40544,10 @@ impl CGame {
                 }
                 SummonedSkillShape::LightingArrow(phalanx) => {
                     lighting_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()));
+                    Some(None)
+                }
+                SummonedSkillShape::MeteorArrow(phalanx) => {
+                    meteor_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()));
                     Some(None)
                 }
                 SummonedSkillShape::BaseMagic(phalanx) => {
@@ -40663,6 +40689,12 @@ impl CGame {
                     }
                 }
                 LightingArrowPhalanxTick::Expired => {}
+            }
+            return true;
+        }
+        if let (Some(meteor_arrow_tick), SummonedSkillShape::MeteorArrow(_)) = (meteor_arrow_tick, &phalanx) {
+            if let MeteorArrowPhalanxTick::Attack { cell: (x, y), sampled_at_ms } = meteor_arrow_tick {
+                self.apply_meteor_arrow_cell(region_id, phalanx_id, x, y, sampled_at_ms, runtime);
             }
             return true;
         }
@@ -41044,7 +41076,7 @@ impl CGame {
                 };
             }
         }
-        if !matches!(&phalanx, SummonedSkillShape::Archery(_))
+        if !matches!(&phalanx, SummonedSkillShape::Archery(_) | SummonedSkillShape::MeteorArrow(_))
             && let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base)
         {
             let _ = self.send_shape_exit_around(region, phalanx.shape());

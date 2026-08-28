@@ -76,6 +76,7 @@ use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::PillarState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
+use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::promotionstate::PromotionState;
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
@@ -512,6 +513,7 @@ pub(crate) struct CanonicalStateStorage {
     curable_state_order: IndexSet<u32>,
     poison_arrow_state: Option<PoisonArrowState>,
     poison_fog_state: Option<PoisonFogState>,
+    meteor_arrow_state: Option<MeteorArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
     spider_web_state: Option<SpiderWebState>,
     weak_state: Option<WeakState>,
@@ -692,6 +694,7 @@ impl CMoveShape {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
         if let Some(state) = self.poison_fog_state { state.update_serialized_runtime(&mut payload, now_ms); }
+        if let Some(state) = self.meteor_arrow_state { state.update_serialized(&mut payload); }
         payload
     }
 
@@ -742,6 +745,9 @@ impl CMoveShape {
         self.poison_fog_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(POISON_FOG_STATE_ID)).and_then(|offset| PoisonFogState::decode(&states, offset, 0).ok());
         self.poison_fog_state_order = None;
         if let Some(state) = self.poison_fog_state { self.curable_state_order.insert(state.skill_id()); self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1); self.poison_fog_state_order = Some(self.reached_property_state_order); }
+        self.meteor_arrow_state = known_offsets.iter().copied()
+            .find(|offset| read_u32(&states, *offset) == Some(METEOR_ARROW_MASS_SKILL_ID))
+            .and_then(|offset| MeteorArrowState::decode(&states, offset).ok());
         self.ex_states.replace(states);
     }
 
@@ -758,6 +764,7 @@ impl CMoveShape {
         self.enlarge_max_hp_state = None;
         self.enlarge_max_mp_state = None;
         self.origin_state = None;
+        self.meteor_arrow_state = None;
         self.hearten_state = None;
         self.heal_states.clear();
         self.fury_states.clear();
@@ -998,6 +1005,7 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
         let poison_fog = usize::from(self.poison_fog_state.is_some_and(|state| state.skill_id() as i32 == state_id));
+        let meteor_arrow = usize::from(self.meteor_arrow_state.is_some_and(|state| state.skill_id() as i32 == state_id));
         let spider_poison = usize::from(
             self.spider_poison_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -1067,6 +1075,7 @@ impl CMoveShape {
             .saturating_add(seal)
             .saturating_add(poison_arrow)
             .saturating_add(poison_fog)
+            .saturating_add(meteor_arrow)
             .saturating_add(spider_poison)
             .saturating_add(spider_web)
             .saturating_add(weak)
@@ -1144,6 +1153,7 @@ impl CMoveShape {
                 .poison_arrow_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self.poison_fog_state.is_some_and(|state| state.skill_id() == state_id)
+            || self.meteor_arrow_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .spider_poison_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -1820,8 +1830,43 @@ impl CMoveShape {
     }
     pub(crate) fn take_expired_poison_fog_state(&mut self, now_ms: u32) -> Option<PoisonFogState> { let state = self.poison_fog_state.filter(|state| state.expired(now_ms))?; self.finish_poison_fog_state(state); Some(state) }
     pub(crate) fn take_poison_fog_state(&mut self) -> Option<PoisonFogState> { let state = self.poison_fog_state?; self.finish_poison_fog_state(state); Some(state) }
-    fn finish_poison_fog_state(&mut self, state: PoisonFogState) { self.poison_fog_state = None; self.poison_fog_state_order = None; self.curable_state_order.shift_remove(&state.skill_id()); let Some((offset, amount)) = state.serialized_span() else { return }; if offset.saturating_add(amount) > self.ex_states.len() { return } self.ex_states.drain(offset..offset + amount); if self.ex_states.len() >= 4 { let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.saturating_sub(1)); } for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); } }
+    fn finish_poison_fog_state(&mut self, state: PoisonFogState) { self.poison_fog_state = None; self.poison_fog_state_order = None; self.curable_state_order.shift_remove(&state.skill_id()); let Some((offset, amount)) = state.serialized_span() else { return }; if offset.saturating_add(amount) > self.ex_states.len() { return } self.ex_states.drain(offset..offset + amount); if self.ex_states.len() >= 4 { let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.saturating_sub(1)); } for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); } }
     pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Option<PoisonFogState> { let mut state = self.poison_fog_state?; state.activate_loaded(now_ms); state.update_serialized_runtime(&mut self.ex_states, now_ms); self.poison_fog_state = Some(state); Some(state) }
+
+    pub(crate) fn meteor_arrow_state(&self) -> Option<MeteorArrowState> { self.meteor_arrow_state }
+    pub(crate) fn add_meteor_arrows(&mut self, maximum: u32, amount: u32) -> Option<MeteorArrowState> {
+        if let Some(mut state) = self.meteor_arrow_state {
+            if !state.add_arrows(amount) { return None }
+            state.update_serialized(&mut self.ex_states);
+            self.meteor_arrow_state = Some(state);
+            return Some(state);
+        }
+        let mut state = MeteorArrowState::new(maximum);
+        if self.ex_states.len() < 4 { self.ex_states.clear(); LegacyWriter::new(&mut self.ex_states).write_u32(0); }
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
+        state.append_serialized(&mut self.ex_states);
+        self.meteor_arrow_state = Some(state);
+        if !state.add_arrows(amount) { return None }
+        state.update_serialized(&mut self.ex_states);
+        self.meteor_arrow_state = Some(state);
+        Some(state)
+    }
+    pub(crate) fn take_meteor_arrow_state(&mut self) -> Option<MeteorArrowState> {
+        let state = self.meteor_arrow_state.take()?;
+        let Some((offset, amount)) = state.serialized_span() else { return Some(state) };
+        if offset.saturating_add(amount) > self.ex_states.len() { return Some(state) }
+        self.ex_states.drain(offset..offset + amount);
+        if self.ex_states.len() >= 4 { let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.saturating_sub(1)); }
+        for known in &mut self.extended_states { known.shift_serialized_offset_after(offset, amount); }
+        for known in &mut self.change_body_states { known.shift_serialized_offset_after(offset, amount); }
+        for known in &mut self.undead_states { known.shift_serialized_offset_after(offset, amount); }
+        if let Some(known) = &mut self.leaf_cut_state { known.shift_serialized_offset_after(offset, amount); }
+        if let Some(known) = &mut self.leaf_cut_3_state { known.shift_serialized_offset_after(offset, amount); }
+        if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_after(offset, amount); }
+        if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_after(offset, amount); }
+        Some(state)
+    }
 
     pub(crate) fn blind_state_order(&self) -> Vec<u32> {
         self.blind_state_order.iter().copied().collect()
@@ -1889,6 +1934,7 @@ impl CMoveShape {
         for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
     }
 
@@ -1954,6 +2000,7 @@ impl CMoveShape {
         for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
     }
 
@@ -2144,6 +2191,7 @@ impl CMoveShape {
                 state.shift_serialized_offset_after(offset, amount);
             }
             if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
+            if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
         }
         self.set_fightable(true);
         Some(state)
@@ -2278,6 +2326,7 @@ impl CMoveShape {
             state.shift_serialized_offset_after(offset, amount);
         }
         if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.ride_state {
             state.shift_serialized_offset_after(offset, amount);
         }
@@ -2430,6 +2479,7 @@ impl CMoveShape {
                 state.shift_serialized_offset_after(offset, amount);
             }
             if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
+            if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
             if let Some(state) = &mut self.ride_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
@@ -2570,6 +2620,7 @@ impl CMoveShape {
                 state.shift_serialized_offset_after(offset, amount);
             }
             if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
+            if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
             if let Some(state) = &mut self.ride_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
@@ -3045,6 +3096,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
             LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
+            METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

@@ -1,183 +1,67 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Канонический запас метеорных стрел `CMeteorArrowState` (`0xCC`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/meteorarrowstate.cpp`. Состояние хранит текущий и
+//! предельный запас, сериализуется тремя little-endian DWORD и при каждом
+//! успешном пополнении публикует обновление `0xBFE03`. Удаление всего запаса
+//! публикует `0xBFE04`. Сырой `ex_states` остаётся только кодеком вокруг этого
+//! единственного типизированного владельца.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.h
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
-// ============================================================================
-// FUNCTION: CSkill::GetSkillLevel
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:63
-// RVA: 0x000F96E0
-// ADDRESS: 004f96e0
-// PROTOTYPE: long __thiscall GetSkillLevel(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const METEOR_ARROW_MASS_SKILL_ID: u32 = 0xcc;
+pub(crate) const METEOR_ARROW_STATE_BYTES: usize = 12;
 
-// ============================================================================
-// FUNCTION: CMeteorArrowState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:115
-// RVA: 0x001ECE70
-// ADDRESS: 005ece70
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MeteorArrowState {
+    arrows: i32,
+    maximum_arrows: u32,
+    serialized_offset: Option<usize>,
+}
 
-// ============================================================================
-// FUNCTION: CMeteorArrowState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:128
-// RVA: 0x001F0010
-// ADDRESS: 005f0010
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::CMeteorArrowState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:15
-// RVA: 0x001F6820
-// ADDRESS: 005f6820
-// PROTOTYPE: undefined __thiscall CMeteorArrowState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::CMeteorArrowState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:25
-// RVA: 0x001F68A0
-// ADDRESS: 005f68a0
-// PROTOTYPE: undefined __thiscall CMeteorArrowState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::~CMeteorArrowState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:35
-// RVA: 0x001F6910
-// ADDRESS: 005f6910
-// PROTOTYPE: void __thiscall ~CMeteorArrowState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::AddMeteorArrow
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:46
-// RVA: 0x001F6970
-// ADDRESS: 005f6970
-// PROTOTYPE: void __thiscall AddMeteorArrow(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:77
-// RVA: 0x001F69B0
-// ADDRESS: 005f69b0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:86
-// RVA: 0x001F6A40
-// ADDRESS: 005f6a40
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:95
-// RVA: 0x001F6AD0
-// ADDRESS: 005f6ad0
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:68
-// RVA: 0x001F6B10
-// ADDRESS: 005f6b10
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMeteorArrowStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\meteorarrowstate.cpp:141
-// RVA: 0x001F6BA0
-// ADDRESS: 005f6ba0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+impl MeteorArrowState {
+    pub(crate) const fn new(maximum_arrows: u32) -> Self {
+        Self { arrows: 0, maximum_arrows, serialized_offset: None }
+    }
+    pub(crate) const fn skill_id(self) -> u32 { METEOR_ARROW_MASS_SKILL_ID }
+    pub(crate) const fn arrows(self) -> i32 { self.arrows }
+    pub(crate) const fn additional_data(self) -> i32 { self.arrows }
+    pub(crate) const fn maximum_arrows(self) -> u32 { self.maximum_arrows }
+    pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> {
+        match self.serialized_offset { Some(offset) => Some((offset, METEOR_ARROW_STATE_BYTES)), None => None }
+    }
+    pub(crate) fn add_arrows(&mut self, amount: u32) -> bool {
+        if self.arrows >= self.maximum_arrows as i32 { return false }
+        let next = (self.arrows.max(0) as u32).wrapping_add(amount).min(self.maximum_arrows);
+        self.arrows = next as i32;
+        true
+    }
+    fn encoded(self) -> [u8; METEOR_ARROW_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(METEOR_ARROW_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(METEOR_ARROW_MASS_SKILL_ID); writer.write_i32(self.arrows); writer.write_u32(self.maximum_arrows);
+        bytes.try_into().expect("размер состояния метеорных стрел фиксирован")
+    }
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != METEOR_ARROW_MASS_SKILL_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self { arrows: reader.read_i32()?, maximum_arrows: reader.read_u32()?, serialized_offset: Some(offset) })
+    }
+    pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>) {
+        let offset = payload.len(); payload.extend_from_slice(&self.encoded()); self.serialized_offset = Some(offset);
+    }
+    pub(crate) fn write_serialized_at(&mut self, payload: &mut [u8], offset: usize) -> bool {
+        let Some(destination) = payload.get_mut(offset..offset.saturating_add(METEOR_ARROW_STATE_BYTES)) else { return false };
+        destination.copy_from_slice(&self.encoded()); self.serialized_offset = Some(offset); true
+    }
+    pub(crate) fn update_serialized(self, payload: &mut [u8]) {
+        if let Some(offset) = self.serialized_offset { let _ = LegacyWriter::write_i32_at(payload, offset + 4, self.arrows); }
+    }
+    pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
+        if self.serialized_offset.is_some_and(|offset| removed_offset < offset) {
+            self.serialized_offset = self.serialized_offset.map(|offset| offset - amount);
+        }
+    }
+}
