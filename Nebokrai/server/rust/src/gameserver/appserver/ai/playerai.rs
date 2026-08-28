@@ -45,6 +45,7 @@ use crate::gameserver::appserver::skills::kernel::{
 };
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
+use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerAiDestination {
@@ -71,6 +72,8 @@ pub(crate) struct CPlayerAI {
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     infernol_last_used_ms: u32,
+    seven_shooting_star: Option<SevenShootingStarExecutionState>,
+    seven_shooting_star_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
     lightning_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
@@ -177,6 +180,7 @@ impl CPlayerAI {
         self.fire_bolt = None;
         self.fire_wall = None;
         self.infernol = None;
+        self.seven_shooting_star = None;
         self.lightning = None;
         self.callosity = None;
         self.hearten = None;
@@ -269,6 +273,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.infernol.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного круга завершено");
+        }
+        if let Some(mut execution) = self.seven_shooting_star.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение семи падающих звёзд завершено");
         }
         if let Some(mut execution) = self.lightning.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -372,6 +380,7 @@ impl CPlayerAI {
         self.fire_bolt = None;
         self.fire_wall = None;
         self.infernol = None;
+        self.seven_shooting_star = None;
         self.lightning = None;
         self.callosity = None;
         self.hearten = None;
@@ -560,6 +569,31 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_infernol_used(&mut self, now_ms: u32) {
         self.infernol_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn seven_shooting_star(&self) -> Option<&SevenShootingStarExecutionState> {
+        self.seven_shooting_star.as_ref()
+    }
+
+    pub(crate) fn begin_seven_shooting_star(
+        &mut self,
+        state: SevenShootingStarExecutionState,
+    ) {
+        self.seven_shooting_star = Some(state);
+    }
+
+    pub(crate) fn seven_shooting_star_mut(
+        &mut self,
+    ) -> Option<&mut SevenShootingStarExecutionState> {
+        self.seven_shooting_star.as_mut()
+    }
+
+    pub(crate) const fn seven_shooting_star_last_used_ms(&self) -> u32 {
+        self.seven_shooting_star_last_used_ms
+    }
+
+    pub(crate) const fn mark_seven_shooting_star_used(&mut self, now_ms: u32) {
+        self.seven_shooting_star_last_used_ms = now_ms;
     }
 
     pub(crate) const fn lightning(&self) -> Option<LightningExecutionState> {
