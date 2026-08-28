@@ -4487,6 +4487,22 @@ impl CPlayer {
     pub(crate) fn replace_god_bless_state(&mut self, state: super::skills::godblessstate::GodBlessState) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.replace_god_bless_state(state) }
     pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_expired_god_bless_state(now_ms) }
 
+    pub(crate) const fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
+        self.move_shape.soul_collect_state()
+    }
+
+    pub(crate) fn soul_collect_state_mut(&mut self) -> Option<&mut super::skills::soulcollectstate::SoulCollectState> {
+        self.move_shape.soul_collect_state_mut()
+    }
+
+    pub(crate) fn begin_soul_collect_state(&mut self, state: super::skills::soulcollectstate::SoulCollectState) {
+        self.move_shape.begin_soul_collect_state(state);
+    }
+
+    pub(crate) fn take_soul_collect_state(&mut self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
+        self.move_shape.take_soul_collect_state()
+    }
+
     pub(crate) fn take_weak_state(&mut self) -> Option<super::skills::weakstate::WeakState> {
         self.move_shape.take_weak_state()
     }

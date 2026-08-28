@@ -13,7 +13,8 @@
 //! игровое поведение читает типизированные состояния. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
-//! Печать, паутина и оглушение дополнительно сохраняют общий порядок вставки для
+//! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
+//! паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
@@ -73,6 +74,7 @@ use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::weakstate::WeakState;
 use crate::gameserver::appserver::skills::godblessstate::GodBlessState;
+use crate::gameserver::appserver::skills::soulcollectstate::SoulCollectState;
 use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
@@ -492,6 +494,7 @@ pub(crate) struct CanonicalStateStorage {
     spider_web_state: Option<SpiderWebState>,
     weak_state: Option<WeakState>,
     god_bless_state: Option<GodBlessState>,
+    soul_collect_state: Option<SoulCollectState>,
     reached_property_state_order: u32,
     weak_state_order: Option<u32>,
     god_bless_state_order: Option<u32>,
@@ -699,6 +702,7 @@ impl CMoveShape {
         self.spider_web_state = None;
         self.weak_state = None;
         self.god_bless_state = None;
+        self.soul_collect_state = None;
         self.reached_property_state_order = 0;
         self.weak_state_order = None;
         self.god_bless_state_order = None;
@@ -744,6 +748,7 @@ impl CMoveShape {
             || self.state_storage.spider_web_state.is_some()
             || self.state_storage.weak_state.is_some()
             || self.state_storage.god_bless_state.is_some()
+            || self.state_storage.soul_collect_state.is_some()
             || self.state_storage.knock_out_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
@@ -911,6 +916,7 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
         let god_bless = usize::from(self.god_bless_state.is_some_and(|state| state.skill_id() as i32 == state_id));
+        let soul_collect = usize::from(self.soul_collect_state.is_some_and(|state| state.skill_id() as i32 == state_id));
         let knock_out = usize::from(
             self.knock_out_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -949,6 +955,7 @@ impl CMoveShape {
             .saturating_add(spider_web)
             .saturating_add(weak)
             .saturating_add(god_bless)
+            .saturating_add(soul_collect)
             .saturating_add(knock_out)
             .saturating_add(blood_loss)
             .saturating_add(battle_fairy_attributes)
@@ -1022,6 +1029,7 @@ impl CMoveShape {
                 .weak_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self.god_bless_state.is_some_and(|state| state.skill_id() == state_id)
+            || self.soul_collect_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .knock_out_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -1514,6 +1522,23 @@ impl CMoveShape {
             (Some(weak), Some(bless)) => bless.wrapping_sub(weak) < 0x8000_0000,
             _ => false,
         }
+    }
+
+    pub(crate) const fn soul_collect_state(&self) -> Option<SoulCollectState> {
+        self.state_storage.soul_collect_state
+    }
+
+    pub(crate) fn begin_soul_collect_state(&mut self, state: SoulCollectState) {
+        debug_assert!(self.soul_collect_state.is_none());
+        self.soul_collect_state = Some(state);
+    }
+
+    pub(crate) fn soul_collect_state_mut(&mut self) -> Option<&mut SoulCollectState> {
+        self.soul_collect_state.as_mut()
+    }
+
+    pub(crate) fn take_soul_collect_state(&mut self) -> Option<SoulCollectState> {
+        self.soul_collect_state.take()
     }
 
     pub(crate) fn take_expired_spider_web_state(

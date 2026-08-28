@@ -170,6 +170,8 @@ pub(crate) mod appserver {
         pub(crate) mod knockoutstate;
         pub(crate) mod snowstorm;
         pub(crate) mod snowstormphalanx;
+        pub(crate) mod soulcollect;
+        pub(crate) mod soulcollectstate;
         pub(crate) mod weak;
         pub(crate) mod weakphalanx;
         pub(crate) mod weakstate;
