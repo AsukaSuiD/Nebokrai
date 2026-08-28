@@ -14,7 +14,8 @@
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
-//! сфера хаоса, семь падающих звёзд, ядовитый мотылёк и кровавая роза,
+//! сфера хаоса, семь падающих звёзд, ядовитый мотылёк, кровавая роза
+//! и трёхударный скорпион,
 //! семейства бегущего и армейского ударов,
 //! рыцарский удар, подготовка яростного удара, последующий рывок, громовое
 //! рассечение, прямой рывок, боевой клич, накопление энергии, обратный рубящий
@@ -62,6 +63,7 @@ use crate::gameserver::appserver::skills::meteorarrow::MeteorArrowExecutionState
 use crate::gameserver::appserver::skills::rainarrow::RainArrowExecutionState;
 use crate::gameserver::appserver::skills::poisonmoth::PoisonMothExecutionState;
 use crate::gameserver::appserver::skills::bloodrose::BloodRoseExecutionState;
+use crate::gameserver::appserver::skills::scorpion::ScorpionExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -104,6 +106,8 @@ pub(crate) struct CPlayerAI {
     poison_moth_last_used_ms: u32,
     blood_rose: Option<BloodRoseExecutionState>,
     blood_rose_last_used_ms: u32,
+    scorpion: Option<ScorpionExecutionState>,
+    scorpion_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -293,6 +297,7 @@ impl CPlayerAI {
         self.rain_arrow = None;
         self.poison_moth = None;
         self.blood_rose = None;
+        self.scorpion = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -434,6 +439,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.blood_rose.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение кровавой розы завершено");
+        }
+        if let Some(mut execution) = self.scorpion.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение скорпиона завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -681,6 +690,7 @@ impl CPlayerAI {
         self.rain_arrow = None;
         self.poison_moth = None;
         self.blood_rose = None;
+        self.scorpion = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -835,6 +845,11 @@ impl CPlayerAI {
     pub(crate) fn blood_rose_mut(&mut self) -> Option<&mut BloodRoseExecutionState> { self.blood_rose.as_mut() }
     pub(crate) const fn blood_rose_last_used_ms(&self) -> u32 { self.blood_rose_last_used_ms }
     pub(crate) const fn mark_blood_rose_used(&mut self, now_ms: u32) { self.blood_rose_last_used_ms = now_ms; }
+    pub(crate) fn scorpion(&self) -> Option<&ScorpionExecutionState> { self.scorpion.as_ref() }
+    pub(crate) fn begin_scorpion(&mut self, state: ScorpionExecutionState) { self.scorpion = Some(state); }
+    pub(crate) fn scorpion_mut(&mut self) -> Option<&mut ScorpionExecutionState> { self.scorpion.as_mut() }
+    pub(crate) const fn scorpion_last_used_ms(&self) -> u32 { self.scorpion_last_used_ms }
+    pub(crate) const fn mark_scorpion_used(&mut self, now_ms: u32) { self.scorpion_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);

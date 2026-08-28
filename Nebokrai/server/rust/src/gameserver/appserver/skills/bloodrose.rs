@@ -25,7 +25,7 @@ use crate::public::tools::get_line_direction;
 pub(crate) const BLOOD_ROSE_SKILL_ID: u32 = 0xd0;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const USER_MP_LOSE: u32 = 2;
-const TARGET_MAX_DISTANCE: u32 = 10_006;
+const TARGET_MAX_DISTANCE: u32 = 5_003;
 const MISSILE_FLYING_TIME: u32 = 10_008;
 const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 const ADDITION_ELEMENT_ATTACK: u32 = 20_013;
