@@ -20,6 +20,7 @@ pub(crate) mod appserver {
         pub(crate) mod passivegladiator;
         pub(crate) mod playerai;
         pub(crate) mod puninesscreature;
+        pub(crate) mod smartgladiator;
         pub(crate) mod stupidarcher;
         pub(crate) mod stupidgladiator;
         pub(crate) mod warattackmonster;

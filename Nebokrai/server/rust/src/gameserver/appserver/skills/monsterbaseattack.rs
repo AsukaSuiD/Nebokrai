@@ -117,6 +117,9 @@ use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, one_step_move_delay_ms, select_attack_skill,
 };
 use crate::gameserver::appserver::ai::nationgladiator::consider_nation_gladiator_target;
+use crate::gameserver::appserver::ai::smartgladiator::{
+    SmartGladiatorCandidate, SmartGladiatorSelection,
+};
 use crate::gameserver::appserver::ai::stupidarcher::{
     StupidArcherTarget, consider_stupid_archer_target,
 };
@@ -299,12 +302,33 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 5 | 6 | 8 | 9 | 13 | 14 | 20 | 23)
+        && (matches!(property.ai, 0 | 3 | 4 | 5 | 6 | 8 | 9 | 13 | 14 | 20 | 23)
+            || (property.ai == 2
+                && region
+                    .find_monster_by_id(monster_id)
+                    .and_then(CMonster::smart_gladiator_ai)
+                    .is_some_and(|state| !state.has_queued_steps())))
         && let Some(area_index) = area_index
         && region.player_ids_around_area(area_index).is_empty()
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.hibernate_ai(runtime.now_milliseconds());
+            return true;
+        }
+    }
+    if target.is_none() && cast.is_none() && !tamed && property.ai == 2 {
+        let destination = region
+            .find_monster_by_id_mut(monster_id)
+            .and_then(CMonster::smart_gladiator_ai_mut)
+            .and_then(|state| state.take_step());
+        if let Some(destination) = destination {
+            let _ = game.move_owned_monster_step(
+                region,
+                monster_id,
+                destination.x,
+                destination.y,
+                CMonster::figure(&property),
+            );
             return true;
         }
     }
@@ -426,6 +450,74 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         );
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 2
+        && let Some(area_index) = area_index
+    {
+        let mut selection = SmartGladiatorSelection::default();
+        for player_id in region.player_ids_around_area(area_index) {
+            let Some(player) = game.find_player(player_id) else {
+                continue;
+            };
+            if player.server_region_id() != Some(region.id) || player.is_dead() {
+                continue;
+            }
+            let Some(view) = player.shape_view() else {
+                continue;
+            };
+            selection = selection.consider(
+                monster_view,
+                SmartGladiatorCandidate {
+                    view,
+                    hit_points: player.health(),
+                    maximum_hit_points: player.combat_properties().maximum_hp,
+                },
+                property.guard_range as i32,
+            );
+        }
+        for pet_id in region.pet_ids_around_area(area_index) {
+            let Some((view, hit_points, maximum_hit_points)) = region
+                .find_monster_by_id(pet_id)
+                .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+                .and_then(|pet| {
+                    let pet_property =
+                        game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                    Some((
+                        pet.shape_view(pet_property)?,
+                        pet.hit_points(),
+                        pet_property.maximum_hp,
+                    ))
+                })
+            else {
+                continue;
+            };
+            selection = selection.consider(
+                monster_view,
+                SmartGladiatorCandidate {
+                    view,
+                    hit_points,
+                    maximum_hit_points,
+                },
+                property.guard_range as i32,
+            );
+        }
+        if let Some(selected) = selection.vulnerable_target() {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected);
+            }
+            target = Some(selected);
+        } else if let Some(destination) = selection.retreat_step(monster_view) {
+            if let Some(state) = region
+                .find_monster_by_id_mut(monster_id)
+                .and_then(CMonster::smart_gladiator_ai_mut)
+            {
+                state.queue_step(destination);
+            }
+            return true;
+        }
+    }
     if target.is_none() && cast.is_none() && !tamed && property.ai == 1 {
         let Some(mut state) = region
             .find_monster_by_id_mut(monster_id)

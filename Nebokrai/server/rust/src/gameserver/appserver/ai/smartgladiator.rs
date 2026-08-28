@@ -1,82 +1,303 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Умный гладиатор (AI2).
+//!
+//! Источник: точная пара gameserver.exe + GameServer.pdb, исходный владелец
+//! appserver/ai/smartgladiator.cpp. Владелец AI хранит очередь шагов,
+//! выбирает уязвимую цель среди игроков и питомцев, отступает от ближайшей угрозы
+//! и обрабатывает реакцию на урон. CGame участвует только в разрешении
+//! владельцев и фактическом пространственном перемещении; наблюдаемый порядок
+//! обхода, пороги здоровья и момент потребления очереди сохранены здесь.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp
+use std::collections::VecDeque;
 
-// ============================================================================
-// FUNCTION: CSmartGladiator::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp:127
-// RVA: 0x002103B0
-// ADDRESS: 006103b0
-// PROTOTYPE: void __thiscall WhenBeenHurted(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{
+    CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
+};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::gameserver::game::CGame;
+use crate::public::tools::get_line_direction;
+use crate::setup::monsterlist::MonsterProperties;
 
-// ============================================================================
-// FUNCTION: CSmartGladiator::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp:30
-// RVA: 0x00210660
-// ADDRESS: 00610660
-// PROTOTYPE: void __thiscall OnIdle(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
 
-// ============================================================================
-// FUNCTION: CSmartGladiator::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp:37
-// RVA: 0x002106E0
-// ADDRESS: 006106e0
-// PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SmartGladiatorState {
+    queued_steps: VecDeque<ShapeAreaCoordinates>,
+}
 
-// ============================================================================
-// FUNCTION: CSmartGladiator::CSmartGladiator
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp:13
-// RVA: 0x00210850
-// ADDRESS: 00610850
-// PROTOTYPE: undefined __thiscall CSmartGladiator(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl SmartGladiatorState {
+    pub(crate) fn queue_step(&mut self, destination: ShapeAreaCoordinates) {
+        self.queued_steps.push_back(destination);
+    }
 
-// ============================================================================
-// FUNCTION: CSmartGladiator::OnSearchEnemy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\smartgladiator.cpp:210
-// RVA: 0x00210AC0
-// ADDRESS: 00610ac0
-// PROTOTYPE: int __thiscall OnSearchEnemy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn take_step(&mut self) -> Option<ShapeAreaCoordinates> {
+        self.queued_steps.pop_front()
+    }
 
+    pub(crate) fn has_queued_steps(&self) -> bool {
+        !self.queued_steps.is_empty()
+    }
 
-// COMPONENT_VARIANT_END: GameServer
+    pub(crate) fn clear(&mut self) {
+        self.queued_steps.clear();
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SmartGladiatorCandidate {
+    pub(crate) view: ShapeView,
+    pub(crate) hit_points: u32,
+    pub(crate) maximum_hit_points: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SmartGladiatorSelection {
+    nearest: Option<(ShapeView, i32)>,
+    vulnerable: Option<(ShapeIdentity, u32)>,
+}
+
+impl SmartGladiatorSelection {
+    pub(crate) fn consider(
+        mut self,
+        owner: ShapeView,
+        candidate: SmartGladiatorCandidate,
+        guard_range: i32,
+    ) -> Self {
+        let distance = real_distance(
+            owner.tile_x,
+            owner.tile_y,
+            candidate.view.tile_x,
+            candidate.view.tile_y,
+        );
+        if guard_range < distance {
+            return self;
+        }
+        if self.nearest.is_none_or(|(_, current)| distance <= current) {
+            self.nearest = Some((candidate.view, distance));
+        }
+        let health_ratio = candidate.hit_points as f32 / candidate.maximum_hit_points as f32;
+        if health_ratio < 0.4
+            && self
+                .vulnerable
+                .is_none_or(|(_, current)| candidate.hit_points < current)
+        {
+            self.vulnerable = Some((candidate.view.identity, candidate.hit_points));
+        }
+        self
+    }
+
+    pub(crate) const fn vulnerable_target(self) -> Option<ShapeIdentity> {
+        match self.vulnerable {
+            Some((identity, _)) => Some(identity),
+            None => None,
+        }
+    }
+
+    pub(crate) fn retreat_step(self, owner: ShapeView) -> Option<ShapeAreaCoordinates> {
+        let (nearest, _) = self.nearest?;
+        retreat_step_from(owner, nearest)
+    }
+}
+
+/// Один исходный шаг от угрозы: направление строится от цели к владельцу.
+pub(crate) fn retreat_step_from(
+    owner: ShapeView,
+    threat: ShapeView,
+) -> Option<ShapeAreaCoordinates> {
+    let direction = get_line_direction(
+        threat.tile_x,
+        threat.tile_y,
+        owner.tile_x,
+        owner.tile_y,
+    );
+    CShape::get_direction_position(
+        direction,
+        ShapeAreaCoordinates {
+            x: owner.tile_x,
+            y: owner.tile_y,
+        },
+    )
+    .ok()
+}
+
+fn nearest_player(
+    game: &CGame,
+    region: &CServerRegion,
+    area_index: usize,
+    owner: ShapeView,
+) -> Option<ShapeView> {
+    region
+        .player_ids_around_area(area_index)
+        .into_iter()
+        .filter_map(|player_id| {
+            let player = game.find_player(player_id)?;
+            (player.server_region_id() == Some(region.id) && !player.is_dead())
+                .then(|| player.shape_view())
+                .flatten()
+        })
+        .fold(None, |nearest, candidate| match nearest {
+            Some((_, distance))
+                if distance
+                    < real_distance(
+                        owner.tile_x,
+                        owner.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ) =>
+            {
+                nearest
+            }
+            _ => Some((
+                candidate,
+                real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            )),
+        })
+        .map(|(candidate, _)| candidate)
+}
+
+fn nearest_monster(
+    game: &CGame,
+    region: &CServerRegion,
+    area_index: usize,
+    owner: ShapeView,
+    owner_id: i32,
+) -> Option<ShapeView> {
+    region
+        .monster_ids_around_area(area_index)
+        .into_iter()
+        .filter(|candidate_id| *candidate_id != owner_id)
+        .filter_map(|candidate_id| {
+            let candidate = region.find_monster_by_id(candidate_id)?;
+            if CMoveShape::is_died(candidate.hit_points()) {
+                return None;
+            }
+            let property =
+                game.find_monster_property_by_origin_name(candidate.base_property_key()?)?;
+            candidate.shape_view(property)
+        })
+        .fold(None, |nearest, candidate| match nearest {
+            Some((_, distance))
+                if distance
+                    < real_distance(
+                        owner.tile_x,
+                        owner.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ) =>
+            {
+                nearest
+            }
+            _ => Some((
+                candidate,
+                real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            )),
+        })
+        .map(|(candidate, _)| candidate)
+}
+
+/// Применяет подтверждённую реакцию AI2 на удар игрока. Базовая реакция на
+/// урон выполняется всегда; выбор цели и немедленный шаг выполняются только
+/// когда гладиатор ещё не ведёт бой.
+pub(crate) fn apply_player_hurt_response(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    player_id: i32,
+    now_ms: u32,
+) {
+    let Some((owner, health, area_index, was_fighting)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            Some((
+                monster.shape_view(property)?,
+                monster.hit_points(),
+                monster.move_shape().shape().area_index(),
+                monster.ai_target().is_some(),
+            ))
+        })
+    else {
+        return;
+    };
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.when_been_hurted(now_ms);
+    }
+    if was_fighting {
+        return;
+    }
+
+    let player = game.find_player(player_id).and_then(|player| {
+        (player.server_region_id() == Some(region.id) && !player.is_dead())
+            .then(|| player.shape_view())
+            .flatten()
+    });
+    if player.is_some() && health as f32 / (property.maximum_hp as f32) < 0.75 {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.set_ai_target(ShapeIdentity {
+                object_type: PLAYER_TYPE,
+                id: player_id,
+                ex_id: crate::public::guid::CGuid::GUID_INVALID,
+            });
+        }
+        return;
+    }
+
+    let threat = player.or_else(|| {
+        let area_index = area_index?;
+        nearest_player(game, region, area_index, owner)
+            .or_else(|| nearest_monster(game, region, area_index, owner, monster_id))
+    });
+    if let Some(destination) = threat.and_then(|threat| retreat_step_from(owner, threat)) {
+        let _ = game.move_owned_monster_step(
+            region,
+            monster_id,
+            destination.x,
+            destination.y,
+            CMonster::figure(property),
+        );
+    }
+}
+
+/// AI2 принимает в цель только приручённого монстра или повозку и только если
+/// до удара ещё не вёл бой.
+pub(crate) fn apply_monster_hurt_response(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    attacker_id: i32,
+    now_ms: u32,
+) {
+    let attacker_is_owned_creature = region
+        .find_monster_by_id(attacker_id)
+        .and_then(|attacker| {
+            let property =
+                game.find_monster_property_by_origin_name(attacker.base_property_key()?)?;
+            Some(attacker.is_tamed() || attacker.is_carriage(property))
+        })
+        .unwrap_or(false);
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+        return;
+    };
+    let was_fighting = monster.ai_target().is_some();
+    monster.when_been_hurted(now_ms);
+    if !was_fighting && attacker_is_owned_creature {
+        monster.set_ai_target(ShapeIdentity {
+            object_type: MONSTER_TYPE,
+            id: attacker_id,
+            ex_id: crate::public::guid::CGuid::GUID_INVALID,
+        });
+    }
+}

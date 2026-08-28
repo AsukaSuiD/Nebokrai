@@ -66,6 +66,7 @@ use super::ai::baseai::CBaseAI;
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
 use super::ai::passivegladiator::PassiveGladiatorState;
+use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
@@ -138,6 +139,7 @@ pub(crate) struct CMonster {
     boss_blue_ai: BossBlueAiState,
     boss_fiend_ai: Option<BossFiendAiState>,
     passive_gladiator_ai: Option<PassiveGladiatorState>,
+    smart_gladiator_ai: Option<SmartGladiatorState>,
     base_ai: CBaseAI,
 }
 
@@ -285,6 +287,7 @@ impl CMonster {
             boss_blue_ai: BossBlueAiState::default(),
             boss_fiend_ai: None,
             passive_gladiator_ai: None,
+            smart_gladiator_ai: None,
             base_ai: CBaseAI::default(),
         }
     }
@@ -678,6 +681,7 @@ impl CMonster {
     pub(crate) fn initialize_special_ai(&mut self, ai_type: u32, now_ms: u32) {
         self.boss_fiend_ai = (ai_type == 0x68).then(|| BossFiendAiState::new(now_ms));
         self.passive_gladiator_ai = (ai_type == 1).then(PassiveGladiatorState::default);
+        self.smart_gladiator_ai = (ai_type == 2).then(SmartGladiatorState::default);
     }
 
     pub(crate) fn boss_fiend_ai_mut(&mut self) -> Option<&mut BossFiendAiState> {
@@ -698,6 +702,14 @@ impl CMonster {
 
     pub(crate) fn restore_passive_gladiator_ai(&mut self, state: PassiveGladiatorState) {
         self.passive_gladiator_ai = Some(state);
+    }
+
+    pub(crate) fn smart_gladiator_ai_mut(&mut self) -> Option<&mut SmartGladiatorState> {
+        self.smart_gladiator_ai.as_mut()
+    }
+
+    pub(crate) fn smart_gladiator_ai(&self) -> Option<&SmartGladiatorState> {
+        self.smart_gladiator_ai.as_ref()
     }
 
     pub(crate) fn combat_properties(
@@ -887,6 +899,9 @@ impl CMonster {
         self.base_ai.when_been_killed(now_ms);
         self.ai_target = None;
         if let Some(state) = self.passive_gladiator_ai.as_mut() {
+            state.clear();
+        }
+        if let Some(state) = self.smart_gladiator_ai.as_mut() {
             state.clear();
         }
     }

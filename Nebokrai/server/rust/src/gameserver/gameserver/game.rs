@@ -36717,6 +36717,9 @@ impl CGame {
                             now_ms,
                             false,
                         );
+                    } else if monster_property.ai == 2 {
+                        // Владелец AI2 применит реакцию после освобождения
+                        // изменяемого заимствования монстра.
                     } else if matches!(monster_property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -36740,6 +36743,20 @@ impl CGame {
                         blast_attack: attack.blast_attack,
                     });
                 }
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && monster_property.ai == 2
+            {
+                crate::gameserver::appserver::ai::smartgladiator::apply_player_hurt_response(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &monster_property,
+                    player_id,
+                    now_ms,
+                );
             }
             if attack.full_miss == 0
                 && damage != 0
@@ -40708,6 +40725,9 @@ impl CGame {
                             now_ms,
                             false,
                         );
+                    } else if property.ai == 2 {
+                        // Владелец AI2 применит реакцию после освобождения
+                        // изменяемого заимствования монстра.
                     } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -40736,6 +40756,20 @@ impl CGame {
                         blast_attack: attack.blast_attack,
                     });
                 }
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && property.ai == 2
+            {
+                crate::gameserver::appserver::ai::smartgladiator::apply_player_hurt_response(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &property,
+                    master.master_id,
+                    now_ms,
+                );
             }
             if attack.full_miss == 0
                 && damage != 0
