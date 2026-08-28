@@ -10,7 +10,8 @@
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
-//! питомцами, усиление, машинный и мана-щит, атака боевой феи и её призываемые области
+//! питомцами, усиление, периодическое лечение, машинный и мана-щит,
+//! атака боевой феи и её призываемые области
 //! и приручение монстров сохраняют незавершённое состояние между проходами ИИ.
 //! Хвост
 //! `CPlayerAI::Run` хранит часы
@@ -88,6 +89,8 @@ pub(crate) struct CPlayerAI {
     hearten_last_used_ms: u32,
     promotion: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     promotion_last_used_ms: u32,
+    heal_family: [Option<SkillExecutionKernel<PlayerSkillDispatch>>; 2],
+    heal_family_last_used_ms: [u32; 2],
     pets_control: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     pets_control_last_used_ms: u32,
     monster_taming: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -152,6 +155,7 @@ impl CPlayerAI {
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
+        self.heal_family = [None; 2];
         self.pets_control = None;
         self.monster_taming = None;
         self.machine_shield = None;
@@ -235,6 +239,15 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение усиления завершено");
         }
+        for mut execution in self
+            .heal_family
+            .each_mut()
+            .into_iter()
+            .filter_map(Option::take)
+        {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение периодического лечения завершено");
+        }
         if let Some(mut execution) = self.pets_control.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение управления питомцами завершено");
@@ -292,6 +305,7 @@ impl CPlayerAI {
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
+        self.heal_family = [None; 2];
         self.pets_control = None;
         self.monster_taming = None;
         self.machine_shield = None;
@@ -475,6 +489,36 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_promotion_used(&mut self, now_ms: u32) {
         self.promotion_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn heal_family(
+        &self,
+        index: usize,
+    ) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.heal_family[index]
+    }
+
+    pub(crate) fn begin_heal_family(
+        &mut self,
+        index: usize,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.heal_family[index] = Some(state);
+    }
+
+    pub(crate) fn heal_family_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.heal_family[index].as_mut()
+    }
+
+    pub(crate) const fn heal_family_last_used_ms(&self, index: usize) -> u32 {
+        self.heal_family_last_used_ms[index]
+    }
+
+    pub(crate) const fn mark_heal_family_used(&mut self, index: usize, now_ms: u32) {
+        self.heal_family_last_used_ms[index] = now_ms;
     }
 
     pub(crate) const fn pets_control(

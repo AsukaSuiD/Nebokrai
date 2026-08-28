@@ -809,6 +809,8 @@ use crate::gameserver::appserver::skills::hearten::{
 };
 use crate::gameserver::appserver::skills::gibe::{execute_player_gibe, GIBE_SKILL_ID};
 use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
+use crate::gameserver::appserver::skills::heal::{execute_player_heal, is_heal_skill};
+use crate::gameserver::appserver::skills::healstate::send_heal_state_visual;
 use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
@@ -26061,6 +26063,33 @@ impl CGame {
             };
             periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
         }
+        let heal_update = self
+            .find_player_mut(player_id)
+            .map(|player| player.update_heal_states(now_ms));
+        if heal_update.as_ref().is_some_and(|update| update.changed) {
+            let _ = self.publish_player_states(player_id);
+        }
+        if let Some(update) = heal_update
+            && !update.ended.is_empty()
+            && let Some((region_id, tile_x, tile_y)) = self.find_player(player_id).and_then(|player| {
+                Some((
+                    player.server_region_id()?,
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                ))
+            })
+        {
+            let target = ShapeIdentity {
+                object_type: PLAYER_TYPE,
+                id: player_id,
+                ex_id: CGuid::GUID_INVALID,
+            };
+            for state in update.ended {
+                send_heal_state_visual(
+                    self, region_id, target, tile_x, tile_y, state, false, now_ms,
+                );
+            }
+        }
         let agility_state_2_ended = self
             .find_player_mut(player_id)
             .and_then(|player| player.take_expired_agility_state_2(now_ms))
@@ -36185,6 +36214,14 @@ impl CGame {
                 }
                 PlayerSkillDispatch::Point { .. } => false,
             };
+            let concrete_heal = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. } => is_heal_skill(skill_id),
+                PlayerSkillDispatch::Object { skill_id, target } => {
+                    is_heal_skill(skill_id)
+                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                }
+                PlayerSkillDispatch::Point { .. } => false,
+            };
             let concrete_pets_control = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36242,6 +36279,8 @@ impl CGame {
                 execute_player_hearten(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_promotion {
                 execute_player_promotion(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_heal {
+                execute_player_heal(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_pets_control {
                 execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_monster_taming {
@@ -40447,6 +40486,58 @@ impl CGame {
                             );
                         }
                         _ => {}
+                    }
+                }
+                let heal_property = self
+                    .find_region(region_id)
+                    .and_then(|owner| owner.base().find_monster_by_id(monster_id))
+                    .and_then(CMonster::base_property_key)
+                    .and_then(|key| self.find_monster_property_by_origin_name(key))
+                    .cloned();
+                let heal_update = heal_property.and_then(|property| {
+                    let mut owner = self.take_region_owner(region_id)?;
+                    let result = owner
+                        .base_mut()
+                        .find_monster_by_id_mut(monster_id)
+                        .and_then(|monster| {
+                            let identity = monster.move_shape().shape().identity();
+                            let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
+                            let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
+                            let maximum_health = if monster.is_tamed() {
+                                monster.pet_maximum_hp(&property)
+                            } else {
+                                property.maximum_hp
+                            };
+                            let health = monster.hit_points();
+                            let update = monster.move_shape_mut().update_heal_states(
+                                now_ms,
+                                health,
+                                maximum_health,
+                                health == 0,
+                            );
+                            monster.set_hit_points(update.health);
+                            Some((identity, tile_x, tile_y, update))
+                        });
+                    self.restore_region_owner(owner);
+                    result
+                });
+                if let Some((identity, tile_x, tile_y, update)) = heal_update {
+                    if update.changed {
+                        let mut states = CMessage::new(0x000b_fe02);
+                        states.add_long(MONSTER_TYPE);
+                        states.add_long(monster_id);
+                        states.add_ulong(update.health);
+                        states.add_long(0);
+                        states.add_long(0);
+                        states.add_long(0);
+                        let _ = self.send_shape_position_around(
+                            region_id, tile_x, tile_y, &states,
+                        );
+                    }
+                    for state in update.ended {
+                        send_heal_state_visual(
+                            self, region_id, identity, tile_x, tile_y, state, false, now_ms,
+                        );
                     }
                 }
                 if self.run_owned_carriage_lifecycle(region_id, monster_id, runtime) {

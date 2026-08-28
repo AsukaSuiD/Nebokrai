@@ -1,136 +1,407 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Семейство периодического лечения `CHeal/CHeal2` (`0xD3/0xE3`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
+//! `appserver/skills/heal.cpp` и `heal2.cpp`. Совпадающий конвейер объединён:
+//! двойная проверка MP, время восстановления, расстояние, задержка, направление,
+//! точная формула усиления оружием с плавающей точкой и установка
+//! периодического состояния.
+//! Обычный нетранспортный монстр после начальной проверки заменяется самим
+//! заклинателем. `CGame` координирует владельцев и доставку; формула и пакеты
+//! остаются здесь. Координатные перегрузки выбора цели ещё не подключены.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp
+use super::baseattack::time_reached;
+use super::heal2::HEAL_2_SKILL_ID;
+use super::healstate::{HealState, round_original, send_heal_state_visual, unsigned_float};
+use super::healstate2::HealState2;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
+use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
+use crate::public::tools::get_line_direction;
 
-// ============================================================================
-// FUNCTION: CHeal::CHeal
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:20
-// RVA: 0x001809F0
-// ADDRESS: 005809f0
-// PROTOTYPE: undefined __thiscall CHeal(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const HEAL_SKILL_ID: u32 = 0xd3;
+pub(crate) const HEAL_EFFECT_MESSAGE: i32 = 0x000b_fe01;
 
-// ============================================================================
-// FUNCTION: CHeal::~CHeal
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:28
-// RVA: 0x00180A60
-// ADDRESS: 00580a60
-// PROTOTYPE: void __thiscall ~CHeal(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+const SKILL_USAGE_CONST: u32 = 20_010;
+const SKILL_USAGE_HEAL_RECOVER_COEFFICIENT: u32 = 20_019;
+const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
+const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
+const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 5_002;
+const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
+const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
+
+#[derive(Clone, Copy)]
+struct HealTarget {
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    dead: bool,
+    ordinary_monster: bool,
+}
+
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    }
+}
+
+pub(crate) const fn is_heal_skill(skill_id: u32) -> bool {
+    matches!(skill_id, HEAL_SKILL_ID | HEAL_2_SKILL_ID)
+}
+
+fn family_index(skill_id: u32) -> usize {
+    usize::from(skill_id == HEAL_2_SKILL_ID)
+}
+
+fn requested_target(player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(u32, ShapeIdentity)> {
+    match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. } if is_heal_skill(skill_id) => Some((
+            skill_id,
+            ShapeIdentity {
+                object_type: PLAYER_TYPE,
+                id: player_id,
+                ex_id: CGuid::GUID_INVALID,
+            },
+        )),
+        PlayerSkillDispatch::Object { skill_id, target }
+            if is_heal_skill(skill_id)
+                && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) =>
+        {
+            Some((skill_id, target))
+        }
+        _ => None,
+    }
+}
+
+fn caster_identity(player_id: i32) -> ShapeIdentity {
+    ShapeIdentity {
+        object_type: PLAYER_TYPE,
+        id: player_id,
+        ex_id: CGuid::GUID_INVALID,
+    }
+}
+
+fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<HealTarget> {
+    let (tile_x, tile_y) = game.move_shape_target_tile(Some(region_id), identity)?;
+    match identity.object_type {
+        PLAYER_TYPE => Some(HealTarget {
+            identity,
+            tile_x,
+            tile_y,
+            dead: game.find_player(identity.id).is_none_or(CPlayer::is_dead),
+            ordinary_monster: false,
+        }),
+        MONSTER_TYPE => {
+            let monster = game
+                .find_region(region_id)?
+                .base()
+                .find_monster_by_id(identity.id)?;
+            let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            Some(HealTarget {
+                identity,
+                tile_x,
+                tile_y,
+                dead: monster.hit_points() == 0,
+                ordinary_monster: !monster.is_tamed() && !monster.is_carriage(property),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn send_failure(game: &mut CGame, player_id: i32, action: u8) {
+    game.send_self_state_skill_failure(HEAL_EFFECT_MESSAGE, player_id, action);
+}
+
+fn send_cast(
+    game: &mut CGame,
+    player_id: i32,
+    target: HealTarget,
+    skill_id: u32,
+    skill_level: i32,
+    begin: bool,
+) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let source = player.shape().identity();
+    let mut message = CMessage::new(HEAL_EFFECT_MESSAGE);
+    message.add_byte(if begin { 1 } else { 2 });
+    message.add_long(skill_id as i32);
+    message.add_short(skill_level as i16);
+    message.add_long(source.object_type);
+    message.add_long(source.id);
+    if begin {
+        message.add_long(player.shape().get_direction());
+    } else {
+        message.add_long(target.identity.object_type);
+        message.add_long(target.identity.id);
+        message.add_long(target.tile_x);
+        message.add_long(target.tile_y);
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn finish_movement(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
+
+fn replace_state(
+    game: &mut CGame,
+    region_id: i32,
+    target: ShapeIdentity,
+    state: HealState,
+) -> Option<Option<HealState>> {
+    match target.object_type {
+        PLAYER_TYPE => {
+            let player = game.find_player_mut(target.id)?;
+            (player.server_region_id() == Some(region_id))
+                .then(|| player.replace_heal_state(state.skill_id(), state))
+        }
+        MONSTER_TYPE => {
+            let mut owner = game.take_region_owner(region_id)?;
+            let previous = owner
+                .base_mut()
+                .find_monster_by_id_mut(target.id)
+                .map(|monster| {
+                    monster
+                        .move_shape_mut()
+                        .replace_heal_state(state.skill_id(), state)
+                });
+            game.restore_region_owner(owner);
+            previous
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let Some((skill_id, requested_identity)) = requested_target(player_id, dispatch) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let index = family_index(skill_id);
+    let Some((region_id, source_x, source_y, skill_level, initial_mana, weapon_level)) = game
+        .find_player(player_id)
+        .and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+                player.learned_skill_level(skill_id),
+                player.mana(),
+                player.weapon_damage_level(game.goods_factory()) as u32,
+            ))
+        })
+    else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    // `CAttackSkill::Begin` подставляет заклинателя, если цель-объект уже
+    // исчез. Это происходит до проверки условий и сохраняется на всех стадиях.
+    let execution_started = player_ai.heal_family(index).is_some();
+    let effective_identity = if execution_started {
+        requested_identity
+    } else {
+        target_snapshot(game, region_id, requested_identity)
+            .map_or_else(|| caster_identity(player_id), |target| target.identity)
+    };
+    let requested = target_snapshot(game, region_id, effective_identity);
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        send_failure(game, player_id, 2);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let frequency_ms = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
+    let coefficient = properties.query_property(SKILL_USAGE_HEAL_RECOVER_COEFFICIENT);
+    let constant = properties.query_property(SKILL_USAGE_CONST);
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    let scaled = coefficient.wrapping_mul(weapon_level);
+    let hp_gain = round_original(unsigned_float(constant) + unsigned_float(scaled) * 0.01) as u32;
+
+    if player_ai.heal_family(index).is_none() {
+        let started_at_ms = runtime.now_milliseconds();
+        game.enter_player_combat_state(player_id);
+        let Some(target) = requested else {
+            send_failure(game, player_id, 2);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if player_ai.heal_family_last_used_ms(index) != 0
+            && !time_reached(
+                cooldown_now_ms,
+                player_ai.heal_family_last_used_ms(index),
+                reuse_delay_ms,
+            )
+        {
+            send_failure(game, player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"GS0278");
+            send_failure(game, player_id, 2);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if !(target.identity.object_type == PLAYER_TYPE && target.identity.id == player_id)
+            && maximum_distance != 0
+            && game
+                .base_magic_path(
+                    region_id,
+                    source_x,
+                    source_y,
+                    target.tile_x,
+                    target.tile_y,
+                    None,
+                )
+                .len()
+                > maximum_distance as usize
+        {
+            send_failure(game, player_id, 0x0b);
+            game.send_skill_system_info(player_id, b"GS0290");
+            send_failure(game, player_id, 2);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss != 0 && initial_mana < mp_loss {
+            send_failure(game, player_id, 7);
+            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+            send_failure(game, player_id, 2);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            if mp_loss != 0 {
+                player.set_skill_moveable(false);
+            }
+            player.set_current_skill_id(Some(skill_id));
+        }
+        player_ai.begin_heal_family(index, SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai
+        .heal_family(index)
+        .is_none_or(|execution| execution.dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    let Some(mut target) = target_snapshot(game, region_id, effective_identity) else {
+        finish_movement(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if target.ordinary_monster {
+        let self_identity = caster_identity(player_id);
+        target = target_snapshot(game, region_id, self_identity)
+            .expect("заклинатель лечения сохранён");
+    }
+    if target.dead {
+        send_failure(game, player_id, 10);
+        finish_movement(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if player_ai
+        .heal_family(index)
+        .is_some_and(|execution| execution.stage() == SkillStage::Begin)
+    {
+        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if current_mana < mp_loss {
+            send_failure(game, player_id, 7);
+            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+            finish_movement(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(current_mana.wrapping_sub(mp_loss));
+            if target.identity.object_type != PLAYER_TYPE || target.identity.id != player_id {
+                player.movement_shape_mut().set_direction(get_line_direction(
+                    source_x,
+                    source_y,
+                    target.tile_x,
+                    target.tile_y,
+                ));
+            }
+        }
+        let _ = game.update_player_current_state(
+            player_id,
+            GamePlayerFightStatePhase::MoveShapeAi,
+        );
+        send_cast(game, player_id, target, skill_id, skill_level, true);
+        if let Some(execution) = player_ai.heal_family_mut(index) {
+            let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+
+    let started_at_ms = player_ai
+        .heal_family(index)
+        .map(SkillExecutionKernel::started_at_ms)
+        .expect("выполнение лечения создано или восстановлено");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+
+    send_cast(game, player_id, target, skill_id, skill_level, false);
+    let now_ms = runtime.now_milliseconds();
+    let state: HealState = if skill_id == HEAL_2_SKILL_ID {
+        HealState2::new(skill_id, now_ms, keep_time_ms, frequency_ms, hp_gain)
+    } else {
+        HealState::new(skill_id, now_ms, keep_time_ms, frequency_ms, hp_gain)
+    };
+    if let Some(previous) = replace_state(game, region_id, target.identity, state) {
+        if let Some(previous) = previous {
+            send_heal_state_visual(
+                game,
+                region_id,
+                target.identity,
+                target.tile_x,
+                target.tile_y,
+                previous,
+                false,
+                now_ms,
+            );
+        }
+        send_heal_state_visual(
+            game,
+            region_id,
+            target.identity,
+            target.tile_x,
+            target.tile_y,
+            state,
+            true,
+            now_ms,
+        );
+    }
+    if let Some(execution) = player_ai.heal_family_mut(index) {
+        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_heal_family_used(index, runtime.now_milliseconds());
+    finish_movement(game, player_id);
+    terminal(QueuedSkillExecutionState::Completed)
+}
 
 // ============================================================================
 // FUNCTION: CHeal::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:170
 // RVA: 0x00180A80
-// ADDRESS: 00580a80
 // PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeal::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:192
-// RVA: 0x00180B60
-// ADDRESS: 00580b60
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeal::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:152
-// RVA: 0x00180C70
-// ADDRESS: 00580c70
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHealEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:403
-// RVA: 0x00180D40
-// ADDRESS: 00580d40
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeal::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:50
-// RVA: 0x001811B0
-// ADDRESS: 005811b0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHeal::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:227
-// RVA: 0x00181490
-// ADDRESS: 00581490
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer

@@ -106,6 +106,10 @@ pub(crate) mod appserver {
         pub(crate) mod fightdefense;
         pub(crate) mod hearten;
         pub(crate) mod heartenstate;
+        pub(crate) mod heal;
+        pub(crate) mod heal2;
+        pub(crate) mod healstate;
+        pub(crate) mod healstate2;
         pub(crate) mod huoxieshu;
         pub(crate) mod immediatestate;
         pub(crate) mod kernel;

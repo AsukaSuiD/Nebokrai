@@ -4241,6 +4241,29 @@ impl CPlayer {
         self.move_shape.take_expired_hearten_state(now_ms)
     }
 
+    pub(crate) fn replace_heal_state(
+        &mut self,
+        removed_skill_id: u32,
+        state: super::skills::healstate::HealState,
+    ) -> Option<super::skills::healstate::HealState> {
+        self.move_shape
+            .replace_heal_state(removed_skill_id, state)
+    }
+
+    pub(crate) fn update_heal_states(
+        &mut self,
+        now_ms: u32,
+    ) -> super::moveshape::HealStatesUpdate {
+        let health = self.health();
+        let maximum_health = self.maximum_health();
+        let dead = self.is_dead();
+        let update = self
+            .move_shape
+            .update_heal_states(now_ms, health, maximum_health, dead);
+        self.set_health(update.health);
+        update
+    }
+
     pub(crate) fn replace_boss_blue_quake_state(
         &mut self,
         state: super::skills::bossbluequakestate::BossBlueQuakeState,
