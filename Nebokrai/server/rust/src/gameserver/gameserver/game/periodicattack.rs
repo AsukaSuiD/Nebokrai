@@ -645,7 +645,7 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
                         monster.when_been_killed(now_ms);
-                    } else if property.ai == 8 {
+                    } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
                         monster.when_been_hurted_by(
@@ -674,8 +674,12 @@ impl CGame {
                     });
                 }
             }
-            if attack.full_miss == 0 && damage != 0 && current_health != 0 && property.ai == 8 {
-                crate::gameserver::appserver::ai::guardwithbow::retarget_guard_with_bow_after_hurt(
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && matches!(property.ai, 8 | 13 | 14 | 20)
+            {
+                crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt(
                     self,
                     owner.base_mut(),
                     target_id,

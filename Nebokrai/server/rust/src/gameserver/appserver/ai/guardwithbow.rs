@@ -76,7 +76,24 @@ pub(crate) fn select_guard_with_bow_target(
         return Some(selected.identity);
     }
 
+    select_guard_monster_target(game, region, monster_id, property, minimum_skill_distance)
+}
+
+/// Общая запасная ветвь охранников: ближайший неохранный монстр, которого
+/// допускает действующая политика `CMonster::IsAttackAble`.
+pub(crate) fn select_guard_monster_target(
+    game: &CGame,
+    region: &CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    minimum_skill_distance: i32,
+) -> Option<ShapeIdentity> {
+    let monster = region.find_monster_by_id(monster_id)?;
+    let monster_view = monster.shape_view(property)?;
+    let area_index = monster.move_shape().shape().area_index()?;
+    let guard_range = property.guard_range as i32;
     let attacker_master = monster.master_info();
+    let mut selected = None;
     for target_id in region.monster_ids_around_area(area_index) {
         let Some(target) = region.find_monster_by_id(target_id) else {
             continue;
@@ -121,51 +138,4 @@ pub(crate) fn select_guard_with_bow_target(
         );
     }
     selected.map(|selected| selected.identity)
-}
-
-/// Немедленная ветвь `WhenBeenHurted`: охранник не принимает нападавшего как
-/// готовую цель, а повторяет собственный приоритет преступника и монстра.
-pub(crate) fn retarget_guard_with_bow_after_hurt(
-    game: &CGame,
-    region: &mut CServerRegion,
-    monster_id: i32,
-    property: &MonsterProperties,
-) {
-    if property.ai != 8
-        || region
-            .find_monster_by_id(monster_id)
-            .is_none_or(|monster| monster.ai_target().is_some())
-    {
-        return;
-    }
-    let Some(current_skill_id) = region
-        .find_monster_by_id(monster_id)
-        .and_then(|monster| monster.move_shape().current_skill_id())
-    else {
-        return;
-    };
-    let Some(skill) = property
-        .skills
-        .iter()
-        .copied()
-        .filter(|skill| u32::from(skill.id) == current_skill_id)
-        .max_by_key(|skill| skill.level)
-    else {
-        return;
-    };
-    let minimum_skill_distance = game
-        .skill_base_properties(current_skill_id, i32::from(skill.level))
-        .map_or(0, |properties| properties.query_property(5_004) as i32);
-    let selected = select_guard_with_bow_target(
-        game,
-        region,
-        monster_id,
-        property,
-        minimum_skill_distance,
-    );
-    if let (Some(selected), Some(monster)) =
-        (selected, region.find_monster_by_id_mut(monster_id))
-    {
-        monster.set_ai_target(selected);
-    }
 }
