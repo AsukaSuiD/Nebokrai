@@ -9,7 +9,8 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба, семейство ловкости, парная закалка, воодушевление, управление
+//! стрельба, бессердечная стрела, семейство ловкости, парная закалка,
+//! воодушевление, управление
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
@@ -53,6 +54,7 @@ use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransf
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
 use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
+use crate::gameserver::appserver::skills::heartlessarrow::HeartlessArrowExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -81,6 +83,8 @@ pub(crate) struct CPlayerAI {
     base_attack_last_used_ms: u32,
     archery: Option<ArcheryExecutionState>,
     archery_last_used_ms: u32,
+    heartless_arrow: Option<HeartlessArrowExecutionState>,
+    heartless_arrow_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -377,6 +381,10 @@ impl CPlayerAI {
                 "выполнение базовой стрельбы завершено"
             );
         }
+        if let Some(mut execution) = self.heartless_arrow.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бессердечной стрелы завершено");
+        }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка ловкости завершено");
@@ -616,6 +624,7 @@ impl CPlayerAI {
         self.player_skills.pop_front();
         self.base_attack = None;
         self.archery = None;
+        self.heartless_arrow = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -734,6 +743,12 @@ impl CPlayerAI {
     pub(crate) const fn mark_archery_used(&mut self, now_ms: u32) {
         self.archery_last_used_ms = now_ms;
     }
+
+    pub(crate) const fn heartless_arrow(&self) -> Option<HeartlessArrowExecutionState> { self.heartless_arrow }
+    pub(crate) const fn begin_heartless_arrow(&mut self, state: HeartlessArrowExecutionState) { self.heartless_arrow = Some(state); }
+    pub(crate) fn heartless_arrow_mut(&mut self) -> Option<&mut HeartlessArrowExecutionState> { self.heartless_arrow.as_mut() }
+    pub(crate) const fn heartless_arrow_last_used_ms(&self) -> u32 { self.heartless_arrow_last_used_ms }
+    pub(crate) const fn mark_heartless_arrow_used(&mut self, now_ms: u32) { self.heartless_arrow_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);

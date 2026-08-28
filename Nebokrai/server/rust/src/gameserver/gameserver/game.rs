@@ -773,6 +773,9 @@ use crate::gameserver::appserver::skills::wangsheng::{
 use crate::gameserver::appserver::skills::archery::{
     execute_player_archery, ARCHERY_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::heartlessarrow::{
+    execute_player_heartless_arrow, is_heartless_arrow_dispatch,
+};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
 };
@@ -36944,6 +36947,7 @@ impl CGame {
                 }
                 _ => false,
             };
+            let concrete_heartless_arrow = is_heartless_arrow_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37051,6 +37055,8 @@ impl CGame {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
             } else if concrete_archery {
                 execute_player_archery(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_heartless_arrow {
+                execute_player_heartless_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
