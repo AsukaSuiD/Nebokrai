@@ -121,6 +121,8 @@ pub(crate) mod appserver {
         pub(crate) mod ragebreakstate;
         pub(crate) mod rush;
         pub(crate) mod rushstate;
+        pub(crate) mod rush2;
+        pub(crate) mod rushstate2;
         pub(crate) mod flash;
         pub(crate) mod thunder;
         pub(crate) mod swallow;

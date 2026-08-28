@@ -97,6 +97,8 @@ pub(crate) struct CPlayerAI {
     pillar_last_used_ms: u32,
     rush: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     rush_last_used_ms: u32,
+    rush_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    rush_2_last_used_ms: u32,
     thunder_blow_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     thunder_blow_2_last_used_ms: u32,
     mosou: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -257,6 +259,7 @@ impl CPlayerAI {
         self.thunder_slash = None;
         self.pillar = None;
         self.rush = None;
+        self.rush_2 = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -390,6 +393,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.rush.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение прямого рывка завершено");
+        }
+        if let Some(mut execution) = self.rush_2.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго прямого рывка завершено");
         }
         if let Some(mut execution) = self.thunder_blow_2.take() {
             let _ = execution.terminate(termination);
@@ -582,6 +589,7 @@ impl CPlayerAI {
         self.thunder_slash = None;
         self.pillar = None;
         self.rush = None;
+        self.rush_2 = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -806,6 +814,12 @@ impl CPlayerAI {
     pub(crate) fn rush_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rush.as_mut() }
     pub(crate) const fn rush_last_used_ms(&self) -> u32 { self.rush_last_used_ms }
     pub(crate) const fn mark_rush_used(&mut self, now_ms: u32) { self.rush_last_used_ms = now_ms; }
+
+    pub(crate) const fn rush_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.rush_2 }
+    pub(crate) const fn begin_rush_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.rush_2 = Some(state); }
+    pub(crate) fn rush_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rush_2.as_mut() }
+    pub(crate) const fn rush_2_last_used_ms(&self) -> u32 { self.rush_2_last_used_ms }
+    pub(crate) const fn mark_rush_2_used(&mut self, now_ms: u32) { self.rush_2_last_used_ms = now_ms; }
 
     pub(crate) const fn thunder_blow_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow_2 }
     pub(crate) const fn begin_thunder_blow_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.thunder_blow_2 = Some(state); }

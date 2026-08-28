@@ -4575,6 +4575,20 @@ impl CPlayer {
         self.move_shape.take_expired_rush_state(now_ms)
     }
 
+    pub(crate) fn replace_rush_2_state(
+        &mut self,
+        state: super::skills::rushstate2::Rush2State,
+    ) -> Option<super::skills::rushstate2::Rush2State> {
+        self.move_shape.replace_rush_2_state(state)
+    }
+
+    pub(crate) fn take_expired_rush_2_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::rushstate2::Rush2State> {
+        self.move_shape.take_expired_rush_2_state(now_ms)
+    }
+
     pub(crate) fn replace_pillar_state(
         &mut self, state: super::skills::pillarstate::PillarState,
     ) -> Option<super::skills::pillarstate::PillarState> {

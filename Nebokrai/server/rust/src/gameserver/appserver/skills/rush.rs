@@ -35,7 +35,7 @@ const STATE_PERSIST_TIME: u32 = 10_002;
 const TARGET_BACK_STEP: u32 = 1_001;
 const TARGET_MOVE_SPEED: u32 = 2_001;
 
-fn skill_id(dispatch: PlayerSkillDispatch) -> u32 {
+pub(super) fn skill_id(dispatch: PlayerSkillDispatch) -> u32 {
     match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id, .. }
         | PlayerSkillDispatch::Point { skill_id, .. }
@@ -47,24 +47,24 @@ pub(crate) fn is_rush_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     skill_id(dispatch) == RUSH_SKILL_ID
 }
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+pub(super) fn finish(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
 }
 
-fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
+pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
     player.equipment().get_goods(2).is_some_and(|weapon| {
         weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 1
     })
 }
 
-fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
+pub(super) fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
     match code {
         2 => game.send_skill_system_info(player_id, b"GS0302"),
@@ -76,7 +76,7 @@ fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
     }
 }
 
-fn destination(
+pub(super) fn destination(
     game: &CGame,
     region_id: i32,
     player_id: i32,
@@ -94,14 +94,14 @@ fn destination(
     }
 }
 
-fn target_identity(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
+pub(super) fn target_identity(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
     match dispatch {
         PlayerSkillDispatch::Object { target, .. } => Some(target),
         _ => None,
     }
 }
 
-fn build_path(
+pub(super) fn build_path(
     game: &CGame,
     region_id: i32,
     source_x: i32,
@@ -127,9 +127,10 @@ fn build_path(
     (destination != (source_x, source_y)).then_some((destination, impact))
 }
 
-fn send_visual(
+pub(super) fn send_visual(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     level: i32,
     fire: bool,
     target: Option<ShapeIdentity>,
@@ -137,7 +138,7 @@ fn send_visual(
     let Some(player) = game.find_player(player_id) else { return };
     let mut message = CMessage::new(EFFECT_MESSAGE);
     message.add_byte(if fire { 2 } else { 1 });
-    message.add_long(RUSH_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(level as i16);
     message.add_long(PLAYER_TYPE);
     message.add_long(player_id);
@@ -152,7 +153,7 @@ fn send_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn scaled_state_time(source_level: u8, target_level: u8, base_time: u32) -> u32 {
+pub(super) fn scaled_state_time(source_level: u8, target_level: u8, base_time: u32) -> u32 {
     if source_level.saturating_add(5) >= target_level {
         return base_time;
     }
@@ -161,7 +162,7 @@ fn scaled_state_time(source_level: u8, target_level: u8, base_time: u32) -> u32 
     (base_time as f32 * factor).round_ties_even() as u32
 }
 
-fn knockback_destination(
+pub(super) fn knockback_destination(
     game: &CGame,
     region_id: i32,
     source_x: i32,
@@ -364,12 +365,12 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let _ = game.relocate_player_shape(player_id, region_id, destination.0, destination.1);
-    send_visual(game, player_id, level, false, target_identity(dispatch));
+    send_visual(game, player_id, RUSH_SKILL_ID, level, false, target_identity(dispatch));
     if let Some(execution) = ai.rush_mut() {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
     }
 
-    send_visual(game, player_id, level, true, target_identity(dispatch));
+    send_visual(game, player_id, RUSH_SKILL_ID, level, true, target_identity(dispatch));
     if game.find_region(region_id).is_none()
         || real_distance(destination.0, destination.1, impact.0, impact.1) > maximum as i32
     {
