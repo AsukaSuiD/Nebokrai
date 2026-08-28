@@ -12,6 +12,7 @@ use super::fightdefense::{
 use super::knockoutstate::finish_blind_states_on_defense;
 use crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt;
 use crate::gameserver::appserver::ai::smartgladiator::apply_monster_hurt_response;
+use crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::{MonsterCombatProperties, MonsterKillingAttack};
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -395,6 +396,12 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 // после освобождения изменяемого заимствования цели.
             } else if target_monster_property
                 .as_ref()
+                .is_some_and(|property| property.ai == 16)
+            {
+                // Поиск AI16 читает соседние категории после освобождения
+                // изменяемого заимствования цели.
+            } else if target_monster_property
+                .as_ref()
                 .is_some_and(|property| property.ai == 1)
             {
                 monster.when_passive_gladiator_hurted_by(
@@ -431,6 +438,15 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             .is_some_and(|property| property.ai == 2)
     {
         apply_monster_hurt_response(game, region, target.id, monster_id, now_ms);
+    }
+    if current_health != 0
+        && !target_tamed
+        && target_monster_property
+            .as_ref()
+            .is_some_and(|property| property.ai == 16)
+        && let Some(property) = target_monster_property.as_ref()
+    {
+        retarget_village_bow_guard_after_hurt(game, region, target.id, property, now_ms);
     }
     if current_health != 0
         && !target_tamed

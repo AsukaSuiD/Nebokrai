@@ -30,7 +30,12 @@
 // COMPONENT_VARIANT_END: GameServer
 
 use crate::gameserver::appserver::shape::{ShapeAreaCoordinates, ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::gameserver::game::CGame;
+
+const PLAYER_TYPE: i32 = 400;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CountryGuardState {
@@ -134,4 +139,76 @@ pub(crate) fn select_country_guard_target(
         (Some(player), _) => Some(player),
         (None, pet) => pet,
     }
+}
+
+pub(crate) fn select_village_country_guard_enemy(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+    minimum_skill_distance: i32,
+) -> Option<CountryGuardTarget> {
+    let mut selected_player = None;
+    for player_id in region.player_ids_around_area(area_index) {
+        let Some(player) = game.find_player(player_id) else {
+            continue;
+        };
+        if player.server_region_id() != Some(region.id) || player.is_dead() {
+            continue;
+        }
+        let Some(candidate) = player.shape_view() else {
+            continue;
+        };
+        selected_player = consider_village_country_guard_player(
+            selected_player,
+            CountryGuardTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            minimum_skill_distance,
+            region.country,
+            player.country(),
+        );
+    }
+    let mut selected_pet = None;
+    for pet_id in region.pet_ids_around_area(area_index) {
+        let Some((candidate, master)) = region
+            .find_monster_by_id(pet_id)
+            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+            .and_then(|pet| {
+                let property =
+                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                Some((pet.shape_view(property)?, pet.master_info()))
+            })
+        else {
+            continue;
+        };
+        let live_master_country = (master.master_type == PLAYER_TYPE)
+            .then(|| game.find_player(master.master_id).map(|player| player.country()))
+            .flatten();
+        selected_pet = consider_village_country_guard_pet(
+            selected_pet,
+            CountryGuardTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            minimum_skill_distance,
+            region.country,
+            live_master_country,
+        );
+    }
+    select_country_guard_target(selected_player, selected_pet)
 }

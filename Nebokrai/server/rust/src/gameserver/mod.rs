@@ -24,6 +24,7 @@ pub(crate) mod appserver {
         pub(crate) mod smartgladiator;
         pub(crate) mod stupidarcher;
         pub(crate) mod stupidgladiator;
+        pub(crate) mod vilcouguardwithbow;
         pub(crate) mod vilcouguardwithsword;
         pub(crate) mod warattackmonster;
         pub(crate) mod wardeffendmonster;
