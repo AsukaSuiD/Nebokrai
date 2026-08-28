@@ -73,6 +73,8 @@ pub(crate) struct CPlayerAI {
     blood_loss_last_used_ms: u32,
     fatal_blow: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     fatal_blow_last_used_ms: u32,
+    thunder: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    thunder_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -152,6 +154,7 @@ impl CPlayerAI {
         self.poison_arrow = None;
         self.blood_loss = None;
         self.fatal_blow = None;
+        self.thunder = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -244,6 +247,7 @@ impl CPlayerAI {
         self.poison_arrow = None;
         self.blood_loss = None;
         self.fatal_blow = None;
+        self.thunder = None;
         true
     }
 
@@ -504,6 +508,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение смертельного удара завершено");
         }
+        if let Some(mut execution) = self.thunder.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение грома завершено");
+        }
         true
     }
 
@@ -708,6 +716,33 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_fatal_blow_used(&mut self, now_ms: u32) {
         self.fatal_blow_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn thunder(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.thunder
+    }
+
+    pub(crate) const fn begin_thunder(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.thunder = Some(state);
+    }
+
+    pub(crate) fn thunder_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.thunder.as_mut()
+    }
+
+    pub(crate) const fn thunder_last_used_ms(&self) -> u32 {
+        self.thunder_last_used_ms
+    }
+
+    pub(crate) const fn mark_thunder_used(&mut self, now_ms: u32) {
+        self.thunder_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]

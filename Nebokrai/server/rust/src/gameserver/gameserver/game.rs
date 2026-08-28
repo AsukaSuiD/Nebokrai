@@ -484,6 +484,7 @@
 
 mod bloodloss;
 mod fatalblow;
+mod thunder;
 mod periodicattack;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -811,6 +812,12 @@ use crate::gameserver::appserver::skills::fatalblow::{
 };
 use crate::gameserver::appserver::skills::fatalblowphalanx::{
     CFatalBlowPhalanx, FatalBlowPhalanxTick,
+};
+use crate::gameserver::appserver::skills::thunder::{
+    THUNDER_SKILL_ID, THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY, execute_battle_fairy_thunder,
+};
+use crate::gameserver::appserver::skills::thunderphalanx::{
+    CThunderPhalanx, ThunderPhalanxTick,
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
@@ -36763,6 +36770,20 @@ impl CGame {
                 execute_battle_fairy_fatal_blow(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
+                BattleFairySkillDispatch::SelfTarget {
+                    skill_id: THUNDER_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Point {
+                    skill_id: THUNDER_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Object {
+                    skill_id: THUNDER_SKILL_ID,
+                    ..
+                }
+            ) {
+                execute_battle_fairy_thunder(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
                 BattleFairySkillDispatch::Object {
                     skill_id: POISON_ARROW_SKILL_ID,
                     target: ShapeIdentity {
@@ -39590,6 +39611,9 @@ impl CGame {
             SummonedSkillShape::FatalBlow(phalanx) => {
                 self.calculate_fatal_blow_attack(phalanx)
             }
+            SummonedSkillShape::Thunder(phalanx) => {
+                self.calculate_thunder_attack(phalanx, target_level)
+            }
         }
     }
 
@@ -39959,6 +39983,14 @@ impl CGame {
                     }
                     FatalBlowPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::Thunder(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    ThunderPhalanxTick::Pending => Some(None),
+                    ThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((
+                        phalanx.shape().identity(),
+                        sampled_at_ms,
+                    ))),
+                    ThunderPhalanxTick::Expired => None,
+                },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
@@ -39978,6 +40010,31 @@ impl CGame {
                     tick = None;
                 }
             }
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::Thunder(thunder),
+        ) = (tick, &phalanx)
+        {
+            for target in self.thunder_targets(region_id, thunder) {
+                match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        runtime,
+                    ),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        sampled_at_ms,
+                        runtime,
+                    ),
+                    _ => {}
+                }
+            }
+            return true;
         }
         match tick {
             Some(None) => return true,
