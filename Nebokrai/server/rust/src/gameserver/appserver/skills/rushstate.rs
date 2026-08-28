@@ -1,99 +1,153 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние оглушения рывком `CRushState` (`0x73`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/rushstate.cpp`. Состояние запрещает движение и бой,
+//! использует строгую беззнаковую проверку срока и публикует точные
+//! `0xBFE03/0xBFE04`. Игрок и монстр хранят один типизированный экземпляр в
+//! `CanonicalStateStorage`; пространственный владелец остаётся у `CGame` и
+//! `CServerRegion`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.cpp
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CRushState::CRushState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.cpp:24
-// RVA: 0x002077E0
-// ADDRESS: 006077e0
-// PROTOTYPE: undefined __thiscall CRushState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const RUSH_STATE_ID: u32 = 0x73;
 
-// ============================================================================
-// FUNCTION: CRushState::~CRushState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.cpp:33
-// RVA: 0x00207850
-// ADDRESS: 00607850
-// PROTOTYPE: void __thiscall ~CRushState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RushState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+}
 
-// ============================================================================
-// FUNCTION: CRushState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.cpp:57
-// RVA: 0x00207860
-// ADDRESS: 00607860
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl RushState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
+        Self { started_at_ms, keep_time_ms }
+    }
 
-// ============================================================================
-// FUNCTION: CRushState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.cpp:73
-// RVA: 0x00207940
-// ADDRESS: 00607940
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn skill_id(self) -> u32 { RUSH_STATE_ID }
 
-// ============================================================================
-// FUNCTION: CRushState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.cpp:44
-// RVA: 0x00207A40
-// ADDRESS: 00607a40
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+    }
 
-// ============================================================================
-// FUNCTION: CRushStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\rushstate.cpp:140
-// RVA: 0x00207B00
-// ADDRESS: 00607b00
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
+        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
+        if elapsed >= self.keep_time_ms {
+            0
+        } else {
+            self.keep_time_ms.wrapping_sub(elapsed) as i32
+        }
+    }
+}
 
+fn state_message(identity: ShapeIdentity, state: RushState, begin: bool, now_ms: u32) -> CMessage {
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(0);
+    }
+    message
+}
 
+pub(crate) fn replace_player_rush_state(
+    game: &mut CGame,
+    player_id: i32,
+    state: RushState,
+    now_ms: u32,
+) -> bool {
+    let installed = game.find_player_mut(player_id).and_then(|player| {
+        let context = (
+            player.server_region_id()?,
+            player.shape().identity(),
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+        );
+        let old = player.replace_rush_state(state);
+        if old.is_some() {
+            player.set_skill_moveable(true);
+            player.set_skill_fightable(true);
+        }
+        player.set_skill_moveable(false);
+        player.set_skill_fightable(false);
+        Some((old, context))
+    });
+    let Some((old, (region_id, identity, tile_x, tile_y))) = installed else {
+        return false;
+    };
+    if let Some(old) = old {
+        let message = state_message(identity, old, false, now_ms);
+        let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    }
+    let message = state_message(identity, state, true, now_ms);
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    true
+}
 
+pub(crate) fn replace_monster_rush_state(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    state: RushState,
+    now_ms: u32,
+) -> bool {
+    let installed = region.find_monster_by_id_mut(monster_id).map(|monster| {
+        let shape = monster.move_shape().shape().clone();
+        let old = monster.move_shape_mut().replace_rush_state(state);
+        if old.is_some() {
+            monster.move_shape_mut().set_moveable(true);
+            monster.move_shape_mut().set_fightable(true);
+        }
+        monster.move_shape_mut().set_moveable(false);
+        monster.move_shape_mut().set_fightable(false);
+        (old, shape)
+    });
+    let Some((old, shape)) = installed else { return false };
+    if let Some(old) = old {
+        let message = state_message(shape.identity(), old, false, now_ms);
+        let _ = game.send_game_shape_around(region, &shape, None, &message);
+    }
+    let message = state_message(shape.identity(), state, true, now_ms);
+    let _ = game.send_game_shape_around(region, &shape, None, &message);
+    true
+}
 
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn expire_player_rush_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    let finished = game.find_player_mut(player_id).and_then(|player| {
+        let state = player.take_expired_rush_state(now_ms)?;
+        player.set_skill_moveable(true);
+        player.set_skill_fightable(true);
+        Some((
+            state,
+            player.server_region_id()?,
+            player.shape().identity(),
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+        ))
+    });
+    let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
+    let message = state_message(identity, state, false, now_ms);
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    true
+}
+
+pub(crate) fn expire_monster_rush_state(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    now_ms: u32,
+) -> bool {
+    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let state = monster.move_shape_mut().take_expired_rush_state(now_ms)?;
+        monster.move_shape_mut().set_moveable(true);
+        monster.move_shape_mut().set_fightable(true);
+        Some((state, monster.move_shape().shape().clone()))
+    });
+    let Some((state, shape)) = finished else { return false };
+    let message = state_message(shape.identity(), state, false, now_ms);
+    let _ = game.send_game_shape_around(region, &shape, None, &message);
+    true
+}

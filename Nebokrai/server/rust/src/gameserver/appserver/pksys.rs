@@ -1,12 +1,12 @@
 //! PK-policy исторического GameServer.
 //!
-//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `server/gameserver/appserver/pksys.cpp`. Достигнутый `OnFirstSkill`
-//! вызывается реальным `skillmessage 0x90001` перед постановкой навыка с
-//! целью-объектом в `CPlayerAI`: сохраняет точные проверки цели, безопасности и войн
-//! фракций, правило стороны битвы богов либо страны, переход преступного
-//! состояния и аудит World
-//! `0x6020A`. Проход смерти также использует перенесённые `GetDiedLostExp`,
+//! вызывается обработчиком `skillmessage 0x90001` перед постановкой навыка с
+//! целью-объектом в `CPlayerAI`, а `OnFirstAttack` — владельцем контактного навыка после
+//! подтверждённой цели. Оба пути сохраняют точные проверки безопасности и
+//! войн фракций, различающееся правило страны, переход преступного состояния
+//! и аудит World `0x6020A`. Проход смерти также использует перенесённые `GetDiedLostExp`,
 //! `GetDiedLostGoods` и `OnKill`: все три читают один текущий снимок настроек,
 //! игрока и региона, а вызывающая сторона сохраняет эффекты контейнера и сети.
 
@@ -30,7 +30,20 @@ pub(crate) struct FirstSkillPkFacts {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FirstSkillPkDisposition {
+pub(crate) struct FirstAttackPkFacts {
+    pub(crate) victim_is_badman: bool,
+    pub(crate) security: RegionSecurity,
+    pub(crate) city_war_enemies: bool,
+    pub(crate) faction_war_enemies: bool,
+    pub(crate) gods_battle_region: bool,
+    pub(crate) same_gods_battle_faction: bool,
+    pub(crate) same_country: bool,
+    pub(crate) attacker_country_identity: u8,
+    pub(crate) attacker_kill_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FirstContactPkDisposition {
     VictimAlreadyBadman,
     ProtectedSecurity,
     CityWarEnemies,
@@ -83,21 +96,42 @@ pub(crate) struct KillPkFacts {
 }
 
 impl CPKSys {
-    pub(crate) fn on_first_skill(facts: FirstSkillPkFacts) -> FirstSkillPkDisposition {
+    pub(crate) fn on_first_attack(facts: FirstAttackPkFacts) -> FirstContactPkDisposition {
         if facts.victim_is_badman {
-            FirstSkillPkDisposition::VictimAlreadyBadman
+            FirstContactPkDisposition::VictimAlreadyBadman
         } else if facts.security != RegionSecurity::FREE {
-            FirstSkillPkDisposition::ProtectedSecurity
+            FirstContactPkDisposition::ProtectedSecurity
         } else if facts.city_war_enemies {
-            FirstSkillPkDisposition::CityWarEnemies
+            FirstContactPkDisposition::CityWarEnemies
         } else if facts.faction_war_enemies {
-            FirstSkillPkDisposition::FactionWarEnemies
+            FirstContactPkDisposition::FactionWarEnemies
+        } else if facts.gods_battle_region && facts.same_gods_battle_faction {
+            FirstContactPkDisposition::EnterCriminalState
+        } else if !facts.gods_battle_region
+            && facts.same_country
+            && (facts.attacker_country_identity != 7 || facts.attacker_kill_count > 10)
+        {
+            FirstContactPkDisposition::EnterCriminalState
+        } else {
+            FirstContactPkDisposition::AllowedCombat
+        }
+    }
+
+    pub(crate) fn on_first_skill(facts: FirstSkillPkFacts) -> FirstContactPkDisposition {
+        if facts.victim_is_badman {
+            FirstContactPkDisposition::VictimAlreadyBadman
+        } else if facts.security != RegionSecurity::FREE {
+            FirstContactPkDisposition::ProtectedSecurity
+        } else if facts.city_war_enemies {
+            FirstContactPkDisposition::CityWarEnemies
+        } else if facts.faction_war_enemies {
+            FirstContactPkDisposition::FactionWarEnemies
         } else if (facts.gods_battle_region && facts.same_gods_battle_faction)
             || (!facts.gods_battle_region && facts.same_country)
         {
-            FirstSkillPkDisposition::EnterCriminalState
+            FirstContactPkDisposition::EnterCriminalState
         } else {
-            FirstSkillPkDisposition::AllowedCombat
+            FirstContactPkDisposition::AllowedCombat
         }
     }
 
@@ -265,20 +299,6 @@ impl CPKSys {
 // RVA: 0x0001E700
 // ADDRESS: 0041e700
 // PROTOTYPE: void __thiscall ReportMurderer(CPlayer * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPKSys::OnFirstAttack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\pksys.cpp:51
-// RVA: 0x0001E7C0
-// ADDRESS: 0041e7c0
-// PROTOTYPE: void __thiscall OnFirstAttack(CPlayer * param_1, CPlayer * param_2, CServerRegion * param_3, eSecurity param_4)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

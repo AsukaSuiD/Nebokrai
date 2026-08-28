@@ -23,6 +23,8 @@
 //! скрытой устаревшей двоичной записи.
 //! `PillarState` хранится здесь же: проверки рывков, строгий таймер и поздний
 //! коэффициент защиты читают один экземпляр без параллельной сырой записи.
+//! Оглушение `RushState` также имеет здесь единственный срок и одновременно
+//! управляет запретами движения и боя для игрока либо регионального монстра.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
 //! остаются у этого владельца.
@@ -60,6 +62,7 @@ use crate::gameserver::appserver::skills::heartenstate::HeartenState;
 use crate::gameserver::appserver::skills::healstate::HealState;
 use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
+use crate::gameserver::appserver::skills::rushstate::RushState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
@@ -511,6 +514,7 @@ pub(crate) struct CanonicalStateStorage {
     weak_state_order: Option<u32>,
     god_bless_state_order: Option<u32>,
     knock_out_state: Option<KnockOutState>,
+    rush_state: Option<RushState>,
     pillar_state: Option<PillarState>,
     knight_cut_state: Option<KnightCutState>,
     blind_state_order: IndexSet<u32>,
@@ -735,6 +739,7 @@ impl CMoveShape {
         self.weak_state_order = None;
         self.god_bless_state_order = None;
         self.knock_out_state = None;
+        self.rush_state = None;
         self.pillar_state = None;
         self.knight_cut_state = None;
         self.blind_state_order.clear();
@@ -782,6 +787,7 @@ impl CMoveShape {
             || self.state_storage.god_bless_state.is_some()
             || self.state_storage.soul_collect_state.is_some()
             || self.state_storage.knock_out_state.is_some()
+            || self.state_storage.rush_state.is_some()
             || self.state_storage.pillar_state.is_some()
             || self.state_storage.knight_cut_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
@@ -960,6 +966,10 @@ impl CMoveShape {
             self.knock_out_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let rush = usize::from(
+            self.rush_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let pillar = usize::from(
             self.pillar_state.is_some_and(|state| state.skill_id() as i32 == state_id),
         );
@@ -1008,6 +1018,7 @@ impl CMoveShape {
             .saturating_add(god_bless)
             .saturating_add(soul_collect)
             .saturating_add(knock_out)
+            .saturating_add(rush)
             .saturating_add(pillar)
             .saturating_add(knight_cut)
             .saturating_add(blood_loss)
@@ -1090,6 +1101,7 @@ impl CMoveShape {
             || self
                 .knock_out_state
                 .is_some_and(|state| state.skill_id() == state_id)
+            || self.rush_state.is_some_and(|state| state.skill_id() == state_id)
             || self.pillar_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .knight_cut_state
@@ -1647,6 +1659,16 @@ impl CMoveShape {
     }
 
     pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.pillar_state }
+
+    pub(crate) fn replace_rush_state(&mut self, state: RushState) -> Option<RushState> {
+        self.rush_state.replace(state)
+    }
+
+    pub(crate) fn take_expired_rush_state(&mut self, now_ms: u32) -> Option<RushState> {
+        self.rush_state.filter(|state| state.expired(now_ms))?;
+        self.rush_state.take()
+    }
+
     pub(crate) fn replace_pillar_state(&mut self, state: PillarState) -> Option<PillarState> {
         self.pillar_state.replace(state)
     }

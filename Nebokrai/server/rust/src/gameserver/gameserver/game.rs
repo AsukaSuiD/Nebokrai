@@ -494,6 +494,7 @@ mod thunderblow;
 mod thunderslash;
 mod thunderblow2;
 mod mosou;
+mod rush;
 mod seal;
 mod thunder;
 mod snowstorm;
@@ -658,7 +659,7 @@ use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
 };
 use crate::gameserver::appserver::organizingsystem::villagewarsys::CVillageWarSys;
 use crate::gameserver::appserver::pksys::{
-    CPKSys, DiedLostGoodsDisposition, FirstSkillPkDisposition, FirstSkillPkFacts,
+    CPKSys, DiedLostGoodsDisposition, FirstAttackPkFacts, FirstContactPkDisposition, FirstSkillPkFacts,
     KillPkDisposition, KillPkFacts,
 };
 use crate::gameserver::appserver::player::{
@@ -801,6 +802,10 @@ use crate::gameserver::appserver::skills::thunderslashphalanx::{
 };
 use crate::gameserver::appserver::skills::pillar::{execute_player_pillar, is_pillar_dispatch};
 use crate::gameserver::appserver::skills::pillarstate::expire_player_pillar_state;
+use crate::gameserver::appserver::skills::rush::{execute_player_rush, is_rush_dispatch};
+use crate::gameserver::appserver::skills::rushstate::{
+    expire_monster_rush_state, expire_player_rush_state,
+};
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
 };
@@ -26307,6 +26312,7 @@ impl CGame {
             return self.find_player(player_id).map(|_| ());
         };
         let _ = expire_player_pillar_state(self, player_id, now_ms);
+        let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
@@ -33569,6 +33575,7 @@ impl CGame {
                             || player.player_ai().little_flash().is_some()
                             || player.player_ai().thunder_slash().is_some()
                             || player.player_ai().pillar().is_some()
+                            || player.player_ai().rush().is_some()
                             || player.player_ai().knock_out().is_some())
                             && changes_command;
                         if interrupted_delayed_skill {
@@ -33644,6 +33651,114 @@ impl CGame {
         }
     }
 
+    /// Точный `CPKSys::OnFirstAttack` для уже достигнутых контактных навыков.
+    /// В отличие от `OnFirstSkill`, участник страны с identity `7` становится
+    /// преступником только после десяти убийств; World-аудит и packet перехода
+    /// остаются в том же порядке.
+    pub(crate) fn player_on_first_attack<Context: GameClockContext>(
+        &mut self,
+        attacker_id: i32,
+        victim_id: i32,
+        region_id: Option<i32>,
+        context: &mut Context,
+    ) -> Option<()> {
+        let region_id = region_id?;
+        let (
+            victim_is_badman, security, city_war_enemies, faction_war_enemies,
+            gods_battle_region, same_gods_battle_faction, same_country,
+            attacker_kill_count, victim_level, victim_x, victim_y,
+        ) = {
+            let attacker = self.find_player(attacker_id)?;
+            let victim = self.find_player(victim_id)?;
+            if attacker.server_region_id() != Some(region_id)
+                || victim.server_region_id() != Some(region_id)
+            {
+                return None;
+            }
+            let victim_x = victim.shape().get_tile_x().ok()?;
+            let victim_y = victim.shape().get_tile_y().ok()?;
+            let attacker_x = attacker.shape().get_tile_x().ok()?;
+            let attacker_y = attacker.shape().get_tile_y().ok()?;
+            let owner = self.find_region(region_id)?;
+            let security = owner.get_security(attacker_x, attacker_y).ok()?;
+            let attacker_faction = attacker.faction_id();
+            let victim_faction = victim.faction_id();
+            (
+                victim.is_badman(self.globe_setup.pk_count_per_kill()),
+                security,
+                attacker_faction > 0 && victim_faction > 0
+                    && (attacker.is_city_war_enemy_faction_member(victim_faction)
+                        || victim.is_city_war_enemy_faction_member(attacker_faction)),
+                attacker_faction > 0 && victim_faction > 0
+                    && (attacker.is_enemy_faction_member(victim_faction)
+                        || victim.is_enemy_faction_member(attacker_faction)),
+                owner.is_gods_battle(),
+                attacker.gods_battle_faction() == victim.gods_battle_faction(),
+                attacker.country() == victim.country(),
+                attacker.kill_count(),
+                victim.level(),
+                victim_x,
+                victim_y,
+            )
+        };
+        let attacker_country_identity = self.player_country_identity(attacker_id);
+        let disposition = CPKSys::on_first_attack(FirstAttackPkFacts {
+            victim_is_badman,
+            security,
+            city_war_enemies,
+            faction_war_enemies,
+            gods_battle_region,
+            same_gods_battle_faction,
+            same_country,
+            attacker_country_identity,
+            attacker_kill_count,
+        });
+        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
+        let mut criminal_timestamp_refreshed = false;
+        let mut criminal_state_started = false;
+        let mut criminal_delivery = None;
+        if disposition == FirstContactPkDisposition::EnterCriminalState {
+            if let Some(started) = self.find_player_mut(attacker_id)?
+                .enter_criminal_state(pk_count_per_kill, || context.now_milliseconds())
+            {
+                criminal_timestamp_refreshed = true;
+                criminal_state_started = started;
+                if started {
+                    let mut message = CMessage::new(0x000b_f60e);
+                    message.add_long(attacker_id);
+                    message.add_byte(1);
+                    criminal_delivery = self.send_player_shape_around(attacker_id, None, &message);
+                }
+            }
+        }
+        let eligible = matches!(
+            disposition,
+            FirstContactPkDisposition::AllowedCombat | FirstContactPkDisposition::EnterCriminalState
+        );
+        let world_log_delivery = (eligible && self.log_system.player_killer_log_enabled()).then(|| {
+            let mut message = CMessage::new(0x0006_020a);
+            message.add_byte(0);
+            message.add_long(victim_id);
+            message.add_long(attacker_id);
+            message.add_ulong(u32::from(victim_level));
+            message.add_long(victim_x);
+            message.add_long(victim_y);
+            message.send(self, false)
+        });
+        tracing::debug!(
+            attacker_id,
+            victim_id,
+            region_id,
+            ?disposition,
+            criminal_timestamp_refreshed,
+            criminal_state_started,
+            ?criminal_delivery,
+            ?world_log_delivery,
+            "обработан первый контактный удар по игроку"
+        );
+        Some(())
+    }
+
     /// Reached `CPKSys::OnFirstSkill` caller: вызывается AI execution owner-ом
     /// только после подтверждённого первого контакта object-target skill.
     pub(crate) fn player_on_first_skill<Context: GameClockContext>(
@@ -33691,7 +33806,7 @@ impl CGame {
         let mut criminal_timestamp_refreshed = false;
         let mut criminal_state_started = false;
         let mut criminal_delivery = None;
-        if disposition == FirstSkillPkDisposition::EnterCriminalState {
+        if disposition == FirstContactPkDisposition::EnterCriminalState {
             if let Some(started) = self
                 .find_player_mut(attacker_id)?
                 .enter_criminal_state(pk_count_per_kill, || context.now_milliseconds())
@@ -33708,7 +33823,7 @@ impl CGame {
         }
         let eligible = matches!(
             disposition,
-            FirstSkillPkDisposition::AllowedCombat | FirstSkillPkDisposition::EnterCriminalState
+            FirstContactPkDisposition::AllowedCombat | FirstContactPkDisposition::EnterCriminalState
         );
         let world_log_delivery =
             (eligible && self.log_system.player_killer_log_enabled()).then(|| {
@@ -34047,6 +34162,7 @@ impl CGame {
                 || player.player_ai().little_flash().is_some()
                 || player.player_ai().thunder_slash().is_some()
                 || player.player_ai().pillar().is_some()
+                || player.player_ai().rush().is_some()
                 || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -36629,6 +36745,7 @@ impl CGame {
             let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
             let concrete_thunder_slash = is_thunder_slash_dispatch(dispatch);
             let concrete_pillar = is_pillar_dispatch(dispatch);
+            let concrete_rush = is_rush_dispatch(dispatch);
             let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
             let concrete_mosou = is_mosou_dispatch(dispatch);
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
@@ -36776,6 +36893,8 @@ impl CGame {
                 execute_player_thunder_slash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_pillar {
                 execute_player_pillar(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_rush {
+                execute_player_rush(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow_2 {
                 execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mosou {
@@ -41324,6 +41443,12 @@ impl CGame {
                 let _ = self.finish_monster_weak_outside(region_id, monster_id);
                 let _ = self.finish_monster_god_bless(region_id, monster_id, now_ms);
                 if let Some(mut owner) = self.take_region_owner(region_id) {
+                    let _ = expire_monster_rush_state(
+                        self,
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
                     let _ = expire_monster_blind_states(
                         self,
                         owner.base_mut(),
