@@ -13,6 +13,8 @@
 //! игровое поведение читает типизированные состояния. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
+//! Паутина и оглушение дополнительно сохраняют общий порядок вставки для
+//! завершения через унаследованное защитное действие `CBlindState`.
 //! Little-endian доступ к legacy codec выполняют общие `LegacyReader` и
 //! `LegacyWriter`; размещение записей и их смещения остаются у этого owner-а.
 //!
@@ -51,6 +53,7 @@ use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
+use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::promotionstate::PromotionState;
@@ -480,6 +483,8 @@ pub(crate) struct CanonicalStateStorage {
     poison_arrow_state: Option<PoisonArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
     spider_web_state: Option<SpiderWebState>,
+    knock_out_state: Option<KnockOutState>,
+    blind_state_order: IndexSet<u32>,
     blood_loss_state: Option<BloodLossState>,
     swordship_states: Vec<SwordshipState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
@@ -676,6 +681,8 @@ impl CMoveShape {
         self.poison_arrow_state = None;
         self.spider_poison_state = None;
         self.spider_web_state = None;
+        self.knock_out_state = None;
+        self.blind_state_order.clear();
         self.blood_loss_state = None;
         self.battle_fairy_attribute_states.clear();
         self.periodic_attack_order.clear();
@@ -711,6 +718,7 @@ impl CMoveShape {
             || self.state_storage.poison_arrow_state.is_some()
             || self.state_storage.spider_poison_state.is_some()
             || self.state_storage.spider_web_state.is_some()
+            || self.state_storage.knock_out_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
@@ -846,6 +854,10 @@ impl CMoveShape {
             self.spider_web_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let knock_out = usize::from(
+            self.knock_out_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let blood_loss = usize::from(
             self.blood_loss_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -877,6 +889,7 @@ impl CMoveShape {
             .saturating_add(poison_arrow)
             .saturating_add(spider_poison)
             .saturating_add(spider_web)
+            .saturating_add(knock_out)
             .saturating_add(blood_loss)
             .saturating_add(battle_fairy_attributes)
             .saturating_add(shields)
@@ -941,6 +954,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .spider_web_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .knock_out_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .blood_loss_state
@@ -1333,6 +1349,7 @@ impl CMoveShape {
         &mut self,
         state: SpiderWebState,
     ) -> Option<SpiderWebState> {
+        self.blind_state_order.insert(state.skill_id());
         self.spider_web_state.replace(state)
     }
 
@@ -1340,12 +1357,42 @@ impl CMoveShape {
         &mut self,
         now_ms: u32,
     ) -> Option<SpiderWebState> {
-        self.spider_web_state.filter(|state| state.expired(now_ms))?;
-        self.spider_web_state.take()
+        let state = self.spider_web_state.filter(|state| state.expired(now_ms))?;
+        self.spider_web_state = None;
+        self.blind_state_order.shift_remove(&state.skill_id());
+        Some(state)
     }
 
     pub(crate) fn take_spider_web_state(&mut self) -> Option<SpiderWebState> {
-        self.spider_web_state.take()
+        let state = self.spider_web_state.take()?;
+        self.blind_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn replace_knock_out_state(&mut self, state: KnockOutState) -> Option<KnockOutState> {
+        self.blind_state_order.insert(state.skill_id());
+        self.knock_out_state.replace(state)
+    }
+
+    pub(crate) fn take_expired_knock_out_state(&mut self, now_ms: u32) -> Option<KnockOutState> {
+        let state = self.knock_out_state.filter(|state| state.expired(now_ms))?;
+        self.knock_out_state = None;
+        self.blind_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {
+        let state = self.knock_out_state.take()?;
+        self.blind_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn blind_state_order(&self) -> [Option<u32>; 2] {
+        let mut order = [None; 2];
+        for (slot, state_id) in order.iter_mut().zip(self.blind_state_order.iter().copied()) {
+            *slot = Some(state_id);
+        }
+        order
     }
 
     pub(crate) fn replace_blood_loss_state(

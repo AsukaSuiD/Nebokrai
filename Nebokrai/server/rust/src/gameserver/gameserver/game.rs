@@ -818,6 +818,11 @@ use crate::gameserver::appserver::skills::immediatestate::{
     execute_player_immediate_state, is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::knockoutruntime::{execute_player_knock_out, KNOCK_OUT_SKILL_ID};
+use crate::gameserver::appserver::skills::knockoutstate::{
+    expire_monster_blind_states, expire_player_blind_states,
+    finish_blind_states_on_defense, finish_player_blind_states_on_defense,
+};
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
@@ -848,10 +853,6 @@ use crate::gameserver::appserver::skills::promotion::{
 use crate::gameserver::appserver::skills::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::skills::spiderpoisonstate::{
     SpiderPoisonStateTick, send_spider_poison_state_visual,
-};
-use crate::gameserver::appserver::skills::spiderwebstate::{
-    expire_monster_spider_web_state, expire_player_spider_web_state,
-    finish_player_spider_web_state_on_defense, finish_spider_web_state_on_defense,
 };
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
@@ -26186,7 +26187,7 @@ impl CGame {
         let Some(now_ms) = sampled_at_ms else {
             return self.find_player(player_id).map(|_| ());
         };
-        let _ = expire_player_spider_web_state(self, player_id, now_ms);
+        let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let expired_cure = self
             .find_player_mut(player_id)
@@ -33338,7 +33339,8 @@ impl CGame {
                     let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
                         || player.player_ai().archery().is_some()
                         || player.player_ai().agility_family().is_some()
-                        || player.player_ai().callosity().is_some())
+                        || player.player_ai().callosity().is_some()
+                        || player.player_ai().knock_out().is_some())
                         && player.player_ai().next_player_skill() != Some(dispatch);
                     if interrupted_delayed_skill {
                         player.set_skill_moveable(true);
@@ -33777,7 +33779,8 @@ impl CGame {
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
                 || player.player_ai().agility_family().is_some()
-                || player.player_ai().callosity().is_some();
+                || player.player_ai().callosity().is_some()
+                || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
                 if interrupted_delayed_skill {
@@ -35702,9 +35705,7 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                 }
                 if current_health != 0 {
-                    let _ = finish_player_spider_web_state_on_defense(
-                        self, target_id, now_ms,
-                    );
+                    let _ = finish_player_blind_states_on_defense(self, target_id, now_ms);
                 }
                 if current_health == 0 {
                     let mut died = CMessage::new(0x000b_f60b);
@@ -35976,7 +35977,7 @@ impl CGame {
                 }
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                let _ = finish_spider_web_state_on_defense(
+                let _ = finish_blind_states_on_defense(
                     self,
                     owner.base_mut(),
                     ShapeIdentity {
@@ -36369,6 +36370,13 @@ impl CGame {
                     skill_id == MONSTER_TAMING_SKILL_ID
                 }
             };
+            let concrete_knock_out = matches!(
+                dispatch,
+                PlayerSkillDispatch::Object {
+                    skill_id: KNOCK_OUT_SKILL_ID,
+                    target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+                }
+            );
             let concrete_self_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36418,6 +36426,8 @@ impl CGame {
                 execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_monster_taming {
                 execute_player_monster_taming(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_knock_out {
+                execute_player_knock_out(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_self_shield {
                 execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
@@ -39423,7 +39433,7 @@ impl CGame {
                 .set_action(if current_health == 0 { 6 } else { 5 });
         }
         if current_health != 0 {
-            let _ = finish_player_spider_web_state_on_defense(self, target_id, 0);
+            let _ = finish_player_blind_states_on_defense(self, target_id, 0);
         }
         if current_health == 0 {
             let mut died = CMessage::new(0x000b_f60b);
@@ -39572,7 +39582,7 @@ impl CGame {
                 }
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                let _ = finish_spider_web_state_on_defense(
+                let _ = finish_blind_states_on_defense(
                     self,
                     owner.base_mut(),
                     ShapeIdentity {
@@ -40529,7 +40539,7 @@ impl CGame {
                     continue;
                 }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
-                    let _ = expire_monster_spider_web_state(
+                    let _ = expire_monster_blind_states(
                         self,
                         owner.base_mut(),
                         monster_id,

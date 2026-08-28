@@ -173,6 +173,9 @@ const LOSS_EXP_WAR_OFFSET: usize = 0x0A8;
 const MINIMUM_PLAYER_HIT_OFFSET: usize = 0x084;
 const MAXIMUM_PLAYER_HIT_OFFSET: usize = 0x090;
 const MINIMUM_MONSTER_HIT_OFFSET: usize = 0x07C;
+const BASE_HIT_OFFSET: usize = 0x070;
+const BASE_ATTACK_HIT_MAGNIFY_OFFSET: usize = 0x074;
+const HIT_LEVEL_RATE_OFFSET: usize = 0x078;
 const MAXIMUM_MONSTER_HIT_OFFSET: usize = 0x080;
 const CRITICAL_RATE_OFFSET: usize = 0x09C;
 const PVP_DAMAGE_FACTOR_OFFSET: usize = 0x730;
@@ -275,6 +278,16 @@ impl GlobeSetupSnapshot {
         (
             self.read_i32(MINIMUM_MONSTER_HIT_OFFSET),
             self.read_i32(MAXIMUM_MONSTER_HIT_OFFSET),
+        )
+    }
+
+    /// Параметры исходной проверки попадания конкретных навыков состояния:
+    /// `lBaseHit`, `fBaseAtcHitcMagnify`, `fHitLvRate` из `tagSetup`.
+    pub(crate) fn base_attack_hit_formula(&self) -> (i32, f32, f32) {
+        (
+            self.read_i32(BASE_HIT_OFFSET),
+            self.read_f32(BASE_ATTACK_HIT_MAGNIFY_OFFSET),
+            self.read_f32(HIT_LEVEL_RATE_OFFSET),
         )
     }
 

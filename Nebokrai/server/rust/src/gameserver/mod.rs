@@ -153,6 +153,9 @@ pub(crate) mod appserver {
         pub(crate) mod pofa;
         pub(crate) mod pofastate;
         pub(crate) mod naturalstate;
+        pub(crate) mod knockout;
+        pub(crate) mod knockoutruntime;
+        pub(crate) mod knockoutstate;
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;
         pub(crate) mod realmappellation;

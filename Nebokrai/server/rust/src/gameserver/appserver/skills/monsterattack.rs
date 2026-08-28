@@ -9,7 +9,7 @@
 use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
 };
-use super::spiderwebstate::finish_spider_web_state_on_defense;
+use super::knockoutstate::finish_blind_states_on_defense;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::{MonsterCombatProperties, MonsterKillingAttack};
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -392,7 +392,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         }
     }
     if current_health != 0 {
-        let _ = finish_spider_web_state_on_defense(game, region, target, now_ms);
+        let _ = finish_blind_states_on_defense(game, region, target, now_ms);
     }
     if current_health == 0 {
         let mut died = CMessage::new(0x000b_f60b);

@@ -153,7 +153,7 @@ impl CGame {
         master.permitted_to_kill_criminal != 0 || !victim_badman
     }
 
-    pub(super) fn apply_periodic_state_attack_to_player<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn apply_periodic_state_attack_to_player<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -226,9 +226,7 @@ impl CGame {
                 .set_action(if current_health == 0 { 6 } else { 5 });
         }
         if current_health != 0 {
-            let _ = super::finish_player_spider_web_state_on_defense(
-                self, target_id, 0,
-            );
+            let _ = super::finish_player_blind_states_on_defense(self, target_id, 0);
         }
         if current_health == 0 {
             let mut died = CMessage::new(0x000b_f60b);
@@ -456,7 +454,7 @@ impl CGame {
             || owner.master_id == master.master_id
     }
 
-    pub(super) fn apply_periodic_state_attack_to_monster<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn apply_periodic_state_attack_to_monster<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -573,7 +571,7 @@ impl CGame {
                 }
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
-                let _ = super::finish_spider_web_state_on_defense(
+                let _ = super::finish_blind_states_on_defense(
                     self,
                     owner.base_mut(),
                     ShapeIdentity {

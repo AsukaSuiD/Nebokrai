@@ -4430,6 +4430,30 @@ impl CPlayer {
         self.move_shape.take_spider_web_state()
     }
 
+    pub(crate) fn replace_knock_out_state(
+        &mut self,
+        state: super::skills::knockoutstate::KnockOutState,
+    ) -> Option<super::skills::knockoutstate::KnockOutState> {
+        self.move_shape.replace_knock_out_state(state)
+    }
+
+    pub(crate) fn take_expired_knock_out_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::knockoutstate::KnockOutState> {
+        self.move_shape.take_expired_knock_out_state(now_ms)
+    }
+
+    pub(crate) fn take_knock_out_state(
+        &mut self,
+    ) -> Option<super::skills::knockoutstate::KnockOutState> {
+        self.move_shape.take_knock_out_state()
+    }
+
+    pub(crate) fn blind_state_order(&self) -> [Option<u32>; 2] {
+        self.move_shape.blind_state_order()
+    }
+
     pub(crate) fn replace_blood_loss_state(
         &mut self,
         state: super::skills::bloodlossstate::BloodLossState,

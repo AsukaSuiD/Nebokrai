@@ -11,6 +11,7 @@
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
 //! питомцами, усиление, периодическое лечение, машинный и мана-щит,
+//! оглушение,
 //! атака боевой феи и её призываемые области
 //! и приручение монстров сохраняют незавершённое состояние между проходами ИИ.
 //! Хвост
@@ -95,6 +96,8 @@ pub(crate) struct CPlayerAI {
     pets_control_last_used_ms: u32,
     monster_taming: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     monster_taming_last_used_ms: u32,
+    knock_out: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    knock_out_last_used_ms: u32,
     machine_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     machine_shield_last_used_ms: u32,
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -158,6 +161,7 @@ impl CPlayerAI {
         self.heal_family = [None; 4];
         self.pets_control = None;
         self.monster_taming = None;
+        self.knock_out = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -256,6 +260,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение приручения монстра завершено");
         }
+        if let Some(mut execution) = self.knock_out.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение оглушения завершено");
+        }
         if let Some(mut execution) = self.machine_shield.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение машинного щита завершено");
@@ -308,6 +316,7 @@ impl CPlayerAI {
         self.heal_family = [None; 4];
         self.pets_control = None;
         self.monster_taming = None;
+        self.knock_out = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -573,6 +582,24 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_monster_taming_used(&mut self, now_ms: u32) {
         self.monster_taming_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn knock_out(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.knock_out
+    }
+
+    pub(crate) const fn begin_knock_out(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) {
+        self.knock_out = Some(state);
+    }
+
+    pub(crate) fn knock_out_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.knock_out.as_mut()
+    }
+
+    pub(crate) const fn knock_out_last_used_ms(&self) -> u32 { self.knock_out_last_used_ms }
+
+    pub(crate) const fn mark_knock_out_used(&mut self, now_ms: u32) {
+        self.knock_out_last_used_ms = now_ms;
     }
 
     pub(crate) const fn machine_shield(
