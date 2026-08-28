@@ -64,9 +64,9 @@ use super::monsterrangeattack::{
     prepare_owned_monster_range_cast,
 };
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
-use super::skeletonarchery::{
-    SKELETON_ARCHERY_SKILL_ID, SkeletonArcheryDispatch, prepare_owned_skeleton_archery,
-};
+use super::chuckstone::CHUCK_STONE_SKILL_ID;
+use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
+use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
 use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
 use super::spiderweb::{SPIDER_WEB_SKILL_ID, execute_owned_spider_web};
@@ -107,6 +107,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | MONSTER_RANGE_ATTACK_SKILL_ID
             | MONSTER_THORN_SKILL_ID
             | SKELETON_ARCHERY_SKILL_ID
+            | CHUCK_STONE_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
@@ -166,7 +167,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     deaths: &mut Vec<MonsterAttackDeath>,
     range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
-    skeleton_dispatch: &mut Option<SkeletonArcheryDispatch>,
+    projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
 ) -> bool {
     let Some((
         property,
@@ -369,17 +370,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let now_ms = runtime.now_milliseconds();
-    if skill_id == SKELETON_ARCHERY_SKILL_ID {
+    if matches!(skill_id, SKELETON_ARCHERY_SKILL_ID | CHUCK_STONE_SKILL_ID) {
         let skill_properties = skill_properties.clone();
-        return prepare_owned_skeleton_archery(
+        return prepare_owned_monster_projectile(
             game,
             region,
             monster_id,
             target,
+            skill_id,
             skill.level,
             &skill_properties,
             now_ms,
-            skeleton_dispatch,
+            projectile_dispatch,
         );
     }
     if skill_id == MONSTER_THORN_SKILL_ID {

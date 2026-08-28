@@ -790,8 +790,8 @@ use crate::gameserver::appserver::skills::monsterrangeattack::{
     execute_owned_monster_range_target, finish_owned_monster_range_cast,
     range_attack_cell_candidates, range_attack_scope_cells,
 };
-use crate::gameserver::appserver::skills::skeletonarchery::{
-    execute_owned_skeleton_archery_target, finish_owned_skeleton_archery,
+use crate::gameserver::appserver::skills::monsterprojectile::{
+    execute_owned_monster_projectile_target, finish_owned_monster_projectile,
 };
 use crate::gameserver::appserver::skills::hearten::{
     execute_player_hearten, HEARTEN_SKILL_ID,
@@ -34840,7 +34840,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x1a1`,
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x1a1`,
     /// включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
@@ -34858,7 +34858,7 @@ impl CGame {
         };
         let mut deaths = Vec::new();
         let mut range_dispatch = None;
-        let mut skeleton_dispatch = None;
+        let mut projectile_dispatch = None;
         let handled = execute_owned_monster_base_attack(
             self,
             owner.base_mut(),
@@ -34866,7 +34866,7 @@ impl CGame {
             runtime,
             &mut deaths,
             &mut range_dispatch,
-            &mut skeleton_dispatch,
+            &mut projectile_dispatch,
         );
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.set_base_attack_owned_tick(handled);
@@ -34915,7 +34915,7 @@ impl CGame {
                 self.restore_region_owner(owner);
             }
         }
-        if let Some(dispatch) = skeleton_dispatch {
+        if let Some(dispatch) = projectile_dispatch {
             let candidates = if let Some(owner) = self.take_region_owner(region_id) {
                 let candidates = monster_attack_cell_candidates(
                     self,
@@ -34934,7 +34934,7 @@ impl CGame {
                     break;
                 };
                 let mut deaths = Vec::new();
-                let applied = execute_owned_skeleton_archery_target(
+                let applied = execute_owned_monster_projectile_target(
                     self,
                     owner.base_mut(),
                     &dispatch,
@@ -34948,7 +34948,7 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_skeleton_archery(owner.base_mut(), &dispatch);
+                finish_owned_monster_projectile(owner.base_mut(), &dispatch);
                 self.restore_region_owner(owner);
             }
         }

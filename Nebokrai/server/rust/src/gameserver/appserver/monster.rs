@@ -20,10 +20,11 @@
 //! `Defense` обрабатывается до активного хода монстра без отдельной
 //! диагностической передачи. Для обычного монстра, чей список состоит из
 //! навыков `0x2bd`, `0x2d1`, `0x2ef`, `0x197`, `0x191`, `0x198`, `0x199`,
-//! `0x19a`, `0x19b`, `0x19c` и `0x1a1`, тот же владелец
+//! `0x19a`, `0x19b`, `0x19c`, `0x19d` и `0x1a1`, тот же владелец
 //! хранит цель, выбранный по исходным `odds` текущий навык, выполнение и задержку
 //! повторного применения; быстрая атака дополнительно хранит визуальную фазу
-//! и первый из двух ударов. Поиск игроков и питомцев, преследование ИИ `0/3`
+//! и первый из двух ударов, а `0x19d/0x1a1` используют единое состояние полёта
+//! прямого снаряда. Поиск игроков и питомцев, преследование ИИ `0/3`
 //! и задержка обходного шага остаются здесь; урон и смерть питомца сохраняют
 //! приоритет цели и связь с хозяином. Пассивная либо командная цель питомца
 //! доходит через масштабированную атаку до смерти дикого монстра; расписание
@@ -55,7 +56,7 @@ use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
-use super::skills::skeletonarchery::SkeletonArcheryProgress;
+use super::skills::monsterprojectile::MonsterProjectileProgress;
 use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::SpiderMistProgress;
 use super::skills::summoncreatureskill::SummonCreatureProgress;
@@ -102,7 +103,7 @@ pub(crate) struct CMonster {
     ai_target: Option<ShapeIdentity>,
     base_attack_cast: Option<MonsterBaseAttackCast>,
     fast_attack_progress: Option<MonsterFastAttackProgress>,
-    skeleton_archery_progress: Option<SkeletonArcheryProgress>,
+    monster_projectile_progress: Option<MonsterProjectileProgress>,
     spider_web_progress: Option<SpiderWebProgress>,
     spider_mist_progress: Option<SpiderMistProgress>,
     summon_creature_progress: Option<SummonCreatureProgress>,
@@ -240,7 +241,7 @@ impl CMonster {
             ai_target: None,
             base_attack_cast: None,
             fast_attack_progress: None,
-            skeleton_archery_progress: None,
+            monster_projectile_progress: None,
             spider_web_progress: None,
             spider_mist_progress: None,
             summon_creature_progress: None,
@@ -804,18 +805,18 @@ impl CMonster {
         self.fast_attack_progress.as_mut()
     }
 
-    pub(crate) fn begin_skeleton_archery_progress(&mut self) {
-        self.skeleton_archery_progress = Some(SkeletonArcheryProgress::default());
+    pub(crate) fn begin_monster_projectile_progress(&mut self) {
+        self.monster_projectile_progress = Some(MonsterProjectileProgress::default());
     }
 
-    pub(crate) const fn skeleton_archery_progress(&self) -> Option<SkeletonArcheryProgress> {
-        self.skeleton_archery_progress
+    pub(crate) const fn monster_projectile_progress(&self) -> Option<MonsterProjectileProgress> {
+        self.monster_projectile_progress
     }
 
-    pub(crate) fn skeleton_archery_progress_mut(
+    pub(crate) fn monster_projectile_progress_mut(
         &mut self,
-    ) -> Option<&mut SkeletonArcheryProgress> {
-        self.skeleton_archery_progress.as_mut()
+    ) -> Option<&mut MonsterProjectileProgress> {
+        self.monster_projectile_progress.as_mut()
     }
 
     pub(crate) const fn spider_web_progress(&self) -> Option<SpiderWebProgress> {
@@ -845,7 +846,7 @@ impl CMonster {
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
         self.fast_attack_progress = None;
-        self.skeleton_archery_progress = None;
+        self.monster_projectile_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
         self.summon_creature_progress = None;
@@ -876,7 +877,7 @@ impl CMonster {
 
     pub(crate) fn cancel_base_attack_cast(&mut self) {
         self.fast_attack_progress = None;
-        self.skeleton_archery_progress = None;
+        self.monster_projectile_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
         self.summon_creature_progress = None;

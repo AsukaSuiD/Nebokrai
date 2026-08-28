@@ -1,4 +1,7 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
+//! Владелец навыка `CChuckStone` (`0x19D`). Достигнутый путь владельца-монстра
+//! использует общий снарядный механизм `monsterprojectile`; проверки оружия,
+//! варианты игрока и автоматический повтор ниже остаются RAW до появления
+//! настоящего вызова.
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
 
@@ -94,7 +97,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStone::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:115
@@ -108,7 +113,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStoneEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:588
@@ -122,7 +129,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStone::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:43
@@ -136,7 +145,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStone::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:501
@@ -150,7 +161,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStone::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:476
@@ -164,7 +177,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStone::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:450
@@ -178,7 +193,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStone::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:205
@@ -192,7 +209,9 @@
 
 // ============================================================================
 // FUNCTION: CChuckStone::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый путь владельца-монстра материализован в `monsterprojectile`;
+// отличающиеся ветви игрока и недостигнутого вызова сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:170
@@ -207,3 +226,5 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+pub(crate) const CHUCK_STONE_SKILL_ID: u32 = 0x19d;

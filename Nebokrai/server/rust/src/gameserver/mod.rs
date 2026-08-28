@@ -76,6 +76,7 @@ pub(crate) mod appserver {
         pub(crate) mod bloodlossstate;
         pub(crate) mod callosity;
         pub(crate) mod callositystate;
+        pub(crate) mod chuckstone;
         pub(crate) mod curestate;
         pub(crate) mod fatalblow;
         pub(crate) mod fatalblowphalanx;
@@ -107,6 +108,7 @@ pub(crate) mod appserver {
         pub(crate) mod monsterbaseattack;
         pub(crate) mod monsterattack;
         pub(crate) mod monsterfastattack;
+        pub(crate) mod monsterprojectile;
         pub(crate) mod monsterrangeattack;
         pub(crate) mod monstertaming;
         pub(crate) mod monsterthorn;
