@@ -10,6 +10,7 @@ pub(crate) mod appserver {
         pub(crate) mod lord;
         pub(crate) mod monsterai;
         pub(crate) mod playerai;
+        pub(crate) mod puninesscreature;
         pub(crate) mod stupidarcher;
     }
     pub(crate) mod area;

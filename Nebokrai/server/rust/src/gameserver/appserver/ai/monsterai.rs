@@ -36,6 +36,23 @@ pub(crate) fn select_attack_skill(
     default_skill_id
 }
 
+/// Общая длительность одного шага `CBaseAI::MoveTo`: диагональ длиннее
+/// осевого шага, после чего прибавляется время остановочного кадра монстра.
+pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32) -> u32 {
+    let distance_units = if direction % 2 == 0 {
+        1_000_000.0
+    } else {
+        1_414_000.0
+    };
+    if speed > 0.0 {
+        (distance_units * 0.68 / speed + stop_frame as f32)
+            .round()
+            .max(0.0) as u32
+    } else {
+        0
+    }
+}
+
 /// Выполняет общий шаг `CMonsterAI::Tracing` перед запуском выбранного навыка.
 /// Наблюдаемый порядок движения задаёт существующий индекс региона; функция не
 /// выбирает навык и не потребляет RNG.
@@ -155,7 +172,7 @@ pub(crate) fn approach_attack_range(
     let Some((direction, destination)) = destination else {
         return false;
     };
-    if game.move_owned_monster_for_skill(
+    if game.move_owned_monster_step(
         region,
         monster_id,
         destination.x,

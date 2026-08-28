@@ -106,9 +106,11 @@ use crate::gameserver::appserver::ai::fixedpositionarcher::{
     FixedArcherTarget, consider_fixed_archer_target,
 };
 use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
-use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, one_step_move_delay_ms, select_attack_skill,
+};
 use crate::gameserver::appserver::ai::stupidarcher::{
-    StupidArcherTarget, consider_stupid_archer_target, stupid_archer_retreat_delay_ms,
+    StupidArcherTarget, consider_stupid_archer_target,
 };
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -556,7 +558,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     )
                 {
                     let figure = CMonster::figure(&property);
-                    let moved = game.move_owned_monster_for_skill(
+                    let moved = game.move_owned_monster_step(
                         region,
                         monster_id,
                         destination.x,
@@ -569,7 +571,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         let retreat_started_at_ms = runtime.now_milliseconds();
                         monster.begin_trace_move_delay(
                             retreat_started_at_ms,
-                            stupid_archer_retreat_delay_ms(
+                            one_step_move_delay_ms(
                                 direction,
                                 monster_shape.get_speed(),
                                 property.stop_frame,

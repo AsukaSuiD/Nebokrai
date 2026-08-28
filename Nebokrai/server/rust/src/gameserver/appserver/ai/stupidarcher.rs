@@ -57,24 +57,3 @@ pub(crate) fn consider_stupid_archer_target(
         _ => Some(candidate),
     }
 }
-
-/// Длительность одного шага совпадает с общим `CBaseAI::MoveTo`: диагональ
-/// длиннее осевого шага, затем добавляется исходное время остановочного кадра.
-pub(crate) fn stupid_archer_retreat_delay_ms(
-    direction: i32,
-    speed: f32,
-    stop_frame: u32,
-) -> u32 {
-    let distance_units = if direction % 2 == 0 {
-        1_000_000.0
-    } else {
-        1_414_000.0
-    };
-    if speed > 0.0 {
-        (distance_units * 0.68 / speed + stop_frame as f32)
-            .round()
-            .max(0.0) as u32
-    } else {
-        0
-    }
-}

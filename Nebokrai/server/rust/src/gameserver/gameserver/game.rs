@@ -534,6 +534,7 @@ use thiserror::Error;
 use tracing::{debug, info, trace, warn};
 
 use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerAutoProgress};
+use crate::gameserver::appserver::ai::puninesscreature::execute_owned_puniness_creature;
 use crate::gameserver::appserver::area::{
     AreaAiContext, AreaMonsterAiFacts, AreaWokenMonsterClass,
 };
@@ -25632,9 +25633,9 @@ impl CGame {
         &self.move_check_cells
     }
 
-    /// Выполняет только пространственное перемещение, рассчитанное конкретным
-    /// навыком: общий владелец сохраняет членство в регионе и сетевую доставку.
-    pub(crate) fn move_owned_monster_for_skill(
+    /// Выполняет только один пространственный шаг, рассчитанный конкретным
+    /// владельцем навыка или ИИ; `CGame` сохраняет членство и сетевую доставку.
+    pub(crate) fn move_owned_monster_step(
         &mut self,
         region: &mut CServerRegion,
         monster_id: i32,
@@ -35734,6 +35735,27 @@ impl CGame {
         }
     }
 
+    /// Тонко координирует владельца региона для самостоятельного ИИ слабого
+    /// существа; поиск, потеря цели и направление отхода остаются в его модуле-владельце.
+    fn run_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let handled = execute_owned_puniness_creature(
+            self,
+            owner.base_mut(),
+            monster_id,
+            runtime,
+        );
+        self.restore_region_owner(owner);
+        handled
+    }
+
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
     /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f5/0x1f6/0x1f7/0x1f8/0x1f9/0x1fa`,
     /// включая их полностью достигнутые
@@ -42244,6 +42266,9 @@ impl CGame {
                         }
                     }
                     self.restore_region_owner(owner);
+                }
+                if self.run_owned_puniness_creature(region_id, monster_id, runtime) {
+                    continue;
                 }
                 if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
