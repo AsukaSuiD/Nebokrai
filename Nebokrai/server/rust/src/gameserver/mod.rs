@@ -104,6 +104,7 @@ pub(crate) mod appserver {
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod lifeshieldstate;
+        pub(crate) mod littlestar;
         pub(crate) mod lingzhishu;
         pub(crate) mod machineshield;
         pub(crate) mod machineshieldstate;

@@ -67,6 +67,7 @@ use super::chuckstone::CHUCK_STONE_SKILL_ID;
 use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptomaine};
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
+use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
 use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
@@ -118,6 +119,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | ENERGY_BOLT_SKILL_ID
             | ZOMBIE_CLAW_SKILL_ID
             | FURY_SKILL_ID
+            | LITTLE_STAR_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
@@ -454,6 +456,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if skill_id == ZOMBIE_CLAW_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_zombie_claw(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
+            deaths,
+        );
+    }
+    if skill_id == LITTLE_STAR_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_little_star(
             game,
             region,
             monster_id,
