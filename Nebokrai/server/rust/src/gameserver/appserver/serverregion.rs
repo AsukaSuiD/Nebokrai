@@ -1439,6 +1439,26 @@ impl CServerRegion {
         true
     }
 
+    /// После успешного `CMonsterTaming` приручённый монстр перестаёт занимать
+    /// место в исходной группе возрождения, но остаётся живым объектом региона.
+    pub(crate) fn finish_owned_monster_taming(&mut self, id: i32) -> bool {
+        let Some(monster) = self.owned_monsters.get(&id) else {
+            return false;
+        };
+        if !monster.is_tamed() {
+            return false;
+        }
+        if let Some(refresh) = self
+            .monster_setups
+            .iter_mut()
+            .find(|setup| setup.index == monster.refresh_index())
+            && refresh.living_count > 0
+        {
+            refresh.living_count -= 1;
+        }
+        true
+    }
+
     pub(crate) fn owned_pet_ids(&self, player_id: i32) -> Vec<i32> {
         self.owned_monsters
             .iter()

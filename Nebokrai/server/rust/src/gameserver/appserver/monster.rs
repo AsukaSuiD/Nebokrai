@@ -39,6 +39,9 @@
 //! taming sign, progress, раздельные Globe experience/property factors и
 //! reached follower-EXP level-up с `0xC0203`, а также узкое pet-control state;
 //! async CPet decision tree этим не подменяется.
+//! Достигнутое приручение хранит исходный счётчик попыток в том же владельце:
+//! проверка выполняется до увеличения, а установка признака — после него,
+//! включая исходную недостижимость успеха на последней разрешённой попытке.
 
 use super::ai::baseai::CBaseAI;
 use super::masterinfo::MasterInfo;
@@ -67,6 +70,7 @@ pub(crate) struct CMonster {
     factors: [u32; 10],
     master_info: MasterInfo,
     tamed: bool,
+    tame_attempt_count: u32,
     pet_level: u32,
     pet_experience: u32,
     pet_mode: i32,
@@ -197,6 +201,7 @@ impl CMonster {
             factors: [1.0f32.to_bits(); 10],
             master_info: MasterInfo::default(),
             tamed: false,
+            tame_attempt_count: 0,
             pet_level: 0,
             pet_experience: 0,
             pet_mode: 0,
@@ -245,6 +250,40 @@ impl CMonster {
 
     pub(crate) const fn is_tamed(&self) -> bool {
         self.tamed
+    }
+
+    pub(crate) const fn is_tamable(&self, property: &MonsterProperties) -> bool {
+        property.tamable == 1
+            && self.tame_attempt_count < property.maximum_tame_attempt_count
+    }
+
+    pub(crate) const fn increase_tame_attempt_count(&mut self) {
+        self.tame_attempt_count = self.tame_attempt_count.wrapping_add(1);
+    }
+
+    pub(crate) fn try_become_tamed(
+        &mut self,
+        property: &MonsterProperties,
+        master: MasterInfo,
+        pet_mode: i32,
+        factors: Option<[f32; 10]>,
+    ) -> bool {
+        if property.tamable != 1
+            || self.tame_attempt_count >= property.maximum_tame_attempt_count
+            || (self.tamed
+                && self.master_info.master_type == 400
+                && self.master_info.master_id != 0)
+        {
+            return false;
+        }
+        self.clear_ai_target();
+        self.tamed = true;
+        self.master_info = master;
+        self.pet_mode = pet_mode;
+        if let Some(factors) = factors {
+            self.adjust_pet_factors(factors);
+        }
+        true
     }
 
     pub(crate) fn is_carriage(&self, property: &MonsterProperties) -> bool {
@@ -948,62 +987,6 @@ impl CMonster {
 // RVA: 0x000E6420
 // ADDRESS: 004e6420
 // PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::IsTamable
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:208
-// RVA: 0x000E6430
-// ADDRESS: 004e6430
-// PROTOTYPE: int __thiscall IsTamable(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::DoesCreatureBeenTamed
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:220
-// RVA: 0x000E6460
-// ADDRESS: 004e6460
-// PROTOTYPE: int __thiscall DoesCreatureBeenTamed(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::IncreaseTameAttemptCount
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:244
-// RVA: 0x000E6490
-// ADDRESS: 004e6490
-// PROTOTYPE: void __thiscall IncreaseTameAttemptCount(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::SetTamedSign
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:249
-// RVA: 0x000E64A0
-// ADDRESS: 004e64a0
-// PROTOTYPE: void __thiscall SetTamedSign(int param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -805,6 +805,9 @@ use crate::gameserver::appserver::skills::lifeshieldstate::{
 use crate::gameserver::appserver::skills::petscontrol::{
     execute_player_pets_control, PETS_CONTROL_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::monstertaming::{
+    execute_player_monster_taming, MONSTER_TAMING_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::poisonarrow::{
     POISON_ARROW_SKILL_ID, execute_battle_fairy_poison_arrow,
 };
@@ -15020,6 +15023,12 @@ impl CGame {
     /// Общий `public::random(max)` script-owner использует тот же process-wide
     /// MSVCRT stream, что goods, equipment и battle-fairy gameplay.
     pub(crate) fn script_random(&mut self, maximum: i32) -> i32 {
+        game_legacy_random(&mut self.random_state, maximum)
+    }
+
+    /// Навыки вызывают тот же общий поток MSVCRT через владельца `CGame`,
+    /// сохраняя число и порядок игровых бросков.
+    pub(crate) fn skill_random_below(&mut self, maximum: i32) -> i32 {
         game_legacy_random(&mut self.random_state, maximum)
     }
 
@@ -36783,6 +36792,13 @@ impl CGame {
                     skill_id == PETS_CONTROL_SKILL_ID
                 }
             };
+            let concrete_monster_taming = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => {
+                    skill_id == MONSTER_TAMING_SKILL_ID
+                }
+            };
             let concrete_mana_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36823,6 +36839,8 @@ impl CGame {
                 execute_player_hearten(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_pets_control {
                 execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_monster_taming {
+                execute_player_monster_taming(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machine_shield {
                 execute_player_machine_shield(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mana_shield {

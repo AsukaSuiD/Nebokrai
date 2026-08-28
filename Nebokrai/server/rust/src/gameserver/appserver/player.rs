@@ -7723,6 +7723,16 @@ impl CPlayer {
         &self.equipment
     }
 
+    pub(crate) fn weapon_damage_level(&self, factory: &CGoodsFactory) -> i32 {
+        self.equipment.get_goods(2).map_or(0, |goods| {
+            goods.addon_property_value(
+                factory,
+                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL,
+                1,
+            )
+        })
+    }
+
     /// Точный обход GoodsAI при первом входе: позиционные equipment/packet,
     /// одиночный hand, позиционные auction и depot. Возврат `false` повторяет
     /// исходный `break` только внутри текущего контейнера; следующий владелец
