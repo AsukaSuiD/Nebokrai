@@ -5,6 +5,7 @@ pub(crate) mod appserver {
         pub(crate) mod baseai;
         pub(crate) mod bossblue;
         pub(crate) mod bossfiend;
+        pub(crate) mod fixedpositionarcher;
         pub(crate) mod lord;
         pub(crate) mod monsterai;
         pub(crate) mod playerai;
