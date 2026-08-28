@@ -807,6 +807,7 @@ use crate::gameserver::appserver::skills::monsterprojectile::{
 use crate::gameserver::appserver::skills::hearten::{
     execute_player_hearten, HEARTEN_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::gibe::{execute_player_gibe, GIBE_SKILL_ID};
 use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
 use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
@@ -36206,6 +36207,11 @@ impl CGame {
                 | PlayerSkillDispatch::Point { skill_id, .. }
                 | PlayerSkillDispatch::Object { skill_id, .. } => is_swordship_skill(skill_id),
             };
+            let concrete_gibe = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == GIBE_SKILL_ID,
+            };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
             } else if concrete_archery {
@@ -36230,6 +36236,8 @@ impl CGame {
                 execute_player_non_fun(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_swordship {
                 execute_player_swordship(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_gibe {
+                execute_player_gibe(self, player_id, dispatch, player_ai, runtime)
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };

@@ -97,6 +97,8 @@ pub(crate) struct CPlayerAI {
     immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     swordship: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    gibe: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    gibe_last_used_ms: u32,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -154,6 +156,7 @@ impl CPlayerAI {
         self.immediate_state = None;
         self.non_fun = None;
         self.swordship = None;
+        self.gibe = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -253,6 +256,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение корабля мечей завершено");
         }
+        if let Some(mut execution) = self.gibe.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение провокации завершено");
+        }
         true
     }
 
@@ -284,6 +291,7 @@ impl CPlayerAI {
         self.immediate_state = None;
         self.non_fun = None;
         self.swordship = None;
+        self.gibe = None;
         self.poison_arrow = None;
         self.blood_loss = None;
         self.fatal_blow = None;
@@ -590,6 +598,31 @@ impl CPlayerAI {
         &mut self,
     ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
         self.swordship.as_mut()
+    }
+
+    pub(crate) const fn gibe(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.gibe
+    }
+
+    pub(crate) const fn begin_gibe(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.gibe = Some(state);
+    }
+
+    pub(crate) fn gibe_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.gibe.as_mut()
+    }
+
+    pub(crate) const fn gibe_last_used_ms(&self) -> u32 {
+        self.gibe_last_used_ms
+    }
+
+    pub(crate) const fn mark_gibe_used(&mut self, now_ms: u32) {
+        self.gibe_last_used_ms = now_ms;
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
