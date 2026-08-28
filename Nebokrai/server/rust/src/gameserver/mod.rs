@@ -78,6 +78,7 @@ pub(crate) mod appserver {
         pub(crate) mod callositystate;
         pub(crate) mod chuckstone;
         pub(crate) mod curestate;
+        pub(crate) mod corpseptomaine;
         pub(crate) mod fatalblow;
         pub(crate) mod fatalblowphalanx;
         pub(crate) mod thunder;

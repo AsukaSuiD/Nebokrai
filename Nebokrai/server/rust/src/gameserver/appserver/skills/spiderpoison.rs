@@ -225,7 +225,11 @@ fn send_visual(
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
 
-fn target_has_cure(game: &CGame, region: &CServerRegion, target: ShapeIdentity) -> bool {
+pub(crate) fn target_has_cure(
+    game: &CGame,
+    region: &CServerRegion,
+    target: ShapeIdentity,
+) -> bool {
     match target.object_type {
         PLAYER_TYPE => game.find_player(target.id).is_some_and(|player| player.has_state_by_skill_id(CURE_SKILL_ID)),
         MONSTER_TYPE => region.find_monster_by_id(target.id).is_some_and(|monster| monster.move_shape().has_state_by_skill_id(CURE_SKILL_ID)),
