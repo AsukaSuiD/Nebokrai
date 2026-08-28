@@ -10,7 +10,7 @@
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
-//! питомцами, усиление, периодическое лечение, машинный и мана-щит,
+//! питомцами, усиление, периодическое лечение, огненная стрела, машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
 //! и приручение монстров сохраняют незавершённое состояние между проходами ИИ.
@@ -62,6 +62,8 @@ pub(crate) struct CPlayerAI {
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
     base_magic_last_used_ms: u32,
+    fire_bolt: Option<BaseMagicExecutionState>,
+    fire_bolt_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
@@ -163,6 +165,7 @@ impl CPlayerAI {
         self.archery = None;
         self.agility_family = None;
         self.base_magic = None;
+        self.fire_bolt = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -242,6 +245,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.base_magic.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение базовой магии завершено");
+        }
+        if let Some(mut execution) = self.fire_bolt.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной стрелы завершено");
         }
         if let Some(mut execution) = self.callosity.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -338,6 +345,7 @@ impl CPlayerAI {
         self.archery = None;
         self.agility_family = None;
         self.base_magic = None;
+        self.fire_bolt = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -455,6 +463,26 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_base_magic_used(&mut self, now_ms: u32) {
         self.base_magic_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn fire_bolt(&self) -> Option<BaseMagicExecutionState> {
+        self.fire_bolt
+    }
+
+    pub(crate) const fn begin_fire_bolt(&mut self, state: BaseMagicExecutionState) {
+        self.fire_bolt = Some(state);
+    }
+
+    pub(crate) fn fire_bolt_mut(&mut self) -> Option<&mut BaseMagicExecutionState> {
+        self.fire_bolt.as_mut()
+    }
+
+    pub(crate) const fn fire_bolt_last_used_ms(&self) -> u32 {
+        self.fire_bolt_last_used_ms
+    }
+
+    pub(crate) const fn mark_fire_bolt_used(&mut self, now_ms: u32) {
+        self.fire_bolt_last_used_ms = now_ms;
     }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {

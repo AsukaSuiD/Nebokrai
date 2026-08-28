@@ -1,11 +1,11 @@
 //! Общая достигнутая часть идентичности и жизненного цикла `CSummonShape`.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/summonshape.cpp`. Все summoned shapes получают process-wide
+//! `appserver/summonshape.cpp`. Все призванные формы получают общий для процесса
 //! знаковый ID с переполнением из прежнего `g_lID`, тип `1000`, начальные часы
 //! и срок жизни. Конкретная область, атака и игровые эффекты остаются у
 //! производного владельца. Счётчик принадлежит `CGame`, а не региону, поэтому смена региона
-//! не создаёт повторные legacy IDs.
+//! не создаёт повторные устаревшие ID.
 
 pub(crate) const SUMMON_SHAPE_TYPE: i32 = 1000;
 
@@ -13,6 +13,7 @@ use crate::gameserver::appserver::skills::basemagicphalanx::CBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::archeryphalanx::CArcheryPhalanx;
 use crate::gameserver::appserver::skills::fatalblowphalanx::CFatalBlowPhalanx;
+use crate::gameserver::appserver::skills::fireboltphalanx::CFireBoltPhalanx;
 use crate::gameserver::appserver::skills::thunderphalanx::CThunderPhalanx;
 use crate::gameserver::appserver::skills::thunder2phalanx::CLeimingPhalanx2;
 use crate::gameserver::appserver::skills::tianhuophalanx::CTianhuoPhalanx;
@@ -28,6 +29,7 @@ pub(crate) enum SummonedSkillShape {
     BaseMagic(CBaseMagicPhalanx),
     BattleFairyBaseMagic(CBattleFairyBaseMagicPhalanx),
     FatalBlow(CFatalBlowPhalanx),
+    FireBolt(CFireBoltPhalanx),
     Thunder(CThunderPhalanx),
     Leiming2(CLeimingPhalanx2),
     Tianhuo(CTianhuoPhalanx),
@@ -43,6 +45,7 @@ impl SummonedSkillShape {
             Self::BaseMagic(shape) => shape.shape(),
             Self::BattleFairyBaseMagic(shape) => shape.shape(),
             Self::FatalBlow(shape) => shape.shape(),
+            Self::FireBolt(shape) => shape.shape(),
             Self::Thunder(shape) => shape.shape(),
             Self::Leiming2(shape) => shape.shape(),
             Self::Tianhuo(shape) => shape.shape(),
@@ -58,6 +61,7 @@ impl SummonedSkillShape {
             Self::BaseMagic(shape) => shape.shape_mut(),
             Self::BattleFairyBaseMagic(shape) => shape.shape_mut(),
             Self::FatalBlow(shape) => shape.shape_mut(),
+            Self::FireBolt(shape) => shape.shape_mut(),
             Self::Thunder(shape) => shape.shape_mut(),
             Self::Leiming2(shape) => shape.shape_mut(),
             Self::Tianhuo(shape) => shape.shape_mut(),
@@ -73,6 +77,7 @@ impl SummonedSkillShape {
             Self::BaseMagic(shape) => shape.master(),
             Self::BattleFairyBaseMagic(shape) => shape.master(),
             Self::FatalBlow(shape) => shape.master(),
+            Self::FireBolt(shape) => shape.master(),
             Self::Thunder(shape) => shape.master(),
             Self::Leiming2(shape) => shape.master(),
             Self::Tianhuo(shape) => shape.master(),

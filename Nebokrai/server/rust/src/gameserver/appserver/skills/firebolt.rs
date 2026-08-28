@@ -1,6 +1,329 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Огненная стрела `CFireBolt` (`0x132`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/firebolt.cpp`. Владелец сохраняет двойную проверку MP,
+//! время восстановления, расстояние, направление, задержку и точный пакет
+//! запуска с длительностью полёта. После применения создаётся принадлежащий
+//! региону `CFireBoltPhalanx`; урон выполняется только его ИИ после строгой
+//! временной границы. Не достигнутый `CSoulCollectState` не подменяется
+//! параллельным состоянием. Координатная перегрузка `Begin` остаётся ниже.
+
+use super::baseattack::{real_distance, time_reached};
+use super::basemagic::{
+    BaseMagicExecutionState, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
+    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME,
+    SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
+};
+use super::fireboltphalanx::CFireBoltPhalanx;
+use super::kernel::SkillStage;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
+use crate::nets::netserver::message::CMessage;
+use crate::public::tools::get_line_direction;
+
+pub(crate) const FIRE_BOLT_SKILL_ID: u32 = 0x132;
+
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
+const USER_MP_LOSE: u32 = 2;
+
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
+
+fn send_failure(game: &CGame, player_id: i32, code: u8) {
+    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
+}
+
+fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
+    match target.object_type {
+        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
+        MONSTER_TYPE => game
+            .find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(target.id))
+            .is_none_or(|monster| monster.hit_points() == 0),
+        _ => true,
+    }
+}
+
+fn send_start(game: &mut CGame, player_id: i32, level: i32) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(1);
+    message.add_long(FIRE_BOLT_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(player.shape().get_direction());
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_fire(
+    game: &mut CGame,
+    player_id: i32,
+    target: ShapeIdentity,
+    target_x: i32,
+    target_y: i32,
+    level: i32,
+    attack_time_ms: i32,
+) {
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(2);
+    message.add_long(FIRE_BOLT_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(target.object_type);
+    message.add_long(target.id);
+    message.add_long(target_x);
+    message.add_long(target_y);
+    message.add_long(attack_time_ms);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn finish(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
+
+pub(crate) const fn is_fire_bolt_target(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::Object {
+            skill_id: FIRE_BOLT_SKILL_ID,
+            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+        }
+    )
+}
+
+pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let target = match dispatch {
+        PlayerSkillDispatch::Object { skill_id: FIRE_BOLT_SKILL_ID, target } => target,
+        _ => return terminal(QueuedSkillExecutionState::Rejected),
+    };
+    let Some((region_id, source_x, source_y, level, initial_mana)) =
+        game.find_player(player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+                player.learned_skill_level(FIRE_BOLT_SKILL_ID),
+                player.mana(),
+            ))
+        })
+    else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(properties) = game.skill_base_properties(FIRE_BOLT_SKILL_ID, level) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(USER_MP_LOSE);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let summoned_speed = properties.query_property(SKILL_USAGE_SUMMONED_SPEED);
+    let summoned_lifetime = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME);
+    let minimum_attack = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+    let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+    let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+
+    if player_ai.fire_bolt().is_none() {
+        let started_at_ms = runtime.now_milliseconds();
+        if target.object_type == PLAYER_TYPE && target.id == player_id {
+            send_failure(game, player_id, 10);
+            game.send_skill_system_info(player_id, b"GS0286");
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if player_ai.fire_bolt_last_used_ms() != 0
+            && !time_reached(cooldown_now_ms, player_ai.fire_bolt_last_used_ms(), reuse_delay_ms)
+        {
+            send_failure(game, player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"GS0278");
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+            send_failure(game, player_id, 10);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let path = game.base_magic_path(
+            region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None,
+        );
+        if maximum_distance != 0 && path.len() > maximum_distance as usize {
+            send_failure(game, player_id, 0x0b);
+            game.send_skill_system_info(player_id, b"GS0290");
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss == 0 {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_failure(game, player_id, 7);
+            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_current_skill_id(Some(FIRE_BOLT_SKILL_ID));
+        }
+        player_ai.begin_fire_bolt(BaseMagicExecutionState::begin(
+            dispatch, target, started_at_ms,
+        ));
+    } else if player_ai.fire_bolt().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if target_dead(game, region_id, target) {
+        send_failure(game, player_id, 10);
+        game.send_skill_system_info(player_id, b"GS0285");
+        finish(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if player_ai.fire_bolt().is_some_and(|state| !state.condition_checked()) {
+        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_failure(game, player_id, 7);
+            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+            finish(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+            send_failure(game, player_id, 10);
+            finish(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(mana.wrapping_sub(mp_loss));
+            player.movement_shape_mut().set_direction(get_line_direction(
+                source_x, source_y, target_view.tile_x, target_view.tile_y,
+            ));
+            player.set_skill_moveable(false);
+        }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        send_start(game, player_id, level);
+        if let Some(state) = player_ai.fire_bolt_mut() {
+            state.mark_condition_checked();
+            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+
+    let started_at_ms = player_ai
+        .fire_bolt()
+        .map(|state| state.kernel().started_at_ms())
+        .expect("выполнение огненной стрелы создано или восстановлено");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+        send_failure(game, player_id, 10);
+        finish(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if target_dead(game, region_id, target) {
+        send_failure(game, player_id, 10);
+        game.send_skill_system_info(player_id, b"GS0285");
+        send_failure(game, player_id, 10);
+        finish(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let attack_time_ms = real_distance(
+        source_x, source_y, target_view.tile_x, target_view.tile_y,
+    )
+    .wrapping_mul(summoned_speed as i32);
+    send_fire(
+        game, player_id, target, target_view.tile_x, target_view.tile_y, level, attack_time_ms,
+    );
+
+    let forced_distance = real_distance(
+        source_x, source_y, target_view.tile_x, target_view.tile_y,
+    ) as u32;
+    let path = game.base_magic_path(
+        region_id,
+        source_x,
+        source_y,
+        target_view.tile_x,
+        target_view.tile_y,
+        Some(forced_distance),
+    );
+    if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {
+        let permissions = game.find_player(player_id).map(CPlayer::pk_permissions).unwrap_or_default();
+        let master = game.find_player(player_id).map(|player| MasterInfo {
+            master_type: PLAYER_TYPE,
+            master_id: player_id,
+            master_guild_id: player.faction_id(),
+            master_team_id: player.team_id(),
+            master_union_id: player.union_id(),
+            master_country_id: 0,
+            permitted_to_kill_player: i32::from(permissions.player),
+            permitted_to_kill_teammate: i32::from(permissions.teammate),
+            permitted_to_kill_guild_member: i32::from(permissions.guild_member),
+            permitted_to_kill_criminal: i32::from(permissions.criminal),
+        }).unwrap_or_default();
+        let summon_id = game.allocate_summon_shape_id();
+        let summon_started_at_ms = runtime.now_milliseconds();
+        let mut phalanx = CFireBoltPhalanx::new(
+            summon_id,
+            master,
+            summon_started_at_ms,
+            summoned_lifetime,
+            level,
+            minimum_attack,
+            maximum_attack,
+            element_modifier,
+            target,
+            attack_time_ms as u32,
+            0,
+            0,
+        );
+        phalanx.shape_mut().set_region_id(region_id);
+        let (tile_x, tile_y, _) = path[0];
+        let (area_width, area_height) = game.area_dimensions();
+        let result = if let Some(mut owner) = game.take_region_owner(region_id) {
+            let result = owner.base_mut().add_fire_bolt_phalanx(
+                phalanx,
+                tile_x,
+                tile_y,
+                area_width,
+                area_height,
+                summon_started_at_ms,
+                runtime,
+            );
+            game.restore_region_owner(owner);
+            Some(result)
+        } else {
+            None
+        };
+        tracing::trace!(region_id, player_id, summon_id, ?result, "создан снаряд огненной стрелы");
+    }
+
+    if let Some(state) = player_ai.fire_bolt_mut() {
+        let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_fire_bolt_used(runtime.now_milliseconds());
+    finish(game, player_id);
+    terminal(QueuedSkillExecutionState::Completed)
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -8,34 +331,6 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.h
-
-// ============================================================================
-// FUNCTION: CFireBolt::CFireBolt
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:20
-// RVA: 0x001A1110
-// ADDRESS: 005a1110
-// PROTOTYPE: undefined __thiscall CFireBolt(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFireBolt::~CFireBolt
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:29
-// RVA: 0x001A1180
-// ADDRESS: 005a1180
-// PROTOTYPE: void __thiscall ~CFireBolt(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CFireBolt::Begin
@@ -50,105 +345,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CFireBolt::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:171
-// RVA: 0x001A1270
-// ADDRESS: 005a1270
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFireBolt::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:138
-// RVA: 0x001A1360
-// ADDRESS: 005a1360
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFireBoltEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:517
-// RVA: 0x001A1420
-// ADDRESS: 005a1420
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFireBolt::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:200
-// RVA: 0x001A18D0
-// ADDRESS: 005a18d0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFireBolt::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:36
-// RVA: 0x001A1D00
-// ADDRESS: 005a1d00
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFireBolt::Summon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:385
-// RVA: 0x001A2030
-// ADDRESS: 005a2030
-// PROTOTYPE: int __thiscall Summon(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

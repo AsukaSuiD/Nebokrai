@@ -765,6 +765,10 @@ use crate::gameserver::appserver::skills::basemagic::{
 use crate::gameserver::appserver::skills::basemagicphalanx::{
     calculate_owned_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
 };
+use crate::gameserver::appserver::skills::firebolt::{execute_player_fire_bolt, is_fire_bolt_target};
+use crate::gameserver::appserver::skills::fireboltphalanx::{
+    calculate_owned_fire_bolt_attack, FireBoltPhalanxTick,
+};
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     execute_battle_fairy_base_magic, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
 };
@@ -36380,6 +36384,7 @@ impl CGame {
                 }
                 _ => false,
             };
+            let concrete_fire_bolt = is_fire_bolt_target(dispatch);
             let concrete_archery = match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == ARCHERY_SKILL_ID
@@ -36489,6 +36494,8 @@ impl CGame {
                 execute_player_archery(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_fire_bolt {
+                execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
                 execute_player_callosity(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_agility_family {
@@ -39429,6 +39436,9 @@ impl CGame {
             SummonedSkillShape::FatalBlow(phalanx) => {
                 self.calculate_fatal_blow_attack(phalanx)
             }
+            SummonedSkillShape::FireBolt(phalanx) => {
+                calculate_owned_fire_bolt_attack(self, phalanx, target_level)
+            }
             SummonedSkillShape::Thunder(phalanx) => {
                 self.calculate_thunder_attack(phalanx, target_level)
             }
@@ -39825,6 +39835,15 @@ impl CGame {
                     }
                     FatalBlowPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::FireBolt(phalanx) => {
+                    match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
+                        FireBoltPhalanxTick::Pending => Some(None),
+                        FireBoltPhalanxTick::Attack { target, sampled_at_ms } => {
+                            Some(Some((target, sampled_at_ms)))
+                        }
+                        FireBoltPhalanxTick::Expired => None,
+                    }
+                }
                 SummonedSkillShape::Thunder(phalanx) => match phalanx.tick(lifetime_now_ms) {
                     ThunderPhalanxTick::Pending => Some(None),
                     ThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((
