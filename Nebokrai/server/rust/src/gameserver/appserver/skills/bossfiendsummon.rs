@@ -1,40 +1,18 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Владелец навыка `CBossFiendSummon` (`0x1F9`) для объектного пути монстра.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/skills/bossfiendsummon.cpp`. Задержки, блокировка движения,
+//! пакеты `0xBFE01` и создание существ проходят общий узкий механизм семейства
+//! призыва. Отличие владельца — один исходный `random(3)` на всё завершённое
+//! применение и неизменная разновидность `30003/30004/30005` для всех
+//! созданных им существ. Координатные перегрузки `Begin` ниже остаются RAW до
+//! появления вызывающего пути.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp
-
-// ============================================================================
-// FUNCTION: CBossFiendSummon::CBossFiendSummon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp:18
-// RVA: 0x0012C300
-// ADDRESS: 0052c300
-// PROTOTYPE: undefined __thiscall CBossFiendSummon(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendSummon::~CBossFiendSummon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp:26
-// RVA: 0x0012C370
-// ADDRESS: 0052c370
-// PROTOTYPE: void __thiscall ~CBossFiendSummon(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBossFiendSummon::Begin
@@ -64,88 +42,14 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CBossFiendSummon::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp:60
-// RVA: 0x0012C550
-// ADDRESS: 0052c550
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendSummon::Summon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp:188
-// RVA: 0x0012C610
-// ADDRESS: 0052c610
-// PROTOTYPE: int __thiscall Summon(CMoveShape * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendSummonEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp:261
-// RVA: 0x0012C7E0
-// ADDRESS: 0052c7e0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendSummon::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp:33
-// RVA: 0x0013E8D0
-// ADDRESS: 0053e8d0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendSummon::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendsummon.cpp:122
-// RVA: 0x0013F270
-// ADDRESS: 0053f270
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // COMPONENT_VARIANT_END: GameServer
+
+pub(crate) const BOSS_FIEND_SUMMON_SKILL_ID: u32 = 0x1f9;
+
+pub(crate) const fn summoned_creature_usage(random_value: i32) -> u32 {
+    match random_value {
+        1 => 30_004,
+        2 => 30_005,
+        _ => 30_003,
+    }
+}

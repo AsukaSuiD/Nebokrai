@@ -1,13 +1,16 @@
-//! Общий достигнутый путь исполнения трёх исходных владельцев `CSummonSkill`.
+//! Общий достигнутый путь исполнения четырёх исходных владельцев `CSummonSkill`.
 //!
 //! `CSummonCorpseCandle`, `CSummonSkeleton` и `CSummonSpore` различаются
-//! только идентификатором навыка. Модуль сохраняет общий объектный путь,
+//! только идентификатором навыка. `CBossFiendSummon` дополнительно выбирает
+//! одну из трёх разновидностей ровно одним исходным броском на всё применение.
+//! Модуль сохраняет общий объектный путь,
 //! задержку повторного применения, задержку исполнения, пакеты `0xBFE01` и
 //! последовательность вызовов создания.
 //! Поиск владельцев и around-доставка остаются у `CGame`; создаваемая сущность
 //! сразу публикуется через `CServerRegion::add_summoned_creature`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
+use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -133,6 +136,11 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
         }
 
         let amount = properties.query_property(SKILL_USAGE_CONST);
+        let summoned_creature_usage = if skill_id == BOSS_FIEND_SUMMON_SKILL_ID {
+            summoned_creature_usage(game.skill_random_below(3))
+        } else {
+            SKILL_USAGE_SUMMONED_CREATURE_ID
+        };
         let source_x = source.get_tile_x().unwrap_or_default();
         let source_y = source.get_tile_y().unwrap_or_default();
         let master = MasterInfo {
@@ -151,7 +159,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
                 tile_y = position.y;
             }
             let lifetime_ms = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME);
-            let picture_id = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_ID);
+            let picture_id = properties.query_property(summoned_creature_usage);
             let property = game.find_monster_property_by_picture_id(picture_id).cloned();
             if let Some(property) = property {
                 let _ = region.add_summoned_creature(
