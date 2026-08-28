@@ -1585,6 +1585,33 @@ impl CServerRegion {
         Ok(id)
     }
 
+    pub(crate) fn add_thunder_blow_phalanx<Context: ServerRegionMembershipContext>(
+        &mut self,
+        mut phalanx: super::skills::thunderblowphalanx::CThunderBlowPhalanx,
+        tile_x: i32,
+        tile_y: i32,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<i32, RegionMembershipBlock> {
+        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        for existing in self.owned_skill_phalanxes.values_mut() {
+            let SummonedSkillShape::ThunderBlow(existing) = existing else {
+                continue;
+            };
+            if existing.shape().get_tile_x() == Ok(tile_x)
+                && existing.shape().get_tile_y() == Ok(tile_y)
+            {
+                existing.finish();
+            }
+        }
+        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
+        let id = phalanx.shape().identity().id;
+        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::ThunderBlow(phalanx));
+        Ok(id)
+    }
+
     pub(crate) fn add_snow_storm_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::snowstormphalanx::CSnowStormPhalanx,

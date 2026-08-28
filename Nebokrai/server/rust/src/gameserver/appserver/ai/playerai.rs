@@ -77,6 +77,8 @@ pub(crate) struct CPlayerAI {
     fire_ball_last_used_ms: u32,
     chain_lightning: Option<ChainLightningExecutionState>,
     chain_lightning_last_used_ms: u32,
+    thunder_blow: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    thunder_blow_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -201,6 +203,7 @@ impl CPlayerAI {
         self.fire_bolt = None;
         self.fire_ball = None;
         self.chain_lightning = None;
+        self.thunder_blow = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -302,6 +305,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.chain_lightning.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение цепной молнии завершено");
+        }
+        if let Some(mut execution) = self.thunder_blow.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового удара завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -432,6 +439,7 @@ impl CPlayerAI {
         self.fire_bolt = None;
         self.fire_ball = None;
         self.chain_lightning = None;
+        self.thunder_blow = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -616,6 +624,12 @@ impl CPlayerAI {
     pub(crate) const fn mark_chain_lightning_used(&mut self, now_ms: u32) {
         self.chain_lightning_last_used_ms = now_ms;
     }
+
+    pub(crate) const fn thunder_blow(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow }
+    pub(crate) const fn begin_thunder_blow(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.thunder_blow = Some(state); }
+    pub(crate) fn thunder_blow_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow.as_mut() }
+    pub(crate) const fn thunder_blow_last_used_ms(&self) -> u32 { self.thunder_blow_last_used_ms }
+    pub(crate) const fn mark_thunder_blow_used(&mut self, now_ms: u32) { self.thunder_blow_last_used_ms = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall

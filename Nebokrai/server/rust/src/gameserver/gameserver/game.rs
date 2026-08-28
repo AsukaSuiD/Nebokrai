@@ -488,6 +488,7 @@ mod firewall;
 mod godpunishment;
 mod chaossphere;
 mod fireball;
+mod thunderblow;
 mod seal;
 mod thunder;
 mod snowstorm;
@@ -780,6 +781,12 @@ use crate::gameserver::appserver::skills::fireball::{
 };
 use crate::gameserver::appserver::skills::fireballphalanx::{
     calculate_owned_fire_ball_attack, FireBallPhalanxTick,
+};
+use crate::gameserver::appserver::skills::thunderblow::{
+    execute_player_thunder_blow, is_thunder_blow_dispatch,
+};
+use crate::gameserver::appserver::skills::thunderblowphalanx::{
+    calculate_owned_thunder_blow_attack, ThunderBlowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
@@ -36430,6 +36437,7 @@ impl CGame {
             let concrete_fire_bolt = is_fire_bolt_target(dispatch);
             let concrete_fire_ball = is_fire_ball_dispatch(dispatch);
             let concrete_chain_lightning = is_chain_lightning_dispatch(dispatch);
+            let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36555,6 +36563,8 @@ impl CGame {
                 execute_player_fire_ball(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_chain_lightning {
                 execute_player_chain_lightning(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_thunder_blow {
+                execute_player_thunder_blow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {
@@ -39530,6 +39540,9 @@ impl CGame {
             SummonedSkillShape::Thunder(phalanx) => {
                 self.calculate_thunder_attack(phalanx, target_level)
             }
+            SummonedSkillShape::ThunderBlow(phalanx) => {
+                calculate_owned_thunder_blow_attack(self, phalanx, target_level)
+            }
             SummonedSkillShape::SnowStorm(phalanx) => {
                 self.calculate_snow_storm_attack(phalanx)
             }
@@ -39992,6 +40005,12 @@ impl CGame {
                     ))),
                     ThunderPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::ThunderBlow(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    ThunderBlowPhalanxTick::Scan { sampled_at_ms } => Some(Some((
+                        phalanx.shape().identity(), sampled_at_ms,
+                    ))),
+                    ThunderBlowPhalanxTick::Expired => None,
+                },
                 SummonedSkillShape::SnowStorm(phalanx) => match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
                     SnowStormPhalanxTick::Pending => Some(None),
                     SnowStormPhalanxTick::Attack { sampled_at_ms } => Some(Some((
@@ -40209,6 +40228,35 @@ impl CGame {
                     ),
                     _ => false,
                 };
+            }
+            return true;
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::ThunderBlow(thunder_blow),
+        ) = (tick, &phalanx)
+        {
+            let targets = self.thunder_blow_targets(region_id, thunder_blow);
+            for target in &targets {
+                match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                        &phalanx, target.id, region_id, false, runtime,
+                    ),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                        &phalanx, target.id, region_id, sampled_at_ms, runtime,
+                    ),
+                    _ => false,
+                };
+            }
+            if !targets.is_empty()
+                && let Some(mut owner) = self.take_region_owner(region_id)
+            {
+                if let Some(SummonedSkillShape::ThunderBlow(thunder_blow)) =
+                    owner.base_mut().find_skill_phalanx_mut(phalanx_id)
+                {
+                    thunder_blow.finish();
+                }
+                self.restore_region_owner(owner);
             }
             return true;
         }
