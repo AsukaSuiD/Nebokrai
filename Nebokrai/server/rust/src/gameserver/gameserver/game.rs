@@ -805,6 +805,7 @@ use crate::gameserver::appserver::skills::explosivearrow::{
     execute_player_explosive_arrow, explosive_arrow_variant,
 };
 use crate::gameserver::appserver::skills::strike::{execute_player_strike, is_strike_dispatch};
+use crate::gameserver::appserver::skills::yakshaslash::{execute_player_yaksha_slash, is_yaksha_slash_dispatch};
 use crate::gameserver::appserver::skills::daubpoison::{execute_player_daub_poison, is_daub_poison_dispatch};
 use crate::gameserver::appserver::skills::daubpoisonstate::expire_player_daub_poison_state;
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
@@ -37021,6 +37022,7 @@ impl CGame {
             let concrete_explosive_arrow = explosive_arrow_variant(dispatch).is_some();
             let concrete_strike = is_strike_dispatch(dispatch);
             let concrete_daub_poison = is_daub_poison_dispatch(dispatch);
+            let concrete_yaksha_slash = is_yaksha_slash_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37154,6 +37156,8 @@ impl CGame {
                 execute_player_strike(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_daub_poison {
                 execute_player_daub_poison(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_yaksha_slash {
+                execute_player_yaksha_slash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {

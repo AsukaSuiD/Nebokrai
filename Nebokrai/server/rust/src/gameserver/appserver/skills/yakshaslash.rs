@@ -1,162 +1,136 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Летающий рубящий удар якши `CYakshaSlash` (`0x196`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/yakshaslash.cpp`. Сохранены начальная проверка реального
+//! расстояния, две проверки непроходимого для полёта пути, задержка, время
+//! полёта по числу клеток, положительный hit modifier и ровно два RNG-вызова
+//! игрока. `CGame` только разрешает владельцев, применяет готовый удар и
+//! выполняет доставку.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.h
+use super::baseattack::{real_distance, time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::poisonmoth::{master_info, MONSTER_TYPE, PLAYER_TYPE};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::nets::netserver::message::CMessage;
+use crate::public::tools::get_line_direction;
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::CYakshaSlash
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:20
-// RVA: 0x00142400
-// ADDRESS: 00542400
-// PROTOTYPE: undefined __thiscall CYakshaSlash(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const YAKSHA_SLASH_SKILL_ID: u32 = 0x196;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const TARGET_MAX_DISTANCE: u32 = 5_003;
+const MISSILE_FLYING_TIME: u32 = 10_008;
+const TARGET_DAMAGE_FACTOR: u32 = 20_003;
+const BLOCK_UNFLY: u8 = 2;
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::~CYakshaSlash
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:30
-// RVA: 0x00142470
-// ADDRESS: 00542470
-// PROTOTYPE: void __thiscall ~CYakshaSlash(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct YakshaSlashExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    condition_checked: bool,
+    attacking_started: bool,
+    missile_flying_time_ms: u32,
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:126
-// RVA: 0x00142490
-// ADDRESS: 00542490
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl YakshaSlashExecutionState {
+    fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), condition_checked: false, attacking_started: false, missile_flying_time_ms: 0 }
+    }
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:145
-// RVA: 0x00142570
-// ADDRESS: 00542570
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:106
-// RVA: 0x00142670
-// ADDRESS: 00542670
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const fn is_yaksha_slash_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(dispatch, PlayerSkillDispatch::Object { skill_id: YAKSHA_SLASH_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } })
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlashEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:416
-// RVA: 0x00142740
-// ADDRESS: 00542740
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn finish(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:39
-// RVA: 0x00142C10
-// ADDRESS: 00542c10
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn fail(game: &CGame, player_id: i32, code: u8) {
+    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:349
-// RVA: 0x00142DC0
-// ADDRESS: 00542dc0
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn target_position(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<(i32, i32)> {
+    game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y))
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:325
-// RVA: 0x00143030
-// ADDRESS: 00543030
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_cast(game: &mut CGame, player_id: i32, level: i32, target: ShapeIdentity, position: (i32, i32), flying_time: Option<u32>) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(if flying_time.is_some() { 2 } else { 1 });
+    message.add_long(YAKSHA_SLASH_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    if let Some(flying_time) = flying_time {
+        message.add_long(target.object_type); message.add_long(target.id);
+        message.add_long(position.0); message.add_long(position.1);
+        message.add_ulong(flying_time);
+    } else {
+        message.add_long(player.shape().get_direction());
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
-// ============================================================================
-// FUNCTION: CYakshaSlash::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yakshaslash.cpp:179
-// RVA: 0x00143140
-// ADDRESS: 00543140
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, hit: i32) -> Option<(MasterInfo, AttackInformation)> {
+    let player = game.find_player(player_id)?;
+    let combat = player.combat_properties();
+    let master = master_info(player);
+    let span = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1);
+    let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(span)).max(0);
+    let mut attack = AttackInformation { skill_id: YAKSHA_SLASH_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: factor as f32 * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
+    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round() as i32; } }
+    Some((master, attack))
+}
 
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_yaksha_slash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
+    let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID)))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(YAKSHA_SLASH_SKILL_ID, level) else { fail(game, player_id, 2); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_step = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    if ai.yaksha_slash().is_none() {
+        let now = runtime.now_milliseconds();
+        if ai.yaksha_slash_last_used_ms() != 0 && !time_reached(now, ai.yaksha_slash_last_used_ms(), reuse) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        let Some(position) = target_position(game, region_id, target) else { fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) };
+        if maximum != 0 && real_distance(source_x, source_y, position.0, position.1) > maximum as i32 { fail(game, player_id, 0x0b); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        if game.base_magic_path(region_id, source_x, source_y, position.0, position.1, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(YAKSHA_SLASH_SKILL_ID)); }
+        ai.begin_yaksha_slash(YakshaSlashExecutionState::begin(dispatch, now));
+    } else if ai.yaksha_slash().is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    if game.periodic_state_target_dead(region_id, target) || (target.object_type == PLAYER_TYPE && target.id == player_id) { fail(game, player_id, 10); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    if ai.yaksha_slash().is_some_and(|state| !state.condition_checked) {
+        let Some(position) = target_position(game, region_id, target) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+        if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, position.0, position.1)); }
+        send_cast(game, player_id, level, target, position, None);
+        if let Some(state) = ai.yaksha_slash_mut() { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
+    }
+    let started = ai.yaksha_slash().map(|state| state.kernel.started_at_ms()).unwrap_or_default();
+    if !ai.yaksha_slash().is_some_and(|state| state.attacking_started) {
+        if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
+        let Some(position) = target_position(game, region_id, target) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+        let path = game.base_magic_path(region_id, source_x, source_y, position.0, position.1, None);
+        if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        let flying_time = missile_step.wrapping_mul(path.len() as u32);
+        send_cast(game, player_id, level, target, position, Some(flying_time));
+        if let Some(state) = ai.yaksha_slash_mut() { state.missile_flying_time_ms = flying_time; state.attacking_started = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); }
+    }
+    let flying_time = ai.yaksha_slash().map_or(0, |state| state.missile_flying_time_ms);
+    if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(flying_time)) { return terminal(QueuedSkillExecutionState::Pending) }
+    if let Some((master, attack)) = calculate_attack(game, player_id, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } }
+    if let Some(state) = ai.yaksha_slash_mut() { let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
+    ai.mark_yaksha_slash_used(runtime.now_milliseconds()); finish(game, player_id); terminal(QueuedSkillExecutionState::Completed)
+}

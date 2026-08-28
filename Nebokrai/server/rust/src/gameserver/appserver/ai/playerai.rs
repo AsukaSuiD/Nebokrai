@@ -70,6 +70,7 @@ use crate::gameserver::appserver::skills::explosivearrow::{
     ExplosiveArrowExecutionState, ExplosiveArrowVariant,
 };
 use crate::gameserver::appserver::skills::strike::StrikeExecutionState;
+use crate::gameserver::appserver::skills::yakshaslash::YakshaSlashExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -124,6 +125,8 @@ pub(crate) struct CPlayerAI {
     strike_last_used_ms: u32,
     daub_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     daub_poison_last_used_ms: u32,
+    yaksha_slash: Option<YakshaSlashExecutionState>,
+    yaksha_slash_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -319,6 +322,7 @@ impl CPlayerAI {
         self.explosive_arrow = None;
         self.strike = None;
         self.daub_poison = None;
+        self.yaksha_slash = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -484,6 +488,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.daub_poison.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение смазки оружия ядом завершено");
+        }
+        if let Some(mut execution) = self.yaksha_slash.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение удара якши завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -737,6 +745,7 @@ impl CPlayerAI {
         self.explosive_arrow = None;
         self.strike = None;
         self.daub_poison = None;
+        self.yaksha_slash = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -922,6 +931,11 @@ impl CPlayerAI {
     pub(crate) fn daub_poison_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.daub_poison.as_mut() }
     pub(crate) const fn daub_poison_last_used_ms(&self) -> u32 { self.daub_poison_last_used_ms }
     pub(crate) const fn mark_daub_poison_used(&mut self, now_ms: u32) { self.daub_poison_last_used_ms = now_ms; }
+    pub(crate) const fn yaksha_slash(&self) -> Option<YakshaSlashExecutionState> { self.yaksha_slash }
+    pub(crate) const fn begin_yaksha_slash(&mut self, state: YakshaSlashExecutionState) { self.yaksha_slash = Some(state); }
+    pub(crate) fn yaksha_slash_mut(&mut self) -> Option<&mut YakshaSlashExecutionState> { self.yaksha_slash.as_mut() }
+    pub(crate) const fn yaksha_slash_last_used_ms(&self) -> u32 { self.yaksha_slash_last_used_ms }
+    pub(crate) const fn mark_yaksha_slash_used(&mut self, now_ms: u32) { self.yaksha_slash_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);
