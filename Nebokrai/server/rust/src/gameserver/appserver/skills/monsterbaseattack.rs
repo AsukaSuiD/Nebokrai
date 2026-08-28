@@ -66,6 +66,7 @@ use super::monsterrangeattack::{
 use super::chuckstone::CHUCK_STONE_SKILL_ID;
 use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptomaine};
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
+use super::fury::{FURY_SKILL_ID, execute_owned_fury};
 use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
@@ -116,6 +117,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | CORPSE_PTOMAINE_SKILL_ID
             | ENERGY_BOLT_SKILL_ID
             | ZOMBIE_CLAW_SKILL_ID
+            | FURY_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
@@ -266,6 +268,22 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let skill_id = u32::from(skill.id);
     if !is_owned_monster_attack_skill(skill_id) {
         return false;
+    }
+    if skill_id == FURY_SKILL_ID {
+        let Some(skill_properties) = game
+            .skill_base_properties(skill_id, i32::from(skill.level))
+            .cloned()
+        else {
+            return false;
+        };
+        return execute_owned_fury(
+            game,
+            region,
+            monster_id,
+            skill.level,
+            &skill_properties,
+            runtime.now_milliseconds(),
+        );
     }
     let fast_attack = skill_id == MONSTER_FAST_ATTACK_SKILL_ID;
     if target.is_none()
@@ -794,7 +812,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             let ordinary_attack = region
                 .find_monster_by_id(monster_id)
                 .map(|monster| {
-                    monster.battle_fairy_attack_bounds(
+                    monster.state_attack_bounds(
                         property.minimum_attack,
                         property.maximum_attack,
                     )

@@ -352,7 +352,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate); }
     send_visual(game, region, &source_shape, monster_id, skill_level, 2, Some((target_identity, target_x, target_y)));
     let (minimum, maximum, element) = region.find_monster_by_id(monster_id).map(|monster| {
-        let (minimum, maximum) = monster.battle_fairy_attack_bounds(property.minimum_attack, property.maximum_attack);
+        let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
         let minimum = pet_attack.map_or(minimum, |pet| pet.minimum_attack);
         let maximum = pet_attack.map_or(maximum, |pet| pet.maximum_attack);
         (minimum as i32, maximum as i32, monster.battle_fairy_element_modify(0))

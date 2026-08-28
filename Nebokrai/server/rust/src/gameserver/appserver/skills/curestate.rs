@@ -10,6 +10,8 @@ pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
 use super::manashieldstate::{
     MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -43,6 +45,25 @@ pub(crate) fn send_cure_state_visual(
         return;
     };
     let identity = player.shape().identity();
+    let message = cure_state_message(identity, state, begin);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
+pub(crate) fn send_cure_state_visual_at(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: CureState,
+    begin: bool,
+) {
+    let message = cure_state_message(identity, state, begin);
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+fn cure_state_message(identity: ShapeIdentity, state: CureState, begin: bool) -> CMessage {
     let mut message = CMessage::new(if begin {
         MANA_SHIELD_STATE_BEGIN_MESSAGE
     } else {
@@ -55,7 +76,30 @@ pub(crate) fn send_cure_state_visual(
         message.add_long(state.client_time());
         message.add_long(0);
     }
-    let _ = game.send_player_shape_around(player_id, None, &message);
+    message
+}
+
+pub(crate) fn expire_monster_cure_state(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+) -> bool {
+    let expired = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let state = monster.move_shape_mut().take_cure_state_for_ai()?;
+        Some((
+            state,
+            monster.move_shape().shape().identity(),
+            monster.move_shape().shape().get_tile_x().unwrap_or_default(),
+            monster.move_shape().shape().get_tile_y().unwrap_or_default(),
+        ))
+    });
+    let Some((state, identity, tile_x, tile_y)) = expired else {
+        return false;
+    };
+    send_cure_state_visual_at(
+        game, region.id, identity, tile_x, tile_y, state, false,
+    );
+    true
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально

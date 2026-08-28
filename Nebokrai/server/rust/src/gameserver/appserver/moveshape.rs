@@ -46,6 +46,7 @@ use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissS
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
+use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
@@ -464,6 +465,7 @@ pub(crate) struct CanonicalStateStorage {
     enlarge_max_mp_state: Option<EnlargeMaxMpState>,
     origin_state: Option<OriginState>,
     hearten_state: Option<HeartenState>,
+    fury_states: Vec<FuryState>,
     cure_state: Option<CureState>,
     poison_arrow_state: Option<PoisonArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
@@ -655,6 +657,7 @@ impl CMoveShape {
         self.enlarge_max_mp_state = None;
         self.origin_state = None;
         self.hearten_state = None;
+        self.fury_states.clear();
         self.cure_state = None;
         self.poison_arrow_state = None;
         self.spider_poison_state = None;
@@ -687,6 +690,7 @@ impl CMoveShape {
     pub(crate) const fn has_materialized_abnormality(&self) -> bool {
         self.state_storage.agility_state_2.is_some()
             || self.state_storage.hearten_state.is_some()
+            || !self.state_storage.fury_states.is_empty()
             || self.state_storage.cure_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
             || self.state_storage.spider_poison_state.is_some()
@@ -792,6 +796,11 @@ impl CMoveShape {
             self.hearten_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let fury = self
+            .fury_states
+            .iter()
+            .filter(|state| state.skill_id() as i32 == state_id)
+            .count();
         let cure = usize::from(
             self.cure_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -831,6 +840,7 @@ impl CMoveShape {
             .saturating_add(enlarge_max_mp)
             .saturating_add(origin)
             .saturating_add(hearten)
+            .saturating_add(fury)
             .saturating_add(cure)
             .saturating_add(poison_arrow)
             .saturating_add(spider_poison)
@@ -874,6 +884,10 @@ impl CMoveShape {
             || self
                 .hearten_state
                 .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .fury_states
+                .iter()
+                .any(|state| state.skill_id() == state_id)
             || self
                 .cure_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -992,6 +1006,27 @@ impl CMoveShape {
         self.hearten_state.take()
     }
 
+    pub(crate) fn push_fury_state(&mut self, state: FuryState) {
+        self.fury_states.push(state);
+    }
+
+    pub(crate) fn fury_states(&self) -> &[FuryState] {
+        &self.fury_states
+    }
+
+    pub(crate) fn take_expired_fury_states(&mut self, now_ms: u32) -> Vec<FuryState> {
+        let mut expired = Vec::new();
+        let mut position = 0;
+        while position < self.fury_states.len() {
+            if self.fury_states[position].expired(now_ms) {
+                expired.push(self.fury_states.remove(position));
+            } else {
+                position += 1;
+            }
+        }
+        expired
+    }
+
     pub(crate) fn replace_mana_shield_state(
         &mut self,
         state: ManaShieldState,
@@ -1108,6 +1143,12 @@ impl CMoveShape {
 
     pub(crate) fn take_spider_poison_state_for_ai(&mut self) -> Option<SpiderPoisonState> {
         self.spider_poison_state.take()
+    }
+
+    pub(crate) fn take_spider_poison_state(&mut self) -> Option<SpiderPoisonState> {
+        let state = self.spider_poison_state.take()?;
+        self.periodic_attack_order.shift_remove(&state.skill_id());
+        Some(state)
     }
 
     pub(crate) fn replace_spider_web_state(

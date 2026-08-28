@@ -352,7 +352,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     let ordinary_attack = region
         .find_monster_by_id(monster_id)
         .map(|monster| {
-            monster.battle_fairy_attack_bounds(property.minimum_attack, property.maximum_attack)
+            monster.state_attack_bounds(property.minimum_attack, property.maximum_attack)
         })
         .unwrap_or((property.minimum_attack, property.maximum_attack));
     let physical_minimum = pet_attack.map_or(ordinary_attack.0, |pet| pet.minimum_attack) as i32;

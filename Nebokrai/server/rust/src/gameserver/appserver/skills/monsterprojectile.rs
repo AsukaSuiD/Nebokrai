@@ -374,7 +374,7 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
                 let pet = monster.pet_attack_properties(&dispatch.property);
                 (pet.minimum_attack, pet.maximum_attack)
             } else {
-                monster.battle_fairy_attack_bounds(
+                monster.state_attack_bounds(
                     dispatch.property.minimum_attack,
                     dispatch.property.maximum_attack,
                 )
