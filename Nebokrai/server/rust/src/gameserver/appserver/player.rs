@@ -517,6 +517,13 @@ pub(crate) enum BattleFairyWarSoulAction {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WarSoulHitOutcome {
+    pub(crate) broken: bool,
+    pub(crate) broadcast_previous_status: bool,
+    pub(crate) update: super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairySummonOutcome {
     FeatureDisabled,
@@ -8243,6 +8250,41 @@ impl CPlayer {
     pub(crate) fn war_soul_attack(&self, factory: &CGoodsFactory) -> Option<i32> {
         self.war_soul_goods(factory)
             .map(|goods| goods.addon_property_value(factory, GAP_BF_ATTACK, 1))
+    }
+
+    /// Специальная ветвь `OnBeenAttacked(..., true)` сферы хаоса: урон
+    /// сначала уменьшает `GAP_BF_HP` с точной wrapping-арифметикой, разрушение
+    /// сбрасывает состояние, после чего формируется полный снимок старого клиента.
+    pub(crate) fn apply_war_soul_hit(
+        &mut self,
+        damage: i32,
+        factory: &CGoodsFactory,
+        da_kong_key: bool,
+    ) -> Option<WarSoulHitOutcome> {
+        if self.war_soul_state == 0 { return None }
+        let player_id = self.player_id();
+        let goods = self.equipment_mut().get_goods_mut(10)?;
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) != 1 { return None }
+        let cut_hurt = goods.addon_property_value(factory, GAP_BF_CUT_HURT_SCALE, 1);
+        let health = goods.addon_property_value(factory, GAP_BF_HP, 1);
+        let next = health.wrapping_sub(10_000i32.wrapping_sub(cut_hurt).wrapping_mul(damage));
+        let broken = next < 1;
+        let stored = if broken { 0 } else { next };
+        let _ = goods.set_addon_property_value_core(GAP_BF_HP, 1, stored);
+        let identity = goods.identity();
+        let mut old_client_payload = Vec::new();
+        if !goods.serialize_for_old_client(&mut old_client_payload, factory, da_kong_key) { return None }
+        let broadcast_previous_status = broken && self.set_war_soul_status(0);
+        Some(WarSoulHitOutcome {
+            broken,
+            broadcast_previous_status,
+            update: super::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate {
+                message_type: 0x000b_f918,
+                player_id,
+                goods: identity,
+                old_client_payload,
+            },
+        })
     }
 
     pub(crate) fn equipped_battle_fairy_mana(&self, factory: &CGoodsFactory) -> Option<i32> {

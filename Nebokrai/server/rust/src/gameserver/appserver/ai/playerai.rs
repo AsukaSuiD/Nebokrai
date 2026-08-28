@@ -12,6 +12,7 @@
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
 //! стена, огненный круг, молния,
+//! сфера хаоса и семь падающих звёзд,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -40,6 +41,7 @@ use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransferKind;
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
+use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
@@ -74,6 +76,8 @@ pub(crate) struct CPlayerAI {
     infernol_last_used_ms: u32,
     seven_shooting_star: Option<SevenShootingStarExecutionState>,
     seven_shooting_star_last_used_ms: u32,
+    chaos_sphere: Option<ChaosSphereExecutionState>,
+    chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
     lightning_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
@@ -181,6 +185,7 @@ impl CPlayerAI {
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
+        self.chaos_sphere = None;
         self.lightning = None;
         self.callosity = None;
         self.hearten = None;
@@ -277,6 +282,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.seven_shooting_star.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение семи падающих звёзд завершено");
+        }
+        if let Some(mut execution) = self.chaos_sphere.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение сферы хаоса завершено");
         }
         if let Some(mut execution) = self.lightning.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -381,6 +390,7 @@ impl CPlayerAI {
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
+        self.chaos_sphere = None;
         self.lightning = None;
         self.callosity = None;
         self.hearten = None;
@@ -594,6 +604,26 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_seven_shooting_star_used(&mut self, now_ms: u32) {
         self.seven_shooting_star_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {
+        self.chaos_sphere.as_ref()
+    }
+
+    pub(crate) const fn begin_chaos_sphere(&mut self, state: ChaosSphereExecutionState) {
+        self.chaos_sphere = Some(state);
+    }
+
+    pub(crate) fn chaos_sphere_mut(&mut self) -> Option<&mut ChaosSphereExecutionState> {
+        self.chaos_sphere.as_mut()
+    }
+
+    pub(crate) const fn chaos_sphere_last_used_ms(&self) -> u32 {
+        self.chaos_sphere_last_used_ms
+    }
+
+    pub(crate) const fn mark_chaos_sphere_used(&mut self, now_ms: u32) {
+        self.chaos_sphere_last_used_ms = now_ms;
     }
 
     pub(crate) const fn lightning(&self) -> Option<LightningExecutionState> {

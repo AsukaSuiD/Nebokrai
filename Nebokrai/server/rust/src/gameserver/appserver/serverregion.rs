@@ -1440,6 +1440,30 @@ impl CServerRegion {
         Ok(id)
     }
 
+    pub(crate) fn add_chaos_sphere_phalanx<Context: ServerRegionMembershipContext>(
+        &mut self,
+        mut phalanx: super::skills::chaosspherephalanx::CChaosSpherePhalanx,
+        tile_x: i32,
+        tile_y: i32,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<i32, RegionMembershipBlock> {
+        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        self.add_object(
+            phalanx.shape_mut(),
+            ShapeRuntimeFacts::default(),
+            area_width,
+            area_height,
+            now_ms,
+            context,
+        )?;
+        let id = phalanx.shape().identity().id;
+        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::ChaosSphere(phalanx));
+        Ok(id)
+    }
+
     pub(crate) fn add_fire_wall_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::firewallphalanx::CFireWallPhalanx,
@@ -2863,6 +2887,10 @@ impl CServerRegion {
         self.areas.get(index)
     }
 
+    pub(crate) fn block_at(&self, x: i32, y: i32) -> Option<u8> {
+        self.region.get_block(x, y).ok()
+    }
+
     /// Mutable counterpart точного coordinate-overload `GetArea`; нужен
     /// только owner-у war-soul map, который уже владеет всем area-grid.
     fn get_area_mut(&mut self, x: i32, y: i32) -> Option<&mut CArea> {
@@ -2907,6 +2935,17 @@ impl CServerRegion {
         let area_y = point.y / WAR_SOUL_AREA_SPAN;
         self.get_area_mut(area_x, area_y)
             .is_some_and(|area| area.del_war_soul(player_id, point))
+    }
+
+    /// Точный `GetWarSoulXY`: упорядоченная карта одной области боевого духа
+    /// фильтруется по координатам и сохраняет возрастание идентификаторов игроков.
+    pub(crate) fn war_souls_at(&self, x: i32, y: i32) -> BTreeMap<u32, WarSoulPoint> {
+        let mut found = BTreeMap::new();
+        if let Some(area) = self.get_area(x / WAR_SOUL_AREA_SPAN, y / WAR_SOUL_AREA_SPAN) {
+            area.find_war_souls(&mut found);
+        }
+        found.retain(|_, point| point.x == x && point.y == y);
+        found
     }
 
     /// Собирает player IDs одной area без чтения их координат: исходный
@@ -4608,20 +4647,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // RVA: 0x00082B60
 // ADDRESS: 00482b60
 // PROTOTYPE: void __thiscall DelOneGoodFromAllPlayer(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CServerRegion::GetWarSoulXY
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2575
-// RVA: 0x00082BE0
-// ADDRESS: 00482be0
-// PROTOTYPE: void __thiscall GetWarSoulXY(long param_1, long param_2, map<unsigned_long,tagPOINT,std::less<unsigned_long>,std::allocator<std::pair<unsigned_long_const_,tagPOINT>_>_> * param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
