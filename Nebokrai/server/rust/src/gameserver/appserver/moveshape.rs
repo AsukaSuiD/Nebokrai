@@ -16,6 +16,8 @@
 //! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
 //! паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
+//! Рыцарский удар хранит здесь единственную каноническую блокировку движения
+//! и боя; замена, истечение и снятие очищением меняют те же счётчики.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
 //! остаются у этого владельца.
@@ -56,6 +58,7 @@ use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
+use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::promotionstate::PromotionState;
@@ -499,6 +502,7 @@ pub(crate) struct CanonicalStateStorage {
     weak_state_order: Option<u32>,
     god_bless_state_order: Option<u32>,
     knock_out_state: Option<KnockOutState>,
+    knight_cut_state: Option<KnightCutState>,
     blind_state_order: IndexSet<u32>,
     blood_loss_state: Option<BloodLossState>,
     swordship_states: Vec<SwordshipState>,
@@ -707,6 +711,7 @@ impl CMoveShape {
         self.weak_state_order = None;
         self.god_bless_state_order = None;
         self.knock_out_state = None;
+        self.knight_cut_state = None;
         self.blind_state_order.clear();
         self.blood_loss_state = None;
         self.wuxing_states.clear();
@@ -750,6 +755,7 @@ impl CMoveShape {
             || self.state_storage.god_bless_state.is_some()
             || self.state_storage.soul_collect_state.is_some()
             || self.state_storage.knock_out_state.is_some()
+            || self.state_storage.knight_cut_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
@@ -921,6 +927,10 @@ impl CMoveShape {
             self.knock_out_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let knight_cut = usize::from(
+            self.knight_cut_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let blood_loss = usize::from(
             self.blood_loss_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -957,6 +967,7 @@ impl CMoveShape {
             .saturating_add(god_bless)
             .saturating_add(soul_collect)
             .saturating_add(knock_out)
+            .saturating_add(knight_cut)
             .saturating_add(blood_loss)
             .saturating_add(battle_fairy_attributes)
             .saturating_add(shields)
@@ -1032,6 +1043,9 @@ impl CMoveShape {
             || self.soul_collect_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .knock_out_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .knight_cut_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .blood_loss_state
@@ -1576,6 +1590,24 @@ impl CMoveShape {
     pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {
         let state = self.knock_out_state.take()?;
         self.blind_state_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn replace_knight_cut_state(&mut self, state: KnightCutState) -> Option<KnightCutState> {
+        self.curable_state_order.insert(state.skill_id());
+        self.knight_cut_state.replace(state)
+    }
+
+    pub(crate) fn take_expired_knight_cut_state(&mut self, now_ms: u32) -> Option<KnightCutState> {
+        let state = self.knight_cut_state.filter(|state| state.expired(now_ms))?;
+        self.knight_cut_state = None;
+        self.curable_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn take_knight_cut_state(&mut self) -> Option<KnightCutState> {
+        let state = self.knight_cut_state.take()?;
         self.curable_state_order.shift_remove(&state.skill_id());
         Some(state)
     }

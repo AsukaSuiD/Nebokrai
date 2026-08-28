@@ -814,6 +814,7 @@ use crate::gameserver::appserver::skills::thunderblow2::{
 };
 use crate::gameserver::appserver::skills::mosou::{execute_player_mosou, is_mosou_dispatch};
 use crate::gameserver::appserver::skills::ghostcut::{execute_player_ghost_cut, is_ghost_cut_dispatch};
+use crate::gameserver::appserver::skills::knightcut::{execute_player_knight_cut, is_knight_cut_dispatch};
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
 };
@@ -847,6 +848,9 @@ use crate::gameserver::appserver::skills::furystate::expire_monster_fury_states;
 use crate::gameserver::appserver::skills::bossbluefurystate::expire_monster_boss_blue_fury_state;
 use crate::gameserver::appserver::skills::bossbluequakestate::{
     expire_monster_boss_blue_quake_state, expire_player_boss_blue_quake_state,
+};
+use crate::gameserver::appserver::skills::knightcutstate::{
+    expire_monster_knight_cut_state, expire_player_knight_cut_state,
 };
 use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
 use crate::gameserver::appserver::skills::machinerystomp::{
@@ -26275,6 +26279,7 @@ impl CGame {
         };
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
+        let _ = expire_player_knight_cut_state(self, player_id, now_ms);
         let weak_ended = self.finish_player_weak_outside(player_id, runtime);
         let god_bless_ended = self.finish_player_god_bless(player_id, now_ms, runtime);
         let expired_cure = self
@@ -36454,6 +36459,7 @@ impl CGame {
             let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
             let concrete_mosou = is_mosou_dispatch(dispatch);
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
+            let concrete_knight_cut = is_knight_cut_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36590,6 +36596,8 @@ impl CGame {
                 execute_player_mosou(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_ghost_cut {
                 execute_player_ghost_cut(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_knight_cut {
+                execute_player_knight_cut(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {
@@ -41102,6 +41110,12 @@ impl CGame {
                         now_ms,
                     );
                     let _ = expire_monster_boss_blue_quake_state(
+                        self,
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
+                    let _ = expire_monster_knight_cut_state(
                         self,
                         owner.base_mut(),
                         monster_id,

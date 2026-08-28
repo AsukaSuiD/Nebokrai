@@ -21,6 +21,10 @@ use super::knockoutstate::{
     KNOCK_OUT_STATE_ID, KnockOutState, finish_player_knock_out_state_on_defense,
     send_knock_out_state_visual,
 };
+use super::knightcutstate::{
+    KNIGHT_CUT_STATE_ID, KnightCutState, finish_player_knight_cut_state_on_cure,
+    send_knight_cut_state_visual,
+};
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
 use super::spiderpoisonstate::{
     SpiderPoisonState, finish_player_spider_poison_state_on_cure,
@@ -167,6 +171,7 @@ enum RemovedMonsterCurableState {
     SpiderWeb(SpiderWebState),
     KnockOut(KnockOutState),
     BossBlueQuake(BossBlueQuakeState),
+    KnightCut(KnightCutState),
 }
 
 fn finish_monster_curable_state(
@@ -204,6 +209,12 @@ fn finish_monster_curable_state(
                 monster.move_shape_mut().set_fightable(true);
                 RemovedMonsterCurableState::BossBlueQuake(state)
             }
+            KNIGHT_CUT_STATE_ID => {
+                let state = monster.move_shape_mut().take_knight_cut_state()?;
+                monster.move_shape_mut().set_moveable(true);
+                monster.move_shape_mut().set_fightable(true);
+                RemovedMonsterCurableState::KnightCut(state)
+            }
             _ => return None,
         };
         Some((removed, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?))
@@ -216,6 +227,7 @@ fn finish_monster_curable_state(
         RemovedMonsterCurableState::SpiderWeb(state) => send_spider_web_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::KnockOut(state) => send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::BossBlueQuake(state) => send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
+        RemovedMonsterCurableState::KnightCut(state) => send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
     }
     true
 }
@@ -226,6 +238,7 @@ fn finish_curable_state(game: &mut CGame, region_id: i32, target: ShapeIdentity,
         (PLAYER_TYPE, SPIDER_WEB_SKILL_ID) => finish_player_spider_web_state_on_defense(game, target.id, now_ms),
         (PLAYER_TYPE, KNOCK_OUT_STATE_ID) => finish_player_knock_out_state_on_defense(game, target.id, now_ms),
         (PLAYER_TYPE, BOSS_BLUE_QUAKE_STATE_ID) => finish_player_boss_blue_quake_state_on_cure(game, target.id, now_ms),
+        (PLAYER_TYPE, KNIGHT_CUT_STATE_ID) => finish_player_knight_cut_state_on_cure(game, target.id, now_ms),
         (MONSTER_TYPE, _) => finish_monster_curable_state(game, region_id, target.id, state_id, now_ms),
         _ => false,
     }
