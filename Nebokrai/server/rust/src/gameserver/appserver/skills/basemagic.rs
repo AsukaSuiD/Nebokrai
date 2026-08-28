@@ -40,6 +40,17 @@ pub(crate) const SKILL_USAGE_ELEMENT_MODIFIER: u32 = 20_015;
 pub(crate) const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 pub(crate) const SKILL_USAGE_SUMMONED_SPEED: u32 = 30_002;
 
+impl CGame {
+    /// Общий legacy failure-пакет базовой магии и стрельбы остаётся рядом с
+    /// семейством навыков; `CGame` предоставляет только фактическую сетевую доставку.
+    pub(crate) fn send_base_magic_failure(&self, player_id: i32, action: u8) {
+        let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+        message.add_byte(0);
+        message.add_byte(action);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BaseMagicExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,

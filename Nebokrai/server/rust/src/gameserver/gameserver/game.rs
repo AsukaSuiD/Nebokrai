@@ -761,7 +761,7 @@ use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
 };
 use crate::gameserver::appserver::skills::basemagic::{
-    execute_player_base_magic, BASE_MAGIC_EFFECT_MESSAGE, BASE_MAGIC_SKILL_ID,
+    execute_player_base_magic, BASE_MAGIC_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::basemagicphalanx::{
     calculate_owned_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
@@ -34899,13 +34899,6 @@ impl CGame {
         handled
     }
 
-    pub(crate) fn send_base_magic_failure(&self, player_id: i32, action: u8) {
-        let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-        message.add_byte(0);
-        message.add_byte(action);
-        let _ = message.send_to_player(self.net_server(), player_id);
-    }
-
     pub(crate) fn send_skill_system_info(&self, player_id: i32, string_id: &[u8]) {
         let mut message = CMessage::new(0x000b_f807);
         message.add_ulong(CSkillFactory::get_skill_failed_message_color());
@@ -35851,13 +35844,6 @@ impl CGame {
             first_contact,
             killing_blow,
         }
-    }
-
-    pub(crate) fn send_battle_fairy_skill_failure(&self, player_id: i32, action: u8) {
-        let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
-        message.add_byte(4);
-        message.add_byte(action);
-        let _ = message.send_to_player(self.net_server(), player_id);
     }
 
     pub(crate) fn target_has_state_by_skill_id(

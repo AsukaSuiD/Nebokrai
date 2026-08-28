@@ -68,6 +68,7 @@ pub(crate) mod appserver {
         pub(crate) mod basemagicphalanx;
         pub(crate) mod battlefairybasemagic;
         pub(crate) mod battlefairybasemagicphalanx;
+        pub(crate) mod battlefairyskill;
         pub(crate) mod battlefairyattribute;
         pub(crate) mod battlefairyattributestate;
         pub(crate) mod battlefairytransfer;
