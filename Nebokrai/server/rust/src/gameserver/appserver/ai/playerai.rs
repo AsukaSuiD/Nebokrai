@@ -55,6 +55,7 @@ use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCu
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
 use crate::gameserver::appserver::skills::knightcut::KnightCutExecutionState;
+use crate::gameserver::appserver::skills::littleflash::LittleFlashExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
@@ -114,6 +115,8 @@ pub(crate) struct CPlayerAI {
     ju_cut_last_used_ms: u32,
     lightning_sword: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     lightning_sword_last_used_ms: u32,
+    little_flash: Option<LittleFlashExecutionState>,
+    little_flash_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -257,6 +260,7 @@ impl CPlayerAI {
         self.leaf_cut = None;
         self.ju_cut = None;
         self.lightning_sword = None;
+        self.little_flash = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -414,6 +418,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение молниеносного меча завершено");
         }
+        if let Some(mut execution) = self.little_flash.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малого рывка завершено");
+        }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненной стены завершено");
@@ -562,6 +570,7 @@ impl CPlayerAI {
         self.leaf_cut = None;
         self.ju_cut = None;
         self.lightning_sword = None;
+        self.little_flash = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -823,6 +832,11 @@ impl CPlayerAI {
     pub(crate) fn lightning_sword_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.lightning_sword.as_mut() }
     pub(crate) const fn lightning_sword_last_used_ms(&self) -> u32 { self.lightning_sword_last_used_ms }
     pub(crate) const fn mark_lightning_sword_used(&mut self, now_ms: u32) { self.lightning_sword_last_used_ms = now_ms; }
+    pub(crate) const fn little_flash(&self) -> Option<&LittleFlashExecutionState> { self.little_flash.as_ref() }
+    pub(crate) fn begin_little_flash(&mut self, state: LittleFlashExecutionState) { self.little_flash = Some(state); }
+    pub(crate) fn little_flash_mut(&mut self) -> Option<&mut LittleFlashExecutionState> { self.little_flash.as_mut() }
+    pub(crate) const fn little_flash_last_used_ms(&self) -> u32 { self.little_flash_last_used_ms }
+    pub(crate) const fn mark_little_flash_used(&mut self, now_ms: u32) { self.little_flash_last_used_ms = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall

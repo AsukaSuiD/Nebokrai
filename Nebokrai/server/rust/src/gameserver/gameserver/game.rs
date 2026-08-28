@@ -828,6 +828,9 @@ use crate::gameserver::appserver::skills::jucut::{execute_player_ju_cut, is_ju_c
 use crate::gameserver::appserver::skills::lightningsword::{
     execute_player_lightning_sword, is_lightning_sword_dispatch,
 };
+use crate::gameserver::appserver::skills::littleflash::{
+    execute_player_little_flash, is_little_flash_dispatch,
+};
 use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
@@ -33534,7 +33537,7 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
-                    let (rejected, interrupted_rage_level) = {
+                    let (rejected, interrupted_rage_level, interrupted_flash, interrupted_little_flash) = {
                         let player = self
                             .players
                             .get_mut(&player_id)
@@ -33543,6 +33546,8 @@ impl CGame {
                         let interrupted_rage_level = (changes_command
                             && player.player_ai().rage().is_some())
                             .then(|| player.learned_skill_level(RAGE_SKILL_ID));
+                        let interrupted_flash = changes_command && player.player_ai().flash().is_some();
+                        let interrupted_little_flash = changes_command && player.player_ai().little_flash().is_some();
                         let interrupted_agility = player.player_ai().agility_family().is_some()
                             && changes_command;
                         let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
@@ -33551,6 +33556,7 @@ impl CGame {
                             || player.player_ai().callosity().is_some()
                             || player.player_ai().ju_cut().is_some()
                             || player.player_ai().lightning_sword().is_some()
+                            || player.player_ai().little_flash().is_some()
                             || player.player_ai().knock_out().is_some())
                             && changes_command;
                         if interrupted_delayed_skill {
@@ -33561,13 +33567,20 @@ impl CGame {
                             player.set_current_skill_id(None);
                         }
                         let rejected = player.player_ai_mut().queue_player_skill(dispatch);
-                        (rejected, interrupted_rage_level)
+                        (rejected, interrupted_rage_level, interrupted_flash, interrupted_little_flash)
                     };
                     if let Some(level) = interrupted_rage_level {
                         end_player_rage(self, player_id, level);
                         let interrupted_at_ms = game_tick_milliseconds();
                         if let Some(player) = self.players.get_mut(&player_id) {
                             player.player_ai_mut().mark_rage_used(interrupted_at_ms);
+                        }
+                    }
+                    if interrupted_flash || interrupted_little_flash {
+                        let interrupted_at_ms = game_tick_milliseconds();
+                        if let Some(player) = self.players.get_mut(&player_id) {
+                            if interrupted_flash { player.player_ai_mut().mark_flash_used(interrupted_at_ms); }
+                            if interrupted_little_flash { player.player_ai_mut().mark_little_flash_used(interrupted_at_ms); }
                         }
                     }
                     for _ in 0..rejected {
@@ -33995,11 +34008,15 @@ impl CGame {
         target: ShapeIdentity,
     ) {
         let mut interrupted_rage_level = None;
+        let mut interrupted_flash = false;
+        let mut interrupted_little_flash = false;
         let released = self.find_player_mut(player_id).is_some_and(|player| {
             let interrupted_agility = player.player_ai().agility_family().is_some();
             if player.player_ai().rage().is_some() {
                 interrupted_rage_level = Some(player.learned_skill_level(RAGE_SKILL_ID));
             }
+            interrupted_flash = player.player_ai().flash().is_some();
+            interrupted_little_flash = player.player_ai().little_flash().is_some();
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
                 || player.player_ai().agility_family().is_some()
@@ -34015,6 +34032,7 @@ impl CGame {
                 || player.player_ai().leaf_cut().is_some()
                 || player.player_ai().ju_cut().is_some()
                 || player.player_ai().lightning_sword().is_some()
+                || player.player_ai().little_flash().is_some()
                 || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -34034,6 +34052,13 @@ impl CGame {
                 let interrupted_at_ms = game_tick_milliseconds();
                 if let Some(player) = self.find_player_mut(player_id) {
                     player.player_ai_mut().mark_rage_used(interrupted_at_ms);
+                }
+            }
+            if interrupted_flash || interrupted_little_flash {
+                let interrupted_at_ms = game_tick_milliseconds();
+                if let Some(player) = self.find_player_mut(player_id) {
+                    if interrupted_flash { player.player_ai_mut().mark_flash_used(interrupted_at_ms); }
+                    if interrupted_little_flash { player.player_ai_mut().mark_little_flash_used(interrupted_at_ms); }
                 }
             }
             let _ = self.send_base_attack_failure(player_id, 2);
@@ -36597,6 +36622,7 @@ impl CGame {
             let concrete_leaf_cut = is_leaf_cut_dispatch(dispatch);
             let concrete_ju_cut = is_ju_cut_dispatch(dispatch);
             let concrete_lightning_sword = is_lightning_sword_dispatch(dispatch);
+            let concrete_little_flash = is_little_flash_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36751,6 +36777,8 @@ impl CGame {
                 execute_player_ju_cut(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning_sword {
                 execute_player_lightning_sword(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_little_flash {
+                execute_player_little_flash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {

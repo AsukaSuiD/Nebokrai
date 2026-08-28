@@ -7,7 +7,8 @@
 //! поражает цели на всех предшествующих клетках в региональном порядке.
 //! Цели дедуплицируются на весь рывок; каждая формула выполняет ровно два
 //! собственных RNG-вызова. `CGame` оставляет только spatial relocation,
-//! применение урона и доставку.
+//! применение урона и доставку. Совпадающая с `CLittleFlash` damage-формула
+//! остаётся узким семейным helper-ом; path и lifecycle навыков различаются.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::kernel::{SkillExecutionKernel, SkillStage};
@@ -56,7 +57,7 @@ fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkill
 pub(crate) fn is_flash_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == FLASH_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
 fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
-fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
+pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
 
 fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
@@ -94,7 +95,7 @@ fn target_position(game: &CGame, region_id: i32, player_id: i32, dispatch: Playe
     }
 }
 
-fn cell_views(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<crate::gameserver::appserver::shape::ShapeView> {
+pub(super) fn cell_views(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<crate::gameserver::appserver::shape::ShapeView> {
     let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
     let (area_width, area_height) = game.area_dimensions();
     let mut views = Vec::new();
@@ -157,12 +158,12 @@ fn build_attack_path<Runtime: GameMainLoopRuntime>(
     path
 }
 
-fn master_info(player: &CPlayer) -> MasterInfo {
+pub(super) fn master_info(player: &CPlayer) -> MasterInfo {
     let permissions = player.pk_permissions();
     MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(permissions.player), permitted_to_kill_teammate: i32::from(permissions.teammate), permitted_to_kill_guild_member: i32::from(permissions.guild_member), permitted_to_kill_criminal: i32::from(permissions.criminal) }
 }
 
-fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u8> {
+pub(super) fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u8> {
     match target.object_type {
         PLAYER_TYPE => game.find_player(target.id).map(CPlayer::level),
         MONSTER_TYPE => game.find_region(region_id).and_then(|owner| { let monster = owner.base().find_monster_by_id(target.id)?; game.find_monster_property_by_origin_name(monster.base_property_key()?).map(|property| property.level as u8) }),
@@ -170,14 +171,14 @@ fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u
     }
 }
 
-fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i32, hit_modifier: i32, damage_factor: u32) -> Option<(MasterInfo, AttackInformation)> {
+pub(super) fn calculate_dash_attack(game: &mut CGame, player_id: i32, skill_id: u32, target_level: u8, level: i32, hit_modifier: i32, damage_factor: u32) -> Option<(MasterInfo, AttackInformation)> {
     let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player);
     let weapon_level = player.equipment().get_goods(2).map_or(0, |weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1));
     let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors(); let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
     let weapon_factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(minimum_factor) };
     let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1);
     let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
-    let mut attack = AttackInformation { skill_id: FLASH_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier, damage_factor: damage_factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
+    let mut attack = AttackInformation { skill_id, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier, damage_factor: damage_factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
     if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } }
     Some((master, attack))
 }
@@ -190,7 +191,7 @@ fn attack_path<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, r
             if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || attacked.contains(&target) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue }
             attacked.push(target);
             let Some(target_level) = target_level(game, region_id, target) else { continue };
-            let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, hit, factor) else { continue };
+            let Some((master, attack)) = calculate_dash_attack(game, player_id, FLASH_SKILL_ID, target_level, level, hit, factor) else { continue };
             match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} }
             game.damage_player_weapon(player_id, runtime);
         }

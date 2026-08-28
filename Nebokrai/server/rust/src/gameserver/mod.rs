@@ -153,6 +153,7 @@ pub(crate) mod appserver {
         pub(crate) mod infernol;
         pub(crate) mod jucut;
         pub(crate) mod lightningsword;
+        pub(crate) mod littleflash;
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod leafcut;
