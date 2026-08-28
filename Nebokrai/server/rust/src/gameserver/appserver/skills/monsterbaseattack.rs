@@ -118,8 +118,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::nationgladiator::consider_nation_gladiator_target;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::{
-    NationCountryGuardTarget, consider_nation_country_guard_pet,
-    consider_nation_country_guard_player, select_nation_country_guard_target,
+    consider_nation_country_guard_player,
 };
 use crate::gameserver::appserver::ai::smartgladiator::{
     SmartGladiatorCandidate, SmartGladiatorSelection,
@@ -128,6 +127,11 @@ use crate::gameserver::appserver::ai::stupidarcher::{
     StupidArcherTarget, consider_stupid_archer_target,
 };
 use crate::gameserver::appserver::ai::warattackmonster::consider_country_war_target;
+use crate::gameserver::appserver::ai::vilcouguardwithsword::{
+    CountryGuardTarget, consider_village_country_guard_pet,
+    consider_village_country_guard_player,
+    select_country_guard_target as select_village_country_guard_target,
+};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -303,10 +307,32 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if !owns_complete_skill_selection(&property.skills, property.ai) {
         return false;
     }
+    if matches!(property.ai, 15 | 19) {
+        let left_chase_range = region
+            .find_monster_by_id_mut(monster_id)
+            .and_then(|monster| {
+                let state = monster.country_guard_ai_mut()?;
+                state.record_station(monster_view);
+                Some(
+                    target.is_some()
+                        && state.left_chase_range(monster_view, property.chase_range as i32),
+                )
+            })
+            .unwrap_or(false);
+        if left_chase_range {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.clear_ai_target();
+            }
+            return true;
+        }
+    }
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && (matches!(property.ai, 0 | 3 | 4 | 5 | 6 | 8 | 9 | 13 | 14 | 20 | 23)
+        && (matches!(
+            property.ai,
+            0 | 3 | 4 | 5 | 6 | 8 | 9 | 13 | 14 | 15 | 19 | 20 | 23
+        )
             || (property.ai == 2
                 && region
                     .find_monster_by_id(monster_id)
@@ -1123,7 +1149,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             };
             selected_player = consider_nation_country_guard_player(
                 selected_player,
-                NationCountryGuardTarget {
+                CountryGuardTarget {
                     identity: candidate.identity,
                     distance: real_distance(
                         monster_view.tile_x,
@@ -1156,9 +1182,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             let live_master_country = (master.master_type == PLAYER_TYPE)
                 .then(|| game.find_player(master.master_id).map(|player| player.country()))
                 .flatten();
-            selected_pet = consider_nation_country_guard_pet(
+            selected_pet = consider_village_country_guard_pet(
                 selected_pet,
-                NationCountryGuardTarget {
+                CountryGuardTarget {
                     identity: candidate.identity,
                     distance: real_distance(
                         monster_view.tile_x,
@@ -1174,7 +1200,86 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             );
         }
         if let Some(selected) =
-            select_nation_country_guard_target(selected_player, selected_pet)
+            select_village_country_guard_target(selected_player, selected_pet)
+        {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected.identity);
+            }
+            target = Some(selected.identity);
+        }
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 15
+        && let Some(area_index) = area_index
+    {
+        let minimum_skill_distance = game
+            .skill_base_properties(skill_id, i32::from(skill.level))
+            .map_or(0, |properties| properties.query_property(5_004) as i32);
+        let mut selected_player = None;
+        for player_id in region.player_ids_around_area(area_index) {
+            let Some(player) = game.find_player(player_id) else {
+                continue;
+            };
+            if player.server_region_id() != Some(region.id) || player.is_dead() {
+                continue;
+            }
+            let Some(candidate) = player.shape_view() else {
+                continue;
+            };
+            selected_player = consider_village_country_guard_player(
+                selected_player,
+                CountryGuardTarget {
+                    identity: candidate.identity,
+                    distance: real_distance(
+                        monster_view.tile_x,
+                        monster_view.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ),
+                },
+                property.guard_range as i32,
+                minimum_skill_distance,
+                region.country,
+                player.country(),
+            );
+        }
+        let mut selected_pet = None;
+        for pet_id in region.pet_ids_around_area(area_index) {
+            let Some((candidate, master)) = region
+                .find_monster_by_id(pet_id)
+                .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+                .and_then(|pet| {
+                    let pet_property =
+                        game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                    Some((pet.shape_view(pet_property)?, pet.master_info()))
+                })
+            else {
+                continue;
+            };
+            let live_master_country = (master.master_type == PLAYER_TYPE)
+                .then(|| game.find_player(master.master_id).map(|player| player.country()))
+                .flatten();
+            selected_pet = consider_village_country_guard_pet(
+                selected_pet,
+                CountryGuardTarget {
+                    identity: candidate.identity,
+                    distance: real_distance(
+                        monster_view.tile_x,
+                        monster_view.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ),
+                },
+                property.guard_range as i32,
+                minimum_skill_distance,
+                region.country,
+                live_master_country,
+            );
+        }
+        if let Some(selected) =
+            select_village_country_guard_target(selected_player, selected_pet)
         {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.set_ai_target(selected.identity);

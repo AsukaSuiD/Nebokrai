@@ -67,6 +67,7 @@ use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
 use super::ai::passivegladiator::PassiveGladiatorState;
 use super::ai::smartgladiator::SmartGladiatorState;
+use super::ai::vilcouguardwithsword::CountryGuardState;
 use super::masterinfo::MasterInfo;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
@@ -140,6 +141,7 @@ pub(crate) struct CMonster {
     boss_fiend_ai: Option<BossFiendAiState>,
     passive_gladiator_ai: Option<PassiveGladiatorState>,
     smart_gladiator_ai: Option<SmartGladiatorState>,
+    country_guard_ai: Option<CountryGuardState>,
     base_ai: CBaseAI,
 }
 
@@ -288,6 +290,7 @@ impl CMonster {
             boss_fiend_ai: None,
             passive_gladiator_ai: None,
             smart_gladiator_ai: None,
+            country_guard_ai: None,
             base_ai: CBaseAI::default(),
         }
     }
@@ -682,6 +685,7 @@ impl CMonster {
         self.boss_fiend_ai = (ai_type == 0x68).then(|| BossFiendAiState::new(now_ms));
         self.passive_gladiator_ai = (ai_type == 1).then(PassiveGladiatorState::default);
         self.smart_gladiator_ai = (ai_type == 2).then(SmartGladiatorState::default);
+        self.country_guard_ai = matches!(ai_type, 15 | 19).then(CountryGuardState::default);
     }
 
     pub(crate) fn boss_fiend_ai_mut(&mut self) -> Option<&mut BossFiendAiState> {
@@ -710,6 +714,10 @@ impl CMonster {
 
     pub(crate) fn smart_gladiator_ai(&self) -> Option<&SmartGladiatorState> {
         self.smart_gladiator_ai.as_ref()
+    }
+
+    pub(crate) fn country_guard_ai_mut(&mut self) -> Option<&mut CountryGuardState> {
+        self.country_guard_ai.as_mut()
     }
 
     pub(crate) fn combat_properties(
