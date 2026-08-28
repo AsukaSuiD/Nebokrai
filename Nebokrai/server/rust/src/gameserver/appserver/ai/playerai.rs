@@ -18,7 +18,8 @@
 //! и трёхударный скорпион,
 //! семейства бегущего и армейского ударов,
 //! рыцарский удар, подготовка яростного удара, ярость, последующий рывок, громовое
-//! рассечение, прямой рывок, боевой клич, накопление энергии, обратный рубящий
+//! рассечение, семейство малых рывков, прямой рывок, боевой клич, накопление
+//! энергии, обратный рубящий
 //! и двойной направленный удары,
 //! периодический удар листвы и фронтальный рубящий удар,
 //! машинный и мана-щит, защитная стойка,
@@ -199,7 +200,7 @@ pub(crate) struct CPlayerAI {
     lightning_sword: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     lightning_sword_last_used_ms: [u32; 4],
     little_flash: Option<LittleFlashExecutionState>,
-    little_flash_last_used_ms: u32,
+    little_flash_last_used_ms: [u32; 2],
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     poison_fog: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -1266,8 +1267,19 @@ impl CPlayerAI {
     pub(crate) const fn little_flash(&self) -> Option<&LittleFlashExecutionState> { self.little_flash.as_ref() }
     pub(crate) fn begin_little_flash(&mut self, state: LittleFlashExecutionState) { self.little_flash = Some(state); }
     pub(crate) fn little_flash_mut(&mut self) -> Option<&mut LittleFlashExecutionState> { self.little_flash.as_mut() }
-    pub(crate) const fn little_flash_last_used_ms(&self) -> u32 { self.little_flash_last_used_ms }
-    pub(crate) const fn mark_little_flash_used(&mut self, now_ms: u32) { self.little_flash_last_used_ms = now_ms; }
+    const fn little_flash_index(skill_id: u32) -> usize {
+        match skill_id {
+            0x71 => 0,
+            0x7f => 1,
+            _ => unreachable!(),
+        }
+    }
+    pub(crate) const fn little_flash_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.little_flash_last_used_ms[Self::little_flash_index(skill_id)]
+    }
+    pub(crate) fn mark_little_flash_used(&mut self, skill_id: u32, now_ms: u32) {
+        self.little_flash_last_used_ms[Self::little_flash_index(skill_id)] = now_ms;
+    }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall

@@ -33672,7 +33672,12 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
-                    let (rejected, interrupted_rage_level, interrupted_flash, interrupted_little_flash) = {
+                    let (
+                        rejected,
+                        interrupted_rage_level,
+                        interrupted_flash,
+                        interrupted_little_flash,
+                    ) = {
                         let player = self
                             .players
                             .get_mut(&player_id)
@@ -33682,7 +33687,9 @@ impl CGame {
                             && player.player_ai().rage().is_some())
                             .then(|| player.learned_skill_level(RAGE_SKILL_ID));
                         let interrupted_flash = changes_command && player.player_ai().flash().is_some();
-                        let interrupted_little_flash = changes_command && player.player_ai().little_flash().is_some();
+                        let interrupted_little_flash = changes_command
+                            .then_some(())
+                            .and_then(|()| player.player_ai().little_flash().map(|state| state.skill_id()));
                         let interrupted_agility = player.player_ai().agility_family().is_some()
                             && changes_command;
                         let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
@@ -33732,11 +33739,15 @@ impl CGame {
                             player.player_ai_mut().mark_rage_used(interrupted_at_ms);
                         }
                     }
-                    if interrupted_flash || interrupted_little_flash {
+                    if interrupted_flash || interrupted_little_flash.is_some() {
                         let interrupted_at_ms = game_tick_milliseconds();
                         if let Some(player) = self.players.get_mut(&player_id) {
                             if interrupted_flash { player.player_ai_mut().mark_flash_used(interrupted_at_ms); }
-                            if interrupted_little_flash { player.player_ai_mut().mark_little_flash_used(interrupted_at_ms); }
+                            if let Some(skill_id) = interrupted_little_flash {
+                                player
+                                    .player_ai_mut()
+                                    .mark_little_flash_used(skill_id, interrupted_at_ms);
+                            }
                         }
                     }
                     for _ in 0..rejected {
@@ -34358,14 +34369,14 @@ impl CGame {
     ) {
         let mut interrupted_rage_level = None;
         let mut interrupted_flash = false;
-        let mut interrupted_little_flash = false;
+        let mut interrupted_little_flash = None;
         let released = self.find_player_mut(player_id).is_some_and(|player| {
             let interrupted_agility = player.player_ai().agility_family().is_some();
             if player.player_ai().rage().is_some() {
                 interrupted_rage_level = Some(player.learned_skill_level(RAGE_SKILL_ID));
             }
             interrupted_flash = player.player_ai().flash().is_some();
-            interrupted_little_flash = player.player_ai().little_flash().is_some();
+            interrupted_little_flash = player.player_ai().little_flash().map(|state| state.skill_id());
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
                 || player.player_ai().heartless_arrow().is_some()
@@ -34425,11 +34436,15 @@ impl CGame {
                     player.player_ai_mut().mark_rage_used(interrupted_at_ms);
                 }
             }
-            if interrupted_flash || interrupted_little_flash {
+            if interrupted_flash || interrupted_little_flash.is_some() {
                 let interrupted_at_ms = game_tick_milliseconds();
                 if let Some(player) = self.find_player_mut(player_id) {
                     if interrupted_flash { player.player_ai_mut().mark_flash_used(interrupted_at_ms); }
-                    if interrupted_little_flash { player.player_ai_mut().mark_little_flash_used(interrupted_at_ms); }
+                    if let Some(skill_id) = interrupted_little_flash {
+                        player
+                            .player_ai_mut()
+                            .mark_little_flash_used(skill_id, interrupted_at_ms);
+                    }
                 }
             }
             let _ = self.send_base_attack_failure(player_id, 2);

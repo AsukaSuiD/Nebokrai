@@ -190,6 +190,7 @@ pub(crate) mod appserver {
         pub(crate) mod lightningsword3;
         pub(crate) mod lightningsword4;
         pub(crate) mod littleflash;
+        pub(crate) mod littleflash2;
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod leafcut;
