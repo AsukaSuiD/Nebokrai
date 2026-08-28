@@ -1,14 +1,15 @@
 //! Каноническое накапливаемое состояние `CFuryState` (`0x1a3`).
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает добавление без
-//! добавление без замены, строгую проверку истечения и последовательное процентное
-//! увеличение только максимальной атаки. Округление использует исходное
+//! замены, строгую проверку истечения и последовательное
+//! процентное увеличение только максимальной атаки игрока или монстра.
+//! Округление использует исходное
 //! правило дробной части `> 0.5`, а визуальные начало/завершение сохраняют
 //! `0xBFE03/04`.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const FURY_STATE_SKILL_ID: u32 = 0x1a3;
@@ -64,6 +65,21 @@ impl FuryState {
         } else {
             result.min(i32::MAX as u32)
         }
+    }
+
+    pub(crate) fn apply_to_player_maximum_attack(self, maximum: u32) -> u32 {
+        let scaled = self.attack_gain_percent as f32 * 0.01 * maximum as f32;
+        let truncated = scaled.trunc() as i32;
+        let rounded = if scaled - truncated as f32 > 0.5 {
+            truncated.wrapping_add(1)
+        } else {
+            truncated
+        };
+        let mut gain = rounded as u16 as u32;
+        if maximum.wrapping_add(gain) > u16::MAX as u32 {
+            gain = (u16::MAX as u32).wrapping_sub(maximum);
+        }
+        maximum.wrapping_add(gain).min(i32::MAX as u32)
     }
 }
 
@@ -124,128 +140,47 @@ pub(crate) fn expire_monster_fury_states(
     count
 }
 
-// Статус оставшегося корпуса: PARTIALLY_IMPLEMENTED
-// Не достигнуты ветвь игрока, устаревшая сериализация и координатные перегрузки.
+pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+    runtime: &mut Runtime,
+) -> usize {
+    let context = game.find_player(player_id).and_then(|player| {
+        Some((
+            player.server_region_id()?,
+            player.shape().identity(),
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+        ))
+    });
+    let states = game
+        .find_player_mut(player_id)
+        .map(|player| player.take_expired_fury_states(now_ms))
+        .unwrap_or_default();
+    let count = states.len();
+    if let Some((region_id, identity, tile_x, tile_y)) = context {
+        for state in states {
+            send_fury_state_visual(
+                game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+            );
+        }
+    }
+    if count != 0 {
+        let _ = game.update_player_properties(player_id, runtime);
+    }
+    count
+}
+
+// Остаётся неизвестной только загрузка старого сохранённого состояния: она
+// начинает новый локальный срок и читает два `long` после продвижения cursor.
+// До достижения DB/load caller-а это тело сохраняется как исходный материал.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp
-
-// ============================================================================
-// FUNCTION: CFuryState::CFuryState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:15
-// RVA: 0x001EA2E0
-// ADDRESS: 005ea2e0
-// PROTOTYPE: undefined __thiscall CFuryState(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryState::~CFuryState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:37
-// RVA: 0x001EA360
-// ADDRESS: 005ea360
-// PROTOTYPE: void __thiscall ~CFuryState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:93
-// RVA: 0x001EA370
-// ADDRESS: 005ea370
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:103
-// RVA: 0x001EA410
-// ADDRESS: 005ea410
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryState::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// Истечение состояния монстра достигнуто в `expire_monster_fury_states`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:127
-// RVA: 0x001EA4C0
-// ADDRESS: 005ea4c0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryState::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// Объектная ветвь монстра достигнута через `FuryState::new` и
-// `send_fury_state_visual`; ветвь игрока остаётся неподключённой.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:83
-// RVA: 0x001EA500
-// ADDRESS: 005ea500
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryStateVisualEffect::UpdateVisualEffect
-// STATUS: IMPLEMENTED
-// Реализовано функцией `send_fury_state_visual`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:170
-// RVA: 0x001EA5A0
-// ADDRESS: 005ea5a0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-
-// ============================================================================
-// FUNCTION: CFuryState::OnUpdateProperties
-// STATUS: PARTIALLY_IMPLEMENTED
-// Ветка монстра реализована `FuryState::apply_to_monster_max_attack`;
-// отличающаяся ветвь игрока сохранена ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:48
-// RVA: 0x001FD480
-// ADDRESS: 005fd480
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CFuryState::Unserialize
@@ -259,35 +194,4 @@ pub(crate) fn expire_monster_fury_states(
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
-//
-
-// ============================================================================
-// FUNCTION: CFuryState::End
-// STATUS: PARTIALLY_IMPLEMENTED
-// Завершение монстра выполняет `expire_monster_fury_states`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:113
-// RVA: 0x002059A0
-// ADDRESS: 006059a0
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryState::GetRemainedTime
-// STATUS: IMPLEMENTED
-// Реализовано методом `FuryState::client_time`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\furystate.cpp:41
-// RVA: 0x00205E10
-// ADDRESS: 00605e10
-// PROTOTYPE: ulong __thiscall GetRemainedTime(void)
-
-
-
-
 // COMPONENT_VARIANT_END: GameServer

@@ -1,165 +1,42 @@
-//! Ярость `CFury` (`0x1a3`) для достигнутого пути монстра.
+//! Ярость `CFury` (`0x1a3`) для игрока и монстра.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает задержку и
 //! повторное использование, пакеты `0xBFE01`, накопление `CFuryState`, порядок
 //! снятия конфликтующих состояний и последующее краткоживущее `CCureState`.
-//! Модуль владеет всей семантикой навыка; общий диспетчер только предоставляет
-//! владельца региона. Ветвь игрока с уже типизированным `CRageBreakState`
-//! сохранена ниже как ещё не достигнутый исходный материал.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.h
-
-// ============================================================================
-// FUNCTION: CFury::CFury
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:19
-// RVA: 0x00136100
-// ADDRESS: 00536100
-// PROTOTYPE: undefined __thiscall CFury(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFury::~CFury
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:27
-// RVA: 0x00136170
-// ADDRESS: 00536170
-// PROTOTYPE: void __thiscall ~CFury(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFury::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:129
-// RVA: 0x00136190
-// ADDRESS: 00536190
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFury::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:145
-// RVA: 0x00136260
-// ADDRESS: 00536260
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFury::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:112
-// RVA: 0x00136350
-// ADDRESS: 00536350
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFuryEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// Действия 0/1 достигнуты функциями `send_cast_start` и `send_cast_fire`;
-// ответы об ошибках только для игрока остаются исходным материалом.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:332
-// RVA: 0x00136410
-// ADDRESS: 00536410
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFury::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// Повторное использование для монстра достигнуто в `execute_owned_fury`;
-// расход RP и сообщения игроку пока не подключены.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:39
-// RVA: 0x00136790
-// ADDRESS: 00536790
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFury::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// Полная достигнутая ветвь монстра находится в `execute_owned_fury`.
-// Ветвь игрока и снятие типизированного `CRageBreakState` ещё не подключены.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:175
-// RVA: 0x00136970
-// ADDRESS: 00536970
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
-
+//! Модуль владеет проверками, расходом RP, стадиями, состояниями и визуальными
+//! пакетами. `CGame` предоставляет владельцев, доставку и общий пересчёт
+//! свойств. Особая ветвь игрока снимает `CRageBreakState` и завершается без
+//! создания `CFuryState`; обычная ветвь сохраняет накопление состояний.
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_at};
 use super::furystate::{FuryState, send_fury_state_visual};
+use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoisonstate::send_spider_poison_state_visual;
 use super::spiderwebstate::send_spider_web_state_visual;
 use super::sealstate::send_seal_state_visual;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::SkillStage;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
 const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const SKILL_USAGE_USER_RP_LOSE: u32 = 3;
+const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_TARGET_ATK_GAIN: u32 = 105;
+const CONFLICTING_STATES: [u32; 9] = [
+    0x138, 0xd2, 0xc9, 0x67, 0x192, 0x191, 0x198, 0x199, 0x1a6,
+];
 pub(crate) const FURY_SKILL_ID: u32 = 0x1a3;
 
 fn self_identity(monster_id: i32) -> ShapeIdentity {
@@ -349,4 +226,211 @@ pub(crate) fn execute_owned_fury(
         let _ = monster.finish_base_attack_cast(now_ms);
     }
     true
+}
+
+pub(crate) const fn is_fury_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == FURY_SKILL_ID,
+    }
+}
+
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    }
+}
+
+fn finish_player_fury(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
+
+fn send_player_failure(game: &CGame, player_id: i32, action: u8, rp_loss: u32) {
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    if action == 8 {
+        message.add_long(0);
+    } else {
+        message.add_byte(0);
+    }
+    message.add_byte(action);
+    let _ = message.send_to_player(game.net_server(), player_id);
+    match action {
+        8 => game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss),
+        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
+        _ => {}
+    }
+}
+
+fn send_player_cast(game: &mut CGame, player_id: i32, level: i32, fired: bool) {
+    game.send_self_state_skill_cast(
+        EFFECT_MESSAGE,
+        player_id,
+        FURY_SKILL_ID,
+        level,
+        if fired { 2 } else { 1 },
+    );
+}
+
+pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_fury_dispatch(dispatch) {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let Some((level, initial_rp)) = game
+        .find_player(player_id)
+        .map(|player| (player.learned_skill_level(FURY_SKILL_ID), player.rp()))
+    else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(properties) = game.skill_base_properties(FURY_SKILL_ID, level) else {
+        if player_ai.fury().is_some() {
+            finish_player_fury(game, player_id);
+        }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let rp_loss = properties.query_property(SKILL_USAGE_USER_RP_LOSE);
+    let reuse_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let attack_gain = properties.query_property(SKILL_USAGE_TARGET_ATK_GAIN) as i32;
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+
+    if player_ai.fury().is_none() {
+        let now_ms = runtime.now_milliseconds();
+        if player_ai.fury_last_used_ms() != 0
+            && now_ms < player_ai.fury_last_used_ms().wrapping_add(reuse_ms)
+        {
+            send_player_failure(game, player_id, 0x0d, rp_loss);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if rp_loss != 0 && (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 {
+            send_player_failure(game, player_id, 8, rp_loss);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(FURY_SKILL_ID));
+        }
+        player_ai.begin_fury(SkillExecutionKernel::begin(dispatch, now_ms));
+    } else if player_ai
+        .fury()
+        .is_none_or(|execution| execution.dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if game.find_player(player_id).is_none_or(CPlayer::is_dead) {
+        send_player_cast(game, player_id, level, false);
+        finish_player_fury(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if player_ai
+        .fury()
+        .is_some_and(|execution| execution.stage() == SkillStage::Begin)
+    {
+        let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
+        if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
+            send_player_failure(game, player_id, 8, rp_loss);
+            finish_player_fury(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16);
+        }
+        let _ = game.publish_player_states(player_id);
+        send_player_cast(game, player_id, level, false);
+        if let Some(execution) = player_ai.fury_mut() {
+            let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+
+    let started_at_ms = player_ai
+        .fury()
+        .map(SkillExecutionKernel::started_at_ms)
+        .unwrap_or_default();
+    if started_at_ms.wrapping_add(delay_ms) > runtime.now_milliseconds() {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+
+    send_player_cast(game, player_id, level, true);
+    if let Some(execution) = player_ai.fury_mut() {
+        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
+    }
+    let now_ms = runtime.now_milliseconds();
+    let Some((region_id, identity, tile_x, tile_y)) =
+        game.find_player(player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.shape().identity(),
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+            ))
+        })
+    else {
+        finish_player_fury(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+
+    if let Some(rage_break) = game
+        .find_player_mut(player_id)
+        .and_then(CPlayer::take_rage_break_state)
+    {
+        send_rage_break_state_visual(
+            game, region_id, identity, tile_x, tile_y, rage_break, false, now_ms,
+        );
+        let _ = game.update_player_properties(player_id, runtime);
+        if let Some(execution) = player_ai.fury_mut() {
+            let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        player_ai.mark_fury_used(now_ms);
+        finish_player_fury(game, player_id);
+        return terminal(QueuedSkillExecutionState::Completed);
+    }
+
+    let fury = FuryState::new(now_ms, keep_time_ms, attack_gain);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.push_fury_state(fury);
+    }
+    send_fury_state_visual(game, region_id, identity, tile_x, tile_y, fury, true, now_ms);
+
+    let state_order = game
+        .find_player(player_id)
+        .map(CPlayer::curable_state_ids)
+        .unwrap_or_default();
+    for state_id in state_order {
+        if CONFLICTING_STATES.contains(&state_id) {
+            let _ = finish_curable_state(game, region_id, identity, state_id, now_ms);
+        }
+    }
+
+    let cure = CureState::new(keep_time_ms);
+    let previous_cure = game
+        .find_player_mut(player_id)
+        .and_then(|player| player.replace_cure_state(cure));
+    if let Some(previous) = previous_cure {
+        super::curestate::send_cure_state_visual(game, player_id, previous, false);
+    }
+    super::curestate::send_cure_state_visual(game, player_id, cure, true);
+    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.publish_player_states(player_id);
+
+    if let Some(execution) = player_ai.fury_mut() {
+        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_fury_used(now_ms);
+    finish_player_fury(game, player_id);
+    terminal(QueuedSkillExecutionState::Completed)
 }

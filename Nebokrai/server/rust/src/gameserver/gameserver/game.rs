@@ -939,7 +939,10 @@ use crate::gameserver::appserver::skills::curestate::{
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_player_base_attack,
 };
-use crate::gameserver::appserver::skills::furystate::expire_monster_fury_states;
+use crate::gameserver::appserver::skills::fury::{execute_player_fury, is_fury_dispatch};
+use crate::gameserver::appserver::skills::furystate::{
+    expire_monster_fury_states, expire_player_fury_states,
+};
 use crate::gameserver::appserver::skills::bossbluefurystate::expire_monster_boss_blue_fury_state;
 use crate::gameserver::appserver::skills::bossbluequakestate::{
     expire_monster_boss_blue_quake_state, expire_player_boss_blue_quake_state,
@@ -26416,6 +26419,7 @@ impl CGame {
             );
             let _ = self.update_player_properties(player_id, runtime);
         }
+        let _ = expire_player_fury_states(self, player_id, now_ms, runtime);
         let weak_ended = self.finish_player_weak_outside(player_id, runtime);
         let god_bless_ended = self.finish_player_god_bless(player_id, now_ms, runtime);
         let roar_ended = self.finish_player_roar(player_id, now_ms, runtime);
@@ -34389,6 +34393,7 @@ impl CGame {
                 || player.player_ai().army_break().is_some()
                 || player.player_ai().rage().is_some()
                 || player.player_ai().rage_break().is_some()
+                || player.player_ai().fury().is_some()
                 || player.player_ai().flash().is_some()
                 || player.player_ai().swallow().is_some()
                 || player.player_ai().leaf_cut().is_some()
@@ -37049,6 +37054,7 @@ impl CGame {
             let concrete_army_break = is_army_break_dispatch(dispatch);
             let concrete_rage = is_rage_dispatch(dispatch);
             let concrete_rage_break = is_rage_break_dispatch(dispatch);
+            let concrete_fury = is_fury_dispatch(dispatch);
             let concrete_flash = is_flash_dispatch(dispatch);
             let concrete_swallow = is_swallow_dispatch(dispatch);
             let concrete_leaf_cut = is_leaf_cut_dispatch(dispatch);
@@ -37274,6 +37280,8 @@ impl CGame {
                 execute_player_rage(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_rage_break {
                 execute_player_rage_break(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_fury {
+                execute_player_fury(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_flash {
                 execute_player_flash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_swallow {

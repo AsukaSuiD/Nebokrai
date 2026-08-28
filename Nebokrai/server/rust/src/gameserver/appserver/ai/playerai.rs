@@ -17,7 +17,7 @@
 //! сфера хаоса, семь падающих звёзд, ядовитый мотылёк, кровавая роза
 //! и трёхударный скорпион,
 //! семейства бегущего и армейского ударов,
-//! рыцарский удар, подготовка яростного удара, последующий рывок, громовое
+//! рыцарский удар, подготовка яростного удара, ярость, последующий рывок, громовое
 //! рассечение, прямой рывок, боевой клич, накопление энергии, обратный рубящий
 //! и двойной направленный удары,
 //! периодический удар листвы и фронтальный рубящий удар,
@@ -178,6 +178,8 @@ pub(crate) struct CPlayerAI {
     rage_last_used_ms: u32,
     rage_break: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     rage_break_last_used_ms: u32,
+    fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    fury_last_used_ms: u32,
     flash: Option<FlashExecutionState>,
     flash_last_used_ms: u32,
     swallow: Option<SwallowExecutionState>,
@@ -363,6 +365,7 @@ impl CPlayerAI {
         self.army_break = None;
         self.rage = None;
         self.rage_break = None;
+        self.fury = None;
         self.flash = None;
         self.swallow = None;
         self.leaf_cut = None;
@@ -608,6 +611,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение подготовки яростного удара завершено");
         }
+        if let Some(mut execution) = self.fury.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ярости завершено");
+        }
         if let Some(mut execution) = self.flash.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рывка сквозь строй завершено");
@@ -807,6 +814,7 @@ impl CPlayerAI {
         self.army_break = None;
         self.rage = None;
         self.rage_break = None;
+        self.fury = None;
         self.flash = None;
         self.swallow = None;
         self.leaf_cut = None;
@@ -1204,6 +1212,11 @@ impl CPlayerAI {
     pub(crate) fn rage_break_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rage_break.as_mut() }
     pub(crate) const fn rage_break_last_used_ms(&self) -> u32 { self.rage_break_last_used_ms }
     pub(crate) const fn mark_rage_break_used(&mut self, now_ms: u32) { self.rage_break_last_used_ms = now_ms; }
+    pub(crate) const fn fury(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.fury }
+    pub(crate) const fn begin_fury(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.fury = Some(state); }
+    pub(crate) fn fury_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.fury.as_mut() }
+    pub(crate) const fn fury_last_used_ms(&self) -> u32 { self.fury_last_used_ms }
+    pub(crate) const fn mark_fury_used(&mut self, now_ms: u32) { self.fury_last_used_ms = now_ms; }
     pub(crate) const fn flash(&self) -> Option<&FlashExecutionState> { self.flash.as_ref() }
     pub(crate) fn begin_flash(&mut self, state: FlashExecutionState) { self.flash = Some(state); }
     pub(crate) fn flash_mut(&mut self) -> Option<&mut FlashExecutionState> { self.flash.as_mut() }

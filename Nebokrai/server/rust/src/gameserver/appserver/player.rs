@@ -4310,6 +4310,20 @@ impl CPlayer {
         self.move_shape.take_expired_rage_break_state(now_ms)
     }
 
+    pub(crate) fn push_fury_state(
+        &mut self,
+        state: super::skills::furystate::FuryState,
+    ) {
+        self.move_shape.push_fury_state(state);
+    }
+
+    pub(crate) fn take_expired_fury_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::furystate::FuryState> {
+        self.move_shape.take_expired_fury_states(now_ms)
+    }
+
     pub(crate) fn restore_heal_states(
         &mut self,
         states: Vec<super::skills::healstate::HealState>,
@@ -5236,6 +5250,9 @@ impl CPlayer {
             );
         }
         if let Some(state) = self.move_shape.rage_break_state() {
+            properties.maximum_attack = state.apply_to_player_maximum_attack(properties.maximum_attack);
+        }
+        for state in self.move_shape.fury_states().iter().copied() {
             properties.maximum_attack = state.apply_to_player_maximum_attack(properties.maximum_attack);
         }
         self.apply_recomputed_combat_properties(properties, goods_factory);
