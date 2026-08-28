@@ -97,6 +97,8 @@ pub(crate) struct CPlayerAI {
     god_punishment_last_used_ms: u32,
     god_thunder: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     god_thunder_last_used_ms: u32,
+    god_thunder_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    god_thunder_2_last_used_ms: u32,
     soul_collect: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     soul_collect_last_used_ms: u32,
     soul_mirror: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -215,6 +217,7 @@ impl CPlayerAI {
         self.yin_yang = None;
         self.god_punishment = None;
         self.god_thunder = None;
+        self.god_thunder_2 = None;
         self.soul_collect = None;
         self.soul_mirror = None;
         self.callosity = None;
@@ -343,6 +346,7 @@ impl CPlayerAI {
         }
         if let Some(mut execution) = self.god_punishment.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественной кары завершено"); }
         if let Some(mut execution) = self.god_thunder.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественного грома завершено"); }
+        if let Some(mut execution) = self.god_thunder_2.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго божественного грома завершено"); }
         if let Some(mut execution) = self.soul_collect.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение сбора душ завершено"); }
         if let Some(mut execution) = self.soul_mirror.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение зеркала душ завершено"); }
         if let Some(mut execution) = self.callosity.take() {
@@ -453,6 +457,7 @@ impl CPlayerAI {
         self.yin_yang = None;
         self.god_punishment = None;
         self.god_thunder = None;
+        self.god_thunder_2 = None;
         self.soul_collect = None;
         self.soul_mirror = None;
         self.callosity = None;
@@ -798,6 +803,11 @@ impl CPlayerAI {
     pub(crate) fn god_thunder_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_thunder.as_mut() }
     pub(crate) const fn god_thunder_last_used_ms(&self) -> u32 { self.god_thunder_last_used_ms }
     pub(crate) const fn mark_god_thunder_used(&mut self, now: u32) { self.god_thunder_last_used_ms = now; }
+    pub(crate) const fn god_thunder_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_thunder_2 }
+    pub(crate) const fn begin_god_thunder_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.god_thunder_2 = Some(state); }
+    pub(crate) fn god_thunder_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_thunder_2.as_mut() }
+    pub(crate) const fn god_thunder_2_last_used_ms(&self) -> u32 { self.god_thunder_2_last_used_ms }
+    pub(crate) const fn mark_god_thunder_2_used(&mut self, now: u32) { self.god_thunder_2_last_used_ms = now; }
     pub(crate) const fn soul_collect(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_collect }
     pub(crate) const fn begin_soul_collect(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.soul_collect = Some(state); }
     pub(crate) fn soul_collect_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_collect.as_mut() }

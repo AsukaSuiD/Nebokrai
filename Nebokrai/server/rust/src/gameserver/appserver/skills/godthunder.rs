@@ -9,6 +9,7 @@
 use super::baseattack::time_reached;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME};
 use super::godthunderphalanx::CGodThunderPhalanx;
+use super::godthunderphalanx2::CGodThunderPhalanx2;
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -57,10 +58,10 @@ fn fail(game: &CGame, player: i32, code: u8, mp: u32) {
     }
 }
 
-fn visual(game: &mut CGame, player_id: i32, level: i32, action: u8, target: Option<(i32, i32)>) {
+fn visual(game: &mut CGame, player_id: i32, skill_id: u32, level: i32, action: u8, target: Option<(i32, i32)>) {
     let Some(player) = game.find_player(player_id) else { return };
     let mut message = CMessage::new(EFFECT_MESSAGE);
-    message.add_byte(action); message.add_long(GOD_THUNDER_SKILL_ID as i32);
+    message.add_byte(action); message.add_long(skill_id as i32);
     message.base_mut().add_short(level as i16);
     message.add_long(player.shape().identity().object_type); message.add_long(player_id);
     if action == 1 {
@@ -98,16 +99,40 @@ pub(crate) const fn is_god_thunder_dispatch(dispatch: PlayerSkillDispatch) -> bo
     )
 }
 
+fn execution(ai: &CPlayerAI, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+    if second { ai.god_thunder_2() } else { ai.god_thunder() }
+}
+fn execution_mut(ai: &mut CPlayerAI, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+    if second { ai.god_thunder_2_mut() } else { ai.god_thunder_mut() }
+}
+fn begin_execution(ai: &mut CPlayerAI, second: bool, state: SkillExecutionKernel<PlayerSkillDispatch>) {
+    if second { ai.begin_god_thunder_2(state); } else { ai.begin_god_thunder(state); }
+}
+fn last_used(ai: &CPlayerAI, second: bool) -> u32 {
+    if second { ai.god_thunder_2_last_used_ms() } else { ai.god_thunder_last_used_ms() }
+}
+fn mark_used(ai: &mut CPlayerAI, second: bool, now: u32) {
+    if second { ai.mark_god_thunder_2_used(now); } else { ai.mark_god_thunder_used(now); }
+}
+
 pub(crate) fn execute_player_god_thunder<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
     ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    if !is_god_thunder_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
+    execute_player_god_thunder_family(game, player_id, dispatch, ai, runtime, GOD_THUNDER_SKILL_ID, false)
+}
+
+pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI, runtime: &mut Runtime, skill_id: u32, second: bool,
+) -> QueuedSkillExecutionOutcome {
+    let requested = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id };
+    if requested != skill_id { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some((region, level, source_x, source_y, initial_mana)) = game.find_player(player_id).and_then(|player| Some((
-        player.server_region_id()?, player.learned_skill_level(GOD_THUNDER_SKILL_ID),
+        player.server_region_id()?, player.learned_skill_level(skill_id),
         player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(GOD_THUNDER_SKILL_ID, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(skill_id, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let reuse = properties.query_property(REUSE_TIME);
     let maximum_distance = properties.query_property(MAX_DISTANCE);
     let mp = properties.query_property(MP_LOSE);
@@ -120,8 +145,8 @@ pub(crate) fn execute_player_god_thunder<Runtime: GameMainLoopRuntime>(
     let element_property = properties.query_property(ELEMENT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.god_thunder().is_none() {
-        if ai.god_thunder_last_used_ms() != 0 && !time_reached(runtime.now_milliseconds(), ai.god_thunder_last_used_ms(), reuse) {
+    if execution(ai, second).is_none() {
+        if last_used(ai, second) != 0 && !time_reached(runtime.now_milliseconds(), last_used(ai, second), reuse) {
             fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) };
@@ -137,17 +162,17 @@ pub(crate) fn execute_player_god_thunder<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(false); player.set_current_skill_id(Some(GOD_THUNDER_SKILL_ID));
+            player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id));
         }
-        ai.begin_god_thunder(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
-    } else if ai.god_thunder().is_none_or(|state| state.dispatch() != dispatch) {
+        begin_execution(ai, second, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+    } else if execution(ai, second).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     let Some((target_x, target_y, target)) = position(game, region, player_id, dispatch) else {
         finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if ai.god_thunder().is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if execution(ai, second).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp) as i32) < 0 {
             fail(game, player_id, 7, mp); finish(game, player_id);
@@ -159,17 +184,17 @@ pub(crate) fn execute_player_god_thunder<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         let _ = game.update_player_criminal_state(player_id, GamePlayerFightStatePhase::MoveShapeAi, runtime);
-        visual(game, player_id, level, 1, None);
-        if let Some(state) = ai.god_thunder_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        visual(game, player_id, skill_id, level, 1, None);
+        if let Some(state) = execution_mut(ai, second) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started = ai.god_thunder().map(SkillExecutionKernel::started_at_ms).expect("божественный гром начат");
+    let started = execution(ai, second).map(SkillExecutionKernel::started_at_ms).expect("божественный гром начат");
     if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending); }
     if target.is_some_and(|identity| game.periodic_state_target_dead(region, identity)) {
         fail(game, player_id, 10, mp); finish(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    visual(game, player_id, level, 2, Some((target_x, target_y)));
+    visual(game, player_id, skill_id, level, 2, Some((target_x, target_y)));
     let Some(player) = game.find_player(player_id) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
     let combat = player.combat_properties();
     let element = combat.add_element_attack as i32
@@ -178,19 +203,25 @@ pub(crate) fn execute_player_god_thunder<Runtime: GameMainLoopRuntime>(
     let master = master_info(player);
     let summon_id = game.allocate_summon_shape_id();
     let summon_time = runtime.now_milliseconds();
-    let mut phalanx = CGodThunderPhalanx::new(
-        summon_id, master, summon_time, lifetime, level, frequency,
-        minimum, maximum, element, target_count, cch,
-    );
-    phalanx.shape_mut().set_region_id(region);
-    let summoned = game.add_god_thunder_phalanx(region, phalanx, target_x, target_y, summon_time, runtime).is_some_and(|result| result.is_ok());
-    if summoned { let _ = game.send_god_thunder_phalanx_entry(region, summon_id, runtime); }
-    if let Some(state) = ai.god_thunder_mut() {
+    let summoned = if second {
+        let mut phalanx = CGodThunderPhalanx2::new(summon_id, master, summon_time, lifetime, level, frequency, minimum, maximum, element, target_count, cch);
+        phalanx.shape_mut().set_region_id(region);
+        let summoned = game.add_god_thunder_2_phalanx(region, phalanx, target_x, target_y, summon_time, runtime).is_some_and(|result| result.is_ok());
+        if summoned { let _ = game.send_god_thunder_2_phalanx_entry(region, summon_id, runtime); }
+        summoned
+    } else {
+        let mut phalanx = CGodThunderPhalanx::new(summon_id, master, summon_time, lifetime, level, frequency, minimum, maximum, element, target_count, cch);
+        phalanx.shape_mut().set_region_id(region);
+        let summoned = game.add_god_thunder_phalanx(region, phalanx, target_x, target_y, summon_time, runtime).is_some_and(|result| result.is_ok());
+        if summoned { let _ = game.send_god_thunder_phalanx_entry(region, summon_id, runtime); }
+        summoned
+    };
+    if let Some(state) = execution_mut(ai, second) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if summoned { ai.mark_god_thunder_used(runtime.now_milliseconds()); }
+    if summoned { mark_used(ai, second, runtime.now_milliseconds()); }
     finish(game, player_id);
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2);
     tracing::trace!(region, player_id, summon_id, summoned, "создана область божественного грома");

@@ -887,10 +887,12 @@ use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_
 use crate::gameserver::appserver::skills::yinyangphalanx::YinYangPhalanxTick;
 use crate::gameserver::appserver::skills::godpunishment::{execute_player_god_punishment, is_god_punishment_target};
 use crate::gameserver::appserver::skills::godthunder::{execute_player_god_thunder, is_god_thunder_dispatch};
+use crate::gameserver::appserver::skills::godthunder2::{execute_player_god_thunder_2, is_god_thunder_2_dispatch};
 use crate::gameserver::appserver::skills::soulcollect::{execute_player_soul_collect, is_soul_collect_skill};
 use crate::gameserver::appserver::skills::soulmirror::{execute_player_soul_mirror, is_soul_mirror_skill};
 use crate::gameserver::appserver::skills::godpunishmentphalanx::GodPunishmentPhalanxTick;
 use crate::gameserver::appserver::skills::godthunderphalanx::GodThunderPhalanxTick;
+use crate::gameserver::appserver::skills::godthunderphalanx2::GodThunder2PhalanxTick;
 use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
 use crate::gameserver::appserver::skills::cure::{execute_player_cure, is_cure_target};
 use crate::gameserver::appserver::skills::nonfun::{
@@ -36522,6 +36524,7 @@ impl CGame {
             let concrete_yin_yang = is_yin_yang_target(dispatch);
             let concrete_god_punishment = is_god_punishment_target(dispatch);
             let concrete_god_thunder = is_god_thunder_dispatch(dispatch);
+            let concrete_god_thunder_2 = is_god_thunder_2_dispatch(dispatch);
             let concrete_soul_collect = is_soul_collect_skill(dispatch);
             let concrete_soul_mirror = is_soul_mirror_skill(dispatch);
             let concrete_god_bless = is_god_bless_skill(dispatch);
@@ -36607,6 +36610,8 @@ impl CGame {
                 execute_player_god_punishment(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_god_thunder {
                 execute_player_god_thunder(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_god_thunder_2 {
+                execute_player_god_thunder_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_soul_collect {
                 execute_player_soul_collect(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_soul_mirror {
@@ -39561,6 +39566,7 @@ impl CGame {
             }
             SummonedSkillShape::GodPunishment(phalanx) => self.calculate_god_punishment_attack(phalanx, target_level),
             SummonedSkillShape::GodThunder(phalanx) => self.calculate_god_thunder_attack(phalanx, target_level),
+            SummonedSkillShape::GodThunder2(phalanx) => self.calculate_god_thunder_2_attack(phalanx, target_level),
         }
     }
 
@@ -40057,6 +40063,7 @@ impl CGame {
                 },
                 SummonedSkillShape::GodPunishment(phalanx) => match phalanx.tick(lifetime_now_ms) { GodPunishmentPhalanxTick::Scan { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodPunishmentPhalanxTick::Expired => None },
                 SummonedSkillShape::GodThunder(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunderPhalanxTick::Pending => Some(None), GodThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunderPhalanxTick::Expired => None },
+                SummonedSkillShape::GodThunder2(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunder2PhalanxTick::Pending => Some(None), GodThunder2PhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunder2PhalanxTick::Expired => None },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
@@ -40387,6 +40394,16 @@ impl CGame {
             for target in self.god_thunder_targets(region_id, god) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
+                    _ => false,
+                };
+            }
+            return true;
+        }
+        if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodThunder2(god)) = (tick, &phalanx) {
+            for (target, war_soul_hit) in self.god_thunder_2_targets(region_id, god) {
+                match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, war_soul_hit, runtime),
                     MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
                     _ => false,
                 };
