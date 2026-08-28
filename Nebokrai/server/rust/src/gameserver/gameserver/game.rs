@@ -490,6 +490,7 @@ mod godthunder;
 mod chaossphere;
 mod fireball;
 mod thunderblow;
+mod thunderblow2;
 mod seal;
 mod thunder;
 mod snowstorm;
@@ -806,6 +807,9 @@ use crate::gameserver::appserver::skills::chaossphere::{
 };
 use crate::gameserver::appserver::skills::chainlightning::{
     execute_player_chain_lightning, is_chain_lightning_dispatch,
+};
+use crate::gameserver::appserver::skills::thunderblow2::{
+    execute_player_thunder_blow_2, is_thunder_blow_2_dispatch,
 };
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
@@ -36444,6 +36448,7 @@ impl CGame {
             let concrete_fire_ball = is_fire_ball_dispatch(dispatch);
             let concrete_chain_lightning = is_chain_lightning_dispatch(dispatch);
             let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
+            let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36574,6 +36579,8 @@ impl CGame {
                 execute_player_chain_lightning(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow {
                 execute_player_thunder_blow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_thunder_blow_2 {
+                execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {
