@@ -881,6 +881,9 @@ use crate::gameserver::appserver::skills::infernol::{
 use crate::gameserver::appserver::skills::sevenshootingstar::{
     execute_player_seven_shooting_star, is_seven_shooting_star_dispatch,
 };
+use crate::gameserver::appserver::skills::littlestar::{
+    execute_player_little_star, is_player_little_star_dispatch,
+};
 use crate::gameserver::appserver::skills::chaossphere::{
     execute_player_chaos_sphere, is_chaos_sphere_dispatch,
 };
@@ -33716,6 +33719,7 @@ impl CGame {
                             || player.player_ai().ju_cut().is_some()
                             || player.player_ai().lightning_sword().is_some()
                             || player.player_ai().little_flash().is_some()
+                            || player.player_ai().little_star().is_some()
                             || player.player_ai().thunder_slash().is_some()
                             || player.player_ai().pillar().is_some()
                             || player.player_ai().rush().is_some()
@@ -34411,6 +34415,7 @@ impl CGame {
                 || player.player_ai().ju_cut().is_some()
                 || player.player_ai().lightning_sword().is_some()
                 || player.player_ai().little_flash().is_some()
+                || player.player_ai().little_star().is_some()
                 || player.player_ai().thunder_slash().is_some()
                 || player.player_ai().pillar().is_some()
                 || player.player_ai().rush().is_some()
@@ -37081,6 +37086,7 @@ impl CGame {
             let concrete_poison_fog = is_poison_fog_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
+            let concrete_little_star = is_player_little_star_dispatch(dispatch);
             let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
             let concrete_seal = is_seal_target(dispatch);
@@ -37319,6 +37325,8 @@ impl CGame {
                 execute_player_infernol(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_seven_shooting_star {
                 execute_player_seven_shooting_star(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_little_star {
+                execute_player_little_star(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_chaos_sphere {
                 execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {

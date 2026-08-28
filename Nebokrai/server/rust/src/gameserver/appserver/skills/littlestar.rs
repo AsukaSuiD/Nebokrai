@@ -1,215 +1,46 @@
-//! Малая звезда `CLittleStar` (`0x1a4`) для достигнутого пути монстра.
+//! Малая звезда `CLittleStar` (`0x1a4`) для игроков и монстров.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает однократное
-//! построение прямого пути после задержки, остановку на `BLOCK_UNFLY`, повторные
-//! проходы по всем клеткам с заданной частотой и строгий конец длительности.
-//! Каждая допустимая цель получает отдельный исходный RNG-вызов. Ветвь игрока
-//! с расходом MP и ещё не достигнутые перегрузки входа сохранены ниже.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/littlestar.cpp`. Навык после задержки один раз строит
+//! прямой путь предельной длины, публикует его конечную клетку и до строгой
+//! границы длительности периодически обходит клетки до первой `BLOCK_UNFLY`.
+//! Игрок проходит две проверки MP и расходует ману до стартового эффекта;
+//! каждая допустимая цель получает ровно один вызов legacy RNG. Монстр
+//! использует ту же геометрию и частоту без расхода, относящегося к игроку.
+//! Формулы, порядок клеток, применение атак и wire-эффекты принадлежат этому
+//! owner-у; `CGame` только разрешает владельцев и доставляет результат.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.h
-
-// ============================================================================
-// FUNCTION: CLittleStarEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// Действия 0/1/3 монстра достигнуты функциями `send_start`, `send_fire` и
-// `send_end`; клиентские ответы об ошибках игрока остаются исходным материалом.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:538
-// RVA: 0x00134DC0
-// ADDRESS: 00534dc0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::~CLittleStar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:30
-// RVA: 0x001352F0
-// ADDRESS: 005352f0
-// PROTOTYPE: void __thiscall ~CLittleStar(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// Объектная ветвь монстра достигнута в `execute_owned_little_star`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:111
-// RVA: 0x00135350
-// ADDRESS: 00535350
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:131
-// RVA: 0x00135430
-// ADDRESS: 00535430
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:150
-// RVA: 0x00135510
-// ADDRESS: 00535510
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::End
-// STATUS: PARTIALLY_IMPLEMENTED
-// Завершение достигнутой ветви монстра выполняет `execute_owned_little_star`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:169
-// RVA: 0x001355F0
-// ADDRESS: 005355f0
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// Повторное использование монстра достигнуто; расход MP и сообщения игрока
-// остаются неподключёнными.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:39
-// RVA: 0x00135760
-// ADDRESS: 00535760
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::CLittleStar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:21
-// RVA: 0x00135940
-// ADDRESS: 00535940
-// PROTOTYPE: undefined __thiscall CLittleStar(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::CalculateAttackPower
-// STATUS: PARTIALLY_IMPLEMENTED
-// Формула монстра достигнута в `attack_path`; отличающаяся ветвь игрока
-// сохранена ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:410
-// RVA: 0x001359C0
-// ADDRESS: 005359c0
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// Атака монстра достигнута в `attack_path`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:386
-// RVA: 0x00135B80
-// ADDRESS: 00535b80
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLittleStar::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// Длительный путь монстра достигнут в `execute_owned_little_star`; ветвь
-// игрока сохранена ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\littlestar.cpp:191
-// RVA: 0x00135CA0
-// ADDRESS: 00535ca0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
-
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use super::baseattack::{
+    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
+    time_reached,
+};
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
+use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
+const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const BLOCK_UNFLY: u8 = 2;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
@@ -217,6 +48,256 @@ const SKILL_USAGE_SKILL_PERSIST_TIME: u32 = 10_007;
 const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
 const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
 pub(crate) const LITTLE_STAR_SKILL_ID: u32 = 0x1a4;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerLittleStarExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    path: Option<Vec<(i32, i32, u8)>>,
+    last_attack_ms: u32,
+}
+impl PlayerLittleStarExecutionState {
+    fn begin(dispatch: PlayerSkillDispatch, now_ms: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), path: None, last_attack_ms: 0 }
+    }
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+    fn attack_due(&self, now_ms: u32, frequency_ms: u32) -> bool {
+        self.last_attack_ms.wrapping_add(frequency_ms) < now_ms
+    }
+}
+
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
+
+pub(crate) const fn is_player_little_star_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(dispatch,
+        PlayerSkillDispatch::Point { skill_id: LITTLE_STAR_SKILL_ID, .. }
+        | PlayerSkillDispatch::Object { skill_id: LITTLE_STAR_SKILL_ID, .. })
+}
+
+fn player_target_position(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
+    match dispatch {
+        PlayerSkillDispatch::Point { skill_id: LITTLE_STAR_SKILL_ID, x, y } => Some((x, y)),
+        PlayerSkillDispatch::Object { skill_id: LITTLE_STAR_SKILL_ID, target } => {
+            game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y))
+        }
+        _ => None,
+    }
+}
+
+fn send_player_failure(game: &CGame, player_id: i32, action: u8) {
+    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, action);
+}
+
+fn send_player_visual(
+    game: &mut CGame,
+    player_id: i32,
+    level: i32,
+    action: u8,
+    destination: Option<(i32, i32)>,
+) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(action);
+    message.add_long(LITTLE_STAR_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    if action == 2 {
+        let Some((x, y)) = destination else { return };
+        message.add_long(0);
+        message.add_long(0);
+        message.add_long(x);
+        message.add_long(y);
+    } else {
+        message.add_long(player.shape().get_direction());
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn finish_player(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "параметры соответствуют подтверждённой формуле навыка")]
+fn calculate_player_attack(
+    game: &mut CGame,
+    player_id: i32,
+    region_id: i32,
+    target: ShapeIdentity,
+    level: i32,
+    minimum: i32,
+    maximum: i32,
+    element_modifier: u32,
+    hit_modifier: i32,
+) -> Option<(MasterInfo, AttackInformation)> {
+    let target_level = target_level(game, region_id, target)?;
+    let player = game.find_player(player_id)?;
+    let combat = player.combat_properties();
+    let master = master_info(player);
+    let weapon_level = player.weapon_damage_level(game.goods_factory());
+    let (divisor, floor) = game.globe_setup().weapon_damage_factors();
+    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
+    let damage_factor = (if divisor == 0.0 { 1.0 } else { delta as f32 / divisor })
+        .min(1.0).max(floor);
+    let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
+    let random_damage = game.skill_random_below(width);
+    let modifier = (element_modifier as f32 * 0.01 * combat.element_modify as f32)
+        .round_ties_even() as i32;
+    let damage = (combat.add_element_attack as i32).wrapping_add(random_damage)
+        .wrapping_add(minimum).wrapping_add(modifier).max(0);
+    Some((master, AttackInformation {
+        skill_id: LITTLE_STAR_SKILL_ID,
+        skill_level: level as u8,
+        attacker_type: PLAYER_TYPE,
+        attacker_id: player_id,
+        attacker_team_id: master.master_team_id,
+        attacker_faction_id: master.master_guild_id,
+        attacker_union_id: master.master_union_id,
+        hit_modifier,
+        damage_factor,
+        damage_modifier: 0,
+        critical: false,
+        blast_attack: false,
+        full_miss: 0,
+        damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }],
+    }))
+}
+
+pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_player_little_star_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((
+        player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
+        player.learned_skill_level(LITTLE_STAR_SKILL_ID), player.mana(),
+    ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(LITTLE_STAR_SKILL_ID, level) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let frequency = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
+    let persist = properties.query_property(SKILL_USAGE_SKILL_PERSIST_TIME);
+    let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+    let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+    let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER);
+    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+
+    if ai.little_star().is_none() {
+        let now_ms = runtime.now_milliseconds();
+        if ai.little_star_last_used_ms() != 0 && !time_reached(now_ms, ai.little_star_last_used_ms(), reuse) {
+            send_player_failure(game, player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"GS0278");
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if player_target_position(game, region_id, dispatch).is_none() { return terminal(QueuedSkillExecutionState::Rejected) }
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_player_failure(game, player_id, 7);
+            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(LITTLE_STAR_SKILL_ID));
+        }
+        ai.begin_little_star(PlayerLittleStarExecutionState::begin(dispatch, now_ms));
+    } else if ai.little_star().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if ai.little_star().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+        let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
+            finish_player(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_player_failure(game, player_id, 7);
+            game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
+            finish_player(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(current_mana.wrapping_sub(mp_loss));
+            player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y));
+        }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        send_player_visual(game, player_id, level, 1, None);
+        if let Some(state) = ai.little_star_mut() { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+    }
+
+    let started = ai.little_star().map(|state| state.kernel().started_at_ms()).unwrap_or_default();
+    if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
+    if ai.little_star().is_some_and(|state| state.path.is_none()) {
+        let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
+            finish_player(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let mut path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, Some(maximum_distance));
+        if path.first().is_some_and(|cell| cell.0 == source_x && cell.1 == source_y) { path.remove(0); }
+        path.truncate(maximum_distance as usize);
+        let endpoint = path.last().map(|cell| (cell.0, cell.1)).unwrap_or((target_x, target_y));
+        send_player_visual(game, player_id, level, 2, Some(endpoint));
+        if let Some(state) = ai.little_star_mut() {
+            state.path = Some(path);
+            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+        }
+    }
+
+    let attack_now = runtime.now_milliseconds();
+    if ai.little_star().is_some_and(|state| state.attack_due(attack_now, frequency)) {
+        let path = ai.little_star().and_then(|state| state.path.as_deref()).unwrap_or_default().to_vec();
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        'cells: for &(x, y, block) in &path {
+            if block == BLOCK_UNFLY { break 'cells }
+            for view in cell_views(game, region_id, x, y) {
+                let target = view.identity;
+                if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) { continue }
+                let Some(owner) = game.find_player(player_id).map(master_info) else { break 'cells };
+                if !game.owned_player_skill_target_attackable(owner, target, region_id) { continue }
+                let Some((master, attack)) = calculate_player_attack(
+                    game, player_id, region_id, target, level, minimum, maximum, element_modifier, hit_modifier,
+                ) else { continue };
+                match target.object_type {
+                    PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
+                    MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        let recorded = runtime.now_milliseconds();
+        if let Some(state) = ai.little_star_mut() {
+            state.last_attack_ms = recorded;
+            if state.kernel().stage() == SkillStage::Calculate { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
+        }
+    }
+
+    let expiration_now = runtime.now_milliseconds();
+    if started.wrapping_add(delay).wrapping_add(persist) < expiration_now {
+        send_player_visual(game, player_id, level, 3, None);
+        if let Some(state) = ai.little_star_mut() {
+            if state.kernel().stage() == SkillStage::Calculate { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
+            let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        ai.mark_little_star_used(expiration_now);
+        finish_player(game, player_id);
+        terminal(QueuedSkillExecutionState::Completed)
+    } else {
+        terminal(QueuedSkillExecutionState::Pending)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LittleStarProgress {
@@ -233,8 +314,7 @@ impl LittleStarProgress {
     }
 
     fn attack_due(&self, now_ms: u32, frequency_ms: u32) -> bool {
-        self.last_attack_ms == 0
-            || self.last_attack_ms.wrapping_add(frequency_ms) < now_ms
+        self.last_attack_ms.wrapping_add(frequency_ms) < now_ms
     }
 
     fn record_attack(&mut self, now_ms: u32) {
@@ -473,9 +553,16 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
         progress
     } else {
         let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE) as usize;
-        let mut path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);
+        let mut path = region.straight_skill_path(
+            source_x,
+            source_y,
+            target_x,
+            target_y,
+            Some(maximum_distance as u32),
+        );
         path.truncate(maximum_distance);
-        send_fire(game, region, &source, skill_level, target_x, target_y);
+        let endpoint = path.last().map(|cell| (cell.0, cell.1)).unwrap_or((target_x, target_y));
+        send_fire(game, region, &source, skill_level, endpoint.0, endpoint.1);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
         }
