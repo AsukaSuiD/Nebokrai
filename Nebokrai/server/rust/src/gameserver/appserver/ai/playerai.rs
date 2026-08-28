@@ -13,7 +13,8 @@
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
-//! сфера хаоса, семь падающих звёзд, семейство бегущего удара и рыцарский удар,
+//! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
+//! а также рыцарский удар,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -36,6 +37,8 @@ use crate::gameserver::appserver::skills::agility::{
     AGILITY_2_SKILL_ID, AGILITY_SKILL_ID, AgilityFamilyExecutionState,
 };
 use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
+use crate::gameserver::appserver::skills::armybreak::{ARMY_BREAK_SKILL_ID, ArmyBreakExecutionState};
+use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
@@ -91,6 +94,8 @@ pub(crate) struct CPlayerAI {
     ghost_cut_last_used_ms: [u32; 3],
     knight_cut: Option<KnightCutExecutionState>,
     knight_cut_last_used_ms: u32,
+    army_break: Option<ArmyBreakExecutionState>,
+    army_break_last_used_ms: [u32; 2],
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -226,6 +231,7 @@ impl CPlayerAI {
         self.mosou = None;
         self.ghost_cut = None;
         self.knight_cut = None;
+        self.army_break = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -350,6 +356,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.knight_cut.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рыцарского удара завершено");
+        }
+        if let Some(mut execution) = self.army_break.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение армейского удара завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -491,6 +501,7 @@ impl CPlayerAI {
         self.mosou = None;
         self.ghost_cut = None;
         self.knight_cut = None;
+        self.army_break = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -711,6 +722,12 @@ impl CPlayerAI {
     pub(crate) fn knight_cut_mut(&mut self) -> Option<&mut KnightCutExecutionState> { self.knight_cut.as_mut() }
     pub(crate) const fn knight_cut_last_used_ms(&self) -> u32 { self.knight_cut_last_used_ms }
     pub(crate) const fn mark_knight_cut_used(&mut self, now_ms: u32) { self.knight_cut_last_used_ms = now_ms; }
+    pub(crate) const fn army_break(&self) -> Option<&ArmyBreakExecutionState> { self.army_break.as_ref() }
+    pub(crate) fn begin_army_break(&mut self, state: ArmyBreakExecutionState) { self.army_break = Some(state); }
+    pub(crate) fn army_break_mut(&mut self) -> Option<&mut ArmyBreakExecutionState> { self.army_break.as_mut() }
+    const fn army_break_index(skill_id: u32) -> usize { match skill_id { ARMY_BREAK_SKILL_ID => 0, ARMY_BREAK_2_SKILL_ID => 1, _ => unreachable!() } }
+    pub(crate) const fn army_break_last_used_ms(&self, skill_id: u32) -> u32 { self.army_break_last_used_ms[Self::army_break_index(skill_id)] }
+    pub(crate) fn mark_army_break_used(&mut self, skill_id: u32, now_ms: u32) { self.army_break_last_used_ms[Self::army_break_index(skill_id)] = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall

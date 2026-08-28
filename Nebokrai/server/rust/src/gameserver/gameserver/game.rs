@@ -815,6 +815,7 @@ use crate::gameserver::appserver::skills::thunderblow2::{
 use crate::gameserver::appserver::skills::mosou::{execute_player_mosou, is_mosou_dispatch};
 use crate::gameserver::appserver::skills::ghostcut::{execute_player_ghost_cut, is_ghost_cut_dispatch};
 use crate::gameserver::appserver::skills::knightcut::{execute_player_knight_cut, is_knight_cut_dispatch};
+use crate::gameserver::appserver::skills::armybreak::{execute_player_army_break, is_army_break_dispatch};
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
 };
@@ -33925,6 +33926,10 @@ impl CGame {
                 || player.player_ai().archery().is_some()
                 || player.player_ai().agility_family().is_some()
                 || player.player_ai().callosity().is_some()
+                || player.player_ai().mosou().is_some()
+                || player.player_ai().ghost_cut().is_some()
+                || player.player_ai().knight_cut().is_some()
+                || player.player_ai().army_break().is_some()
                 || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -36460,6 +36465,7 @@ impl CGame {
             let concrete_mosou = is_mosou_dispatch(dispatch);
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
             let concrete_knight_cut = is_knight_cut_dispatch(dispatch);
+            let concrete_army_break = is_army_break_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36598,6 +36604,8 @@ impl CGame {
                 execute_player_ghost_cut(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_knight_cut {
                 execute_player_knight_cut(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_army_break {
+                execute_player_army_break(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {
