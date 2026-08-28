@@ -57,6 +57,10 @@ use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
 use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
 use crate::gameserver::appserver::skills::heartlessarrow::HeartlessArrowExecutionState;
+use crate::gameserver::appserver::skills::heartlessarrow2::{
+    HEARTLESS_ARROW_2_SKILL_ID, HeartlessArrowAreaExecutionState,
+};
+use crate::gameserver::appserver::skills::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
 use crate::gameserver::appserver::skills::lightingarrow::LightingArrowExecutionState;
 use crate::gameserver::appserver::skills::meteorarrowmass::MeteorArrowMassExecutionState;
 use crate::gameserver::appserver::skills::meteorarrow::MeteorArrowExecutionState;
@@ -101,6 +105,8 @@ pub(crate) struct CPlayerAI {
     archery_last_used_ms: u32,
     heartless_arrow: Option<HeartlessArrowExecutionState>,
     heartless_arrow_last_used_ms: u32,
+    heartless_arrow_area: Option<HeartlessArrowAreaExecutionState>,
+    heartless_arrow_area_last_used_ms: [u32; 2],
     lighting_arrow: Option<LightingArrowExecutionState>,
     lighting_arrow_last_used_ms: u32,
     meteor_arrow_mass: Option<MeteorArrowMassExecutionState>,
@@ -310,6 +316,7 @@ impl CPlayerAI {
         self.base_attack = None;
         self.archery = None;
         self.heartless_arrow = None;
+        self.heartless_arrow_area = None;
         self.lighting_arrow = None;
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
@@ -440,6 +447,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.heartless_arrow.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бессердечной стрелы завершено");
+        }
+        if let Some(mut execution) = self.heartless_arrow_area.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение региональной стрелы завершено");
         }
         if let Some(mut execution) = self.lighting_arrow.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -733,6 +744,7 @@ impl CPlayerAI {
         self.base_attack = None;
         self.archery = None;
         self.heartless_arrow = None;
+        self.heartless_arrow_area = None;
         self.lighting_arrow = None;
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
@@ -870,6 +882,18 @@ impl CPlayerAI {
     pub(crate) fn heartless_arrow_mut(&mut self) -> Option<&mut HeartlessArrowExecutionState> { self.heartless_arrow.as_mut() }
     pub(crate) const fn heartless_arrow_last_used_ms(&self) -> u32 { self.heartless_arrow_last_used_ms }
     pub(crate) const fn mark_heartless_arrow_used(&mut self, now_ms: u32) { self.heartless_arrow_last_used_ms = now_ms; }
+    pub(crate) const fn heartless_arrow_area(&self) -> Option<HeartlessArrowAreaExecutionState> { self.heartless_arrow_area }
+    pub(crate) const fn begin_heartless_arrow_area(&mut self, state: HeartlessArrowAreaExecutionState) { self.heartless_arrow_area = Some(state); }
+    pub(crate) fn heartless_arrow_area_mut(&mut self) -> Option<&mut HeartlessArrowAreaExecutionState> { self.heartless_arrow_area.as_mut() }
+    const fn heartless_arrow_area_index(skill_id: u32) -> usize {
+        match skill_id {
+            HEARTLESS_ARROW_2_SKILL_ID => 0,
+            HEARTLESS_ARROW_3_SKILL_ID => 1,
+            _ => unreachable!(),
+        }
+    }
+    pub(crate) const fn heartless_arrow_area_last_used_ms(&self, skill_id: u32) -> u32 { self.heartless_arrow_area_last_used_ms[Self::heartless_arrow_area_index(skill_id)] }
+    pub(crate) fn mark_heartless_arrow_area_used(&mut self, skill_id: u32, now_ms: u32) { self.heartless_arrow_area_last_used_ms[Self::heartless_arrow_area_index(skill_id)] = now_ms; }
     pub(crate) const fn lighting_arrow(&self) -> Option<LightingArrowExecutionState> { self.lighting_arrow }
     pub(crate) const fn begin_lighting_arrow(&mut self, state: LightingArrowExecutionState) { self.lighting_arrow = Some(state); }
     pub(crate) fn lighting_arrow_mut(&mut self) -> Option<&mut LightingArrowExecutionState> { self.lighting_arrow.as_mut() }

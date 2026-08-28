@@ -33,6 +33,7 @@ use crate::gameserver::appserver::skills::yinyangphalanx::CYinYangPhalanx;
 use crate::gameserver::appserver::skills::godpunishmentphalanx::CGodPunishmentPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx2::CGodThunderPhalanx2;
+use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
@@ -62,6 +63,7 @@ pub(crate) enum SummonedSkillShape {
     GodPunishment(CGodPunishmentPhalanx),
     GodThunder(CGodThunderPhalanx),
     GodThunder2(CGodThunderPhalanx2),
+    HeartlessArrow(CHeartlessArrowPhalanx),
 }
 
 impl SummonedSkillShape {
@@ -91,6 +93,7 @@ impl SummonedSkillShape {
             Self::GodPunishment(shape) => shape.shape(),
             Self::GodThunder(shape) => shape.shape(),
             Self::GodThunder2(shape) => shape.shape(),
+            Self::HeartlessArrow(shape) => shape.shape(),
         }
     }
 
@@ -120,6 +123,7 @@ impl SummonedSkillShape {
             Self::GodPunishment(shape) => shape.shape_mut(),
             Self::GodThunder(shape) => shape.shape_mut(),
             Self::GodThunder2(shape) => shape.shape_mut(),
+            Self::HeartlessArrow(shape) => shape.shape_mut(),
         }
     }
 
@@ -149,6 +153,7 @@ impl SummonedSkillShape {
             Self::GodPunishment(shape) => shape.master(),
             Self::GodThunder(shape) => shape.master(),
             Self::GodThunder2(shape) => shape.master(),
+            Self::HeartlessArrow(shape) => shape.master(),
         }
     }
 }

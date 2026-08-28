@@ -780,6 +780,13 @@ use crate::gameserver::appserver::skills::archery::{
 use crate::gameserver::appserver::skills::heartlessarrow::{
     execute_player_heartless_arrow, is_heartless_arrow_dispatch,
 };
+use crate::gameserver::appserver::skills::heartlessarrow2::{
+    execute_player_heartless_arrow_area, is_heartless_arrow_area_dispatch,
+};
+use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
+    CHeartlessArrowPhalanx, HeartlessArrowPhalanxTick,
+    calculate_owned_heartless_arrow_attack,
+};
 use crate::gameserver::appserver::skills::lightingarrow::{
     execute_player_lighting_arrow, is_lighting_arrow_dispatch,
 };
@@ -33657,6 +33664,7 @@ impl CGame {
                         let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
                             || player.player_ai().archery().is_some()
                             || player.player_ai().heartless_arrow().is_some()
+                            || player.player_ai().heartless_arrow_area().is_some()
                             || player.player_ai().lighting_arrow().is_some()
                             || player.player_ai().meteor_arrow_mass().is_some()
                             || player.player_ai().meteor_arrow().is_some()
@@ -34333,6 +34341,7 @@ impl CGame {
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
                 || player.player_ai().heartless_arrow().is_some()
+                || player.player_ai().heartless_arrow_area().is_some()
                 || player.player_ai().lighting_arrow().is_some()
                 || player.player_ai().meteor_arrow_mass().is_some()
                 || player.player_ai().meteor_arrow().is_some()
@@ -35911,6 +35920,29 @@ impl CGame {
         Some(result)
     }
 
+    pub(crate) fn add_heartless_arrow_phalanx<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        phalanx: CHeartlessArrowPhalanx,
+        tile_x: i32,
+        tile_y: i32,
+        started_at_ms: u32,
+        runtime: &mut Runtime,
+    ) -> Option<Result<i32, RegionMembershipBlock>> {
+        let mut owner = self.take_region_owner(region_id)?;
+        let result = owner.base_mut().add_heartless_arrow_phalanx(
+            phalanx,
+            tile_x,
+            tile_y,
+            self.area_width,
+            self.area_height,
+            started_at_ms,
+            runtime,
+        );
+        self.restore_region_owner(owner);
+        Some(result)
+    }
+
     pub(crate) fn add_battle_fairy_base_magic_phalanx<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -37010,6 +37042,7 @@ impl CGame {
                 _ => false,
             };
             let concrete_heartless_arrow = is_heartless_arrow_dispatch(dispatch);
+            let concrete_heartless_arrow_area = is_heartless_arrow_area_dispatch(dispatch);
             let concrete_lighting_arrow = is_lighting_arrow_dispatch(dispatch);
             let concrete_meteor_arrow_mass = is_meteor_arrow_mass_dispatch(dispatch);
             let concrete_meteor_arrow = is_meteor_arrow_dispatch(dispatch);
@@ -37132,6 +37165,8 @@ impl CGame {
                 execute_player_archery(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_heartless_arrow {
                 execute_player_heartless_arrow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_heartless_arrow_area {
+                execute_player_heartless_arrow_area(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lighting_arrow {
                 execute_player_lighting_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_meteor_arrow_mass {
@@ -40218,6 +40253,9 @@ impl CGame {
             SummonedSkillShape::GodPunishment(phalanx) => self.calculate_god_punishment_attack(phalanx, target_level),
             SummonedSkillShape::GodThunder(phalanx) => self.calculate_god_thunder_attack(phalanx, target_level),
             SummonedSkillShape::GodThunder2(phalanx) => self.calculate_god_thunder_2_attack(phalanx, target_level),
+            SummonedSkillShape::HeartlessArrow(phalanx) => {
+                calculate_owned_heartless_arrow_attack(self, phalanx)
+            }
         }
     }
 
@@ -40256,6 +40294,14 @@ impl CGame {
             return false;
         }
         let _ = self.player_on_first_skill(master.master_id, target_id, Some(region_id), runtime);
+        if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
+            heartless.prepare_target(
+                self,
+                region_id,
+                ShapeIdentity { object_type: PLAYER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID },
+                runtime.now_milliseconds(),
+            );
+        }
         let Some((mut attack, attacker_properties, attacker_occupation, _)) =
             self.calculate_summoned_skill_attack(phalanx, target_level)
         else {
@@ -40423,6 +40469,14 @@ impl CGame {
             let _ = self.player_on_first_skill(master.master_id, owner_id, Some(region_id), runtime);
         }
         self.apply_guard_monster_first_attack(master.master_id, region_id, &property, now_ms);
+        if let SummonedSkillShape::HeartlessArrow(heartless) = phalanx {
+            heartless.prepare_target(
+                self,
+                region_id,
+                ShapeIdentity { object_type: MONSTER_TYPE, id: target_id, ex_id: CGuid::GUID_INVALID },
+                runtime.now_milliseconds(),
+            );
+        }
         let Some((mut attack, attacker_properties, attacker_occupation, attacker_level)) =
             self.calculate_summoned_skill_attack(phalanx, target_properties.level)
         else {
@@ -40597,6 +40651,7 @@ impl CGame {
         let mut lighting_arrow_tick = None;
         let mut meteor_arrow_tick = None;
         let mut rain_arrow_tick = None;
+        let mut heartless_arrow_tick = None;
         let tick = owner
             .base_mut()
             .find_skill_phalanx_mut(phalanx_id)
@@ -40741,12 +40796,86 @@ impl CGame {
                 SummonedSkillShape::GodPunishment(phalanx) => match phalanx.tick(lifetime_now_ms) { GodPunishmentPhalanxTick::Scan { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodPunishmentPhalanxTick::Expired => None },
                 SummonedSkillShape::GodThunder(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunderPhalanxTick::Pending => Some(None), GodThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunderPhalanxTick::Expired => None },
                 SummonedSkillShape::GodThunder2(phalanx) => match phalanx.tick(lifetime_now_ms) { GodThunder2PhalanxTick::Pending => Some(None), GodThunder2PhalanxTick::Attack { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodThunder2PhalanxTick::Expired => None },
+                SummonedSkillShape::HeartlessArrow(phalanx) => {
+                    heartless_arrow_tick = Some(phalanx.tick(lifetime_now_ms));
+                    Some(None)
+                }
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
         let (Some(mut tick), Some(phalanx)) = (tick, phalanx) else {
             return false;
         };
+        if let (Some(heartless_arrow_tick), SummonedSkillShape::HeartlessArrow(heartless)) =
+            (heartless_arrow_tick, &phalanx)
+        {
+            match heartless_arrow_tick {
+                HeartlessArrowPhalanxTick::Scan => {
+                    let (Ok(tile_x), Ok(tile_y)) =
+                        (heartless.shape().get_tile_x(), heartless.shape().get_tile_y())
+                    else {
+                        return true;
+                    };
+                    let mut candidates = Vec::new();
+                    if let Some(region) = self.find_region(region_id) {
+                        let _ = region.base().get_shapes(
+                            tile_x,
+                            tile_y,
+                            self.area_width,
+                            self.area_height,
+                            self,
+                            &mut candidates,
+                        );
+                    }
+                    let mut applied = false;
+                    for candidate in candidates {
+                        let target = candidate.identity;
+                        if !heartless.accepts_candidate(target) {
+                            continue;
+                        }
+                        applied = match target.object_type {
+                            PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                                &phalanx,
+                                target.id,
+                                region_id,
+                                false,
+                                runtime,
+                            ),
+                            MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                                &phalanx,
+                                target.id,
+                                region_id,
+                                lifetime_now_ms,
+                                runtime,
+                            ),
+                            _ => false,
+                        };
+                        if applied {
+                            break;
+                        }
+                    }
+                    if applied {
+                        if let Some(mut owner) = self.take_region_owner(region_id) {
+                            if let Some(SummonedSkillShape::HeartlessArrow(heartless)) =
+                                owner.base_mut().find_skill_phalanx_mut(phalanx_id)
+                            {
+                                heartless.finish();
+                            }
+                            self.restore_region_owner(owner);
+                        }
+                        if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+                            let _ = self.send_shape_exit_around(region, phalanx.shape());
+                        }
+                    }
+                }
+                HeartlessArrowPhalanxTick::Expired => {
+                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+                        let _ = self.send_shape_exit_around(region, phalanx.shape());
+                    }
+                }
+            }
+            return true;
+        }
         if let (Some(lighting_arrow_tick), SummonedSkillShape::LightingArrow(_)) = (lighting_arrow_tick, &phalanx) {
             match lighting_arrow_tick {
                 LightingArrowPhalanxTick::Pending => {}

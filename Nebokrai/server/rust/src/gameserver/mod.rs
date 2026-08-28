@@ -154,6 +154,10 @@ pub(crate) mod appserver {
         pub(crate) mod hearten;
         pub(crate) mod heartenstate;
         pub(crate) mod heartlessarrow;
+        pub(crate) mod heartlessarrow2;
+        pub(crate) mod heartlessarrow3;
+        pub(crate) mod heartlessarrowphalanx2;
+        pub(crate) mod heartlessarrowphalanx3;
         pub(crate) mod lightingarrow;
         pub(crate) mod lightingarrowphalanx;
         pub(crate) mod meteorarrow;
