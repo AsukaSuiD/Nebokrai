@@ -47,18 +47,18 @@ fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
 fn finish(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); }
 }
-fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
+pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
     player.equipment().get_goods(2).is_some_and(|weapon|
         weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3)
 }
-fn master_info(player: &CPlayer) -> MasterInfo {
+pub(super) fn master_info(player: &CPlayer) -> MasterInfo {
     let p = player.pk_permissions();
     MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(),
         master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()),
         permitted_to_kill_player: i32::from(p.player), permitted_to_kill_teammate: i32::from(p.teammate),
         permitted_to_kill_guild_member: i32::from(p.guild_member), permitted_to_kill_criminal: i32::from(p.criminal) }
 }
-fn target_snapshot(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<(i32, i32, bool)> {
+pub(super) fn target_snapshot(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<(i32, i32, bool)> {
     match target.object_type {
         PLAYER_TYPE => game.find_player(target.id).and_then(|p| Some((p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.is_dead()))),
         MONSTER_TYPE => game.find_region(region_id).and_then(|r| { let m = r.base().find_monster_by_id(target.id)?;

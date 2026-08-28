@@ -65,6 +65,7 @@ use crate::gameserver::appserver::skills::poisonmoth::PoisonMothExecutionState;
 use crate::gameserver::appserver::skills::bloodrose::BloodRoseExecutionState;
 use crate::gameserver::appserver::skills::scorpion::ScorpionExecutionState;
 use crate::gameserver::appserver::skills::boalock::BoaLockExecutionState;
+use crate::gameserver::appserver::skills::fallingstar::FallingStarExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -111,6 +112,8 @@ pub(crate) struct CPlayerAI {
     scorpion_last_used_ms: u32,
     boa_lock: Option<BoaLockExecutionState>,
     boa_lock_last_used_ms: u32,
+    falling_star: Option<FallingStarExecutionState>,
+    falling_star_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -302,6 +305,7 @@ impl CPlayerAI {
         self.blood_rose = None;
         self.scorpion = None;
         self.boa_lock = None;
+        self.falling_star = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -451,6 +455,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.boa_lock.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение связывания удава завершено");
+        }
+        if let Some(mut execution) = self.falling_star.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение падающей звезды завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -700,6 +708,7 @@ impl CPlayerAI {
         self.blood_rose = None;
         self.scorpion = None;
         self.boa_lock = None;
+        self.falling_star = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -864,6 +873,11 @@ impl CPlayerAI {
     pub(crate) fn boa_lock_mut(&mut self) -> Option<&mut BoaLockExecutionState> { self.boa_lock.as_mut() }
     pub(crate) const fn boa_lock_last_used_ms(&self) -> u32 { self.boa_lock_last_used_ms }
     pub(crate) const fn mark_boa_lock_used(&mut self, now_ms: u32) { self.boa_lock_last_used_ms = now_ms; }
+    pub(crate) fn falling_star(&self) -> Option<&FallingStarExecutionState> { self.falling_star.as_ref() }
+    pub(crate) fn begin_falling_star(&mut self, state: FallingStarExecutionState) { self.falling_star = Some(state); }
+    pub(crate) fn falling_star_mut(&mut self) -> Option<&mut FallingStarExecutionState> { self.falling_star.as_mut() }
+    pub(crate) const fn falling_star_last_used_ms(&self) -> u32 { self.falling_star_last_used_ms }
+    pub(crate) const fn mark_falling_star_used(&mut self, now_ms: u32) { self.falling_star_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);

@@ -1,191 +1,370 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Расходование накопленных метеорных стрел навыком `CFallingStar` (`0xD5`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/fallingstar.cpp`. Начальная проверка сохраняет задержку
+//! повторного использования,
+//! дальность, непроходимые клетки, лук и ненулевую стоимость MP. В AI MP
+//! списывается до повторной проверки лука и накопленного состояния; эта
+//! частичная мутация необратима. После задержки состояние `0xCC` атомарно
+//! изымается, публикуется пакет выстрела и создаётся область с сетевым ID `0xCD`.
+//! Формулы, два вызова RNG на стрелу и пакеты принадлежат владельцам навыка;
+//! `CGame` только связывает player, region и доставку.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp
+use super::baseattack::{time_reached, SKILL_USAGE_USER_HIT_MODIFIER};
+use super::basemagic::{
+    BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
+};
+use super::fallingstarphalanx::create_falling_star_phalanx;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::meteorarrow::{master_info, target_snapshot, weapon_is_valid};
+use super::meteorarrowmass::send_meteor_arrow_state_remove;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
+use crate::nets::netserver::message::CMessage;
+use crate::public::tools::get_line_direction;
 
-// ============================================================================
-// FUNCTION: CFallingStar::CFallingStar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:22
-// RVA: 0x00178D00
-// ADDRESS: 00578d00
-// PROTOTYPE: undefined __thiscall CFallingStar(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const FALLING_STAR_SKILL_ID: u32 = 0xd5;
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
+const USER_MP_LOSE: u32 = 2;
+const TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 
-// ============================================================================
-// FUNCTION: CFallingStar::~CFallingStar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:30
-// RVA: 0x00178D70
-// ADDRESS: 00578d70
-// PROTOTYPE: void __thiscall ~CFallingStar(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FallingStarExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    destination: (i32, i32),
+    target: Option<ShapeIdentity>,
+    condition_checked: bool,
+}
 
-// ============================================================================
-// FUNCTION: CFallingStar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:201
-// RVA: 0x00178D90
-// ADDRESS: 00578d90
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl FallingStarExecutionState {
+    fn begin(
+        dispatch: PlayerSkillDispatch,
+        destination: (i32, i32),
+        target: Option<ShapeIdentity>,
+        now_ms: u32,
+    ) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, now_ms),
+            destination,
+            target,
+            condition_checked: false,
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CFallingStar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:217
-// RVA: 0x00178E60
-// ADDRESS: 00578e60
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
+    }
 
-// ============================================================================
-// FUNCTION: CFallingStar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:184
-// RVA: 0x00178F50
-// ADDRESS: 00578f50
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+}
 
-// ============================================================================
-// FUNCTION: CFallingStarEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:567
-// RVA: 0x00179010
-// ADDRESS: 00579010
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    }
+}
 
-// ============================================================================
-// FUNCTION: CFallingStar::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:246
-// RVA: 0x00179550
-// ADDRESS: 00579550
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn finish(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
 
-// ============================================================================
-// FUNCTION: CFallingStar::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:37
-// RVA: 0x00179AB0
-// ADDRESS: 00579ab0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_failure(game: &CGame, player_id: i32, action: u8, mp_loss: u32) {
+    game.send_base_magic_failure(player_id, action);
+    match action {
+        4 => game.send_skill_system_info(player_id, b"GS0300"),
+        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
+        10 => game.send_skill_system_info(player_id, b"GS0285"),
+        0x0b => game.send_skill_system_info(player_id, b"GS0290"),
+        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
+        0x0e => game.send_skill_system_info(player_id, b"GS0297"),
+        0x0f => game.send_skill_system_info(player_id, b"GS0282"),
+        _ => {}
+    }
+}
 
-// ============================================================================
-// FUNCTION: CFallingStar::Summon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:493
-// RVA: 0x00179F60
-// ADDRESS: 00579f60
-// PROTOTYPE: int __thiscall Summon(CMoveShape * param_1, long param_2, long param_3, ulong param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_start(game: &mut CGame, player_id: i32, level: i32) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+    message.add_byte(1);
+    message.add_long(FALLING_STAR_SKILL_ID as i32);
+    message.base_mut().add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(player.shape().get_direction());
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
-// ============================================================================
-// FUNCTION: FUN_00579f99
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:497
-// RVA: 0x00179F99
-// ADDRESS: 00579f99
-// PROTOTYPE: undefined FUN_00579f99()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_fire(
+    game: &mut CGame,
+    player_id: i32,
+    level: i32,
+    x: i32,
+    y: i32,
+) {
+    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+    message.add_byte(2);
+    message.add_long(FALLING_STAR_SKILL_ID as i32);
+    message.base_mut().add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(0);
+    message.add_long(0);
+    message.add_long(x);
+    message.add_long(y);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
-// ============================================================================
-// FUNCTION: CFallingStar::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fallingstar.cpp:233
-// RVA: 0x001AE7A0
-// ADDRESS: 005ae7a0
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const fn is_falling_star_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::SelfTarget {
+            skill_id: FALLING_STAR_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Point {
+            skill_id: FALLING_STAR_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Object {
+            skill_id: FALLING_STAR_SKILL_ID,
+            target: ShapeIdentity {
+                object_type: PLAYER_TYPE | MONSTER_TYPE,
+                ..
+            },
+        }
+    )
+}
 
+pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_falling_star_dispatch(dispatch) {
+        return outcome(QueuedSkillExecutionState::Rejected);
+    }
+    let Some((region_id, level, source_x, source_y)) = game.find_player(player_id).and_then(|player| {
+        Some((
+            player.server_region_id()?,
+            player.learned_skill_level(FALLING_STAR_SKILL_ID),
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+        ))
+    }) else {
+        return outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(properties) = game.skill_base_properties(FALLING_STAR_SKILL_ID, level) else {
+        finish(game, player_id);
+        return outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(USER_MP_LOSE);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let frequency = properties.query_property(TARGET_AFFECT_FREQUENCY);
+    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
+    if ai.falling_star().is_none() {
+        let (destination, target) = match dispatch {
+            PlayerSkillDispatch::SelfTarget { .. } => ((source_x, source_y), None),
+            PlayerSkillDispatch::Point { x, y, .. } => ((x, y), None),
+            PlayerSkillDispatch::Object { target, .. } => match target_snapshot(game, region_id, target) {
+                Some((x, y, false)) => ((x, y), Some(target)),
+                _ => {
+                    send_failure(game, player_id, 10, mp_loss);
+                    return outcome(QueuedSkillExecutionState::Rejected);
+                }
+            },
+        };
+        let now_ms = runtime.now_milliseconds();
+        if ai.falling_star_last_used_ms() != 0
+            && !time_reached(now_ms, ai.falling_star_last_used_ms(), reuse)
+        {
+            send_failure(game, player_id, 0x0d, mp_loss);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        let path = game.base_magic_path(
+            region_id,
+            source_x,
+            source_y,
+            destination.0,
+            destination.1,
+            None,
+        );
+        if maximum_distance != 0 && path.len() > maximum_distance as usize {
+            send_failure(game, player_id, 0x0b, mp_loss);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        if path.iter().any(|cell| cell.2 == 2) {
+            send_failure(game, player_id, 0x0f, mp_loss);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(player) = game.find_player(player_id) else {
+            return outcome(QueuedSkillExecutionState::Rejected);
+        };
+        if !weapon_is_valid(game, player) {
+            send_failure(game, player_id, 0x0e, mp_loss);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss == 0 {
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        if (player.mana().wrapping_sub(mp_loss) as i32) < 0 {
+            send_failure(game, player_id, 7, mp_loss);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(FALLING_STAR_SKILL_ID));
+        }
+        ai.begin_falling_star(FallingStarExecutionState::begin(
+            dispatch,
+            destination,
+            target,
+            now_ms,
+        ));
+    } else if ai
+        .falling_star()
+        .is_none_or(|state| state.kernel().dispatch() != dispatch)
+    {
+        return outcome(QueuedSkillExecutionState::Rejected);
+    }
 
+    let state = ai.falling_star().expect("выполнение падающей звезды создано");
+    let (mut destination, target) = (state.destination, state.target);
+    if let Some(target) = target {
+        match target_snapshot(game, region_id, target) {
+            Some((x, y, false)) => destination = (x, y),
+            _ => {
+                send_failure(game, player_id, 10, mp_loss);
+                finish(game, player_id);
+                return outcome(QueuedSkillExecutionState::Rejected);
+            }
+        }
+    }
+    if !state.condition_checked {
+        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_failure(game, player_id, 7, mp_loss);
+            finish(game, player_id);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(mana.wrapping_sub(mp_loss));
+        }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        if game
+            .find_player(player_id)
+            .is_none_or(|player| !weapon_is_valid(game, player))
+        {
+            send_failure(game, player_id, 0x0e, mp_loss);
+            finish(game, player_id);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        if game.find_player(player_id).is_none_or(|player| {
+            player
+                .meteor_arrow_state()
+                .is_none_or(|state| state.arrows() == 0)
+        }) {
+            send_failure(game, player_id, 4, mp_loss);
+            finish(game, player_id);
+            return outcome(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.movement_shape_mut().set_direction(get_line_direction(
+                source_x,
+                source_y,
+                destination.0,
+                destination.1,
+            ));
+        }
+        send_start(game, player_id, level);
+        if let Some(state) = ai.falling_star_mut() {
+            state.condition_checked = true;
+            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
 
+    let started_at_ms = ai
+        .falling_star()
+        .expect("состояние падающей звезды сохранено")
+        .kernel()
+        .started_at_ms();
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) {
+        return outcome(QueuedSkillExecutionState::Pending);
+    }
+    let arrows = game
+        .find_player_mut(player_id)
+        .and_then(CPlayer::take_meteor_arrow_state)
+        .map_or(0, |state| state.arrows().max(0) as u32);
+    if arrows == 0 {
+        send_failure(game, player_id, 4, mp_loss);
+        finish(game, player_id);
+        return outcome(QueuedSkillExecutionState::Rejected);
+    }
+    send_meteor_arrow_state_remove(game, player_id);
+    let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+    send_fire(game, player_id, level, destination.0, destination.1);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+    let Some(player) = game.find_player(player_id) else {
+        return outcome(QueuedSkillExecutionState::Rejected);
+    };
+    let master = master_info(player);
+    let combat = player.combat_properties();
+    let summon_id = game.allocate_summon_shape_id();
+    let now_ms = runtime.now_milliseconds();
+    let mut phalanx = create_falling_star_phalanx(
+        summon_id,
+        master,
+        now_ms,
+        frequency,
+        level,
+        combat.minimum_attack as i32,
+        combat.maximum_attack as i32,
+        combat.add_element_attack as i32,
+        i32::from(combat.add_soul_attack),
+        i32::from(combat.cch),
+        hit_modifier,
+        arrows,
+        destination.0,
+        destination.1,
+        |maximum| game.skill_random_below(maximum),
+    );
+    phalanx.shape_mut().set_region_id(region_id);
+    let result = game.add_meteor_arrow_phalanx(
+        region_id,
+        phalanx,
+        destination.0,
+        destination.1,
+        now_ms,
+        runtime,
+    );
+    if result.is_some_and(|result| result.is_ok()) {
+        let _ = game.send_meteor_arrow_phalanx_entry(region_id, summon_id, runtime);
+    }
+    if let Some(state) = ai.falling_star_mut() {
+        let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    ai.mark_falling_star_used(runtime.now_milliseconds());
+    finish(game, player_id);
+    outcome(QueuedSkillExecutionState::Completed)
+}

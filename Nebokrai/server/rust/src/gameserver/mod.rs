@@ -215,6 +215,8 @@ pub(crate) mod appserver {
         pub(crate) mod scorpion;
         pub(crate) mod boalock;
         pub(crate) mod boalockstate;
+        pub(crate) mod fallingstar;
+        pub(crate) mod fallingstarphalanx;
         pub(crate) mod promotion;
         pub(crate) mod promotionstate;
         pub(crate) mod pojia;

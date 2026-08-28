@@ -59,6 +59,17 @@ impl CMeteorArrowPhalanx {
             frequency_ms, skill_level, minimum_attack, maximum_attack, element_attack, soul_attack,
             critical_chance, hit_modifier, cells, last_attack_at_ms: 0, attack_count: 0 }
     }
+    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
+    pub(crate) fn from_cells(id: i32, master: MasterInfo, started_at_ms: u32, frequency_ms: u32,
+        skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_attack: i32,
+        soul_attack: i32, critical_chance: i32, hit_modifier: i32, cells: Vec<(i32, i32)>) -> Self {
+        let mut shape = CShape::with_constructor_defaults();
+        shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
+        let arrow_count = cells.len() as u32;
+        Self { shape, master, started_at_ms, lifetime_ms: frequency_ms.wrapping_mul(arrow_count).wrapping_add(10),
+            frequency_ms, skill_level, minimum_attack, maximum_attack, element_attack, soul_attack,
+            critical_chance, hit_modifier, cells, last_attack_at_ms: 0, attack_count: 0 }
+    }
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
