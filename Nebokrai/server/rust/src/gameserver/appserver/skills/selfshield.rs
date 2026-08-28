@@ -6,6 +6,8 @@
 
 use super::baseattack::time_reached;
 use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::machineshield::{MACHINE_SHIELD_SKILL_ID, MachineShieldOwner};
+use super::manashield::{MANA_SHIELD_SKILL_ID, ManaShieldOwner};
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -60,6 +62,37 @@ pub(crate) trait SelfShieldOwner {
     );
     fn last_used_ms(player_ai: &CPlayerAI) -> u32;
     fn mark_used(player_ai: &mut CPlayerAI, now_ms: u32);
+}
+
+pub(crate) const fn is_self_shield_skill(skill_id: u32) -> bool {
+    matches!(skill_id, MANA_SHIELD_SKILL_ID | MACHINE_SHIELD_SKILL_ID)
+}
+
+pub(crate) fn execute_player_self_shield_dispatch<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let skill_id = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+    };
+    match skill_id {
+        MANA_SHIELD_SKILL_ID => execute_player_self_shield::<ManaShieldOwner, Runtime>(
+            game, player_id, dispatch, player_ai, runtime,
+        ),
+        MACHINE_SHIELD_SKILL_ID => execute_player_self_shield::<MachineShieldOwner, Runtime>(
+            game, player_id, dispatch, player_ai, runtime,
+        ),
+        _ => QueuedSkillExecutionOutcome {
+            state: QueuedSkillExecutionState::Rejected,
+            first_contact: false,
+            killing_blow: None,
+        },
+    }
 }
 
 fn send_cast<Owner: SelfShieldOwner>(

@@ -858,12 +858,9 @@ use crate::gameserver::appserver::skills::tianhuophalanx::{
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::machineshield::{
-    execute_player_machine_shield, MACHINE_SHIELD_SKILL_ID,
-};
 use crate::gameserver::appserver::skills::machineshieldstate::send_machine_shield_state_visual;
-use crate::gameserver::appserver::skills::manashield::{
-    execute_player_mana_shield, MANA_SHIELD_SKILL_ID,
+use crate::gameserver::appserver::skills::selfshield::{
+    execute_player_self_shield_dispatch, is_self_shield_skill,
 };
 use crate::gameserver::appserver::skills::manashieldstate::{
     send_mana_shield_state_visual,
@@ -36049,18 +36046,11 @@ impl CGame {
                     skill_id == MONSTER_TAMING_SKILL_ID
                 }
             };
-            let concrete_mana_shield = match dispatch {
+            let concrete_self_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
                 | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    skill_id == MANA_SHIELD_SKILL_ID
-                }
-            };
-            let concrete_machine_shield = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => {
-                    skill_id == MACHINE_SHIELD_SKILL_ID
+                    is_self_shield_skill(skill_id)
                 }
             };
             let concrete_immediate_state = match dispatch {
@@ -36086,10 +36076,8 @@ impl CGame {
                 execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_monster_taming {
                 execute_player_monster_taming(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_machine_shield {
-                execute_player_machine_shield(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_mana_shield {
-                execute_player_mana_shield(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_self_shield {
+                execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
                 execute_player_immediate_state(self, player_id, dispatch, player_ai, runtime)
             } else {

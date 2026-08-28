@@ -19,13 +19,11 @@ pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
 
 use super::kernel::SkillExecutionKernel;
 use super::machineshieldstate::{send_machine_shield_state_visual, MachineShieldState};
-use super::selfshield::{execute_player_self_shield, SelfShieldOwner};
+use super::selfshield::SelfShieldOwner;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
-};
+use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) struct MachineShieldOwner;
 
@@ -89,16 +87,4 @@ impl SelfShieldOwner for MachineShieldOwner {
     fn mark_used(player_ai: &mut CPlayerAI, now_ms: u32) {
         player_ai.mark_machine_shield_used(now_ms);
     }
-}
-
-pub(crate) fn execute_player_machine_shield<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    execute_player_self_shield::<MachineShieldOwner, Runtime>(
-        game, player_id, dispatch, player_ai, runtime,
-    )
 }
