@@ -85,6 +85,7 @@ pub(crate) mod appserver {
         pub(crate) mod chuckstone;
         pub(crate) mod chaossphere;
         pub(crate) mod chaosspherephalanx;
+        pub(crate) mod chainlightning;
         pub(crate) mod cure;
         pub(crate) mod curestate;
         pub(crate) mod corpsecandleblasting;

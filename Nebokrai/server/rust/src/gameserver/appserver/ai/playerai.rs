@@ -44,6 +44,7 @@ use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseM
 use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransferKind;
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
+use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
@@ -74,6 +75,8 @@ pub(crate) struct CPlayerAI {
     fire_bolt_last_used_ms: u32,
     fire_ball: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_ball_last_used_ms: u32,
+    chain_lightning: Option<ChainLightningExecutionState>,
+    chain_lightning_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -197,6 +200,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.fire_bolt = None;
         self.fire_ball = None;
+        self.chain_lightning = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -294,6 +298,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.fire_ball.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного шара завершено");
+        }
+        if let Some(mut execution) = self.chain_lightning.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение цепной молнии завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -423,6 +431,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.fire_bolt = None;
         self.fire_ball = None;
+        self.chain_lightning = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -588,6 +597,24 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_fire_ball_used(&mut self, now_ms: u32) {
         self.fire_ball_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn chain_lightning(&self) -> Option<ChainLightningExecutionState> {
+        self.chain_lightning
+    }
+
+    pub(crate) const fn begin_chain_lightning(&mut self, state: ChainLightningExecutionState) {
+        self.chain_lightning = Some(state);
+    }
+
+    pub(crate) fn chain_lightning_mut(&mut self) -> Option<&mut ChainLightningExecutionState> {
+        self.chain_lightning.as_mut()
+    }
+
+    pub(crate) const fn chain_lightning_last_used_ms(&self) -> u32 { self.chain_lightning_last_used_ms }
+
+    pub(crate) const fn mark_chain_lightning_used(&mut self, now_ms: u32) {
+        self.chain_lightning_last_used_ms = now_ms;
     }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
