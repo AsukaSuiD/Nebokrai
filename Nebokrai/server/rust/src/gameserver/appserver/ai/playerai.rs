@@ -14,7 +14,8 @@
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
-//! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
+//! сфера хаоса, семь падающих звёзд, ядовитый мотылёк,
+//! семейства бегущего и армейского ударов,
 //! рыцарский удар, подготовка яростного удара, последующий рывок, громовое
 //! рассечение, прямой рывок, боевой клич, накопление энергии, обратный рубящий
 //! и двойной направленный удары,
@@ -59,6 +60,7 @@ use crate::gameserver::appserver::skills::lightingarrow::LightingArrowExecutionS
 use crate::gameserver::appserver::skills::meteorarrowmass::MeteorArrowMassExecutionState;
 use crate::gameserver::appserver::skills::meteorarrow::MeteorArrowExecutionState;
 use crate::gameserver::appserver::skills::rainarrow::RainArrowExecutionState;
+use crate::gameserver::appserver::skills::poisonmoth::PoisonMothExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -97,6 +99,8 @@ pub(crate) struct CPlayerAI {
     meteor_arrow_last_used_ms: u32,
     rain_arrow: Option<RainArrowExecutionState>,
     rain_arrow_last_used_ms: u32,
+    poison_moth: Option<PoisonMothExecutionState>,
+    poison_moth_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -284,6 +288,7 @@ impl CPlayerAI {
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
         self.rain_arrow = None;
+        self.poison_moth = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -417,6 +422,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.rain_arrow.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение дождя стрел завершено");
+        }
+        if let Some(mut execution) = self.poison_moth.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение ядовитого мотылька завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -662,6 +671,7 @@ impl CPlayerAI {
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
         self.rain_arrow = None;
+        self.poison_moth = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -806,6 +816,11 @@ impl CPlayerAI {
     pub(crate) fn rain_arrow_mut(&mut self) -> Option<&mut RainArrowExecutionState> { self.rain_arrow.as_mut() }
     pub(crate) const fn rain_arrow_last_used_ms(&self) -> u32 { self.rain_arrow_last_used_ms }
     pub(crate) const fn mark_rain_arrow_used(&mut self, now_ms: u32) { self.rain_arrow_last_used_ms = now_ms; }
+    pub(crate) fn poison_moth(&self) -> Option<&PoisonMothExecutionState> { self.poison_moth.as_ref() }
+    pub(crate) fn begin_poison_moth(&mut self, state: PoisonMothExecutionState) { self.poison_moth = Some(state); }
+    pub(crate) fn poison_moth_mut(&mut self) -> Option<&mut PoisonMothExecutionState> { self.poison_moth.as_mut() }
+    pub(crate) const fn poison_moth_last_used_ms(&self) -> u32 { self.poison_moth_last_used_ms }
+    pub(crate) const fn mark_poison_moth_used(&mut self, now_ms: u32) { self.poison_moth_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);
