@@ -155,6 +155,7 @@ pub(crate) mod appserver {
         pub(crate) mod yubingstate;
         pub(crate) mod yumo;
         pub(crate) mod yumostate;
+        pub(crate) mod yunshenglightning;
         pub(crate) mod yufa;
         pub(crate) mod yufastate;
     }
