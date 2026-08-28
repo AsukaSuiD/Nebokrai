@@ -12,6 +12,7 @@ pub(crate) const SUMMON_SHAPE_TYPE: i32 = 1000;
 use crate::gameserver::appserver::skills::basemagicphalanx::CBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
 use crate::gameserver::appserver::skills::archeryphalanx::CArcheryPhalanx;
+use crate::gameserver::appserver::skills::fatalblowphalanx::CFatalBlowPhalanx;
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
@@ -20,6 +21,7 @@ pub(crate) enum SummonedSkillShape {
     Archery(CArcheryPhalanx),
     BaseMagic(CBaseMagicPhalanx),
     BattleFairyBaseMagic(CBattleFairyBaseMagicPhalanx),
+    FatalBlow(CFatalBlowPhalanx),
 }
 
 impl SummonedSkillShape {
@@ -28,6 +30,7 @@ impl SummonedSkillShape {
             Self::Archery(shape) => shape.shape(),
             Self::BaseMagic(shape) => shape.shape(),
             Self::BattleFairyBaseMagic(shape) => shape.shape(),
+            Self::FatalBlow(shape) => shape.shape(),
         }
     }
 
@@ -36,6 +39,7 @@ impl SummonedSkillShape {
             Self::Archery(shape) => shape.shape_mut(),
             Self::BaseMagic(shape) => shape.shape_mut(),
             Self::BattleFairyBaseMagic(shape) => shape.shape_mut(),
+            Self::FatalBlow(shape) => shape.shape_mut(),
         }
     }
 
@@ -44,6 +48,7 @@ impl SummonedSkillShape {
             Self::Archery(shape) => shape.master(),
             Self::BaseMagic(shape) => shape.master(),
             Self::BattleFairyBaseMagic(shape) => shape.master(),
+            Self::FatalBlow(shape) => shape.master(),
         }
     }
 }

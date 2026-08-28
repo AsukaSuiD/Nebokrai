@@ -71,6 +71,8 @@ pub(crate) struct CPlayerAI {
     poison_arrow_last_used_ms: u32,
     blood_loss: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     blood_loss_last_used_ms: u32,
+    fatal_blow: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    fatal_blow_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -149,6 +151,7 @@ impl CPlayerAI {
         self.wangsheng = None;
         self.poison_arrow = None;
         self.blood_loss = None;
+        self.fatal_blow = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -240,6 +243,7 @@ impl CPlayerAI {
         self.immediate_state = None;
         self.poison_arrow = None;
         self.blood_loss = None;
+        self.fatal_blow = None;
         true
     }
 
@@ -496,6 +500,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение потери крови завершено");
         }
+        if let Some(mut execution) = self.fatal_blow.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение смертельного удара завершено");
+        }
         true
     }
 
@@ -673,6 +681,33 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_blood_loss_used(&mut self, now_ms: u32) {
         self.blood_loss_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn fatal_blow(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.fatal_blow
+    }
+
+    pub(crate) const fn begin_fatal_blow(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.fatal_blow = Some(state);
+    }
+
+    pub(crate) fn fatal_blow_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.fatal_blow.as_mut()
+    }
+
+    pub(crate) const fn fatal_blow_last_used_ms(&self) -> u32 {
+        self.fatal_blow_last_used_ms
+    }
+
+    pub(crate) const fn mark_fatal_blow_used(&mut self, now_ms: u32) {
+        self.fatal_blow_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]

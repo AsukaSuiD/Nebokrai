@@ -73,6 +73,8 @@ pub(crate) mod appserver {
         pub(crate) mod callosity;
         pub(crate) mod callositystate;
         pub(crate) mod curestate;
+        pub(crate) mod fatalblow;
+        pub(crate) mod fatalblowphalanx;
         pub(crate) mod enlargemaxhp;
         pub(crate) mod enlargemaxhpstate;
         pub(crate) mod enlargemaxmp;

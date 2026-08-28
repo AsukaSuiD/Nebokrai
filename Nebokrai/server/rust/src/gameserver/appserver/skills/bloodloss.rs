@@ -11,7 +11,8 @@
 use super::baseattack::time_reached;
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
-    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
+    SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
+    SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::battlefairytransfer::send_goods_update;
 use super::kernel::{SkillExecutionKernel, SkillStage};
@@ -35,9 +36,7 @@ const DENIED_STATE_C: u32 = 0xd2;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
-const SKILL_USAGE_MIN_ATTACK: u32 = 20_001;
-const SKILL_USAGE_MAX_ATTACK: u32 = 20_002;
-const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 6_003;
+const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {

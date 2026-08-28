@@ -483,6 +483,7 @@
 //! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
 
 mod bloodloss;
+mod fatalblow;
 mod periodicattack;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -804,6 +805,12 @@ use crate::gameserver::appserver::skills::bloodloss::{
 };
 use crate::gameserver::appserver::skills::bloodlossstate::{
     BloodLossState, BloodLossStateTick, send_blood_loss_state_visual,
+};
+use crate::gameserver::appserver::skills::fatalblow::{
+    FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
+};
+use crate::gameserver::appserver::skills::fatalblowphalanx::{
+    CFatalBlowPhalanx, FatalBlowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
@@ -36745,6 +36752,18 @@ impl CGame {
             } else if matches!(
                 dispatch,
                 BattleFairySkillDispatch::Object {
+                    skill_id: FATAL_BLOW_SKILL_ID,
+                    target: ShapeIdentity {
+                        object_type: PLAYER_TYPE | MONSTER_TYPE,
+                        ..
+                    },
+                    ..
+                }
+            ) {
+                execute_battle_fairy_fatal_blow(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
+                BattleFairySkillDispatch::Object {
                     skill_id: POISON_ARROW_SKILL_ID,
                     target: ShapeIdentity {
                         object_type: PLAYER_TYPE | MONSTER_TYPE,
@@ -39568,6 +39587,9 @@ impl CGame {
             SummonedSkillShape::BattleFairyBaseMagic(phalanx) => {
                 self.calculate_battle_fairy_base_magic_attack(phalanx)
             }
+            SummonedSkillShape::FatalBlow(phalanx) => {
+                self.calculate_fatal_blow_attack(phalanx)
+            }
         }
     }
 
@@ -39931,12 +39953,32 @@ impl CGame {
                         BattleFairyPhalanxTick::Expired => None,
                     }
                 }
+                SummonedSkillShape::FatalBlow(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    FatalBlowPhalanxTick::Ready(target) => {
+                        Some(Some((target, lifetime_now_ms)))
+                    }
+                    FatalBlowPhalanxTick::Expired => None,
+                },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
-        let (Some(tick), Some(phalanx)) = (tick, phalanx) else {
+        let (Some(mut tick), Some(phalanx)) = (tick, phalanx) else {
             return false;
         };
+        if let (
+            Some(Some((target, _))),
+            SummonedSkillShape::FatalBlow(fatal_blow),
+        ) = (tick, &phalanx)
+        {
+            match self.fatal_blow_attack_ready(fatal_blow, target, region_id) {
+                Some(true) => self.finish_fatal_blow_phalanx(region_id, phalanx_id),
+                Some(false) => return true,
+                None => {
+                    self.finish_fatal_blow_phalanx(region_id, phalanx_id);
+                    tick = None;
+                }
+            }
+        }
         match tick {
             Some(None) => return true,
             None => {}
