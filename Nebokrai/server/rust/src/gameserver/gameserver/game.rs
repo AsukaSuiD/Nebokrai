@@ -1047,6 +1047,7 @@ use crate::gameserver::appserver::skills::leafcutstate3::{
 };
 use crate::gameserver::appserver::skills::kerosene::{execute_player_kerosene, is_kerosene_dispatch};
 use crate::gameserver::appserver::skills::ignition::{execute_player_ignition, is_ignition_dispatch};
+use crate::gameserver::appserver::skills::blind::{execute_player_blind, is_blind_dispatch};
 use crate::gameserver::appserver::skills::fatalblow::{
     FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
 };
@@ -33685,6 +33686,7 @@ impl CGame {
                             || player.player_ai().poison_moth().is_some()
                             || player.player_ai().kerosene().is_some()
                             || player.player_ai().ignition().is_some()
+                            || player.player_ai().blind().is_some()
                             || player.player_ai().blood_rose().is_some()
                             || player.player_ai().scorpion().is_some()
                             || player.player_ai().boa_lock().is_some()
@@ -34365,6 +34367,7 @@ impl CGame {
                 || player.player_ai().poison_moth().is_some()
                 || player.player_ai().kerosene().is_some()
                 || player.player_ai().ignition().is_some()
+                || player.player_ai().blind().is_some()
                 || player.player_ai().blood_rose().is_some()
                 || player.player_ai().scorpion().is_some()
                 || player.player_ai().boa_lock().is_some()
@@ -37069,6 +37072,7 @@ impl CGame {
             let concrete_poison_moth = is_poison_moth_dispatch(dispatch);
             let concrete_kerosene = is_kerosene_dispatch(dispatch);
             let concrete_ignition = is_ignition_dispatch(dispatch);
+            let concrete_blind = is_blind_dispatch(dispatch);
             let concrete_blood_rose = is_blood_rose_dispatch(dispatch);
             let concrete_scorpion = is_scorpion_dispatch(dispatch);
             let concrete_boa_lock = is_boa_lock_dispatch(dispatch);
@@ -37204,6 +37208,8 @@ impl CGame {
                 execute_player_kerosene(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_ignition {
                 execute_player_ignition(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_blind {
+                execute_player_blind(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_blood_rose {
                 execute_player_blood_rose(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_scorpion {

@@ -74,6 +74,7 @@ pub(crate) mod appserver {
         pub(crate) mod battlefairytransfer;
         pub(crate) mod bloodloss;
         pub(crate) mod bloodlossstate;
+        pub(crate) mod blind;
         pub(crate) mod bossbluefury;
         pub(crate) mod bossbluefurystate;
         pub(crate) mod bossbluequake;
