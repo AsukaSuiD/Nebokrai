@@ -199,7 +199,37 @@ impl CGame {
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
         region_id: i32,
+        attack: AttackInformation,
+        runtime: &mut Runtime,
+    ) {
+        self.apply_owned_skill_attack_to_player_kind(
+            master, target_id, region_id, attack, false, runtime,
+        );
+    }
+
+    /// Применяет уже рассчитанное попадание к вынесенной боевой фее игрока.
+    /// Флаг остаётся на runtime-root, потому что одна атомарная операция меняет
+    /// экипировку, обычные HP/MP и выполняет соответствующую доставку.
+    pub(crate) fn apply_owned_skill_attack_to_war_soul<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        target_id: i32,
+        region_id: i32,
+        attack: AttackInformation,
+        runtime: &mut Runtime,
+    ) {
+        self.apply_owned_skill_attack_to_player_kind(
+            master, target_id, region_id, attack, true, runtime,
+        );
+    }
+
+    fn apply_owned_skill_attack_to_player_kind<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        target_id: i32,
+        region_id: i32,
         mut attack: AttackInformation,
+        war_soul_hit: bool,
         runtime: &mut Runtime,
     ) {
         if !self.owned_skill_player_attackable(master, target_id, region_id) {
@@ -220,30 +250,58 @@ impl CGame {
         else {
             return;
         };
-        let _ = self.player_on_owned_skill_attack(
-            master.master_id,
-            target_id,
-            region_id,
-            runtime,
-        );
-        let mut defense_shields = self
-            .find_player_mut(target_id)
-            .map(CPlayer::take_defense_shields)
-            .unwrap_or_default();
-        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        defend_player_base_attack(
-            &mut attack,
-            attacker_properties,
-            attacker_occupation,
-            target_properties,
-            target_mana,
-            target_war_soul_mana,
-            &self.globe_setup,
-            &mut random,
-            &mut defense_shields,
-        );
-        if let Some(target) = self.find_player_mut(target_id) {
-            target.restore_defense_shields(defense_shields);
+        if !war_soul_hit {
+            let _ = self.player_on_owned_skill_attack(
+                master.master_id,
+                target_id,
+                region_id,
+                runtime,
+            );
+        }
+        if war_soul_hit {
+            let raw_damage = attack.damages.iter().fold(0_i32, |total, power| {
+                total.wrapping_add(power.hp_damage)
+            });
+            let da_kong_key = self.globe_setup.da_kong_key();
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            let outcome = players.get_mut(&target_id).and_then(|target| {
+                target.apply_war_soul_hit(raw_damage, goods_factory, da_kong_key)
+            });
+            if let Some(outcome) = outcome {
+                if outcome.broken {
+                    let mut broken = CMessage::new(0x000b_f92f);
+                    broken.add_long(PLAYER_TYPE);
+                    broken.add_long(target_id);
+                    let _ = self.send_player_shape_around(target_id, None, &broken);
+                }
+                if outcome.broadcast_previous_status {
+                    let mut status = CMessage::new(0x000b_f930);
+                    status.add_long(PLAYER_TYPE);
+                    status.add_long(target_id);
+                    let _ = self.send_player_shape_around(target_id, None, &status);
+                }
+                let _ = self.send_battle_fairy_goods_update(&outcome.update);
+            }
+        } else {
+            let mut defense_shields = self
+                .find_player_mut(target_id)
+                .map(CPlayer::take_defense_shields)
+                .unwrap_or_default();
+            let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+            defend_player_base_attack(
+                &mut attack,
+                attacker_properties,
+                attacker_occupation,
+                target_properties,
+                target_mana,
+                target_war_soul_mana,
+                &self.globe_setup,
+                &mut random,
+                &mut defense_shields,
+            );
+            if let Some(target) = self.find_player_mut(target_id) {
+                target.restore_defense_shields(defense_shields);
+            }
         }
         let (damage, mana_damage) =
             Self::applied_attack_damage(&attack, target_health, target_mana);

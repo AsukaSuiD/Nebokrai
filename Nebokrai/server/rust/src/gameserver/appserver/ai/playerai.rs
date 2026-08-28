@@ -13,7 +13,7 @@
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
-//! сфера хаоса и семь падающих звёзд,
+//! сфера хаоса, семь падающих звёзд и семейство бегущего удара,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -45,6 +45,9 @@ use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransf
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
 use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
+use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
+use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
+use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
@@ -83,6 +86,8 @@ pub(crate) struct CPlayerAI {
     thunder_blow_2_last_used_ms: u32,
     mosou: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     mosou_last_used_ms: u32,
+    ghost_cut: Option<GhostCutExecutionState>,
+    ghost_cut_last_used_ms: [u32; 3],
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -214,6 +219,9 @@ impl CPlayerAI {
         self.fire_ball = None;
         self.chain_lightning = None;
         self.thunder_blow = None;
+        self.thunder_blow_2 = None;
+        self.mosou = None;
+        self.ghost_cut = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -330,6 +338,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.mosou.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение Мо-шоу завершено");
+        }
+        if let Some(mut execution) = self.ghost_cut.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бегущего удара завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -467,6 +479,9 @@ impl CPlayerAI {
         self.fire_ball = None;
         self.chain_lightning = None;
         self.thunder_blow = None;
+        self.thunder_blow_2 = None;
+        self.mosou = None;
+        self.ghost_cut = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -672,6 +687,15 @@ impl CPlayerAI {
     pub(crate) fn mosou_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.mosou.as_mut() }
     pub(crate) const fn mosou_last_used_ms(&self) -> u32 { self.mosou_last_used_ms }
     pub(crate) const fn mark_mosou_used(&mut self, now_ms: u32) { self.mosou_last_used_ms = now_ms; }
+
+    pub(crate) const fn ghost_cut(&self) -> Option<&GhostCutExecutionState> { self.ghost_cut.as_ref() }
+    pub(crate) fn begin_ghost_cut(&mut self, state: GhostCutExecutionState) { self.ghost_cut = Some(state); }
+    pub(crate) fn ghost_cut_mut(&mut self) -> Option<&mut GhostCutExecutionState> { self.ghost_cut.as_mut() }
+    const fn ghost_cut_index(skill_id: u32) -> usize {
+        match skill_id { GHOST_CUT_SKILL_ID => 0, GHOST_CUT_2_SKILL_ID => 1, GHOST_CUT_3_SKILL_ID => 2, _ => unreachable!() }
+    }
+    pub(crate) const fn ghost_cut_last_used_ms(&self, skill_id: u32) -> u32 { self.ghost_cut_last_used_ms[Self::ghost_cut_index(skill_id)] }
+    pub(crate) fn mark_ghost_cut_used(&mut self, skill_id: u32, now_ms: u32) { self.ghost_cut_last_used_ms[Self::ghost_cut_index(skill_id)] = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall
