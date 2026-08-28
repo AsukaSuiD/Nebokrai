@@ -1,57 +1,18 @@
-//! Механический топот `CMachineryStomp` (`0x1a7`) для достигнутого пути монстра.
+//! Механический топот `CMachineryStomp` (`0x1a7`) для объектного пути игрока и монстра.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/machinerystomp.cpp`. Точечная проверка EXE подтвердила
-//! отдельные глобальные данные этого владельца: полную маску `5×5`,
-//! `g_dwBesideCells == 3`
-//! и адреса `0x006A16C8..0x006A16EC`. После основной площади навык обходит две
-//! трёхклеточные дуги вокруг исходной цели; каждая допустимая цель отдельно
-//! потребляет вызовы RNG для физического урона и критического удара. `CGame`
-//! только чередует владельца региона
-//! с немедленными последствиями смерти. Совпадающий `CLordWiderangingAttack`
-//! использует тот же узкий семейный путь исполнения с собственным ID. Варианты игрока
-//! остаются RAW ниже.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.h
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::CMachineryStomp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:30
-// RVA: 0x001312B0
-// ADDRESS: 005312b0
-// PROTOTYPE: undefined __thiscall CMachineryStomp(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::~CMachineryStomp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:38
-// RVA: 0x00131320
-// ADDRESS: 00531320
-// PROTOTYPE: void __thiscall ~CMachineryStomp(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+//! `appserver/skills/machinerystomp.cpp`. Владелец сохраняет полную маску 5×5,
+//! `g_dwBesideCells == 3` и две трёхклеточные дуги вокруг исходной цели.
+//! Проверка расстояния и непроходимого блока, задержка, направление, пакеты и
+//! порядок X → Y принадлежат этому модулю. Для каждой допустимой цели отдельно
+//! выполняются вызовы RNG физического урона и критического удара; формула игрока
+//! также сохраняет урон стихией и душой и износ оружия. `CGame` только разрешает
+//! независимых владельцев, применяет защиту и последствия смерти и доставляет
+//! пакеты. Координатные перегрузки `Begin` остаются ниже недостигнутыми.
 
 // ============================================================================
 // FUNCTION: CMachineryStomp::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// Объектный вход монстра материализован `prepare_owned_machinery_stomp`;
-// координатные варианты и варианты игрока остаются в телах ниже.
+// STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:141
@@ -77,133 +38,12 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CMachineryStomp::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:120
-// RVA: 0x00131520
-// ADDRESS: 00531520
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStompEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// Действия 0/1 монстра формирует достигнутый runtime-владелец; клиентские
-// ошибки игрока остаются исходным материалом.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:637
-// RVA: 0x001315F0
-// ADDRESS: 005315f0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// Перезарядка, дальность, `BLOCK_UNFLY` и блокировка движения для достигнутого
-// входа монстра выполняются `prepare_owned_machinery_stomp`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:45
-// RVA: 0x00131B80
-// ADDRESS: 00531b80
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::GetOutsideCells
-// STATUS: IMPLEMENTED
-// Точная signed-граница и обе трёхклеточные дуги реализованы `outside_cells`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:360
-// RVA: 0x00131D70
-// ADDRESS: 00531d70
-// PROTOTYPE: void __thiscall GetOutsideCells(long param_1, long param_2, long param_3, long param_4, vector<CSkill::tagCell,std::allocator<CSkill::tagCell>_> * param_5)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::CalculateAttackPower
-// STATUS: PARTIALLY_IMPLEMENTED
-// Формула монстра и оба вызова RNG реализованы `wide_arc_attack`;
-// свойства игрока остаются в исходном теле.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:569
-// RVA: 0x00132020
-// ADDRESS: 00532020
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// Цель-монстр проходит `execute_owned_wide_arc_attack_target`; источник-игрок
-// и снимок его разрешений остаются в теле ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:545
-// RVA: 0x00132290
-// ADDRESS: 00532290
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// Стадии выполнения монстра, точный порядок клеток и завершение материализованы
-// рабочими вызовами ниже; вход игрока остаётся RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:194
-// RVA: 0x001323A0
-// ADDRESS: 005323a0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
-
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::flash::{cell_views, master_info};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable,
@@ -211,26 +51,301 @@ use super::monsterattack::{
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::PetAttackProperties;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const BLOCK_UNFLY: u8 = 2;
 const SCOPE_HALF_SIDE: i32 = 2;
 const BESIDE_CELLS: usize = 3;
 const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
 pub(crate) const MACHINERY_STOMP_SKILL_ID: u32 = 0x1a7;
+
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
+
+pub(crate) const fn is_machinery_stomp_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::Object {
+            skill_id: MACHINERY_STOMP_SKILL_ID,
+            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+        }
+    )
+}
+fn send_player_failure(game: &CGame, player_id: i32, action: u8) {
+    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, action);
+}
+
+fn send_player_start(game: &mut CGame, player_id: i32, level: i32) {
+    let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(1);
+    message.add_long(MACHINERY_STOMP_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(direction);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_player_fire(
+    game: &mut CGame,
+    player_id: i32,
+    level: i32,
+    target_x: i32,
+    target_y: i32,
+) {
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(2);
+    message.add_long(MACHINERY_STOMP_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(0);
+    message.add_long(0);
+    message.add_long(target_x);
+    message.add_long(target_y);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn finish_player(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
+
+fn calculate_player_attack(
+    game: &mut CGame,
+    player_id: i32,
+    level: i32,
+    hit_modifier: i32,
+    damage_factor: f32,
+) -> Option<(MasterInfo, AttackInformation)> {
+    let (combat, master) = game.find_player(player_id)
+        .map(|player| (player.combat_properties(), master_info(player)))?;
+    let minimum = combat.minimum_attack as i32;
+    let maximum = combat.maximum_attack as i32;
+    let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
+    let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
+    let mut attack = AttackInformation {
+        skill_id: MACHINERY_STOMP_SKILL_ID,
+        skill_level: level as u8,
+        attacker_type: PLAYER_TYPE,
+        attacker_id: player_id,
+        attacker_team_id: master.master_team_id,
+        attacker_faction_id: master.master_guild_id,
+        attacker_union_id: master.master_union_id,
+        hit_modifier,
+        damage_factor,
+        damage_modifier: 0,
+        critical: false,
+        blast_attack: false,
+        full_miss: 0,
+        damages: vec![
+            AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 },
+        ],
+    };
+    if game.skill_random_below(100) < i32::from(combat.cch) {
+        attack.critical = true;
+        let critical_rate = game.globe_setup().critical_rate();
+        for power in &mut attack.damages {
+            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+        }
+    }
+    Some((master, attack))
+}
+
+fn attack_player_cell<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    region_id: i32,
+    tile_x: i32,
+    tile_y: i32,
+    level: i32,
+    hit_modifier: i32,
+    damage_factor: f32,
+    runtime: &mut Runtime,
+) {
+    for view in cell_views(game, region_id, tile_x, tile_y) {
+        let target = view.identity;
+        if (target.object_type == PLAYER_TYPE && target.id == player_id)
+            || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+        {
+            continue;
+        }
+        let Some(master) = game.find_player(player_id).map(master_info) else { return };
+        if !game.owned_player_skill_target_attackable(master, target, region_id) {
+            continue;
+        }
+        let Some((master, attack)) = calculate_player_attack(
+            game, player_id, level, hit_modifier, damage_factor,
+        ) else { continue };
+        match target.object_type {
+            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
+            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+            _ => unreachable!(),
+        }
+        game.damage_player_weapon(player_id, runtime);
+    }
+}
+
+pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let target = match dispatch {
+        PlayerSkillDispatch::Object { skill_id: MACHINERY_STOMP_SKILL_ID, target }
+            if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
+        _ => return player_terminal(QueuedSkillExecutionState::Rejected),
+    };
+    let Some((region_id, level, source_view)) = game.find_player(player_id).and_then(|player| {
+        Some((
+            player.server_region_id()?,
+            player.learned_skill_level(MACHINERY_STOMP_SKILL_ID),
+            player.shape_view()?,
+        ))
+    }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let active = player_ai.machinery_stomp().is_some();
+    let Some(properties) = game.skill_base_properties(MACHINERY_STOMP_SKILL_ID, level) else {
+        send_player_failure(game, player_id, if active { 0x0d } else { 2 });
+        if active {
+            finish_player(game, player_id);
+        }
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    let damage_factor = properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01;
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+
+    if player_ai.machinery_stomp().is_none() {
+        let now_ms = runtime.now_milliseconds();
+        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+            send_player_failure(game, player_id, 2);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if player_ai.machinery_stomp_last_used_ms() != 0
+            && !time_reached(now_ms, player_ai.machinery_stomp_last_used_ms(), reuse_delay_ms)
+        {
+            send_player_failure(game, player_id, 0x0d);
+            send_player_failure(game, player_id, 2);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if maximum_distance != 0 && source_view.distance(target_view) > maximum_distance as i32 {
+            send_player_failure(game, player_id, 0x0b);
+            send_player_failure(game, player_id, 2);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let path = game.base_magic_path(
+            region_id, source_view.tile_x, source_view.tile_y,
+            target_view.tile_x, target_view.tile_y, None,
+        );
+        if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
+            send_player_failure(game, player_id, 0x0f);
+            send_player_failure(game, player_id, 2);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(MACHINERY_STOMP_SKILL_ID));
+        }
+        player_ai.begin_machinery_stomp(dispatch, now_ms);
+    } else if player_ai.machinery_stomp().is_none_or(|kernel| kernel.dispatch() != dispatch) {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+        send_player_failure(game, player_id, 0x0d);
+        finish_player(game, player_id);
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if game.periodic_state_target_dead(region_id, target) {
+        send_player_failure(game, player_id, 10);
+        finish_player(game, player_id);
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if player_ai.machinery_stomp().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
+        let Some(source) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
+            finish_player(game, player_id);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.movement_shape_mut().set_direction(get_line_direction(
+                source.tile_x, source.tile_y, target_view.tile_x, target_view.tile_y,
+            ));
+        }
+        send_player_start(game, player_id, level);
+        if let Some(kernel) = player_ai.machinery_stomp_mut() {
+            let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let started_at_ms = player_ai.machinery_stomp()
+        .map(|kernel| kernel.started_at_ms())
+        .expect("выполнение механического топота хранит время начала");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return player_terminal(QueuedSkillExecutionState::Pending);
+    }
+    let Some(source_view) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
+        finish_player(game, player_id);
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    send_player_fire(game, player_id, level, target_view.tile_x, target_view.tile_y);
+    if let Some(kernel) = player_ai.machinery_stomp_mut() {
+        let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate);
+    }
+    for offset_x in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
+        for offset_y in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
+            attack_player_cell(
+                game, player_id, region_id,
+                source_view.tile_x.wrapping_add(offset_x),
+                source_view.tile_y.wrapping_add(offset_y),
+                level, hit_modifier, damage_factor, runtime,
+            );
+        }
+    }
+    for (tile_x, tile_y) in outside_cells(
+        source_view.tile_x, source_view.tile_y, target_view.tile_x, target_view.tile_y,
+    ) {
+        attack_player_cell(
+            game, player_id, region_id, tile_x, tile_y,
+            level, hit_modifier, damage_factor, runtime,
+        );
+    }
+    if let Some(kernel) = player_ai.machinery_stomp_mut() {
+        let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_machinery_stomp_used(runtime.now_milliseconds());
+    finish_player(game, player_id);
+    player_terminal(QueuedSkillExecutionState::Completed)
+}
 
 fn send_start(
     game: &CGame,

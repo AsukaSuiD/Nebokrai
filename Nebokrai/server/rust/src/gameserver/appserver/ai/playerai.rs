@@ -219,6 +219,8 @@ pub(crate) struct CPlayerAI {
     path_projectile_last_used_ms: [u32; 3],
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
+    machinery_stomp: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    machinery_stomp_last_used_ms: u32,
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -394,6 +396,7 @@ impl CPlayerAI {
         self.little_star = None;
         self.path_projectile = None;
         self.sprite_burn = None;
+        self.machinery_stomp = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -684,6 +687,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
         }
+        if let Some(mut kernel) = self.machinery_stomp.take() {
+            let _ = kernel.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение механического топота завершено");
+        }
         if let Some(mut execution) = self.chaos_sphere.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение сферы хаоса завершено");
@@ -858,6 +865,7 @@ impl CPlayerAI {
         self.little_star = None;
         self.path_projectile = None;
         self.sprite_burn = None;
+        self.machinery_stomp = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -1457,6 +1465,26 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_sprite_burn_used(&mut self, now_ms: u32) {
         self.sprite_burn_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn machinery_stomp(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.machinery_stomp.as_ref()
+    }
+
+    pub(crate) const fn begin_machinery_stomp(&mut self, dispatch: PlayerSkillDispatch, now_ms: u32) {
+        self.machinery_stomp = Some(SkillExecutionKernel::begin(dispatch, now_ms));
+    }
+
+    pub(crate) fn machinery_stomp_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.machinery_stomp.as_mut()
+    }
+
+    pub(crate) const fn machinery_stomp_last_used_ms(&self) -> u32 {
+        self.machinery_stomp_last_used_ms
+    }
+
+    pub(crate) const fn mark_machinery_stomp_used(&mut self, now_ms: u32) {
+        self.machinery_stomp_last_used_ms = now_ms;
     }
 
     pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {
