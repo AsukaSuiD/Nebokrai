@@ -7,6 +7,7 @@
 //! псевдокодом до появления настоящего исполнителя навыка монстра.
 
 use super::taiji::TAIJI_SKILL_ID;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TaiJiState {
@@ -21,6 +22,17 @@ impl TaiJiState {
     pub(crate) const fn skill_id(self) -> u32 { TAIJI_SKILL_ID }
     pub(crate) const fn player_element_resistance_gain(self) -> u16 {
         self.element_resistance_gain as u16
+    }
+
+    pub(crate) fn apply_to_player(
+        self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        properties.element_resistance = properties
+            .element_resistance
+            .wrapping_add(u32::from(self.player_element_resistance_gain()))
+            .min(i32::MAX as u32);
+        properties
     }
 }
 

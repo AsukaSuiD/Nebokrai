@@ -4998,74 +4998,26 @@ impl CGame {
         player_id: i32,
         properties: PlayerCombatProperties,
     ) -> bool {
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| player.apply_agility_state_properties(properties))
-        else {
-            return false;
-        };
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| player.apply_taiji_state_properties(properties))
-        else {
-            return false;
-        };
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| player.apply_enlarge_max_states(properties))
-        else {
-            return false;
-        };
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| player.apply_enlarge_full_miss_state(properties))
-        else {
-            return false;
-        };
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| player.apply_origin_state(properties))
-        else {
-            return false;
-        };
-        let Some((properties, hearten_visual)) = self
-            .find_player(player_id)
-            .map(|player| player.apply_hearten_state(properties))
-        else {
-            return false;
-        };
-        let Some((properties, callosity_visual)) = self
-            .find_player(player_id)
-            .map(|player| player.apply_callosity_state_properties(properties))
-        else {
-            return false;
-        };
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| player.apply_battle_fairy_attribute_states(properties))
-        else {
-            return false;
-        };
-        let Some((properties, script_visuals)) = self
+        let Some(pass) = self
             .find_player_mut(player_id)
-            .map(|player| player.apply_script_move_state_properties(properties))
+            .map(|player| player.apply_materialized_state_properties(properties))
         else {
             return false;
         };
-        for state in script_visuals {
+        for state in pass.script_visuals {
             let _ = self.send_script_move_state_visual(player_id, state, true);
         }
-        if let Some(state) = callosity_visual {
+        if let Some(state) = pass.callosity_visual {
             send_callosity_state_begin(self, player_id, state);
         }
-        if let Some(state) = hearten_visual {
+        if let Some(state) = pass.hearten_visual {
             send_hearten_state_visual(self, player_id, state, true, game_tick_milliseconds());
         }
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let Some(player) = players.get_mut(&player_id) else {
             return false;
         };
-        player.apply_recomputed_combat_properties(properties, goods_factory);
+        player.apply_recomputed_combat_properties(pass.properties, goods_factory);
         true
     }
 

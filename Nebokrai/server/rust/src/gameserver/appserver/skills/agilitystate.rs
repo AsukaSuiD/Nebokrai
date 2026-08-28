@@ -12,6 +12,7 @@ use super::natural::NATURAL_SKILL_ID;
 use super::naturalstate::NaturalState;
 use super::rapture::RAPTURE_SKILL_ID;
 use super::rapturestate::RaptureState;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -47,6 +48,13 @@ impl AgilityState {
 
     pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
     pub(crate) const fn full_miss(self) -> u16 { self.full_miss }
+    pub(crate) fn apply_to_player(
+        self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        properties.full_miss = properties.full_miss.wrapping_add(self.full_miss);
+        properties
+    }
     pub(crate) const fn is_timed(self) -> bool { self.skill_id == AGILITY_2_SKILL_ID }
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.is_timed() && self.started_at_ms.wrapping_add(self.keep_time_ms as u32) < now_ms
@@ -86,6 +94,29 @@ impl PersistentAgilityFamilyState {
             skill_id,
             AGILITY_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID
         )
+    }
+
+    pub(crate) fn apply_to_player(
+        self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        match self {
+            Self::Agility(state) => {
+                properties = state.apply_to_player(properties);
+            }
+            Self::Natural(state) => {
+                properties.element_resistance = properties
+                    .element_resistance
+                    .wrapping_add(u32::from(state.element_resistance_gain()))
+                    .min(i32::MAX as u32);
+            }
+            Self::Rapture(state) => {
+                properties.blast_attack = properties
+                    .blast_attack
+                    .wrapping_add(state.blast_attack_gain());
+            }
+        }
+        properties
     }
 }
 

@@ -1393,6 +1393,13 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) critical_rate_bits: u32,
 }
 
+pub(crate) struct PlayerStatePropertyPass {
+    pub(crate) properties: PlayerCombatProperties,
+    pub(crate) callosity_visual: Option<super::skills::callositystate::CallosityState>,
+    pub(crate) hearten_visual: Option<super::skills::heartenstate::HeartenState>,
+    pub(crate) script_visuals: Vec<super::moveshape::ScriptMoveState>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TaoZhuangSetEvaluation {
     pub(crate) set_id: u32,
@@ -4126,19 +4133,6 @@ impl CPlayer {
         self.move_shape.begin_callosity_state(state);
     }
 
-    /// `CCallosityState::OnUpdateProperties` не меняет базовый снимок и
-    /// применяет WORD-сложение только при очередном общем пересчёте свойств.
-    pub(crate) fn apply_callosity_state_properties(
-        &self,
-        mut properties: PlayerCombatProperties,
-    ) -> (PlayerCombatProperties, Option<super::skills::callositystate::CallosityState>) {
-        let state = self.callosity_state();
-        if let Some(state) = state {
-            properties.cch = properties.cch.wrapping_add(state.blast_factor());
-        }
-        (properties, state)
-    }
-
     pub(crate) fn agility_state(
         &self,
         skill_id: u32,
@@ -4180,53 +4174,11 @@ impl CPlayer {
         self.move_shape.take_expired_agility_state_2(now_ms)
     }
 
-    pub(crate) fn apply_agility_state_properties(
-        &self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        use super::skills::agilitystate::PersistentAgilityFamilyState;
-
-        match self.move_shape.persistent_agility_family_state() {
-            Some(PersistentAgilityFamilyState::Agility(state)) => {
-                properties.full_miss = properties.full_miss.wrapping_add(state.full_miss());
-            }
-            Some(PersistentAgilityFamilyState::Natural(state)) => {
-                properties.element_resistance = properties
-                    .element_resistance
-                    .wrapping_add(u32::from(state.element_resistance_gain()))
-                    .min(i32::MAX as u32);
-            }
-            Some(PersistentAgilityFamilyState::Rapture(state)) => {
-                properties.blast_attack = properties
-                    .blast_attack
-                    .wrapping_add(state.blast_attack_gain());
-            }
-            None => {}
-        }
-        if let Some(state) = self.agility_state(super::skills::agility::AGILITY_2_SKILL_ID) {
-            properties.full_miss = properties.full_miss.wrapping_add(state.full_miss());
-        }
-        properties
-    }
-
     pub(crate) fn replace_taiji_state(
         &mut self,
         state: super::skills::taijistate::TaiJiState,
     ) -> Option<super::skills::taijistate::TaiJiState> {
         self.move_shape.replace_taiji_state(state)
-    }
-
-    pub(crate) fn apply_taiji_state_properties(
-        &self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        if let Some(state) = self.move_shape.taiji_state() {
-            properties.element_resistance = properties
-                .element_resistance
-                .wrapping_add(u32::from(state.player_element_resistance_gain()))
-                .min(i32::MAX as u32);
-        }
-        properties
     }
 
     pub(crate) fn replace_enlarge_max_hp_state(
@@ -4250,44 +4202,11 @@ impl CPlayer {
         self.move_shape.replace_enlarge_max_mp_state(state)
     }
 
-    pub(crate) fn apply_enlarge_max_states(
-        &self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        if let Some(state) = self.move_shape.enlarge_max_hp_state() {
-            properties.maximum_hp = state.apply(properties.maximum_hp);
-        }
-        if let Some(state) = self.move_shape.enlarge_max_mp_state() {
-            properties.maximum_mp = state.apply(properties.maximum_mp);
-        }
-        properties
-    }
-
-    pub(crate) fn apply_enlarge_full_miss_state(
-        &self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        if let Some(state) = self.move_shape.enlarge_full_miss_state() {
-            properties.full_miss = state.apply(properties.full_miss);
-        }
-        properties
-    }
-
     pub(crate) fn replace_origin_state(
         &mut self,
         state: super::skills::originstate::OriginState,
     ) -> Option<super::skills::originstate::OriginState> {
         self.move_shape.replace_origin_state(state)
-    }
-
-    pub(crate) fn apply_origin_state(
-        &self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        if let Some(state) = self.move_shape.origin_state() {
-            properties.element_modify = state.apply_to_player(properties.element_modify);
-        }
-        properties
     }
 
     pub(crate) fn replace_hearten_state(
@@ -4304,15 +4223,52 @@ impl CPlayer {
         self.move_shape.take_expired_hearten_state(now_ms)
     }
 
-    pub(crate) fn apply_hearten_state(
-        &self,
+    /// Применяет канонические состояния в исходном порядке общего
+    /// `CPlayer::UpdateProperty`. Формулы остаются методами конкретных владельцев состояний;
+    /// наружу выходят только визуальные действия, требующие сетевого владельца.
+    pub(crate) fn apply_materialized_state_properties(
+        &mut self,
         mut properties: PlayerCombatProperties,
-    ) -> (PlayerCombatProperties, Option<super::skills::heartenstate::HeartenState>) {
-        let state = self.move_shape.hearten_state();
-        if let Some(state) = state {
+    ) -> PlayerStatePropertyPass {
+        if let Some(state) = self.move_shape.persistent_agility_family_state() {
+            properties = state.apply_to_player(properties);
+        }
+        if let Some(state) = self.agility_state(super::skills::agility::AGILITY_2_SKILL_ID) {
+            properties = state.apply_to_player(properties);
+        }
+        if let Some(state) = self.move_shape.taiji_state() {
+            properties = state.apply_to_player(properties);
+        }
+        if let Some(state) = self.move_shape.enlarge_max_hp_state() {
             properties.maximum_hp = state.apply(properties.maximum_hp);
         }
-        (properties, state)
+        if let Some(state) = self.move_shape.enlarge_max_mp_state() {
+            properties.maximum_mp = state.apply(properties.maximum_mp);
+        }
+        if let Some(state) = self.move_shape.enlarge_full_miss_state() {
+            properties.full_miss = state.apply(properties.full_miss);
+        }
+        if let Some(state) = self.move_shape.origin_state() {
+            properties.element_modify = state.apply_to_player(properties.element_modify);
+        }
+        let hearten_visual = self.move_shape.hearten_state();
+        if let Some(state) = hearten_visual {
+            properties.maximum_hp = state.apply(properties.maximum_hp);
+        }
+        let callosity_visual = self.callosity_state();
+        if let Some(state) = callosity_visual {
+            properties = state.apply_to_player(properties);
+        }
+        for state in self.move_shape.battle_fairy_attribute_states() {
+            properties = state.apply_to_player(properties);
+        }
+        let (properties, script_visuals) = self.apply_script_move_state_properties(properties);
+        PlayerStatePropertyPass {
+            properties,
+            callosity_visual,
+            hearten_visual,
+            script_visuals,
+        }
     }
 
     pub(crate) fn replace_mana_shield_state(
@@ -4418,16 +4374,6 @@ impl CPlayer {
         now_ms: u32,
     ) -> Vec<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
         self.move_shape.take_expired_battle_fairy_attribute_states(now_ms)
-    }
-
-    pub(crate) fn apply_battle_fairy_attribute_states(
-        &self,
-        mut properties: PlayerCombatProperties,
-    ) -> PlayerCombatProperties {
-        for state in self.move_shape.battle_fairy_attribute_states() {
-            properties = state.apply_to_player(properties);
-        }
-        properties
     }
 
     pub(crate) fn take_blood_loss_state_for_ai(

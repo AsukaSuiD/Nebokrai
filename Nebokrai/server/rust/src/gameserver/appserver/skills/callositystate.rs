@@ -11,6 +11,7 @@
 //! `OnUpdateProperties`.
 
 use super::callosity::{CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID};
+use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -51,6 +52,14 @@ impl CallosityState {
 
     pub(crate) const fn additional_data(self) -> u32 {
         0
+    }
+
+    pub(crate) const fn apply_to_player(
+        self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        properties.cch = properties.cch.wrapping_add(self.blast_factor);
+        properties
     }
 }
 
