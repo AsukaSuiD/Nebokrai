@@ -135,6 +135,7 @@ pub(crate) mod appserver {
         pub(crate) mod skillfactory;
         pub(crate) mod shieldstate;
         pub(crate) mod selfshield;
+        pub(crate) mod stateskill;
         pub(crate) mod taiji;
         pub(crate) mod taijistate;
         pub(crate) mod wangsheng;
