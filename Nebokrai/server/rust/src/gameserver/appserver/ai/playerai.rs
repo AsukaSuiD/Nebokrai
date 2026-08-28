@@ -11,7 +11,8 @@
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
-//! стена, огненный круг, молния, печать, инь-ян, божественная кара и сбор душ,
+//! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
+//! и зеркало душ,
 //! сфера хаоса и семь падающих звёзд,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
@@ -89,6 +90,8 @@ pub(crate) struct CPlayerAI {
     god_punishment_last_used_ms: u32,
     soul_collect: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     soul_collect_last_used_ms: u32,
+    soul_mirror: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    soul_mirror_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
@@ -200,6 +203,7 @@ impl CPlayerAI {
         self.yin_yang = None;
         self.god_punishment = None;
         self.soul_collect = None;
+        self.soul_mirror = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -314,6 +318,7 @@ impl CPlayerAI {
         }
         if let Some(mut execution) = self.god_punishment.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественной кары завершено"); }
         if let Some(mut execution) = self.soul_collect.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение сбора душ завершено"); }
+        if let Some(mut execution) = self.soul_mirror.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение зеркала душ завершено"); }
         if let Some(mut execution) = self.callosity.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
@@ -419,6 +424,7 @@ impl CPlayerAI {
         self.yin_yang = None;
         self.god_punishment = None;
         self.soul_collect = None;
+        self.soul_mirror = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -720,6 +726,11 @@ impl CPlayerAI {
     pub(crate) fn soul_collect_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_collect.as_mut() }
     pub(crate) const fn soul_collect_last_used_ms(&self) -> u32 { self.soul_collect_last_used_ms }
     pub(crate) const fn mark_soul_collect_used(&mut self, now: u32) { self.soul_collect_last_used_ms = now; }
+    pub(crate) const fn soul_mirror(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_mirror }
+    pub(crate) const fn begin_soul_mirror(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.soul_mirror = Some(state); }
+    pub(crate) fn soul_mirror_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_mirror.as_mut() }
+    pub(crate) const fn soul_mirror_last_used_ms(&self) -> u32 { self.soul_mirror_last_used_ms }
+    pub(crate) const fn mark_soul_mirror_used(&mut self, now: u32) { self.soul_mirror_last_used_ms = now; }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {
         self.callosity

@@ -869,6 +869,7 @@ use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_
 use crate::gameserver::appserver::skills::yinyangphalanx::YinYangPhalanxTick;
 use crate::gameserver::appserver::skills::godpunishment::{execute_player_god_punishment, is_god_punishment_target};
 use crate::gameserver::appserver::skills::soulcollect::{execute_player_soul_collect, is_soul_collect_skill};
+use crate::gameserver::appserver::skills::soulmirror::{execute_player_soul_mirror, is_soul_mirror_skill};
 use crate::gameserver::appserver::skills::godpunishmentphalanx::GodPunishmentPhalanxTick;
 use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
 use crate::gameserver::appserver::skills::cure::{execute_player_cure, is_cure_target};
@@ -36498,6 +36499,7 @@ impl CGame {
             let concrete_yin_yang = is_yin_yang_target(dispatch);
             let concrete_god_punishment = is_god_punishment_target(dispatch);
             let concrete_soul_collect = is_soul_collect_skill(dispatch);
+            let concrete_soul_mirror = is_soul_mirror_skill(dispatch);
             let concrete_god_bless = is_god_bless_skill(dispatch);
             let concrete_cure = is_cure_target(dispatch);
             let concrete_self_shield = match dispatch {
@@ -36575,6 +36577,8 @@ impl CGame {
                 execute_player_god_punishment(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_soul_collect {
                 execute_player_soul_collect(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_soul_mirror {
+                execute_player_soul_mirror(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_god_bless {
                 execute_player_god_bless(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_cure {

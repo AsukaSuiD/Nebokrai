@@ -33,6 +33,10 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
+const fn has_mana(mana: u32, loss: u32) -> bool {
+    mana.wrapping_sub(loss) as i32 >= 0
+}
+
 fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
     match code {
@@ -128,7 +132,7 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        if mp_loss == 0 || player.mana() < mp_loss {
+        if mp_loss == 0 || !has_mana(player.mana(), mp_loss) {
             if mp_loss != 0 { send_failure(game, player_id, 7, mp_loss); }
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -143,7 +147,7 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
 
     if player_ai.soul_collect().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if mana < mp_loss {
+        if !has_mana(mana, mp_loss) {
             send_failure(game, player_id, 7, mp_loss);
             finish(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
