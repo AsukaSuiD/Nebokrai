@@ -893,6 +893,9 @@ use crate::gameserver::appserver::skills::snakebolt::{
 use crate::gameserver::appserver::skills::zombieclaw::{
     ZOMBIE_CLAW_SKILL_ID, execute_player_zombie_claw,
 };
+use crate::gameserver::appserver::skills::spriteburn::{
+    execute_player_sprite_burn, is_sprite_burn_dispatch,
+};
 use crate::gameserver::appserver::skills::chaossphere::{
     execute_player_chaos_sphere, is_chaos_sphere_dispatch,
 };
@@ -12381,6 +12384,24 @@ impl CGame {
             return Ok(0);
         };
         message.send_to_around(Some(region), origin, excluded_player_id, &runtime)
+    }
+
+    pub(crate) fn send_game_position_around(
+        &self,
+        region: &CServerRegion,
+        tile_x: i32,
+        tile_y: i32,
+        message: &CMessage,
+    ) -> i32 {
+        let Some(runtime) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            self.globe_setup.area_width(),
+            self.globe_setup.area_height(),
+        ) else {
+            return 0;
+        };
+        message.send_to_around_position(Some(region), tile_x, tile_y, None, &runtime)
     }
 
     /// Завершает exact `CArea::WakeUpMonsters → CMonsterAI::WakeUp` для
@@ -33730,6 +33751,7 @@ impl CGame {
                             || player.player_ai().little_flash().is_some()
                             || player.player_ai().little_star().is_some()
                             || player.player_ai().path_projectile().is_some()
+                            || player.player_ai().sprite_burn().is_some()
                             || player.player_ai().thunder_slash().is_some()
                             || player.player_ai().pillar().is_some()
                             || player.player_ai().rush().is_some()
@@ -34427,6 +34449,7 @@ impl CGame {
                 || player.player_ai().little_flash().is_some()
                 || player.player_ai().little_star().is_some()
                 || player.player_ai().path_projectile().is_some()
+                || player.player_ai().sprite_burn().is_some()
                 || player.player_ai().thunder_slash().is_some()
                 || player.player_ai().pillar().is_some()
                 || player.player_ai().rush().is_some()
@@ -37104,6 +37127,7 @@ impl CGame {
                 | PlayerSkillDispatch::Point { skill_id, .. }
                 | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
             };
+            let concrete_sprite_burn = is_sprite_burn_dispatch(dispatch);
             let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
             let concrete_seal = is_seal_target(dispatch);
@@ -37350,6 +37374,8 @@ impl CGame {
                 execute_player_zombie_claw(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_path_projectile && path_projectile_skill_id == SNAKE_BOLT_SKILL_ID {
                 execute_player_snake_bolt(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_sprite_burn {
+                execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_chaos_sphere {
                 execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {

@@ -176,7 +176,9 @@ use super::monsterattack::{
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderpoisonstate::{SpiderPoisonState, send_spider_poison_state_visual};
+use super::spiderpoisonstate::{
+    SpiderPoisonState, send_spider_poison_state_visual_in_region,
+};
 use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -261,9 +263,9 @@ pub(crate) fn install_spider_poison_state(
     };
     let Some((previous, identity, x, y)) = replaced else { return };
     if let Some(previous) = previous {
-        send_spider_poison_state_visual(game, region.id, identity, x, y, previous, false, now_ms);
+        send_spider_poison_state_visual_in_region(game, region, identity, x, y, previous, false, now_ms);
     }
-    send_spider_poison_state_visual(game, region.id, identity, x, y, state, true, now_ms);
+    send_spider_poison_state_visual_in_region(game, region, identity, x, y, state, true, now_ms);
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]

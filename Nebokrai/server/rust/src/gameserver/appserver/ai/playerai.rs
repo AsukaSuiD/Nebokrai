@@ -84,6 +84,7 @@ use crate::gameserver::appserver::skills::knightcut::KnightCutExecutionState;
 use crate::gameserver::appserver::skills::littleflash::LittleFlashExecutionState;
 use crate::gameserver::appserver::skills::littlestar::PlayerLittleStarExecutionState;
 use crate::gameserver::appserver::skills::energybolt::PlayerPathProjectileExecutionState;
+use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
@@ -216,6 +217,8 @@ pub(crate) struct CPlayerAI {
     little_star_last_used_ms: u32,
     path_projectile: Option<PlayerPathProjectileExecutionState>,
     path_projectile_last_used_ms: [u32; 3],
+    sprite_burn: Option<SpriteBurnExecutionState>,
+    sprite_burn_last_used_ms: u32,
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -390,6 +393,7 @@ impl CPlayerAI {
         self.seven_shooting_star = None;
         self.little_star = None;
         self.path_projectile = None;
+        self.sprite_burn = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -676,6 +680,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение пошагового снаряда завершено");
         }
+        if let Some(mut execution) = self.sprite_burn.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
+        }
         if let Some(mut execution) = self.chaos_sphere.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение сферы хаоса завершено");
@@ -849,6 +857,7 @@ impl CPlayerAI {
         self.seven_shooting_star = None;
         self.little_star = None;
         self.path_projectile = None;
+        self.sprite_burn = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -1428,6 +1437,26 @@ impl CPlayerAI {
 
     pub(crate) fn mark_path_projectile_used(&mut self, skill_id: u32, now_ms: u32) {
         self.path_projectile_last_used_ms[Self::path_projectile_index(skill_id)] = now_ms;
+    }
+
+    pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
+        self.sprite_burn.as_ref()
+    }
+
+    pub(crate) const fn begin_sprite_burn(&mut self, state: SpriteBurnExecutionState) {
+        self.sprite_burn = Some(state);
+    }
+
+    pub(crate) fn sprite_burn_mut(&mut self) -> Option<&mut SpriteBurnExecutionState> {
+        self.sprite_burn.as_mut()
+    }
+
+    pub(crate) const fn sprite_burn_last_used_ms(&self) -> u32 {
+        self.sprite_burn_last_used_ms
+    }
+
+    pub(crate) const fn mark_sprite_burn_used(&mut self, now_ms: u32) {
+        self.sprite_burn_last_used_ms = now_ms;
     }
 
     pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {

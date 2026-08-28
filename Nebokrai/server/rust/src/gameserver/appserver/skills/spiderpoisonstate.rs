@@ -115,6 +115,27 @@ pub(crate) fn send_spider_poison_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
+pub(crate) fn send_spider_poison_state_visual_in_region(
+    game: &CGame,
+    region: &crate::gameserver::appserver::serverregion::CServerRegion,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: SpiderPoisonState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(0);
+    }
+    let _ = game.send_game_position_around(region, tile_x, tile_y, &message);
+}
+
 pub(crate) fn finish_player_spider_poison_state_on_cure(
     game: &mut CGame,
     player_id: i32,
