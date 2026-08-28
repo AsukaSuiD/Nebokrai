@@ -180,6 +180,8 @@ pub(crate) mod appserver {
         pub(crate) mod sevenshootingstar;
         pub(crate) mod seal;
         pub(crate) mod sealstate;
+        pub(crate) mod yinyang;
+        pub(crate) mod yinyangphalanx;
         pub(crate) mod realmappellation;
         pub(crate) mod skeletonarchery;
         pub(crate) mod snakebolt;

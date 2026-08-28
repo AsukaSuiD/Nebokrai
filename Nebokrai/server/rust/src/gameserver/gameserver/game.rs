@@ -493,6 +493,7 @@ mod leiming2;
 mod tianhuo;
 mod spidermist;
 mod weak;
+mod yinyang;
 mod godbless;
 mod periodicattack;
 
@@ -863,6 +864,8 @@ use crate::gameserver::appserver::skills::snowstormphalanx::{
 };
 use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
+use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_yin_yang_target};
+use crate::gameserver::appserver::skills::yinyangphalanx::YinYangPhalanxTick;
 use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
 use crate::gameserver::appserver::skills::cure::{execute_player_cure, is_cure_target};
 use crate::gameserver::appserver::skills::nonfun::{
@@ -36488,6 +36491,7 @@ impl CGame {
             );
             let concrete_snow_storm = is_snow_storm_target(dispatch);
             let concrete_weak = is_weak_target(dispatch);
+            let concrete_yin_yang = is_yin_yang_target(dispatch);
             let concrete_god_bless = is_god_bless_skill(dispatch);
             let concrete_cure = is_cure_target(dispatch);
             let concrete_self_shield = match dispatch {
@@ -36559,6 +36563,8 @@ impl CGame {
                 execute_player_snow_storm(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_weak {
                 execute_player_weak(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_yin_yang {
+                execute_player_yin_yang(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_god_bless {
                 execute_player_god_bless(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_cure {
@@ -39498,6 +39504,9 @@ impl CGame {
             SummonedSkillShape::Tianhuo(phalanx) => self.calculate_tianhuo_attack(phalanx),
             SummonedSkillShape::SpiderMist(_) => None,
             SummonedSkillShape::Weak(_) => None,
+            SummonedSkillShape::YinYang(phalanx) => {
+                self.calculate_yin_yang_attack(phalanx, target_level)
+            }
         }
     }
 
@@ -39977,6 +39986,10 @@ impl CGame {
                     WeakPhalanxTick::Scan => Some(Some((phalanx.shape().identity(), lifetime_now_ms))),
                     WeakPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::YinYang(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    YinYangPhalanxTick::Pending => Some(None),
+                    YinYangPhalanxTick::AttackAndExpire { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))),
+                },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
@@ -40197,6 +40210,23 @@ impl CGame {
                         let _ = self.send_shape_exit_around(region, phalanx.shape());
                     }
                 }
+            }
+            return true;
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::YinYang(yin_yang),
+        ) = (tick, &phalanx)
+        {
+            for target in self.yin_yang_targets(region_id, yin_yang) {
+                match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
+                    _ => false,
+                };
+            }
+            if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+                let _ = self.send_shape_exit_around(region, phalanx.shape());
             }
             return true;
         }

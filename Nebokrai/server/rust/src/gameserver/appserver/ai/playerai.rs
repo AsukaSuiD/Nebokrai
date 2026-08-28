@@ -11,7 +11,7 @@
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
-//! стена, огненный круг, молния, печать,
+//! стена, огненный круг, молния, печать, инь-ян,
 //! сфера хаоса и семь падающих звёзд,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
@@ -83,6 +83,8 @@ pub(crate) struct CPlayerAI {
     lightning_last_used_ms: u32,
     seal: Option<SealExecutionState>,
     seal_last_used_ms: u32,
+    yin_yang: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    yin_yang_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
@@ -191,6 +193,7 @@ impl CPlayerAI {
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
+        self.yin_yang = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -299,6 +302,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение печати завершено");
         }
+        if let Some(mut execution) = self.yin_yang.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение инь-ян завершено");
+        }
         if let Some(mut execution) = self.callosity.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
@@ -401,6 +408,7 @@ impl CPlayerAI {
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
+        self.yin_yang = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -673,6 +681,24 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_seal_used(&mut self, now_ms: u32) {
         self.seal_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn yin_yang(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.yin_yang
+    }
+
+    pub(crate) const fn begin_yin_yang(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) {
+        self.yin_yang = Some(state);
+    }
+
+    pub(crate) fn yin_yang_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.yin_yang.as_mut()
+    }
+
+    pub(crate) const fn yin_yang_last_used_ms(&self) -> u32 { self.yin_yang_last_used_ms }
+
+    pub(crate) const fn mark_yin_yang_used(&mut self, now_ms: u32) {
+        self.yin_yang_last_used_ms = now_ms;
     }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {

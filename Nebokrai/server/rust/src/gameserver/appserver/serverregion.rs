@@ -1500,6 +1500,28 @@ impl CServerRegion {
         Ok(id)
     }
 
+    pub(crate) fn add_yin_yang_phalanx<Context: ServerRegionMembershipContext>(
+        &mut self,
+        mut phalanx: super::skills::yinyangphalanx::CYinYangPhalanx,
+        tile_x: i32,
+        tile_y: i32,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<i32, RegionMembershipBlock> {
+        phalanx.shape_mut().set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        self.add_object(phalanx.shape_mut(), ShapeRuntimeFacts::default(), area_width, area_height, now_ms, context)?;
+        for existing in self.owned_skill_phalanxes.values_mut() {
+            if let SummonedSkillShape::YinYang(existing) = existing {
+                existing.replace_affect_region(phalanx.skill_level(), tile_x, tile_y);
+            }
+        }
+        let id = phalanx.shape().identity().id;
+        self.owned_skill_phalanxes.insert(id, SummonedSkillShape::YinYang(phalanx));
+        Ok(id)
+    }
+
     pub(crate) fn add_thunder_phalanx<Context: ServerRegionMembershipContext>(
         &mut self,
         mut phalanx: super::skills::thunderphalanx::CThunderPhalanx,
