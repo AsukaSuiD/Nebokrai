@@ -115,6 +115,7 @@ pub(crate) mod appserver {
         pub(crate) mod knightcutstate;
         pub(crate) mod armybreak;
         pub(crate) mod armybreak2;
+        pub(crate) mod rage;
         pub(crate) mod ragebreak;
         pub(crate) mod ragebreakstate;
         pub(crate) mod flash;

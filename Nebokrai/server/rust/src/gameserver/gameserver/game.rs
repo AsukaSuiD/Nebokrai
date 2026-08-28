@@ -817,6 +817,9 @@ use crate::gameserver::appserver::skills::mosou::{execute_player_mosou, is_mosou
 use crate::gameserver::appserver::skills::ghostcut::{execute_player_ghost_cut, is_ghost_cut_dispatch};
 use crate::gameserver::appserver::skills::knightcut::{execute_player_knight_cut, is_knight_cut_dispatch};
 use crate::gameserver::appserver::skills::armybreak::{execute_player_army_break, is_army_break_dispatch};
+use crate::gameserver::appserver::skills::rage::{
+    RAGE_SKILL_ID, end_player_rage, execute_player_rage, is_rage_dispatch,
+};
 use crate::gameserver::appserver::skills::ragebreak::{execute_player_rage_break, is_rage_break_dispatch};
 use crate::gameserver::appserver::skills::flash::{execute_player_flash, is_flash_dispatch};
 use crate::gameserver::appserver::skills::swallow::{execute_player_swallow, is_swallow_dispatch};
@@ -33528,26 +33531,40 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
-                    let player = self
-                        .players
-                        .get_mut(&player_id)
-                        .expect("skill dispatch сохраняет canonical player");
-                    let interrupted_agility = player.player_ai().agility_family().is_some()
-                        && player.player_ai().next_player_skill() != Some(dispatch);
-                    let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
-                        || player.player_ai().archery().is_some()
-                        || player.player_ai().agility_family().is_some()
-                        || player.player_ai().callosity().is_some()
-                        || player.player_ai().knock_out().is_some())
-                        && player.player_ai().next_player_skill() != Some(dispatch);
-                    if interrupted_delayed_skill {
-                        player.set_skill_moveable(true);
-                        if interrupted_agility {
+                    let (rejected, interrupted_rage_level) = {
+                        let player = self
+                            .players
+                            .get_mut(&player_id)
+                            .expect("skill dispatch сохраняет canonical player");
+                        let changes_command = player.player_ai().next_player_skill() != Some(dispatch);
+                        let interrupted_rage_level = (changes_command
+                            && player.player_ai().rage().is_some())
+                            .then(|| player.learned_skill_level(RAGE_SKILL_ID));
+                        let interrupted_agility = player.player_ai().agility_family().is_some()
+                            && changes_command;
+                        let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
+                            || player.player_ai().archery().is_some()
+                            || player.player_ai().agility_family().is_some()
+                            || player.player_ai().callosity().is_some()
+                            || player.player_ai().knock_out().is_some())
+                            && changes_command;
+                        if interrupted_delayed_skill {
                             player.set_skill_moveable(true);
+                            if interrupted_agility {
+                                player.set_skill_moveable(true);
+                            }
+                            player.set_current_skill_id(None);
                         }
-                        player.set_current_skill_id(None);
+                        let rejected = player.player_ai_mut().queue_player_skill(dispatch);
+                        (rejected, interrupted_rage_level)
+                    };
+                    if let Some(level) = interrupted_rage_level {
+                        end_player_rage(self, player_id, level);
+                        let interrupted_at_ms = game_tick_milliseconds();
+                        if let Some(player) = self.players.get_mut(&player_id) {
+                            player.player_ai_mut().mark_rage_used(interrupted_at_ms);
+                        }
                     }
-                    let rejected = player.player_ai_mut().queue_player_skill(dispatch);
                     for _ in 0..rejected {
                         let mut message = CMessage::new(0x000b_fe01);
                         message.add_byte(0);
@@ -33972,8 +33989,12 @@ impl CGame {
         player_id: i32,
         target: ShapeIdentity,
     ) {
+        let mut interrupted_rage_level = None;
         let released = self.find_player_mut(player_id).is_some_and(|player| {
             let interrupted_agility = player.player_ai().agility_family().is_some();
+            if player.player_ai().rage().is_some() {
+                interrupted_rage_level = Some(player.learned_skill_level(RAGE_SKILL_ID));
+            }
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
                 || player.player_ai().agility_family().is_some()
@@ -33982,6 +34003,7 @@ impl CGame {
                 || player.player_ai().ghost_cut().is_some()
                 || player.player_ai().knight_cut().is_some()
                 || player.player_ai().army_break().is_some()
+                || player.player_ai().rage().is_some()
                 || player.player_ai().rage_break().is_some()
                 || player.player_ai().flash().is_some()
                 || player.player_ai().swallow().is_some()
@@ -34001,6 +34023,13 @@ impl CGame {
             released
         });
         if released {
+            if let Some(level) = interrupted_rage_level {
+                end_player_rage(self, player_id, level);
+                let interrupted_at_ms = game_tick_milliseconds();
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.player_ai_mut().mark_rage_used(interrupted_at_ms);
+                }
+            }
             let _ = self.send_base_attack_failure(player_id, 2);
         }
     }
@@ -36555,6 +36584,7 @@ impl CGame {
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
             let concrete_knight_cut = is_knight_cut_dispatch(dispatch);
             let concrete_army_break = is_army_break_dispatch(dispatch);
+            let concrete_rage = is_rage_dispatch(dispatch);
             let concrete_rage_break = is_rage_break_dispatch(dispatch);
             let concrete_flash = is_flash_dispatch(dispatch);
             let concrete_swallow = is_swallow_dispatch(dispatch);
@@ -36700,6 +36730,8 @@ impl CGame {
                 execute_player_knight_cut(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_army_break {
                 execute_player_army_break(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_rage {
+                execute_player_rage(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_rage_break {
                 execute_player_rage_break(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_flash {

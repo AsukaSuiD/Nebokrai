@@ -60,6 +60,7 @@ use crate::gameserver::appserver::skills::kernel::{
 };
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
+use crate::gameserver::appserver::skills::rage::RageExecutionState;
 use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,6 +100,8 @@ pub(crate) struct CPlayerAI {
     knight_cut_last_used_ms: u32,
     army_break: Option<ArmyBreakExecutionState>,
     army_break_last_used_ms: [u32; 2],
+    rage: Option<RageExecutionState>,
+    rage_last_used_ms: u32,
     rage_break: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     rage_break_last_used_ms: u32,
     flash: Option<FlashExecutionState>,
@@ -245,6 +248,7 @@ impl CPlayerAI {
         self.ghost_cut = None;
         self.knight_cut = None;
         self.army_break = None;
+        self.rage = None;
         self.rage_break = None;
         self.flash = None;
         self.swallow = None;
@@ -378,6 +382,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.army_break.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение армейского удара завершено");
+        }
+        if let Some(mut execution) = self.rage.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение канала ярости завершено");
         }
         if let Some(mut execution) = self.rage_break.take() {
             let _ = execution.terminate(termination);
@@ -540,6 +548,7 @@ impl CPlayerAI {
         self.ghost_cut = None;
         self.knight_cut = None;
         self.army_break = None;
+        self.rage = None;
         self.rage_break = None;
         self.flash = None;
         self.swallow = None;
@@ -771,6 +780,11 @@ impl CPlayerAI {
     const fn army_break_index(skill_id: u32) -> usize { match skill_id { ARMY_BREAK_SKILL_ID => 0, ARMY_BREAK_2_SKILL_ID => 1, _ => unreachable!() } }
     pub(crate) const fn army_break_last_used_ms(&self, skill_id: u32) -> u32 { self.army_break_last_used_ms[Self::army_break_index(skill_id)] }
     pub(crate) fn mark_army_break_used(&mut self, skill_id: u32, now_ms: u32) { self.army_break_last_used_ms[Self::army_break_index(skill_id)] = now_ms; }
+    pub(crate) const fn rage(&self) -> Option<&RageExecutionState> { self.rage.as_ref() }
+    pub(crate) const fn begin_rage(&mut self, state: RageExecutionState) { self.rage = Some(state); }
+    pub(crate) fn rage_mut(&mut self) -> Option<&mut RageExecutionState> { self.rage.as_mut() }
+    pub(crate) const fn rage_last_used_ms(&self) -> u32 { self.rage_last_used_ms }
+    pub(crate) const fn mark_rage_used(&mut self, now_ms: u32) { self.rage_last_used_ms = now_ms; }
     pub(crate) const fn rage_break(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.rage_break }
     pub(crate) const fn begin_rage_break(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.rage_break = Some(state); }
     pub(crate) fn rage_break_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rage_break.as_mut() }

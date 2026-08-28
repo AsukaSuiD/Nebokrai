@@ -12014,6 +12014,10 @@ impl CPlayer {
         self.base_properties.rp
     }
 
+    pub(crate) const fn maximum_rp(&self) -> u16 {
+        self.base_properties.maximum_rp
+    }
+
     pub(crate) const fn yp(&self) -> u16 {
         self.base_properties.yp
     }
