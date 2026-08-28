@@ -487,6 +487,7 @@ mod fatalblow;
 mod firewall;
 mod godpunishment;
 mod chaossphere;
+mod fireball;
 mod seal;
 mod thunder;
 mod snowstorm;
@@ -773,6 +774,12 @@ use crate::gameserver::appserver::skills::basemagicphalanx::{
 use crate::gameserver::appserver::skills::firebolt::{execute_player_fire_bolt, is_fire_bolt_target};
 use crate::gameserver::appserver::skills::fireboltphalanx::{
     calculate_owned_fire_bolt_attack, FireBoltPhalanxTick,
+};
+use crate::gameserver::appserver::skills::fireball::{
+    execute_player_fire_ball, is_fire_ball_dispatch,
+};
+use crate::gameserver::appserver::skills::fireballphalanx::{
+    calculate_owned_fire_ball_attack, FireBallPhalanxTick,
 };
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
@@ -36418,6 +36425,7 @@ impl CGame {
                 _ => false,
             };
             let concrete_fire_bolt = is_fire_bolt_target(dispatch);
+            let concrete_fire_ball = is_fire_ball_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36539,6 +36547,8 @@ impl CGame {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
                 execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_fire_ball {
+                execute_player_fire_ball(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {
@@ -39502,6 +39512,9 @@ impl CGame {
             SummonedSkillShape::FireBolt(phalanx) => {
                 calculate_owned_fire_bolt_attack(self, phalanx, target_level)
             }
+            SummonedSkillShape::FireBall(phalanx) => {
+                calculate_owned_fire_ball_attack(self, phalanx, target_level)
+            }
             SummonedSkillShape::ChaosSphere(phalanx) => {
                 calculate_owned_chaos_sphere_attack(self, phalanx, target_level)
             }
@@ -39894,6 +39907,7 @@ impl CGame {
             return false;
         };
         let mut chaos_tick = None;
+        let mut fire_ball_tick = None;
         let tick = owner
             .base_mut()
             .find_skill_phalanx_mut(phalanx_id)
@@ -39942,6 +39956,10 @@ impl CGame {
                         }
                         FireBoltPhalanxTick::Expired => None,
                     }
+                }
+                SummonedSkillShape::FireBall(phalanx) => {
+                    fire_ball_tick = Some(phalanx.tick(lifetime_now_ms));
+                    Some(None)
                 }
                 SummonedSkillShape::ChaosSphere(phalanx) => {
                     chaos_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()));
@@ -40012,6 +40030,55 @@ impl CGame {
         let (Some(mut tick), Some(phalanx)) = (tick, phalanx) else {
             return false;
         };
+        if let (Some(fire_ball_tick), SummonedSkillShape::FireBall(fire_ball)) =
+            (fire_ball_tick, &phalanx)
+        {
+            match fire_ball_tick {
+                FireBallPhalanxTick::Pending => {}
+                FireBallPhalanxTick::Active { force_move, scan } => {
+                    if let Some((center_x, center_y, sampled_at_ms)) = scan
+                        && self.find_region(region_id)
+                            .is_some_and(|owner| owner.base().block_at(center_x, center_y) == Some(3))
+                    {
+                        let mut applied = false;
+                        for (target, war_soul_hit) in
+                            self.fire_ball_targets(region_id, fire_ball, center_x, center_y)
+                        {
+                            applied |= match target.object_type {
+                                PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                                    &phalanx, target.id, region_id, war_soul_hit, runtime,
+                                ),
+                                MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                                    &phalanx, target.id, region_id, sampled_at_ms, runtime,
+                                ),
+                                _ => false,
+                            };
+                        }
+                        if applied
+                            && let Some(mut owner) = self.take_region_owner(region_id)
+                        {
+                            if let Some(SummonedSkillShape::FireBall(fire_ball)) =
+                                owner.base_mut().find_skill_phalanx_mut(phalanx_id)
+                            {
+                                fire_ball.finish();
+                            }
+                            self.restore_region_owner(owner);
+                        }
+                    }
+                    if let Some((destination_x, destination_y, duration_ms)) = force_move {
+                        let _ = self.force_move_fire_ball(
+                            region_id, phalanx_id, destination_x, destination_y, duration_ms,
+                        );
+                    }
+                }
+                FireBallPhalanxTick::Expired => {
+                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+                        let _ = self.send_shape_exit_around(region, phalanx.shape());
+                    }
+                }
+            }
+            return true;
+        }
         if let (Some(chaos_tick), SummonedSkillShape::ChaosSphere(chaos)) = (chaos_tick, &phalanx) {
             match chaos_tick {
                 ChaosSpherePhalanxTick::Pending => {}

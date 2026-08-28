@@ -72,6 +72,8 @@ pub(crate) struct CPlayerAI {
     base_magic_last_used_ms: u32,
     fire_bolt: Option<BaseMagicExecutionState>,
     fire_bolt_last_used_ms: u32,
+    fire_ball: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    fire_ball_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -194,6 +196,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
+        self.fire_ball = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -287,6 +290,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.fire_bolt.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной стрелы завершено");
+        }
+        if let Some(mut execution) = self.fire_ball.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного шара завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -415,6 +422,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
+        self.fire_ball = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -562,6 +570,24 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_fire_bolt_used(&mut self, now_ms: u32) {
         self.fire_bolt_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn fire_ball(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.fire_ball
+    }
+
+    pub(crate) const fn begin_fire_ball(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) {
+        self.fire_ball = Some(state);
+    }
+
+    pub(crate) fn fire_ball_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.fire_ball.as_mut()
+    }
+
+    pub(crate) const fn fire_ball_last_used_ms(&self) -> u32 { self.fire_ball_last_used_ms }
+
+    pub(crate) const fn mark_fire_ball_used(&mut self, now_ms: u32) {
+        self.fire_ball_last_used_ms = now_ms;
     }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {

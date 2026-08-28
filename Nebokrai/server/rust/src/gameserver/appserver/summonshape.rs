@@ -14,6 +14,7 @@ use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::CBattleFa
 use crate::gameserver::appserver::skills::archeryphalanx::CArcheryPhalanx;
 use crate::gameserver::appserver::skills::fatalblowphalanx::CFatalBlowPhalanx;
 use crate::gameserver::appserver::skills::fireboltphalanx::CFireBoltPhalanx;
+use crate::gameserver::appserver::skills::fireballphalanx::CFireBallPhalanx;
 use crate::gameserver::appserver::skills::chaosspherephalanx::CChaosSpherePhalanx;
 use crate::gameserver::appserver::skills::firewallphalanx::CFireWallPhalanx;
 use crate::gameserver::appserver::skills::thunderphalanx::CThunderPhalanx;
@@ -34,6 +35,7 @@ pub(crate) enum SummonedSkillShape {
     BattleFairyBaseMagic(CBattleFairyBaseMagicPhalanx),
     FatalBlow(CFatalBlowPhalanx),
     FireBolt(CFireBoltPhalanx),
+    FireBall(CFireBallPhalanx),
     ChaosSphere(CChaosSpherePhalanx),
     FireWall(CFireWallPhalanx),
     Thunder(CThunderPhalanx),
@@ -54,6 +56,7 @@ impl SummonedSkillShape {
             Self::BattleFairyBaseMagic(shape) => shape.shape(),
             Self::FatalBlow(shape) => shape.shape(),
             Self::FireBolt(shape) => shape.shape(),
+            Self::FireBall(shape) => shape.shape(),
             Self::ChaosSphere(shape) => shape.shape(),
             Self::FireWall(shape) => shape.shape(),
             Self::Thunder(shape) => shape.shape(),
@@ -74,6 +77,7 @@ impl SummonedSkillShape {
             Self::BattleFairyBaseMagic(shape) => shape.shape_mut(),
             Self::FatalBlow(shape) => shape.shape_mut(),
             Self::FireBolt(shape) => shape.shape_mut(),
+            Self::FireBall(shape) => shape.shape_mut(),
             Self::ChaosSphere(shape) => shape.shape_mut(),
             Self::FireWall(shape) => shape.shape_mut(),
             Self::Thunder(shape) => shape.shape_mut(),
@@ -94,6 +98,7 @@ impl SummonedSkillShape {
             Self::BattleFairyBaseMagic(shape) => shape.master(),
             Self::FatalBlow(shape) => shape.master(),
             Self::FireBolt(shape) => shape.master(),
+            Self::FireBall(shape) => shape.master(),
             Self::ChaosSphere(shape) => shape.master(),
             Self::FireWall(shape) => shape.master(),
             Self::Thunder(shape) => shape.master(),
