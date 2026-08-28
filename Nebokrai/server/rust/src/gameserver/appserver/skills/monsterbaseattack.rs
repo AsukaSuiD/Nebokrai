@@ -117,6 +117,10 @@ use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, one_step_move_delay_ms, select_attack_skill,
 };
 use crate::gameserver::appserver::ai::nationgladiator::consider_nation_gladiator_target;
+use crate::gameserver::appserver::ai::nationcouguardwithsword::{
+    NationCountryGuardTarget, consider_nation_country_guard_pet,
+    consider_nation_country_guard_player, select_nation_country_guard_target,
+};
 use crate::gameserver::appserver::ai::smartgladiator::{
     SmartGladiatorCandidate, SmartGladiatorSelection,
 };
@@ -1091,6 +1095,87 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             );
         }
         if let Some(selected) = selected {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected.identity);
+            }
+            target = Some(selected.identity);
+        }
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 19
+        && let Some(area_index) = area_index
+    {
+        let minimum_skill_distance = game
+            .skill_base_properties(skill_id, i32::from(skill.level))
+            .map_or(0, |properties| properties.query_property(5_004) as i32);
+        let mut selected_player = None;
+        for player_id in region.player_ids_around_area(area_index) {
+            let Some(player) = game.find_player(player_id) else {
+                continue;
+            };
+            if player.server_region_id() != Some(region.id) || player.is_dead() {
+                continue;
+            }
+            let Some(candidate) = player.shape_view() else {
+                continue;
+            };
+            selected_player = consider_nation_country_guard_player(
+                selected_player,
+                NationCountryGuardTarget {
+                    identity: candidate.identity,
+                    distance: real_distance(
+                        monster_view.tile_x,
+                        monster_view.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ),
+                },
+                property.guard_range as i32,
+                minimum_skill_distance,
+                region.country,
+                property.race,
+                player.country(),
+                player.is_badman(game.globe_setup().pk_count_per_kill()),
+            );
+        }
+        let mut selected_pet = None;
+        for pet_id in region.pet_ids_around_area(area_index) {
+            let Some((candidate, master)) = region
+                .find_monster_by_id(pet_id)
+                .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+                .and_then(|pet| {
+                    let pet_property =
+                        game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                    Some((pet.shape_view(pet_property)?, pet.master_info()))
+                })
+            else {
+                continue;
+            };
+            let live_master_country = (master.master_type == PLAYER_TYPE)
+                .then(|| game.find_player(master.master_id).map(|player| player.country()))
+                .flatten();
+            selected_pet = consider_nation_country_guard_pet(
+                selected_pet,
+                NationCountryGuardTarget {
+                    identity: candidate.identity,
+                    distance: real_distance(
+                        monster_view.tile_x,
+                        monster_view.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ),
+                },
+                property.guard_range as i32,
+                minimum_skill_distance,
+                region.country,
+                live_master_country,
+            );
+        }
+        if let Some(selected) =
+            select_nation_country_guard_target(selected_player, selected_pet)
+        {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.set_ai_target(selected.identity);
             }
