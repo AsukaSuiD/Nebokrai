@@ -108,6 +108,7 @@ use crate::gameserver::appserver::ai::fixedpositionarcher::{
 use crate::gameserver::appserver::ai::gladiator::{
     GladiatorTarget, consider_gladiator_target,
 };
+use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, one_step_move_delay_ms, select_attack_skill,
@@ -657,6 +658,23 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 monster.set_ai_target(selected.identity);
             }
             target = Some(selected.identity);
+        }
+    }
+    if target.is_none() && cast.is_none() && !tamed && property.ai == 8 {
+        let minimum_skill_distance = game
+            .skill_base_properties(skill_id, i32::from(skill.level))
+            .map_or(0, |properties| properties.query_property(5_004) as i32);
+        if let Some(selected) = select_guard_with_bow_target(
+            game,
+            region,
+            monster_id,
+            &property,
+            minimum_skill_distance,
+        ) {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected);
+            }
+            target = Some(selected);
         }
     }
     if target.is_none()

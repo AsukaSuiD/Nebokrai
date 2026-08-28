@@ -8,6 +8,7 @@ pub(crate) mod appserver {
         pub(crate) mod bossfiend;
         pub(crate) mod fixedpositionarcher;
         pub(crate) mod gladiator;
+        pub(crate) mod guardwithbow;
         pub(crate) mod lord;
         pub(crate) mod monsterai;
         pub(crate) mod playerai;
