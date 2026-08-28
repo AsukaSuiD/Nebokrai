@@ -194,4 +194,34 @@ impl CGame {
         self.restore_region_owner(owner);
         installed
     }
+
+    /// Устанавливает каноническое оглушение `Rush2State` без пространственного
+    /// эффекта. Такая граница нужна `CStrike`: исходный навык блокирует цель
+    /// после попадания, но не вызывает `ForceMove`.
+    pub(crate) fn install_rush_2_state(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        state: Rush2State,
+        now_ms: u32,
+    ) -> bool {
+        if target.object_type == PLAYER_TYPE {
+            return replace_player_rush_2_state(self, target.id, state, now_ms);
+        }
+        if target.object_type != MONSTER_TYPE {
+            return false;
+        }
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let installed = replace_monster_rush_2_state(
+            self,
+            owner.base_mut(),
+            target.id,
+            state,
+            now_ms,
+        );
+        self.restore_region_owner(owner);
+        installed
+    }
 }

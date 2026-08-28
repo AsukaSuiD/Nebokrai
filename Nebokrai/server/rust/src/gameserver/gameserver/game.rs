@@ -804,6 +804,7 @@ use crate::gameserver::appserver::skills::fallingstar::{execute_player_falling_s
 use crate::gameserver::appserver::skills::explosivearrow::{
     execute_player_explosive_arrow, explosive_arrow_variant,
 };
+use crate::gameserver::appserver::skills::strike::{execute_player_strike, is_strike_dispatch};
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -33662,6 +33663,7 @@ impl CGame {
                             || player.player_ai().boa_lock().is_some()
                             || player.player_ai().falling_star().is_some()
                             || player.player_ai().explosive_arrow().is_some()
+                            || player.player_ai().strike().is_some()
                             || player.player_ai().agility_family().is_some()
                             || player.player_ai().callosity().is_some()
                             || player.player_ai().ju_cut().is_some()
@@ -34337,6 +34339,7 @@ impl CGame {
                 || player.player_ai().boa_lock().is_some()
                 || player.player_ai().falling_star().is_some()
                 || player.player_ai().explosive_arrow().is_some()
+                || player.player_ai().strike().is_some()
                 || player.player_ai().agility_family().is_some()
                 || player.player_ai().callosity().is_some()
                 || player.player_ai().mosou().is_some()
@@ -37013,6 +37016,7 @@ impl CGame {
             let concrete_boa_lock = is_boa_lock_dispatch(dispatch);
             let concrete_falling_star = is_falling_star_dispatch(dispatch);
             let concrete_explosive_arrow = explosive_arrow_variant(dispatch).is_some();
+            let concrete_strike = is_strike_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37142,6 +37146,8 @@ impl CGame {
                 execute_player_falling_star(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_explosive_arrow {
                 execute_player_explosive_arrow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_strike {
+                execute_player_strike(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {

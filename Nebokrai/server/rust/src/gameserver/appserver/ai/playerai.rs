@@ -69,6 +69,7 @@ use crate::gameserver::appserver::skills::fallingstar::FallingStarExecutionState
 use crate::gameserver::appserver::skills::explosivearrow::{
     ExplosiveArrowExecutionState, ExplosiveArrowVariant,
 };
+use crate::gameserver::appserver::skills::strike::StrikeExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -119,6 +120,8 @@ pub(crate) struct CPlayerAI {
     falling_star_last_used_ms: u32,
     explosive_arrow: Option<ExplosiveArrowExecutionState>,
     explosive_arrow_last_used_ms: [u32; 3],
+    strike: Option<StrikeExecutionState>,
+    strike_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -312,6 +315,7 @@ impl CPlayerAI {
         self.boa_lock = None;
         self.falling_star = None;
         self.explosive_arrow = None;
+        self.strike = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -469,6 +473,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.explosive_arrow.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей стрелы завершено");
+        }
+        if let Some(mut execution) = self.strike.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение оглушающего снаряда завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -720,6 +728,7 @@ impl CPlayerAI {
         self.boa_lock = None;
         self.falling_star = None;
         self.explosive_arrow = None;
+        self.strike = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -894,6 +903,11 @@ impl CPlayerAI {
     pub(crate) fn explosive_arrow_mut(&mut self) -> Option<&mut ExplosiveArrowExecutionState> { self.explosive_arrow.as_mut() }
     pub(crate) const fn explosive_arrow_last_used_ms(&self, variant: ExplosiveArrowVariant) -> u32 { self.explosive_arrow_last_used_ms[variant.index()] }
     pub(crate) fn mark_explosive_arrow_used(&mut self, variant: ExplosiveArrowVariant, now_ms: u32) { self.explosive_arrow_last_used_ms[variant.index()] = now_ms; }
+    pub(crate) const fn strike(&self) -> Option<StrikeExecutionState> { self.strike }
+    pub(crate) const fn begin_strike(&mut self, state: StrikeExecutionState) { self.strike = Some(state); }
+    pub(crate) fn strike_mut(&mut self) -> Option<&mut StrikeExecutionState> { self.strike.as_mut() }
+    pub(crate) const fn strike_last_used_ms(&self) -> u32 { self.strike_last_used_ms }
+    pub(crate) const fn mark_strike_used(&mut self, now_ms: u32) { self.strike_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);
