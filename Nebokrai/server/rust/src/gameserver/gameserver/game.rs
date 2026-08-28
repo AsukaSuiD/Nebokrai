@@ -36707,6 +36707,8 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
                         monster.when_been_killed(now_ms);
+                    } else if monster_property.ai == 8 {
+                        monster.when_been_hurted(now_ms);
                     } else {
                         monster.when_been_hurted_by(
                             ShapeIdentity {
@@ -36728,6 +36730,18 @@ impl CGame {
                         blast_attack: attack.blast_attack,
                     });
                 }
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && monster_property.ai == 8
+            {
+                crate::gameserver::appserver::ai::guardwithbow::retarget_guard_with_bow_after_hurt(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &monster_property,
+                );
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
                 let _ = finish_blind_states_on_defense(
@@ -40674,6 +40688,8 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
                         monster.when_been_killed(now_ms);
+                    } else if property.ai == 8 {
+                        monster.when_been_hurted(now_ms);
                     } else {
                         monster.when_been_hurted_by(
                             ShapeIdentity {
@@ -40683,12 +40699,12 @@ impl CGame {
                             },
                             now_ms,
                         );
-                        monster.register_attacking_player(
-                            master.master_id,
-                            now_ms,
-                            self.globe_setup.attack_monster_protection_ms(),
-                        );
                     }
+                    monster.register_attacking_player(
+                        master.master_id,
+                        now_ms,
+                        self.globe_setup.attack_monster_protection_ms(),
+                    );
                 }
                 if current_health == 0 {
                     monster.set_killed_by(MonsterKillingAttack {
@@ -40700,6 +40716,14 @@ impl CGame {
                         blast_attack: attack.blast_attack,
                     });
                 }
+            }
+            if attack.full_miss == 0 && damage != 0 && current_health != 0 && property.ai == 8 {
+                crate::gameserver::appserver::ai::guardwithbow::retarget_guard_with_bow_after_hurt(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &property,
+                );
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
                 let _ = finish_blind_states_on_defense(

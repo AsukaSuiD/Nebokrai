@@ -1,6 +1,11 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Поиск цели и реакция на урон лучника городской охраны `CGuardWithBow`.
+//!
+//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
+//! подтверждает приоритет преступных игроков перед неохранными монстрами.
+//! Проверка политики атаки остаётся у GameServer, а необычный выбор по
+//! минимальной дистанции навыка разделяется с неподвижным лучником. Немедленная
+//! реакция на урон вызывает тот же owner до продолжения обработки попадания.
+//! `OnIdle` остаётся RAW до подключения его отдельного контракта видимости.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -17,20 +22,6 @@
 // RVA: 0x0020EE60
 // ADDRESS: 0060ee60
 // PROTOTYPE: void __thiscall OnIdle(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGuardWithBow::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\guardwithbow.cpp:135
-// RVA: 0x0020EF80
-// ADDRESS: 0060ef80
-// PROTOTYPE: void __thiscall WhenBeenHurted(long param_1, long param_2, ulong param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -143,4 +134,51 @@ pub(crate) fn select_guard_with_bow_target(
         );
     }
     selected.map(|selected| selected.identity)
+}
+
+/// Немедленная ветвь `WhenBeenHurted`: охранник не принимает нападавшего как
+/// готовую цель, а повторяет собственный приоритет преступника и монстра.
+pub(crate) fn retarget_guard_with_bow_after_hurt(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+) {
+    if property.ai != 8
+        || region
+            .find_monster_by_id(monster_id)
+            .is_none_or(|monster| monster.ai_target().is_some())
+    {
+        return;
+    }
+    let Some(current_skill_id) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().current_skill_id())
+    else {
+        return;
+    };
+    let Some(skill) = property
+        .skills
+        .iter()
+        .copied()
+        .filter(|skill| u32::from(skill.id) == current_skill_id)
+        .max_by_key(|skill| skill.level)
+    else {
+        return;
+    };
+    let minimum_skill_distance = game
+        .skill_base_properties(current_skill_id, i32::from(skill.level))
+        .map_or(0, |properties| properties.query_property(5_004) as i32);
+    let selected = select_guard_with_bow_target(
+        game,
+        region,
+        monster_id,
+        property,
+        minimum_skill_distance,
+    );
+    if let (Some(selected), Some(monster)) =
+        (selected, region.find_monster_by_id_mut(monster_id))
+    {
+        monster.set_ai_target(selected);
+    }
 }

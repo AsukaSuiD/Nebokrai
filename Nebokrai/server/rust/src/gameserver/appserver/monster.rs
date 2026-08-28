@@ -825,10 +825,16 @@ impl CMonster {
     }
 
     pub(crate) fn when_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
-        self.base_ai.when_been_hurted(now_ms);
+        self.when_been_hurted(now_ms);
         if self.ai_target.is_none() && matches!(attacker.object_type, 400 | 600) {
             self.ai_target = Some(attacker);
         }
+    }
+
+    /// Общая часть `CBaseAI::WhenBeenHurted` без политики выбора цели
+    /// конкретного производного ИИ.
+    pub(crate) fn when_been_hurted(&mut self, now_ms: u32) {
+        self.base_ai.when_been_hurted(now_ms);
     }
 
     pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {

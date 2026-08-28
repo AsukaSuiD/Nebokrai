@@ -10,6 +10,7 @@ use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
 };
 use super::knockoutstate::finish_blind_states_on_defense;
+use crate::gameserver::appserver::ai::guardwithbow::retarget_guard_with_bow_after_hurt;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::{MonsterCombatProperties, MonsterKillingAttack};
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -377,6 +378,11 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             };
             if target_tamed {
                 monster.when_pet_been_hurted_by(attacker, now_ms);
+            } else if target_monster_property
+                .as_ref()
+                .is_some_and(|property| property.ai == 8)
+            {
+                monster.when_been_hurted(now_ms);
             } else {
                 monster.when_been_hurted_by(attacker, now_ms);
             }
@@ -393,6 +399,15 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 protection_ms,
             );
         }
+    }
+    if current_health != 0
+        && !target_tamed
+        && target_monster_property
+            .as_ref()
+            .is_some_and(|property| property.ai == 8)
+        && let Some(property) = target_monster_property.as_ref()
+    {
+        retarget_guard_with_bow_after_hurt(game, region, target.id, property);
     }
     if current_health != 0 {
         let _ = finish_blind_states_on_defense(game, region, target, now_ms);
