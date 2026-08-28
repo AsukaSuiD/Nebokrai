@@ -4133,6 +4133,13 @@ impl CPlayer {
         self.move_shape.begin_callosity_state(state);
     }
 
+    pub(crate) fn replace_swordship_state(
+        &mut self,
+        state: super::skills::swordshipstate::SwordshipState,
+    ) -> Option<super::skills::swordshipstate::SwordshipState> {
+        self.move_shape.replace_swordship_state(state)
+    }
+
     pub(crate) fn agility_state(
         &self,
         skill_id: u32,
@@ -4271,6 +4278,9 @@ impl CPlayer {
         }
         let callosity_visual = self.callosity_state();
         if let Some(state) = callosity_visual {
+            properties = state.apply_to_player(properties);
+        }
+        for state in self.move_shape.swordship_states() {
             properties = state.apply_to_player(properties);
         }
         for state in self.move_shape.battle_fairy_attribute_states() {

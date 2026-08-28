@@ -1,69 +1,66 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние семейства `CSwordshipState`.
+//!
+//! PDB подтверждает одинаковый набор виртуальных операций у четырёх исходных
+//! классов. Отличается только ID `0x6f/0xe0/0xe8/0xe9`. Для игрока обе
+//! прибавки сначала знаково усекаются до `i16`, затем складываются через
+//! `u32` и ограничиваются `i32::MAX`. Для монстра исходный владелец передаёт
+//! полные значения `i32` методам `SetMinAtk/SetMaxAtk`, то есть выполняет
+//! сложение с переполнением.
+//! Состояния не имеют собственного таймера и визуального сообщения.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\swordshipstate.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\swordshipstate.h
+use super::swordship::is_swordship_skill;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
 
-// ============================================================================
-// FUNCTION: CSwordshipState::CSwordshipState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\swordshipstate.cpp:15
-// RVA: 0x001F8750
-// ADDRESS: 005f8750
-// PROTOTYPE: undefined __thiscall CSwordshipState(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SwordshipState {
+    skill_id: u32,
+    minimum_attack_gain: i32,
+    maximum_attack_gain: i32,
+}
 
-// ============================================================================
-// FUNCTION: CSwordshipState::CSwordshipState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\swordshipstate.cpp:25
-// RVA: 0x001F87D0
-// ADDRESS: 005f87d0
-// PROTOTYPE: undefined __thiscall CSwordshipState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl SwordshipState {
+    pub(crate) const fn new(
+        skill_id: u32,
+        minimum_attack_gain: i32,
+        maximum_attack_gain: i32,
+    ) -> Self {
+        debug_assert!(is_swordship_skill(skill_id));
+        Self {
+            skill_id,
+            minimum_attack_gain,
+            maximum_attack_gain,
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CSwordshipState::~CSwordshipState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\swordshipstate.cpp:35
-// RVA: 0x001F8840
-// ADDRESS: 005f8840
-// PROTOTYPE: void __thiscall ~CSwordshipState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn skill_id(self) -> u32 {
+        self.skill_id
+    }
 
-// ============================================================================
-// FUNCTION: CSwordshipState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\swordshipstate.cpp:39
-// RVA: 0x001F8870
-// ADDRESS: 005f8870
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn apply_to_player(
+        self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        properties.minimum_attack = apply_player_gain(
+            properties.minimum_attack,
+            self.minimum_attack_gain,
+        );
+        properties.maximum_attack = apply_player_gain(
+            properties.maximum_attack,
+            self.maximum_attack_gain,
+        );
+        properties
+    }
 
+    pub(crate) const fn apply_to_monster(self, minimum: u32, maximum: u32) -> (u32, u32) {
+        (
+            minimum.wrapping_add(self.minimum_attack_gain as u32),
+            maximum.wrapping_add(self.maximum_attack_gain as u32),
+        )
+    }
+}
 
-// COMPONENT_VARIANT_END: GameServer
+fn apply_player_gain(value: u32, gain: i32) -> u32 {
+    value
+        .wrapping_add((gain as i16 as i32) as u32)
+        .min(i32::MAX as u32)
+}

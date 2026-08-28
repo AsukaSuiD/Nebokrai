@@ -699,6 +699,9 @@ impl CMonster {
         mut minimum: u32,
         mut maximum: u32,
     ) -> (u32, u32) {
+        for state in self.move_shape.swordship_states() {
+            (minimum, maximum) = state.apply_to_monster(minimum, maximum);
+        }
         for state in self.move_shape.battle_fairy_attribute_states() {
             minimum = state.apply_to_monster_attack(minimum);
             maximum = state.apply_to_monster_attack(maximum);

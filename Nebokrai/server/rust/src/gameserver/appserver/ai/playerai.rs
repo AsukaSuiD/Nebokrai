@@ -96,6 +96,7 @@ pub(crate) struct CPlayerAI {
     mana_shield_last_used_ms: u32,
     immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    swordship: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -152,6 +153,7 @@ impl CPlayerAI {
         self.mana_shield = None;
         self.immediate_state = None;
         self.non_fun = None;
+        self.swordship = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -247,6 +249,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение пустого навыка завершено");
         }
+        if let Some(mut execution) = self.swordship.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение корабля мечей завершено");
+        }
         true
     }
 
@@ -277,6 +283,7 @@ impl CPlayerAI {
         self.mana_shield = None;
         self.immediate_state = None;
         self.non_fun = None;
+        self.swordship = None;
         self.poison_arrow = None;
         self.blood_loss = None;
         self.fatal_blow = None;
@@ -566,6 +573,23 @@ impl CPlayerAI {
         &mut self,
     ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
         self.non_fun.as_mut()
+    }
+
+    pub(crate) const fn swordship(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.swordship
+    }
+
+    pub(crate) const fn begin_swordship(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.swordship = Some(state);
+    }
+
+    pub(crate) fn swordship_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.swordship.as_mut()
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {

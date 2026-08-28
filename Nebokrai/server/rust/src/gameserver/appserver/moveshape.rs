@@ -54,6 +54,7 @@ use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
+use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::bossbluefurystate::{
@@ -477,6 +478,7 @@ pub(crate) struct CanonicalStateStorage {
     spider_poison_state: Option<SpiderPoisonState>,
     spider_web_state: Option<SpiderWebState>,
     blood_loss_state: Option<BloodLossState>,
+    swordship_states: Vec<SwordshipState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
@@ -929,6 +931,10 @@ impl CMoveShape {
                 .blood_loss_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
+                .swordship_states
+                .iter()
+                .any(|state| state.skill_id() == state_id)
+            || self
                 .battle_fairy_attribute_states
                 .iter()
                 .any(|state| state.skill_id() == state_id)
@@ -967,6 +973,27 @@ impl CMoveShape {
     pub(crate) fn begin_callosity_state(&mut self, state: CallosityState) {
         debug_assert!(self.callosity_state.is_none());
         self.callosity_state = Some(state);
+    }
+
+    pub(crate) fn swordship_states(&self) -> &[SwordshipState] {
+        &self.swordship_states
+    }
+
+    /// Заменяет состояние в прежней позиции семейного списка, а новый ID
+    /// добавляет в конец. Так сохраняется относительный порядок этих прибавок.
+    pub(crate) fn replace_swordship_state(
+        &mut self,
+        state: SwordshipState,
+    ) -> Option<SwordshipState> {
+        if let Some(slot) = self
+            .swordship_states
+            .iter_mut()
+            .find(|current| current.skill_id() == state.skill_id())
+        {
+            return Some(std::mem::replace(slot, state));
+        }
+        self.swordship_states.push(state);
+        None
     }
 
     pub(crate) const fn taiji_state(&self) -> Option<TaiJiState> {
