@@ -77,6 +77,7 @@ use super::summoncreatureskill::execute_owned_summon_creature;
 use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
 use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
+use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -114,6 +115,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | YUNSHENG_LIGHTNING_SKILL_ID
             | CORPSE_PTOMAINE_SKILL_ID
             | ENERGY_BOLT_SKILL_ID
+            | ZOMBIE_CLAW_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
@@ -420,6 +422,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if skill_id == ENERGY_BOLT_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_energy_bolt(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
+            deaths,
+        );
+    }
+    if skill_id == ZOMBIE_CLAW_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_zombie_claw(
             game,
             region,
             monster_id,

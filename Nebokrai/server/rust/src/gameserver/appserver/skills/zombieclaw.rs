@@ -1,6 +1,10 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! `CZombieClaw` для достигнутого monster-owner-а.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает общий с
+//! `CEnergyBolt` пошаговый путь и отличающуюся таблицу scope: только третий
+//! уровень атакует 3×3 клетки. Конкретный owner задаёт ID и scope-политику,
+//! а общий узкий runtime сохраняет packet layout, такты полёта и порядок
+//! X→Y. Player MP, `CSoulCollectState` и координатные overload-ы остаются RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -11,7 +15,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClawEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:775
@@ -39,7 +43,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClaw::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:200
@@ -81,7 +85,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClaw::CZombieClaw
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:33
@@ -95,7 +99,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClaw::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:119
@@ -109,7 +113,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClaw::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:704
@@ -123,7 +127,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClaw::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:658
@@ -137,7 +141,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClaw::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:570
@@ -151,7 +155,7 @@
 
 // ============================================================================
 // FUNCTION: CZombieClaw::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\zombieclaw.cpp:315
@@ -182,3 +186,38 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+use super::energybolt::{PathProjectileSpec, execute_owned_path_projectile};
+use super::monsterattack::MonsterAttackDeath;
+use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+
+pub(crate) const ZOMBIE_CLAW_SKILL_ID: u32 = 0x1a2;
+
+#[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
+pub(crate) fn execute_owned_zombie_claw<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    now_ms: u32,
+    runtime: &mut Runtime,
+    deaths: &mut Vec<MonsterAttackDeath>,
+) -> bool {
+    execute_owned_path_projectile(
+        game,
+        region,
+        monster_id,
+        target_identity,
+        PathProjectileSpec::new(ZOMBIE_CLAW_SKILL_ID, 3),
+        skill_level,
+        properties,
+        now_ms,
+        runtime,
+        deaths,
+    )
+}

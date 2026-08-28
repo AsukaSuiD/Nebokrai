@@ -1,4 +1,5 @@
-//! Пошаговый энергетический снаряд `CEnergyBolt` для достигнутого monster-owner-а.
+//! Узкий runtime семейства пошаговых `CEnergyBolt/CZombieClaw` и конкретный
+//! owner энергетического снаряда для достигнутого monster-пути.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает принудительный
 //! путь длиной `SKILL_USAGE_TARGET_MAX_DISTANT`, один шаг за единицу времени
@@ -238,8 +239,23 @@ const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
 const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
 pub(crate) const ENERGY_BOLT_SKILL_ID: u32 = 0x1a0;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PathProjectileSpec {
+    skill_id: u32,
+    wide_scope_level: u16,
+}
+
+impl PathProjectileSpec {
+    pub(crate) const fn new(skill_id: u32, wide_scope_level: u16) -> Self {
+        Self {
+            skill_id,
+            wide_scope_level,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EnergyBoltProgress {
+pub(crate) struct PathProjectileProgress {
     destination_x: i32,
     destination_y: i32,
     path: Vec<(i32, i32, u8)>,
@@ -251,7 +267,7 @@ pub(crate) struct EnergyBoltProgress {
     fired: bool,
 }
 
-impl EnergyBoltProgress {
+impl PathProjectileProgress {
     pub(crate) const fn new(destination_x: i32, destination_y: i32) -> Self {
         Self {
             destination_x,
@@ -310,11 +326,12 @@ fn send_start(
     game: &CGame,
     region: &CServerRegion,
     source: &CShape,
+    skill_id: u32,
     skill_level: u16,
 ) {
     let mut message = CMessage::new(0x000b_fe01);
     message.add_byte(1);
-    message.add_long(ENERGY_BOLT_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(skill_level as i16);
     message.add_long(MONSTER_TYPE);
     message.add_long(source.identity().id);
@@ -326,6 +343,7 @@ fn send_fire(
     game: &CGame,
     region: &CServerRegion,
     source: &CShape,
+    skill_id: u32,
     skill_level: u16,
     target: Option<ShapeIdentity>,
     destination: (i32, i32),
@@ -333,7 +351,7 @@ fn send_fire(
 ) {
     let mut message = CMessage::new(0x000b_fe01);
     message.add_byte(2);
-    message.add_long(ENERGY_BOLT_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(skill_level as i16);
     message.add_long(MONSTER_TYPE);
     message.add_long(source.identity().id);
@@ -349,12 +367,13 @@ fn send_end(
     game: &CGame,
     region: &CServerRegion,
     source: &CShape,
+    skill_id: u32,
     skill_level: u16,
-    progress: &EnergyBoltProgress,
+    progress: &PathProjectileProgress,
 ) {
     let mut message = CMessage::new(0x000b_fe01);
     message.add_byte(3);
-    message.add_long(ENERGY_BOLT_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(skill_level as i16);
     message.add_long(MONSTER_TYPE);
     message.add_long(source.identity().id);
@@ -377,6 +396,7 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     now_ms: u32,
     monster_id: i32,
+    spec: PathProjectileSpec,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     attacker_property: &MonsterProperties,
@@ -384,10 +404,12 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
     attacker_tamed: bool,
     center_x: i32,
     center_y: i32,
-    progress: &mut EnergyBoltProgress,
+    progress: &mut PathProjectileProgress,
     deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
-    let scope_radius = (skill_level == 1).then_some(1).unwrap_or(0);
+    let scope_radius = (skill_level == spec.wide_scope_level)
+        .then_some(1)
+        .unwrap_or(0);
     let mut attacked = Vec::new();
     let mut did_attack = false;
     for offset_x in -scope_radius..=scope_radius {
@@ -434,7 +456,7 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
                     .wrapping_add(1) as i32;
                 let damage = minimum.wrapping_add(game.skill_random_below(span)).max(0);
                 let attack = AttackInformation {
-                    skill_id: ENERGY_BOLT_SKILL_ID,
+                    skill_id: spec.skill_id,
                     skill_level: skill_level as u8,
                     attacker_type: MONSTER_TYPE,
                     attacker_id: monster_id,
@@ -489,11 +511,12 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет owner, путь и текущий такт многоцелевого полёта")]
-pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
+pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     target_identity: ShapeIdentity,
+    spec: PathProjectileSpec,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
@@ -512,7 +535,7 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.base_attack_cast(),
-                monster.energy_bolt_progress().cloned(),
+                monster.path_projectile_progress().cloned(),
                 monster.last_base_attack_ms(),
             ))
         })
@@ -527,7 +550,7 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
         Some((target.shape.get_tile_x().ok()?, target.shape.get_tile_y().ok()?))
     });
     let Some(destination) = live_destination
-        .or_else(|| progress.as_ref().map(EnergyBoltProgress::destination))
+        .or_else(|| progress.as_ref().map(PathProjectileProgress::destination))
     else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
@@ -558,13 +581,8 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
         let direction = get_line_direction(source_x, source_y, destination.0, destination.1);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().shape_mut().set_direction(direction);
-            monster.begin_base_attack_cast(
-                target_identity,
-                ENERGY_BOLT_SKILL_ID,
-                skill_level,
-                now_ms,
-            );
-            monster.set_energy_bolt_progress(EnergyBoltProgress::new(
+            monster.begin_base_attack_cast(target_identity, spec.skill_id, skill_level, now_ms);
+            monster.set_path_projectile_progress(PathProjectileProgress::new(
                 destination.0,
                 destination.1,
             ));
@@ -573,12 +591,12 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
             .find_monster_by_id(monster_id)
             .map(|monster| monster.move_shape().shape())
             .unwrap_or(&source);
-        send_start(game, region, source, skill_level);
+        send_start(game, region, source, spec.skill_id, skill_level);
         return true;
     }
 
-    let cast = cast.expect("выполнение энергетического снаряда проверено выше");
-    if cast.dispatch().skill_id != ENERGY_BOLT_SKILL_ID {
+    let cast = cast.expect("выполнение пошагового снаряда проверено выше");
+    if cast.dispatch().skill_id != spec.skill_id {
         return false;
     }
     let Some(mut progress) = progress else { return true };
@@ -609,13 +627,14 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
             game,
             region,
             &source,
+            spec.skill_id,
             skill_level,
             target.as_ref().map(|_| target_identity),
             destination,
             progress.missile_flying_time_ms,
         );
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.set_energy_bolt_progress(progress.clone());
+            monster.set_path_projectile_progress(progress.clone());
             let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
         }
     }
@@ -627,7 +646,7 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
         return true;
     }
     if progress.current_position >= progress.path.len() {
-        send_end(game, region, &source, skill_level, &progress);
+        send_end(game, region, &source, spec.skill_id, skill_level, &progress);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
@@ -649,6 +668,7 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
                 runtime,
                 now_ms,
                 monster_id,
+                spec,
                 skill_level,
                 properties,
                 &property,
@@ -659,23 +679,49 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
                 &mut progress,
                 deaths,
             ) {
-                send_end(game, region, &source, skill_level, &progress);
+                send_end(game, region, &source, spec.skill_id, skill_level, &progress);
                 progress.finish_after_collision();
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.set_energy_bolt_progress(progress);
+                    monster.set_path_projectile_progress(progress);
                 }
                 return true;
             }
         }
         BLOCK_UNFLY => {
-            send_end(game, region, &source, skill_level, &progress);
+            send_end(game, region, &source, spec.skill_id, skill_level, &progress);
             progress.current_position = progress.path.len();
         }
         _ => {}
     }
     progress.advance();
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.set_energy_bolt_progress(progress);
+        monster.set_path_projectile_progress(progress);
     }
     true
+}
+
+#[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
+pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    now_ms: u32,
+    runtime: &mut Runtime,
+    deaths: &mut Vec<MonsterAttackDeath>,
+) -> bool {
+    execute_owned_path_projectile(
+        game,
+        region,
+        monster_id,
+        target_identity,
+        PathProjectileSpec::new(ENERGY_BOLT_SKILL_ID, 1),
+        skill_level,
+        properties,
+        now_ms,
+        runtime,
+        deaths,
+    )
 }

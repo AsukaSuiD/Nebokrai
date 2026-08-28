@@ -160,6 +160,7 @@ pub(crate) mod appserver {
         pub(crate) mod yunshenglightning;
         pub(crate) mod yufa;
         pub(crate) mod yufastate;
+        pub(crate) mod zombieclaw;
     }
     pub(crate) mod states {
         pub(crate) mod attackpower;
