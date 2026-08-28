@@ -7,18 +7,19 @@
 //! преступника. Поиск игроков выполняется раньше поиска питомцев, а игрок
 //! побеждает при равном итоговом расстоянии.
 
-use super::vilcouguardwithsword::{CountryGuardTarget, consider_country_guard_target};
+use super::guardtarget::GuardDistanceTarget;
+use super::vilcouguardwithsword::consider_country_guard_target;
 
 pub(crate) fn consider_nation_country_guard_player(
-    selected: Option<CountryGuardTarget>,
-    candidate: CountryGuardTarget,
+    selected: Option<GuardDistanceTarget>,
+    candidate: GuardDistanceTarget,
     guard_range: i32,
     minimum_skill_distance: i32,
     region_country: u8,
     guard_country: u32,
     player_country: u8,
     player_is_badman: bool,
-) -> Option<CountryGuardTarget> {
+) -> Option<GuardDistanceTarget> {
     if (region_country != 0 && player_country == region_country)
         || (!player_is_badman && u32::from(player_country) == guard_country)
     {

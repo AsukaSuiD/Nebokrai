@@ -6,6 +6,8 @@ pub(crate) mod appserver {
         pub(crate) mod baseai;
         pub(crate) mod bossblue;
         pub(crate) mod bossfiend;
+        pub(crate) mod cityguardwithbow;
+        pub(crate) mod cityguardwithsword;
         pub(crate) mod fixedpositionarcher;
         pub(crate) mod gladiator;
         pub(crate) mod godsbattlemonster;
@@ -14,6 +16,7 @@ pub(crate) mod appserver {
         pub(crate) mod guardwithsword;
         pub(crate) mod guardcountry;
         pub(crate) mod guardcountry2;
+        pub(crate) mod guardtarget;
         pub(crate) mod lord;
         pub(crate) mod monsterai;
         pub(crate) mod nationcouguardwithsword;

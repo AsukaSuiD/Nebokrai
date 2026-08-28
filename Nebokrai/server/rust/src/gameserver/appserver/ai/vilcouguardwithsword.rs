@@ -29,7 +29,10 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
-use crate::gameserver::appserver::shape::{ShapeAreaCoordinates, ShapeIdentity, ShapeView};
+use super::guardtarget::{
+    GuardDistanceTarget, consider_guard_distance_target, select_guard_target_groups,
+};
+use crate::gameserver::appserver::shape::ShapeView;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::skills::baseattack::real_distance;
@@ -37,67 +40,26 @@ use crate::gameserver::gameserver::game::CGame;
 
 const PLAYER_TYPE: i32 = 400;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CountryGuardState {
-    station: Option<ShapeAreaCoordinates>,
-}
-impl CountryGuardState {
-    pub(crate) fn record_station(&mut self, owner: ShapeView) {
-        self.station.get_or_insert(ShapeAreaCoordinates {
-            x: owner.tile_x,
-            y: owner.tile_y,
-        });
-    }
-
-    pub(crate) fn left_chase_range(&self, owner: ShapeView, chase_range: i32) -> bool {
-        self.station.is_some_and(|station| {
-            real_distance(owner.tile_x, owner.tile_y, station.x, station.y) > chase_range
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CountryGuardTarget {
-    pub(crate) identity: ShapeIdentity,
-    pub(crate) distance: i32,
-}
-
 /// Сохраняет исходное правило выбора внутри отдельного списка целей: сначала
 /// ищется ближайняя цель не ближе минимальной дистанции навыка, а если все
 /// цели ближе неё, остаётся последняя запись списка.
 pub(crate) fn consider_country_guard_target(
-    selected: Option<CountryGuardTarget>,
-    candidate: CountryGuardTarget,
+    selected: Option<GuardDistanceTarget>,
+    candidate: GuardDistanceTarget,
     guard_range: i32,
     minimum_skill_distance: i32,
-) -> Option<CountryGuardTarget> {
-    if candidate.distance > guard_range {
-        return selected;
-    }
-    let Some(current) = selected else {
-        return Some(candidate);
-    };
-    if current.distance <= candidate.distance {
-        if current.distance < minimum_skill_distance {
-            Some(candidate)
-        } else {
-            Some(current)
-        }
-    } else if candidate.distance < minimum_skill_distance {
-        Some(current)
-    } else {
-        Some(candidate)
-    }
+) -> Option<GuardDistanceTarget> {
+    consider_guard_distance_target(selected, candidate, guard_range, minimum_skill_distance)
 }
 
 pub(crate) fn consider_village_country_guard_player(
-    selected: Option<CountryGuardTarget>,
-    candidate: CountryGuardTarget,
+    selected: Option<GuardDistanceTarget>,
+    candidate: GuardDistanceTarget,
     guard_range: i32,
     minimum_skill_distance: i32,
     region_country: u8,
     player_country: u8,
-) -> Option<CountryGuardTarget> {
+) -> Option<GuardDistanceTarget> {
     if region_country != 0 && player_country == region_country {
         return selected;
     }
@@ -110,13 +72,13 @@ pub(crate) fn consider_village_country_guard_player(
 }
 
 pub(crate) fn consider_village_country_guard_pet(
-    selected: Option<CountryGuardTarget>,
-    candidate: CountryGuardTarget,
+    selected: Option<GuardDistanceTarget>,
+    candidate: GuardDistanceTarget,
     guard_range: i32,
     minimum_skill_distance: i32,
     region_country: u8,
     live_master_country: Option<u8>,
-) -> Option<CountryGuardTarget> {
+) -> Option<GuardDistanceTarget> {
     if region_country != 0 && live_master_country == Some(region_country) {
         return selected;
     }
@@ -131,14 +93,10 @@ pub(crate) fn consider_village_country_guard_pet(
 /// Сводит отдельные результаты поиска игроков и питомцев. Первый список
 /// побеждает при равной дистанции.
 pub(crate) fn select_country_guard_target(
-    player: Option<CountryGuardTarget>,
-    pet: Option<CountryGuardTarget>,
-) -> Option<CountryGuardTarget> {
-    match (player, pet) {
-        (Some(player), Some(pet)) if pet.distance < player.distance => Some(pet),
-        (Some(player), _) => Some(player),
-        (None, pet) => pet,
-    }
+    player: Option<GuardDistanceTarget>,
+    pet: Option<GuardDistanceTarget>,
+) -> Option<GuardDistanceTarget> {
+    select_guard_target_groups(player, pet)
 }
 
 pub(crate) fn select_village_country_guard_enemy(
@@ -148,7 +106,7 @@ pub(crate) fn select_village_country_guard_enemy(
     area_index: usize,
     guard_range: i32,
     minimum_skill_distance: i32,
-) -> Option<CountryGuardTarget> {
+) -> Option<GuardDistanceTarget> {
     let mut selected_player = None;
     for player_id in region.player_ids_around_area(area_index) {
         let Some(player) = game.find_player(player_id) else {
@@ -162,7 +120,7 @@ pub(crate) fn select_village_country_guard_enemy(
         };
         selected_player = consider_village_country_guard_player(
             selected_player,
-            CountryGuardTarget {
+            GuardDistanceTarget {
                 identity: candidate.identity,
                 distance: real_distance(
                     owner.tile_x,
@@ -195,7 +153,7 @@ pub(crate) fn select_village_country_guard_enemy(
             .flatten();
         selected_pet = consider_village_country_guard_pet(
             selected_pet,
-            CountryGuardTarget {
+            GuardDistanceTarget {
                 identity: candidate.identity,
                 distance: real_distance(
                     owner.tile_x,

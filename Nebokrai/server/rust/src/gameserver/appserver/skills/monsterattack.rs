@@ -10,6 +10,7 @@ use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
 };
 use super::knockoutstate::finish_blind_states_on_defense;
+use crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt;
 use crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt;
 use crate::gameserver::appserver::ai::smartgladiator::apply_monster_hurt_response;
 use crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt;
@@ -402,6 +403,12 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 // изменяемого заимствования цели.
             } else if target_monster_property
                 .as_ref()
+                .is_some_and(|property| property.ai == 11)
+            {
+                // Поиск AI11 читает владельца города и соседние категории
+                // после освобождения изменяемого заимствования цели.
+            } else if target_monster_property
+                .as_ref()
                 .is_some_and(|property| property.ai == 1)
             {
                 monster.when_passive_gladiator_hurted_by(
@@ -447,6 +454,15 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         && let Some(property) = target_monster_property.as_ref()
     {
         retarget_village_bow_guard_after_hurt(game, region, target.id, property, now_ms);
+    }
+    if current_health != 0
+        && !target_tamed
+        && target_monster_property
+            .as_ref()
+            .is_some_and(|property| property.ai == 11)
+        && let Some(property) = target_monster_property.as_ref()
+    {
+        retarget_city_bow_guard_after_hurt(game, region, target.id, property, now_ms);
     }
     if current_health != 0
         && !target_tamed

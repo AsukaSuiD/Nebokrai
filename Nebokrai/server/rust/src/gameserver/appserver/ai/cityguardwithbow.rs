@@ -1,6 +1,11 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутая часть городского охранника с луком (AI11).
+//!
+//! Точная пара gameserver.exe + GameServer.pdb и исходный владелец
+//! appserver/ai/cityguardwithbow.cpp подтверждают общий городской поиск игроков
+//! и питомцев по владельцу фракции и союза, преимущество игрока при равной
+//! дистанции и повторный поиск после урона только вне боя. Точные очереди
+//! OnSchedule/OnFighting/OnIdle и не достигнутый из OnSearch поиск повозок
+//! сохранены как RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -17,20 +22,6 @@
 // RVA: 0x0020B890
 // ADDRESS: 0060b890
 // PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::CCityGuardWithBow
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:13
-// RVA: 0x0020D910
-// ADDRESS: 0060d910
-// PROTOTYPE: undefined __thiscall CCityGuardWithBow(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -65,62 +56,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CCityGuardWithBow::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:135
-// RVA: 0x0020DA90
-// ADDRESS: 0060da90
-// PROTOTYPE: void __thiscall WhenBeenHurted(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::OnSearchEnemy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:428
-// RVA: 0x0020DB10
-// ADDRESS: 0060db10
-// PROTOTYPE: int __thiscall OnSearchEnemy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::SearchEnemyGuildMember
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:201
-// RVA: 0x0020DB90
-// ADDRESS: 0060db90
-// PROTOTYPE: CMoveShape * __thiscall SearchEnemyGuildMember(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::SearchEnemyGuildPet
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:272
-// RVA: 0x0020DD50
-// ADDRESS: 0060dd50
-// PROTOTYPE: CMoveShape * __thiscall SearchEnemyGuildPet(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CCityGuardWithBow::SearchEnemyGuildCarriage
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -136,3 +71,67 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+use super::cityguardwithsword::select_city_guard_enemy;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::gameserver::game::CGame;
+use crate::setup::monsterlist::MonsterProperties;
+
+/// `WhenBeenHurted` AI11 не принимает атакующего напрямую: вне боя он заново
+/// выполняет общий городской поиск игроков и питомцев текущим навыком.
+pub(crate) fn retarget_city_bow_guard_after_hurt(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    now_ms: u32,
+) {
+    let Some((owner, area_index, current_skill_id, was_fighting)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            Some((
+                monster.shape_view(property)?,
+                monster.move_shape().shape().area_index(),
+                monster.move_shape().current_skill_id(),
+                monster.ai_target().is_some(),
+            ))
+        })
+    else {
+        return;
+    };
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.when_been_hurted(now_ms);
+    }
+    if was_fighting {
+        return;
+    }
+    let Some((area_index, current_skill_id)) = area_index.zip(current_skill_id) else {
+        return;
+    };
+    let Some(skill) = property
+        .skills
+        .iter()
+        .filter(|skill| u32::from(skill.id) == current_skill_id)
+        .max_by_key(|skill| skill.level)
+    else {
+        return;
+    };
+    let Some(skill_properties) =
+        game.skill_base_properties(current_skill_id, i32::from(skill.level))
+    else {
+        return;
+    };
+    let selected = select_city_guard_enemy(
+        game,
+        region,
+        owner,
+        area_index,
+        property.guard_range as i32,
+        skill_properties.query_property(5_004) as i32,
+    );
+    if let (Some(selected), Some(monster)) =
+        (selected, region.find_monster_by_id_mut(monster_id))
+    {
+        monster.set_ai_target(selected.identity);
+    }
+}

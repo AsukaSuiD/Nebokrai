@@ -36723,6 +36723,9 @@ impl CGame {
                     } else if monster_property.ai == 16 {
                         // Поиск AI16 выполняется после освобождения изменяемого
                         // заимствования монстра.
+                    } else if monster_property.ai == 11 {
+                        // Поиск AI11 выполняется после освобождения изменяемого
+                        // заимствования монстра.
                     } else if matches!(monster_property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -36758,6 +36761,19 @@ impl CGame {
                     target_id,
                     &monster_property,
                     player_id,
+                    now_ms,
+                );
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && monster_property.ai == 11
+            {
+                crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &monster_property,
                     now_ms,
                 );
             }
@@ -40747,6 +40763,9 @@ impl CGame {
                     } else if property.ai == 16 {
                         // Поиск AI16 выполняется после освобождения изменяемого
                         // заимствования монстра.
+                    } else if property.ai == 11 {
+                        // Поиск AI11 выполняется после освобождения изменяемого
+                        // заимствования монстра.
                     } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -40787,6 +40806,19 @@ impl CGame {
                     target_id,
                     &property,
                     master.master_id,
+                    now_ms,
+                );
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && property.ai == 11
+            {
+                crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_after_hurt(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &property,
                     now_ms,
                 );
             }

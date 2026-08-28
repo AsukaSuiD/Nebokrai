@@ -102,6 +102,9 @@ use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::archer::{ArcherTarget, consider_archer_target};
 use crate::gameserver::appserver::ai::bossblue::select_boss_blue_attack_skill;
 use crate::gameserver::appserver::ai::bossfiend::select_boss_fiend_attack_skill;
+use crate::gameserver::appserver::ai::cityguardwithsword::{
+    CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
+};
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
     FixedArcherTarget, consider_fixed_archer_target,
 };
@@ -112,6 +115,7 @@ use crate::gameserver::appserver::ai::godsbattlemonster::consider_gods_battle_ta
 use crate::gameserver::appserver::ai::godsbattleguardwithsword::consider_gods_battle_guard_target;
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::guardcountry::select_country_guard_target;
+use crate::gameserver::appserver::ai::guardtarget::GuardDistanceTarget;
 use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, one_step_move_delay_ms, select_attack_skill,
@@ -128,7 +132,7 @@ use crate::gameserver::appserver::ai::stupidarcher::{
 };
 use crate::gameserver::appserver::ai::warattackmonster::consider_country_war_target;
 use crate::gameserver::appserver::ai::vilcouguardwithsword::{
-    CountryGuardTarget, consider_village_country_guard_pet,
+    consider_village_country_guard_pet,
     select_country_guard_target as select_village_country_guard_target,
     select_village_country_guard_enemy,
 };
@@ -307,11 +311,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if !owns_complete_skill_selection(&property.skills, property.ai) {
         return false;
     }
-    if matches!(property.ai, 15 | 19) {
+    if matches!(property.ai, 10 | 15 | 19) {
         let left_chase_range = region
             .find_monster_by_id_mut(monster_id)
             .and_then(|monster| {
-                let state = monster.country_guard_ai_mut()?;
+                let state = monster.guard_station_ai_mut()?;
                 state.record_station(monster_view);
                 Some(
                     target.is_some()
@@ -331,7 +335,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && !tamed
         && (matches!(
             property.ai,
-            0 | 3 | 4 | 5 | 6 | 8 | 9 | 13 | 14 | 15 | 16 | 19 | 20 | 23
+            0 | 3 | 4 | 5 | 6 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 16 | 19 | 20 | 23
         )
             || (property.ai == 2
                 && region
@@ -1149,7 +1153,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             };
             selected_player = consider_nation_country_guard_player(
                 selected_player,
-                CountryGuardTarget {
+                GuardDistanceTarget {
                     identity: candidate.identity,
                     distance: real_distance(
                         monster_view.tile_x,
@@ -1184,7 +1188,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 .flatten();
             selected_pet = consider_village_country_guard_pet(
                 selected_pet,
-                CountryGuardTarget {
+                GuardDistanceTarget {
                     identity: candidate.identity,
                     distance: real_distance(
                         monster_view.tile_x,
@@ -1202,6 +1206,29 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         if let Some(selected) =
             select_village_country_guard_target(selected_player, selected_pet)
         {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected.identity);
+            }
+            target = Some(selected.identity);
+        }
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && matches!(property.ai, 10 | 11)
+        && let Some(area_index) = area_index
+    {
+        let minimum_skill_distance = game
+            .skill_base_properties(skill_id, i32::from(skill.level))
+            .map_or(0, |properties| properties.query_property(5_004) as i32);
+        if let Some(selected) = select_city_guard_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            property.guard_range as i32,
+            minimum_skill_distance,
+        ) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.set_ai_target(selected.identity);
             }
@@ -1347,7 +1374,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    let Some(skill_properties) = game.skill_base_properties(skill_id, i32::from(skill.level))
+    let Some(skill_properties) = game
+        .skill_base_properties(skill_id, i32::from(skill.level))
+        .cloned()
     else {
         return false;
     };
@@ -1801,6 +1830,24 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             return true;
         }
+    }
+
+    if property.ai == 10
+        && cast.is_none()
+        && trace_city_sword_target(
+            game,
+            region,
+            monster_id,
+            monster_view,
+            target_x,
+            target_y,
+            skill_properties.query_property(5_004) as i32,
+            maximum_distance as i32,
+            property.chase_range as i32,
+            runtime,
+        ) == CitySwordTraceOutcome::Handled
+    {
+        return true;
     }
 
     if let Some(cast) = cast {
