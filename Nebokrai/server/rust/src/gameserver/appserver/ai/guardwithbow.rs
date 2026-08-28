@@ -4,28 +4,15 @@
 //! подтверждает приоритет преступных игроков перед неохранными монстрами.
 //! Проверка политики атаки остаётся у GameServer, а необычный выбор по
 //! минимальной дистанции навыка разделяется с неподвижным лучником. Немедленная
-//! реакция на урон вызывает тот же owner до продолжения обработки попадания.
-//! `OnIdle` остаётся RAW до подключения его отдельного контракта видимости.
+//! реакция на урон вызывает того же владельца до продолжения обработки попадания.
+//! Общий сон включается только при отсутствии подключённых игроков во всех
+//! девяти областях.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\guardwithbow.cpp
-
-// ============================================================================
-// FUNCTION: CGuardWithBow::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\guardwithbow.cpp:93
-// RVA: 0x0020EE60
-// ADDRESS: 0060ee60
-// PROTOTYPE: void __thiscall OnIdle(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // COMPONENT_VARIANT_END: GameServer
 

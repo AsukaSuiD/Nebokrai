@@ -296,7 +296,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 5 | 6)
+        && matches!(property.ai, 0 | 3 | 4 | 5 | 6 | 8)
         && let Some(area_index) = area_index
         && region.player_ids_around_area(area_index).is_empty()
     {
