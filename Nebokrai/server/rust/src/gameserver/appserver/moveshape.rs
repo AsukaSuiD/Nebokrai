@@ -159,6 +159,7 @@ pub(crate) struct MoveShapeSkill {
     level: i32,
     skill_type: u32,
     name: Vec<u8>,
+    item_position: i32,
 }
 
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
@@ -408,6 +409,14 @@ impl MoveShapeSkill {
 
     pub(crate) fn name(&self) -> &[u8] {
         &self.name
+    }
+
+    pub(crate) const fn item_position(&self) -> i32 {
+        self.item_position
+    }
+
+    pub(crate) const fn set_item_position(&mut self, position: i32) {
+        self.item_position = position;
     }
 }
 
@@ -2775,6 +2784,12 @@ impl CMoveShape {
         self.skills.get(&skill_id)
     }
 
+    pub(crate) fn set_item_skill_position(&mut self, skill_id: u32, position: i32) -> bool {
+        let Some(skill) = self.skills.get_mut(&skill_id) else { return false };
+        skill.set_item_position(position);
+        true
+    }
+
     /// Достигнутый ID-view `GetCurrentSkill`: concrete `CSkill` execution и
     /// его `End` остаются у ещё не перенесённого skill owner-а, но caller-ы
     /// могут точно отличить запретный active skill `0xD4`.
@@ -2845,6 +2860,7 @@ impl CMoveShape {
                 level,
                 skill_type,
                 name: properties.skill_name().to_vec(),
+                item_position: -1,
             },
         );
         true

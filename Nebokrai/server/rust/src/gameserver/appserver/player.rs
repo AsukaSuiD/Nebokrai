@@ -1812,6 +1812,7 @@ pub(crate) struct CPlayer {
     combat_properties: PlayerCombatProperties,
     combat_property_wire: [u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
     expendable_effects: BTreeMap<i32, PlayerExpendableEffect>,
+    last_skill_item_use_ms: BTreeMap<u32, u32>,
     ci_qing_open: bool,
     ci_qing_list: BTreeSet<u32>,
     ci_qing_add_values: BTreeMap<u32, u32>,
@@ -2164,6 +2165,7 @@ impl CPlayer {
             combat_properties: PlayerCombatProperties::default(),
             combat_property_wire: [0; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
             expendable_effects: BTreeMap::new(),
+            last_skill_item_use_ms: BTreeMap::new(),
             ci_qing_open: false,
             ci_qing_list: BTreeSet::new(),
             ci_qing_add_values: BTreeMap::new(),
@@ -5896,6 +5898,37 @@ impl CPlayer {
     ) -> bool {
         let _deleted = self.move_shape.delete_skill(skill_id, factory);
         self.move_shape.add_skill(skill_id, level, factory)
+    }
+
+    pub(crate) fn set_item_skill_position(&mut self, skill_id: u32, position: i32) -> bool {
+        self.move_shape.set_item_skill_position(skill_id, position)
+    }
+
+    pub(crate) fn item_skill_position(&self, skill_id: u32) -> Option<i32> {
+        self.move_shape.skill(skill_id).map(MoveShapeSkill::item_position)
+    }
+
+    pub(crate) fn last_skill_item_use_ms(&self, item_index: u32) -> u32 {
+        self.last_skill_item_use_ms.get(&item_index).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn mark_skill_item_used(&mut self, item_index: u32, now_ms: u32) {
+        self.last_skill_item_use_ms.insert(item_index, now_ms);
+    }
+
+    /// `DeleteSkillItem` работает только с сохранённой ячейкой и не ищет
+    /// подходящий stack в остальных ячейках пакета.
+    pub(crate) fn consume_skill_item_at(
+        &mut self,
+        position: u32,
+        item_index: u32,
+        amount: u32,
+    ) -> Option<CiQingPacketConsumption> {
+        let goods = self.packet.get_goods(position)?;
+        if goods.base_properties_index() != item_index || goods.amount() < amount || amount == 0 {
+            return None;
+        }
+        self.remove_packet_goods_by_id(goods.identity().ex_id, amount)
     }
 
     /// Owned tail четырёх `tagExpendableEffect` case-ов. Повторное применение

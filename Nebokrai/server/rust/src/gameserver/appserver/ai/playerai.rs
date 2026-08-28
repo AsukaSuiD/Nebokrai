@@ -144,6 +144,8 @@ pub(crate) struct CPlayerAI {
     fire_bolt_last_used_ms: u32,
     fire_ball: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_ball_last_used_ms: u32,
+    item_skill_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    item_skill_2_last_used_ms: u32,
     chain_lightning: Option<ChainLightningExecutionState>,
     chain_lightning_last_used_ms: u32,
     thunder_blow: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -344,6 +346,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.fire_bolt = None;
         self.fire_ball = None;
+        self.item_skill_2 = None;
         self.chain_lightning = None;
         self.thunder_blow = None;
         self.thunder_slash = None;
@@ -536,6 +539,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.fire_ball.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного шара завершено");
+        }
+        if let Some(mut execution) = self.item_skill_2.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового огня завершено");
         }
         if let Some(mut execution) = self.chain_lightning.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -783,6 +790,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.fire_bolt = None;
         self.fire_ball = None;
+        self.item_skill_2 = None;
         self.chain_lightning = None;
         self.thunder_blow = None;
         self.thunder_slash = None;
@@ -1068,6 +1076,24 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_fire_ball_used(&mut self, now_ms: u32) {
         self.fire_ball_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn item_skill_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.item_skill_2
+    }
+
+    pub(crate) const fn begin_item_skill_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) {
+        self.item_skill_2 = Some(state);
+    }
+
+    pub(crate) fn item_skill_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.item_skill_2.as_mut()
+    }
+
+    pub(crate) const fn item_skill_2_last_used_ms(&self) -> u32 { self.item_skill_2_last_used_ms }
+
+    pub(crate) const fn mark_item_skill_2_used(&mut self, now_ms: u32) {
+        self.item_skill_2_last_used_ms = now_ms;
     }
 
     pub(crate) const fn chain_lightning(&self) -> Option<ChainLightningExecutionState> {

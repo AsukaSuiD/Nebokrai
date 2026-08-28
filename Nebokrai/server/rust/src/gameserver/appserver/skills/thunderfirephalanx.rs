@@ -1,98 +1,53 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Движущийся громовой огонь `CThunderFirePhalanx` (`0x322`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/thunderfirephalanx.cpp`. Форма проходит исходный путь,
+//! атакует маской 1×1 только в клетках с блоком `3` и прекращается после
+//! первой клетки с применённой атакой. Формула сохраняет два вызова MSVCRT RNG.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunderfirephalanx.cpp
+use super::itemskill2::ITEM_SKILL_2_ID;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CThunderFirePhalanx::~CThunderFirePhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunderfirephalanx.cpp:49
-// RVA: 0x001E0F90
-// ADDRESS: 005e0f90
-// PROTOTYPE: void __thiscall ~CThunderFirePhalanx(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ThunderFirePhalanxTick { Pending, Active { force_move: Option<(i32,i32,u32)>, scan: Option<(i32,i32,u32)> }, Expired }
 
-// ============================================================================
-// FUNCTION: CThunderFirePhalanx::CThunderFirePhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunderfirephalanx.cpp:27
-// RVA: 0x001E11E0
-// ADDRESS: 005e11e0
-// PROTOTYPE: undefined __thiscall CThunderFirePhalanx(tagMasterInfo * param_1, ulong param_2, long param_3, long param_4, long param_5, long param_6, vector<CSkill::tagCell,std::allocator<CSkill::tagCell>_> * param_7, long param_8, long param_9, long param_10)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CThunderFirePhalanx {
+    shape:CShape, master:MasterInfo, started_at_ms:u32, lifetime_ms:u32, skill_level:i32,
+    minimum_attack:i32, maximum_attack:i32, element_modifier:i32, path:Vec<(i32,i32)>,
+    speed_ms:u32, soul_count:i32, soul_variable:u32, current_position:usize, force_moved:bool,
+}
 
-// ============================================================================
-// FUNCTION: CThunderFirePhalanx::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunderfirephalanx.cpp:225
-// RVA: 0x001E1310
-// ADDRESS: 005e1310
-// PROTOTYPE: void __thiscall CalculateAttackPower(tagAttackInformation * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CThunderFirePhalanx {
+    #[allow(clippy::too_many_arguments, reason="поля буквально соответствуют конструктору EXE")]
+    pub(crate) fn new(id:i32,master:MasterInfo,started_at_ms:u32,lifetime_ms:u32,skill_level:i32,minimum_attack:i32,maximum_attack:i32,element_modifier:i32,path:Vec<(i32,i32)>,speed_ms:u32,soul_count:i32,soul_variable:u32)->Self{
+        let mut shape=CShape::with_constructor_defaults();shape.set_identity(ShapeIdentity{object_type:SUMMON_SHAPE_TYPE,id,ex_id:CGuid::GUID_INVALID});Self{shape,master,started_at_ms,lifetime_ms,skill_level,minimum_attack,maximum_attack,element_modifier,path,speed_ms,soul_count,soul_variable,current_position:0,force_moved:false}
+    }
+    pub(crate) const fn shape(&self)->&CShape{&self.shape} pub(crate) const fn shape_mut(&mut self)->&mut CShape{&mut self.shape} pub(crate) const fn master(&self)->MasterInfo{self.master}
+    pub(crate) fn finish(&mut self){self.shape.set_change_state(SHAPE_CHANGE_DELETE);}
+    pub(crate) fn tick(&mut self,now:u32)->ThunderFirePhalanxTick{
+        if self.started_at_ms.wrapping_add(self.lifetime_ms)<now||self.path.is_empty()||self.current_position>=self.path.len(){self.finish();return ThunderFirePhalanxTick::Expired;}
+        let force_move=if self.force_moved{None}else{self.force_moved=true;let &(x,y)=self.path.last().expect("путь непуст");Some((x,y,(self.path.len() as u32).wrapping_mul(self.speed_ms)))};
+        let scan=(self.started_at_ms.wrapping_add((self.current_position as u32).wrapping_mul(self.speed_ms))<=now).then(||{let (x,y)=self.path[self.current_position];self.current_position=self.current_position.wrapping_add(1);(x,y,now)});
+        if force_move.is_some()||scan.is_some(){ThunderFirePhalanxTick::Active{force_move,scan}}else{ThunderFirePhalanxTick::Pending}
+    }
+    pub(crate) fn encode_client_snapshot(&self,mut now:impl FnMut()->u32)->Option<Vec<u8>>{
+        let first=now();let remained=if self.started_at_ms.wrapping_add(self.lifetime_ms)<=first{0}else{self.lifetime_ms.wrapping_sub(now()).wrapping_add(self.started_at_ms)};let mut payload=Vec::new();{let mut w=LegacyWriter::new(&mut payload);w.write_i32(ITEM_SKILL_2_ID as i32);w.write_i32(self.skill_level);w.write_i32(self.master.master_type);w.write_i32(self.master.master_id);w.write_u32(remained);}self.shape.encode_to_byte_array(&mut payload,true).then_some(payload)
+    }
+}
 
-// ============================================================================
-// FUNCTION: CThunderFirePhalanx::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunderfirephalanx.cpp:202
-// RVA: 0x001E1570
-// ADDRESS: 005e1570
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CThunderFirePhalanx::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunderfirephalanx.cpp:123
-// RVA: 0x001E1670
-// ADDRESS: 005e1670
-// PROTOTYPE: int __thiscall Attack(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CThunderFirePhalanx::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunderfirephalanx.cpp:69
-// RVA: 0x001E1970
-// ADDRESS: 005e1970
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn calculate_owned_thunder_fire_attack(game:&mut CGame,p:&CThunderFirePhalanx,target_level:u8)->Option<(AttackInformation,PlayerCombatProperties,u8,u8)>{
+    let player=game.find_player(p.master.master_id)?;let mut combat=player.combat_properties();let occupation=player.occupation();let attacker_level=player.level();let weapon_level=player.equipment().get_goods(2).map_or(0,|goods|goods.addon_property_value(game.goods_factory(),GAP_WEAPON_DAMAGE_LEVEL,1));let(divisor,minimum)=game.globe_setup().weapon_damage_factors();let delta=weapon_level.wrapping_sub(i32::from(target_level)).max(0);let factor=if divisor==0.0{1.0}else{(delta as f32/divisor).min(1.0).max(minimum)};
+    let width_delta=p.maximum_attack.wrapping_sub(p.minimum_attack);let width=if width_delta<0{width_delta.wrapping_neg()}else{width_delta}.wrapping_add(1);let mut damage=p.element_modifier.wrapping_mul(combat.element_modify).wrapping_div(100).wrapping_add(combat.add_element_attack as i32).wrapping_add(game.skill_random_below(width)).wrapping_add(p.minimum_attack);if p.soul_count!=0&&p.soul_variable!=0{damage=((p.soul_variable as f32*p.soul_count as f32*0.01+1.0)*damage as f32).round_ties_even() as i32;}damage=damage.max(0);
+    let mut attack=AttackInformation{skill_id:ITEM_SKILL_2_ID,skill_level:p.skill_level as u8,attacker_type:p.master.master_type,attacker_id:p.master.master_id,attacker_team_id:p.master.master_team_id,attacker_faction_id:p.master.master_guild_id,attacker_union_id:p.master.master_union_id,hit_modifier:100,damage_factor:factor,damage_modifier:0,critical:false,blast_attack:false,full_miss:0,damages:vec![AttackPower{kind:AttackPowerType::Element,hp_damage:damage,mp_damage:0}]};
+    if game.skill_random_below(100)<i32::from(combat.cch){attack.critical=true;let rate=combat.critical_rate();for power in &mut attack.damages{power.hp_damage=(power.hp_damage as f32*rate).round_ties_even() as i32;}}
+    let[ba,bd,eba,ebd,fm]=game.globe_setup().base_combat_scales();if combat.blast_attack_scale()<1.0{combat.blast_attack_scale_bits=ba.max(1.0).to_bits();}if combat.blast_defense_scale()<0.01{combat.blast_defense_scale_bits=bd.max(0.01).to_bits();}if combat.element_blast_attack_scale()<1.0{combat.element_blast_attack_scale_bits=eba.max(1.0).to_bits();}if combat.element_blast_defense_scale()<0.01{combat.element_blast_defense_scale_bits=ebd.max(0.01).to_bits();}if combat.full_miss_scale()<0.01{combat.full_miss_scale_bits=fm.max(0.01).to_bits();}Some((attack,combat,occupation,attacker_level))
+}

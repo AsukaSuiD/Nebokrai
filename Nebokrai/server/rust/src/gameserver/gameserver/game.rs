@@ -493,6 +493,7 @@ mod godpunishment;
 mod godthunder;
 mod chaossphere;
 mod fireball;
+mod thunderfire;
 mod lightingarrow;
 mod meteorarrow;
 mod rainarrow;
@@ -839,6 +840,8 @@ use crate::gameserver::appserver::skills::fireball::{
 use crate::gameserver::appserver::skills::fireballphalanx::{
     calculate_owned_fire_ball_attack, FireBallPhalanxTick,
 };
+use crate::gameserver::appserver::skills::itemskill2::{execute_player_item_skill_2, is_item_skill_2_dispatch};
+use crate::gameserver::appserver::skills::thunderfirephalanx::{calculate_owned_thunder_fire_attack, ThunderFirePhalanxTick};
 use crate::gameserver::appserver::skills::thunderblow::{
     execute_player_thunder_blow, is_thunder_blow_dispatch,
 };
@@ -25229,6 +25232,10 @@ impl CGame {
         &mut self.new_skill_monster_conf
     }
 
+    pub(crate) const fn new_skill_monster_conf(&self) -> &NewSkillMonsterConf {
+        &self.new_skill_monster_conf
+    }
+
     pub(crate) const fn goods_destroy_setup_mut(&mut self) -> &mut GoodsDestroySetup {
         &mut self.goods_destroy_setup
     }
@@ -37025,6 +37032,7 @@ impl CGame {
             };
             let concrete_fire_bolt = is_fire_bolt_target(dispatch);
             let concrete_fire_ball = is_fire_ball_dispatch(dispatch);
+            let concrete_item_skill_2 = is_item_skill_2_dispatch(dispatch);
             let concrete_chain_lightning = is_chain_lightning_dispatch(dispatch);
             let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
             let concrete_thunder_slash = is_thunder_slash_dispatch(dispatch);
@@ -37232,6 +37240,8 @@ impl CGame {
                 execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_ball {
                 execute_player_fire_ball(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_item_skill_2 {
+                execute_player_item_skill_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_chain_lightning {
                 execute_player_chain_lightning(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow {
@@ -40257,6 +40267,9 @@ impl CGame {
             SummonedSkillShape::FireBall(phalanx) => {
                 calculate_owned_fire_ball_attack(self, phalanx, target_level)
             }
+            SummonedSkillShape::ThunderFire(phalanx) => {
+                calculate_owned_thunder_fire_attack(self, phalanx, target_level)
+            }
             SummonedSkillShape::ChaosSphere(phalanx) => {
                 calculate_owned_chaos_sphere_attack(self, phalanx, target_level)
             }
@@ -40681,6 +40694,7 @@ impl CGame {
         };
         let mut chaos_tick = None;
         let mut fire_ball_tick = None;
+        let mut thunder_fire_tick = None;
         let mut lighting_arrow_tick = None;
         let mut meteor_arrow_tick = None;
         let mut rain_arrow_tick = None;
@@ -40745,6 +40759,10 @@ impl CGame {
                 }
                 SummonedSkillShape::FireBall(phalanx) => {
                     fire_ball_tick = Some(phalanx.tick(lifetime_now_ms));
+                    Some(None)
+                }
+                SummonedSkillShape::ThunderFire(phalanx) => {
+                    thunder_fire_tick = Some(phalanx.tick(lifetime_now_ms));
                     Some(None)
                 }
                 SummonedSkillShape::ChaosSphere(phalanx) => {
@@ -40981,6 +40999,34 @@ impl CGame {
                     if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
                         let _ = self.send_shape_exit_around(region, phalanx.shape());
                     }
+                }
+            }
+            return true;
+        }
+        if let (Some(thunder_fire_tick), SummonedSkillShape::ThunderFire(thunder_fire)) = (thunder_fire_tick, &phalanx) {
+            match thunder_fire_tick {
+                ThunderFirePhalanxTick::Pending => {}
+                ThunderFirePhalanxTick::Active { force_move, scan } => {
+                    if let Some((center_x, center_y, sampled_at_ms)) = scan
+                        && self.find_region(region_id).is_some_and(|owner| owner.base().block_at(center_x, center_y) == Some(3))
+                    {
+                        let mut applied = false;
+                        for (target, war_soul_hit) in self.thunder_fire_targets(region_id, thunder_fire, center_x, center_y) {
+                            applied |= match target.object_type {
+                                PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, war_soul_hit, runtime),
+                                MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
+                                _ => false,
+                            };
+                        }
+                        if applied && let Some(mut owner) = self.take_region_owner(region_id) {
+                            if let Some(SummonedSkillShape::ThunderFire(owner)) = owner.base_mut().find_skill_phalanx_mut(phalanx_id) { owner.finish(); }
+                            self.restore_region_owner(owner);
+                        }
+                    }
+                    if let Some((x, y, duration)) = force_move { let _ = self.force_move_thunder_fire(region_id, phalanx_id, x, y, duration); }
+                }
+                ThunderFirePhalanxTick::Expired => {
+                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) { let _ = self.send_shape_exit_around(region, phalanx.shape()); }
                 }
             }
             return true;

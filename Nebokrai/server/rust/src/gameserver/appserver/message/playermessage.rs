@@ -1019,6 +1019,12 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                     .find_player_mut(player_id)
                                     .expect("reuse-item player сохранён для skill replacement")
                                     .replace_item_skill(skill_id, skill_level, &skill_factory);
+                                if replaced {
+                                    let _ = game
+                                        .find_player_mut(player_id)
+                                        .expect("reuse-item player сохранён для позиции")
+                                        .set_item_skill_position(skill_id, i32::from(slot));
+                                }
                                 let result = replaced.then(|| {
                                     runtime.apply_player_item_runtime_effect(
                                         game,
