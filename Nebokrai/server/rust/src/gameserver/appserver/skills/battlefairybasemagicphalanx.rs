@@ -9,12 +9,14 @@
 //! рассчитанную атаку к независимому владельцу цели.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,6 +104,34 @@ impl CBattleFairyBaseMagicPhalanx {
         }
         BattleFairyPhalanxTick::Pending
     }
+}
+
+pub(crate) fn calculate_owned_battle_fairy_base_magic_attack(
+    game: &mut CGame,
+    phalanx: &CBattleFairyBaseMagicPhalanx,
+) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+    let master = phalanx.master();
+    if master.master_type != 400 || master.master_id == 0 {
+        return None;
+    }
+    let player = game.find_player(master.master_id)?;
+    let war_soul = player.war_soul_goods(game.goods_factory())?;
+    let combat = player.combat_properties();
+    let occupation = player.occupation();
+    let attacker_level = player.level();
+    let sprite = ((war_soul.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1) as f64)
+        * 0.0001)
+        .round_ties_even() as i32;
+    let combat_scales = game.globe_setup().base_combat_scales();
+    calculate_battle_fairy_base_magic_attack(
+        phalanx,
+        combat,
+        occupation,
+        attacker_level,
+        sprite,
+        combat_scales,
+        |maximum| game.skill_random_below(maximum),
+    )
 }
 
 #[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной формулы")]

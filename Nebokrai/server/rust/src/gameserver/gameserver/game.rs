@@ -758,19 +758,19 @@ use crate::gameserver::appserver::skills::archery::{
     execute_player_archery, ARCHERY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::archeryphalanx::{
-    calculate_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
+    calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
 };
 use crate::gameserver::appserver::skills::basemagic::{
     execute_player_base_magic, BASE_MAGIC_EFFECT_MESSAGE, BASE_MAGIC_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::basemagicphalanx::{
-    calculate_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
+    calculate_owned_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
 };
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     execute_battle_fairy_base_magic, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::{
-    calculate_battle_fairy_base_magic_attack, BattleFairyPhalanxTick,
+    calculate_owned_battle_fairy_base_magic_attack, BattleFairyPhalanxTick,
     CBattleFairyBaseMagicPhalanx,
 };
 use crate::gameserver::appserver::skills::battlefairyattribute::{
@@ -38976,103 +38976,6 @@ impl CGame {
         );
     }
 
-    fn calculate_base_magic_attack(
-        &mut self,
-        phalanx: &CBaseMagicPhalanx,
-        target_level: u8,
-    ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-        let master = phalanx.master();
-        let player = self.find_player(master.master_id)?;
-        let combat = player.combat_properties();
-        let occupation = player.occupation();
-        let attacker_level = player.level();
-        let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
-            goods.addon_property_value(&self.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
-        });
-        let weapon_damage_factors = self.globe_setup.weapon_damage_factors();
-        let critical_rate = self.globe_setup.critical_rate();
-        let combat_scales = self.globe_setup.base_combat_scales();
-        let mut random_below = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        calculate_base_magic_attack(
-            phalanx,
-            target_level,
-            combat,
-            occupation,
-            attacker_level,
-            weapon_level,
-            weapon_damage_factors,
-            critical_rate,
-            combat_scales,
-            &mut random_below,
-        )
-    }
-
-    fn calculate_battle_fairy_base_magic_attack(
-        &mut self,
-        phalanx: &CBattleFairyBaseMagicPhalanx,
-    ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-        let master = phalanx.master();
-        if master.master_type != PLAYER_TYPE || master.master_id == 0 {
-            return None;
-        }
-        let player = self.find_player(master.master_id)?;
-        let war_soul = player.war_soul_goods(&self.goods_factory)?;
-        let combat = player.combat_properties();
-        let occupation = player.occupation();
-        let attacker_level = player.level();
-        let sprite = ((war_soul
-            .addon_property_value(&self.goods_factory, GAP_BF_SPRITE, 1) as f64)
-            * 0.0001)
-            .round_ties_even() as i32;
-        let combat_scales = self.globe_setup.base_combat_scales();
-        let mut random_below = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        calculate_battle_fairy_base_magic_attack(
-            phalanx,
-            combat,
-            occupation,
-            attacker_level,
-            sprite,
-            combat_scales,
-            &mut random_below,
-        )
-    }
-
-    fn calculate_archery_attack(
-        &mut self,
-        phalanx: &CArcheryPhalanx,
-        target_level: u8,
-    ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-        let master = phalanx.master();
-        let player = self.find_player(master.master_id)?;
-        let properties = self
-            .skill_factory
-            .query_skill_base_properties(ARCHERY_SKILL_ID, phalanx.skill_level())?;
-        let combat = player.combat_properties();
-        let occupation = player.occupation();
-        let attacker_level = player.level();
-        let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
-            goods.addon_property_value(&self.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
-        });
-        let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-        let weapon_damage_factors = self.globe_setup.weapon_damage_factors();
-        let critical_rate = self.globe_setup.critical_rate();
-        let combat_scales = self.globe_setup.base_combat_scales();
-        let mut random_below = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        calculate_archery_attack(
-            phalanx,
-            target_level,
-            combat,
-            occupation,
-            attacker_level,
-            weapon_level,
-            hit_modifier,
-            weapon_damage_factors,
-            critical_rate,
-            combat_scales,
-            &mut random_below,
-        )
-    }
-
     fn calculate_summoned_skill_attack(
         &mut self,
         phalanx: &SummonedSkillShape,
@@ -39080,13 +38983,13 @@ impl CGame {
     ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
         match phalanx {
             SummonedSkillShape::Archery(phalanx) => {
-                self.calculate_archery_attack(phalanx, target_level)
+                calculate_owned_archery_attack(self, phalanx, target_level)
             }
             SummonedSkillShape::BaseMagic(phalanx) => {
-                self.calculate_base_magic_attack(phalanx, target_level)
+                calculate_owned_base_magic_attack(self, phalanx, target_level)
             }
             SummonedSkillShape::BattleFairyBaseMagic(phalanx) => {
-                self.calculate_battle_fairy_base_magic_attack(phalanx)
+                calculate_owned_battle_fairy_base_magic_attack(self, phalanx)
             }
             SummonedSkillShape::FatalBlow(phalanx) => {
                 self.calculate_fatal_blow_attack(phalanx)

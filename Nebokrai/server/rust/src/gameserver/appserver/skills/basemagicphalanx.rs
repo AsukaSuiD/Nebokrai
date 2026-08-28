@@ -10,6 +10,7 @@
 //! передаёт только снимки владельцев и применяет рассчитанную атаку к цели.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{
     CShape, SHAPE_CHANGE_DELETE, ShapeIdentity,
@@ -18,6 +19,7 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,6 +130,35 @@ impl CBaseMagicPhalanx {
         }
         BaseMagicPhalanxTick::Pending
     }
+}
+
+pub(crate) fn calculate_owned_base_magic_attack(
+    game: &mut CGame,
+    phalanx: &CBaseMagicPhalanx,
+    target_level: u8,
+) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+    let player = game.find_player(phalanx.master().master_id)?;
+    let combat = player.combat_properties();
+    let occupation = player.occupation();
+    let attacker_level = player.level();
+    let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
+        goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)
+    });
+    let weapon_damage_factors = game.globe_setup().weapon_damage_factors();
+    let critical_rate = game.globe_setup().critical_rate();
+    let combat_scales = game.globe_setup().base_combat_scales();
+    calculate_base_magic_attack(
+        phalanx,
+        target_level,
+        combat,
+        occupation,
+        attacker_level,
+        weapon_level,
+        weapon_damage_factors,
+        critical_rate,
+        combat_scales,
+        |maximum| game.skill_random_below(maximum),
+    )
 }
 
 #[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной формулы")]
