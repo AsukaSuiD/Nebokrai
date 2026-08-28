@@ -1,179 +1,54 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Воспламенение `CIgnition` (`0xF2`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/ignition.cpp`. Навык сохраняет необратимый расход MP до
+//! поздней проверки арбалета, выбирает один из двух коэффициентов по наличию
+//! `KeroseneState`, выполняет ровно два RNG-вызова и снимает горючую смесь
+//! только после реально допустимого `OnBeenAttacked`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.h
+use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER};
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kerosene::{kerosene_path_block, kerosene_target_facts};
+use super::kerosenestate::{send_kerosene_state_visual, KEROSENE_STATE_ID};
+use super::poisonmoth::{master_info, weapon_is_crossbow};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::nets::netserver::message::CMessage;
+use crate::public::tools::get_line_direction;
 
-// ============================================================================
-// FUNCTION: CIgnition::CIgnition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:28
-// RVA: 0x001447F0
-// ADDRESS: 005447f0
-// PROTOTYPE: undefined __thiscall CIgnition(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const IGNITION_SKILL_ID: u32 = 0xf2;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const PLAYER_TYPE: i32 = 400; const MONSTER_TYPE: i32 = 600;
+const USER_MP_LOSE: u32 = 2; const SECOND_TIME: u32 = 15_002; const THIRD_TIME: u32 = 15_003; const TARGET_DAMAGE_FACTOR: u32 = 20_003; const TARGET_DAMAGE_FACTOR_2: u32 = 20_021;
 
-// ============================================================================
-// FUNCTION: CIgnition::~CIgnition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:35
-// RVA: 0x00144820
-// ADDRESS: 00544820
-// PROTOTYPE: void __thiscall ~CIgnition(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+pub(crate) fn is_ignition_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Object { skill_id: IGNITION_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }) }
+fn target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
+fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
+fn failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32, name: Option<&[u8]>) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code); match code { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss), 10 => game.send_skill_system_info(player_id, b"GS0286"), 0x0b => game.send_skill_system_info(player_id, b"GS0290"), 0x0d => game.send_skill_system_info(player_id, b"GS0278"), 0x0e => game.send_skill_system_info(player_id, b"GS0293"), 0x0f => game.send_skill_system_info_with_text(player_id, b"GS0291", name.unwrap_or_default()), _ => {} } }
+fn send_start(game: &mut CGame, player_id: i32, level: i32) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(1); message.add_long(IGNITION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); let _ = game.send_player_shape_around(player_id, None, &message); }
+fn send_fire(game: &mut CGame, player_id: i32, level: i32, target: ShapeIdentity, x: i32, y: i32, second: u32, third: u32) { let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(2); message.add_long(IGNITION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(target.object_type); message.add_long(target.id); message.add_long(x); message.add_long(y); message.add_long(0); message.add_ulong(second); message.add_ulong(second.wrapping_add(third)); let _ = game.send_player_shape_around(player_id, None, &message); }
 
-// ============================================================================
-// FUNCTION: CIgnition::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:197
-// RVA: 0x00144830
-// ADDRESS: 00544830
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn has_kerosene(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool { match target.object_type { PLAYER_TYPE => game.find_player(target.id).is_some_and(|owner| owner.has_state_by_skill_id(KEROSENE_STATE_ID)), MONSTER_TYPE => game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(target.id)).is_some_and(|owner| owner.move_shape().has_state_by_skill_id(KEROSENE_STATE_ID)), _ => false } }
+fn remove_kerosene(game: &mut CGame, region_id: i32, target: ShapeIdentity, now_ms: u32) {
+    let removed = match target.object_type { PLAYER_TYPE => game.find_player_mut(target.id).and_then(|owner| Some((owner.take_kerosene_state()?, owner.shape().get_tile_x().ok()?, owner.shape().get_tile_y().ok()?))), MONSTER_TYPE => { let mut owner = game.take_region_owner(region_id); let result = owner.as_mut().and_then(|owner| owner.base_mut().find_monster_by_id_mut(target.id)).and_then(|shape| Some((shape.move_shape_mut().take_kerosene_state()?, shape.move_shape().shape().get_tile_x().ok()?, shape.move_shape().shape().get_tile_y().ok()?))); if let Some(owner) = owner { game.restore_region_owner(owner); } result }, _ => None };
+    if let Some((state, x, y)) = removed { send_kerosene_state_visual(game, region_id, target, x, y, state, false, now_ms); if target.object_type == PLAYER_TYPE { let _ = game.publish_player_states(target.id); } }
+}
+fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, hit: i32) -> Option<(MasterInfo, AttackInformation)> { let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let span = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(span)).max(0); let mut attack = AttackInformation { skill_id: IGNITION_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: factor as f32 * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] }; if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } } Some((master, attack)) }
 
-// ============================================================================
-// FUNCTION: CIgnition::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:236
-// RVA: 0x00144870
-// ADDRESS: 00544870
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CIgnition::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:259
-// RVA: 0x00144940
-// ADDRESS: 00544940
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CIgnition::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:215
-// RVA: 0x00144A40
-// ADDRESS: 00544a40
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CIgnitionEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:598
-// RVA: 0x00144B10
-// ADDRESS: 00544b10
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CIgnition::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:43
-// RVA: 0x00145120
-// ADDRESS: 00545120
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CIgnition::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:513
-// RVA: 0x001455E0
-// ADDRESS: 005455e0
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CIgnition::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:469
-// RVA: 0x00145880
-// ADDRESS: 00545880
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CIgnition::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ignition.cpp:278
-// RVA: 0x00145A20
-// ADDRESS: 00545a20
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_ignition<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_ignition_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) } let Some(target) = target(dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) }; if target.object_type == PLAYER_TYPE && target.id == player_id { failure(game, player_id, 10, 0, None); return terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((region_id, source, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, (player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?), player.learned_skill_level(IGNITION_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) }; let Some((target_x, target_y, dead, name)) = kerosene_target_facts(game, region_id, target) else { failure(game, player_id, 10, 0, None); return terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(IGNITION_SKILL_ID, level) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+    let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let second = properties.query_property(SECOND_TIME); let third = properties.query_property(THIRD_TIME); let factor = properties.query_property(if has_kerosene(game, region_id, target) { TARGET_DAMAGE_FACTOR_2 } else { TARGET_DAMAGE_FACTOR }); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    if ai.ignition().is_none() { let now = runtime.now_milliseconds(); if ai.ignition_last_used_ms() != 0 && !time_reached(now, ai.ignition_last_used_ms(), reuse) { failure(game, player_id, 0x0d, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } let Some(blocked) = kerosene_path_block(game, region_id, source, (target_x, target_y), maximum) else { failure(game, player_id, 0x0b, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) }; if blocked { failure(game, player_id, 0x0f, mp_loss, Some(&name)); return terminal(QueuedSkillExecutionState::Rejected) } let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_crossbow(game, player) { failure(game, player_id, 0x0e, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 && initial_mana < mp_loss { failure(game, player_id, 7, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(IGNITION_SKILL_ID)); } ai.begin_ignition(SkillExecutionKernel::begin(dispatch, now)); }
+    if dead { failure(game, player_id, 10, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    if ai.ignition().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) { let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if mana < mp_loss { failure(game, player_id, 7, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_crossbow(game, player)) { failure(game, player_id, 0x0e, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source.0, source.1, target_x, target_y)); } send_start(game, player_id, level); if let Some(kernel) = ai.ignition_mut() { let _ = kernel.advance(SkillStage::Begin, SkillStage::Check); } }
+    let started = ai.ignition().map(SkillExecutionKernel::started_at_ms).unwrap_or_default(); if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } let Some((live_x, live_y, live_dead, live_name)) = kerosene_target_facts(game, region_id, target) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; if live_dead { failure(game, player_id, 10, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let Some(blocked) = kerosene_path_block(game, region_id, source, (live_x, live_y), maximum) else { failure(game, player_id, 0x0b, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; if blocked { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 0x0f); game.send_skill_system_info_with_text(player_id, b"GS0307", &live_name); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    send_fire(game, player_id, level, target, live_x, live_y, second, third); let master = game.find_player(player_id).map(master_info); let attackable = master.is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)); if attackable { if let Some((master, attack)) = calculate_attack(game, player_id, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } remove_kerosene(game, region_id, target, runtime.now_milliseconds()); } }
+    if let Some(kernel) = ai.ignition_mut() { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply); } ai.mark_ignition_used(runtime.now_milliseconds()); finish(game, player_id); terminal(QueuedSkillExecutionState::Completed)
+}

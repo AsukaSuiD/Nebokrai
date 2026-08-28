@@ -1,141 +1,61 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Наложение горючей смеси `CKerosene` (`0xF1`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/kerosene.cpp`. Навык дважды проверяет MP и арбалет,
+//! сохраняет расход MP перед поздней проверкой оружия, после задержки повторно
+//! проверяет путь и заменяет `KeroseneState` сначала на цели, затем в исходном
+//! порядке X → Y → shape окна 3×3. `CGame` участвует только в разрешении
+//! независимых владельцев и доставке пакетов.
+//! Роли исходных типов `601..603` принадлежат тому же `CMonster` в текущем
+//! `MonsterWorld`, поэтому разрешаются через его канонический тип `600`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.h
+use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kerosenestate::{send_kerosene_state_visual, KeroseneState};
+use super::poisonmoth::{cell_targets, master_info, weapon_is_crossbow};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::nets::netserver::message::CMessage;
+use crate::public::tools::get_line_direction;
 
-// ============================================================================
-// FUNCTION: CKerosene::CKerosene
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:31
-// RVA: 0x00145EA0
-// ADDRESS: 00545ea0
-// PROTOTYPE: undefined __thiscall CKerosene(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const KEROSENE_SKILL_ID: u32 = 0xf1;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const PLAYER_TYPE: i32 = 400; const MONSTER_TYPE: i32 = 600;
+const USER_MP_LOSE: u32 = 2; const STATE_PERSIST_TIME: u32 = 10_002; const TARGET_AFFECT_FREQUENCY: u32 = 6_001; const SKILL_USAGE_CONST: u32 = 20_010;
 
-// ============================================================================
-// FUNCTION: CKerosene::~CKerosene
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:38
-// RVA: 0x00145ED0
-// ADDRESS: 00545ed0
-// PROTOTYPE: void __thiscall ~CKerosene(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+pub(crate) fn is_kerosene_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Object { skill_id: KEROSENE_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }) }
+fn target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
+fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
+fn target_facts(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<(i32, i32, bool, Vec<u8>)> { match identity.object_type { PLAYER_TYPE => { let player = game.find_player(identity.id)?; if player.server_region_id() != Some(region_id) { return None } Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.is_dead(), player.player_name().to_vec())) }, MONSTER_TYPE => { let monster = game.find_region(region_id)?.base().find_monster_by_id(identity.id)?; Some((monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?, monster.hit_points() == 0, monster.display_name().to_vec())) }, _ => None } }
+fn path_block(game: &CGame, region_id: i32, source: (i32, i32), destination: (i32, i32), maximum: u32) -> Option<bool> { let path = game.base_magic_path(region_id, source.0, source.1, destination.0, destination.1, None); if maximum != 0 && path.len() as u32 > maximum { return None } Some(path.iter().any(|cell| cell.2 == 2)) }
+pub(super) fn kerosene_target_facts(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<(i32, i32, bool, Vec<u8>)> { target_facts(game, region_id, identity) }
+pub(super) fn kerosene_path_block(game: &CGame, region_id: i32, source: (i32, i32), destination: (i32, i32), maximum: u32) -> Option<bool> { path_block(game, region_id, source, destination, maximum) }
+fn failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32, name: Option<&[u8]>) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code); match code { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss), 10 => game.send_skill_system_info(player_id, b"GS0286"), 0x0b => game.send_skill_system_info(player_id, b"GS0290"), 0x0d => game.send_skill_system_info(player_id, b"GS0278"), 0x0e => game.send_skill_system_info(player_id, b"GS0293"), 0x0f => game.send_skill_system_info_with_text(player_id, b"GS0291", name.unwrap_or_default()), _ => {} } }
+fn send_visual(game: &mut CGame, player_id: i32, level: i32, action: u8, target: Option<(ShapeIdentity, i32, i32)>) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(action); message.add_long(KEROSENE_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); if action == 1 { message.add_long(player.shape().get_direction()); } else if let Some((target, x, y)) = target { message.add_long(target.object_type); message.add_long(target.id); message.add_long(x); message.add_long(y); } let _ = game.send_player_shape_around(player_id, None, &message); }
 
-// ============================================================================
-// FUNCTION: CKerosene::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:225
-// RVA: 0x00145EE0
-// ADDRESS: 00545ee0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn replace_state<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, identity: ShapeIdentity, state: KeroseneState, now_ms: u32, runtime: &mut Runtime) -> bool {
+    if identity.object_type == PLAYER_TYPE { let _ = game.player_on_first_skill(player_id, identity.id, Some(region_id), runtime); }
+    let replaced = match identity.object_type {
+        PLAYER_TYPE => game.find_player_mut(identity.id).and_then(|owner| Some((owner.replace_kerosene_state(state, now_ms), owner.shape().get_tile_x().ok()?, owner.shape().get_tile_y().ok()?))),
+        MONSTER_TYPE => { let mut owner = game.take_region_owner(region_id); let result = owner.as_mut().and_then(|owner| owner.base_mut().find_monster_by_id_mut(identity.id)).and_then(|target| Some((target.move_shape_mut().replace_kerosene_state(state, now_ms), target.move_shape().shape().get_tile_x().ok()?, target.move_shape().shape().get_tile_y().ok()?))); if let Some(owner) = owner { game.restore_region_owner(owner); } result },
+        _ => None,
+    };
+    let Some((previous, x, y)) = replaced else { return false }; if let Some(previous) = previous { send_kerosene_state_visual(game, region_id, identity, x, y, previous, false, now_ms); } send_kerosene_state_visual(game, region_id, identity, x, y, state, true, now_ms); if identity.object_type == PLAYER_TYPE { let _ = game.publish_player_states(identity.id); } true
+}
 
-// ============================================================================
-// FUNCTION: CKerosene::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:248
-// RVA: 0x00145FB0
-// ADDRESS: 00545fb0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn apply_states<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity, target_position: (i32, i32), state: KeroseneState, now_ms: u32, runtime: &mut Runtime) { let _ = replace_state(game, player_id, region_id, target, state, now_ms, runtime); let Some((width, height)) = game.find_region(region_id).map(|owner| (owner.base().region.width, owner.base().region.height)) else { return }; let left = target_position.0.saturating_sub(1).max(0); let top = target_position.1.saturating_sub(1).max(0); let right = target_position.0.wrapping_add(1).min(width); let bottom = target_position.1.wrapping_add(1).min(height); for x in left..=right { for y in top..=bottom { for identity in cell_targets(game, region_id, x, y) { if identity == target || (identity.object_type == PLAYER_TYPE && identity.id == player_id) || !matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE) { continue } let _ = replace_state(game, player_id, region_id, identity, state, now_ms, runtime); } } } }
 
-// ============================================================================
-// FUNCTION: CKerosene::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:204
-// RVA: 0x001460F0
-// ADDRESS: 005460f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKeroseneEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:606
-// RVA: 0x001461C0
-// ADDRESS: 005461c0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKerosene::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:46
-// RVA: 0x001465F0
-// ADDRESS: 005465f0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKerosene::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosene.cpp:282
-// RVA: 0x00146AB0
-// ADDRESS: 00546ab0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_kerosene<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_kerosene_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) } let Some(target) = target(dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) }; if target.object_type == PLAYER_TYPE && target.id == player_id { failure(game, player_id, 10, 0, None); return terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((region_id, source, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, (player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?), player.learned_skill_level(KEROSENE_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) }; let Some((target_x, target_y, dead, name)) = target_facts(game, region_id, target) else { failure(game, player_id, 10, 0, None); return terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(KEROSENE_SKILL_ID, level) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+    let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let keep = properties.query_property(STATE_PERSIST_TIME); let frequency = properties.query_property(TARGET_AFFECT_FREQUENCY); let hp_loss = properties.query_property(SKILL_USAGE_CONST); let skill_name = properties.skill_name().to_vec(); let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    if ai.kerosene().is_none() { let now = runtime.now_milliseconds(); if ai.kerosene_last_used_ms() != 0 && !time_reached(now, ai.kerosene_last_used_ms(), reuse) { failure(game, player_id, 0x0d, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } let Some(blocked) = path_block(game, region_id, source, (target_x, target_y), maximum) else { failure(game, player_id, 0x0b, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) }; if blocked { failure(game, player_id, 0x0f, mp_loss, Some(&name)); return terminal(QueuedSkillExecutionState::Rejected) } let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_crossbow(game, player) { failure(game, player_id, 0x0e, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss, None); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(KEROSENE_SKILL_ID)); } ai.begin_kerosene(SkillExecutionKernel::begin(dispatch, now)); }
+    if dead { failure(game, player_id, 10, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    if ai.kerosene().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) { let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_crossbow(game, player)) { failure(game, player_id, 0x0e, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source.0, source.1, target_x, target_y)); } send_visual(game, player_id, level, 1, None); if let Some(kernel) = ai.kerosene_mut() { let _ = kernel.advance(SkillStage::Begin, SkillStage::Check); } }
+    let started = ai.kerosene().map(SkillExecutionKernel::started_at_ms).unwrap_or_default(); if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } let Some((live_x, live_y, live_dead, _)) = target_facts(game, region_id, target) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; if live_dead { failure(game, player_id, 10, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let Some(blocked) = path_block(game, region_id, source, (live_x, live_y), maximum) else { failure(game, player_id, 0x0b, mp_loss, None); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; if blocked { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 0x0f); game.send_skill_system_info_with_text(player_id, b"GS0307", &skill_name); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    send_visual(game, player_id, level, 2, Some((target, live_x, live_y))); let Some(master) = game.find_player(player_id).map(master_info) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; let now = runtime.now_milliseconds(); apply_states(game, player_id, region_id, target, (live_x, live_y), KeroseneState::new(master, now, keep, frequency, hp_loss), now, runtime); if let Some(kernel) = ai.kerosene_mut() { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply); } ai.mark_kerosene_used(now); finish(game, player_id); terminal(QueuedSkillExecutionState::Completed)
+}

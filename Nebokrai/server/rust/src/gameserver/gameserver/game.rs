@@ -485,6 +485,7 @@
 mod bloodloss;
 mod leafcut;
 mod leafcut3;
+mod kerosene;
 mod fatalblow;
 mod firewall;
 mod poisonfog;
@@ -1044,6 +1045,8 @@ use crate::gameserver::appserver::skills::leafcutstate::{
 use crate::gameserver::appserver::skills::leafcutstate3::{
     LeafCutState3, LEAF_CUT_3_STATE_ID, send_leaf_cut_3_state_visual,
 };
+use crate::gameserver::appserver::skills::kerosene::{execute_player_kerosene, is_kerosene_dispatch};
+use crate::gameserver::appserver::skills::ignition::{execute_player_ignition, is_ignition_dispatch};
 use crate::gameserver::appserver::skills::fatalblow::{
     FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
 };
@@ -26432,6 +26435,7 @@ impl CGame {
                     self.update_player_leaf_cut_state(player_id, runtime)
                 }
                 LEAF_CUT_3_STATE_ID => self.update_player_leaf_cut_3_state(player_id, runtime),
+                crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => self.update_player_kerosene_state(player_id, runtime),
                 _ => false,
             };
             periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
@@ -28217,6 +28221,7 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_leaf_cut_3_state(login_tick_ms);
+        let loaded_kerosene_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_kerosene_state(login_tick_ms);
         let loaded_poison_fog_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_poison_fog_state(login_tick_ms);
         for state in &loaded_appellation_states {
             self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
@@ -28264,6 +28269,10 @@ impl CGame {
             && let Some(player) = self.find_player(expected_player_id)
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
         { crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
+        if let Some(state) = loaded_kerosene_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        { crate::gameserver::appserver::skills::kerosenestate::send_kerosene_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
         self.restore_player_login_pets(expected_player_id, region_id, context);
         self.restore_player_login_carriage(expected_player_id, region_id, context);
 
@@ -33674,6 +33683,8 @@ impl CGame {
                             || player.player_ai().meteor_arrow().is_some()
                             || player.player_ai().rain_arrow().is_some()
                             || player.player_ai().poison_moth().is_some()
+                            || player.player_ai().kerosene().is_some()
+                            || player.player_ai().ignition().is_some()
                             || player.player_ai().blood_rose().is_some()
                             || player.player_ai().scorpion().is_some()
                             || player.player_ai().boa_lock().is_some()
@@ -34352,6 +34363,8 @@ impl CGame {
                 || player.player_ai().meteor_arrow().is_some()
                 || player.player_ai().rain_arrow().is_some()
                 || player.player_ai().poison_moth().is_some()
+                || player.player_ai().kerosene().is_some()
+                || player.player_ai().ignition().is_some()
                 || player.player_ai().blood_rose().is_some()
                 || player.player_ai().scorpion().is_some()
                 || player.player_ai().boa_lock().is_some()
@@ -37054,6 +37067,8 @@ impl CGame {
             let concrete_meteor_arrow = is_meteor_arrow_dispatch(dispatch);
             let concrete_rain_arrow = is_rain_arrow_dispatch(dispatch);
             let concrete_poison_moth = is_poison_moth_dispatch(dispatch);
+            let concrete_kerosene = is_kerosene_dispatch(dispatch);
+            let concrete_ignition = is_ignition_dispatch(dispatch);
             let concrete_blood_rose = is_blood_rose_dispatch(dispatch);
             let concrete_scorpion = is_scorpion_dispatch(dispatch);
             let concrete_boa_lock = is_boa_lock_dispatch(dispatch);
@@ -37185,6 +37200,10 @@ impl CGame {
                 execute_player_rain_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_poison_moth {
                 execute_player_poison_moth(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_kerosene {
+                execute_player_kerosene(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_ignition {
+                execute_player_ignition(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_blood_rose {
                 execute_player_blood_rose(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_scorpion {
@@ -42039,6 +42058,9 @@ impl CGame {
                         }
                         LEAF_CUT_3_STATE_ID => {
                             let _ = self.update_monster_leaf_cut_3_state(region_id, monster_id, runtime);
+                        }
+                        crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => {
+                            let _ = self.update_monster_kerosene_state(region_id, monster_id, runtime);
                         }
                         _ => {}
                     }

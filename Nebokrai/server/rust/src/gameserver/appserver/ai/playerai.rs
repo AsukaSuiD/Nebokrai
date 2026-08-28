@@ -184,6 +184,10 @@ pub(crate) struct CPlayerAI {
     leaf_cut_last_used_ms: u32,
     leaf_cut_3: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     leaf_cut_3_last_used_ms: u32,
+    kerosene: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    kerosene_last_used_ms: u32,
+    ignition: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    ignition_last_used_ms: u32,
     ju_cut: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     ju_cut_last_used_ms: u32,
     lightning_sword: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -358,6 +362,8 @@ impl CPlayerAI {
         self.swallow = None;
         self.leaf_cut = None;
         self.leaf_cut_3 = None;
+        self.kerosene = None;
+        self.ignition = None;
         self.ju_cut = None;
         self.lightning_sword = None;
         self.little_flash = None;
@@ -608,6 +614,8 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение третьего периодического удара завершено");
         }
+        if let Some(mut execution) = self.kerosene.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "наложение горючей смеси завершено"); }
+        if let Some(mut execution) = self.ignition.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "воспламенение завершено"); }
         if let Some(mut execution) = self.ju_cut.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение рубящего удара завершено");
@@ -791,6 +799,8 @@ impl CPlayerAI {
         self.swallow = None;
         self.leaf_cut = None;
         self.leaf_cut_3 = None;
+        self.kerosene = None;
+        self.ignition = None;
         self.ju_cut = None;
         self.lightning_sword = None;
         self.little_flash = None;
@@ -1183,6 +1193,16 @@ impl CPlayerAI {
     pub(crate) fn leaf_cut_3_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_3.as_mut() }
     pub(crate) const fn leaf_cut_3_last_used_ms(&self) -> u32 { self.leaf_cut_3_last_used_ms }
     pub(crate) const fn mark_leaf_cut_3_used(&mut self, now_ms: u32) { self.leaf_cut_3_last_used_ms = now_ms; }
+    pub(crate) const fn kerosene(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.kerosene }
+    pub(crate) const fn begin_kerosene(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.kerosene = Some(state); }
+    pub(crate) fn kerosene_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.kerosene.as_mut() }
+    pub(crate) const fn kerosene_last_used_ms(&self) -> u32 { self.kerosene_last_used_ms }
+    pub(crate) const fn mark_kerosene_used(&mut self, now_ms: u32) { self.kerosene_last_used_ms = now_ms; }
+    pub(crate) const fn ignition(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.ignition }
+    pub(crate) const fn begin_ignition(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.ignition = Some(state); }
+    pub(crate) fn ignition_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.ignition.as_mut() }
+    pub(crate) const fn ignition_last_used_ms(&self) -> u32 { self.ignition_last_used_ms }
+    pub(crate) const fn mark_ignition_used(&mut self, now_ms: u32) { self.ignition_last_used_ms = now_ms; }
     pub(crate) const fn ju_cut(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.ju_cut }
     pub(crate) const fn begin_ju_cut(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.ju_cut = Some(state); }
     pub(crate) fn ju_cut_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.ju_cut.as_mut() }

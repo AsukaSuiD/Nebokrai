@@ -4750,6 +4750,12 @@ impl CPlayer {
     ) -> Option<super::skills::leafcutstate3::LeafCutState3> {
         self.move_shape.activate_loaded_leaf_cut_3_state(now_ms)
     }
+    pub(crate) fn activate_loaded_kerosene_state(&mut self, now_ms: u32) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.activate_loaded_kerosene_state(now_ms) }
+    pub(crate) fn replace_kerosene_state(&mut self, state: super::skills::kerosenestate::KeroseneState, now_ms: u32) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.replace_kerosene_state(state, now_ms) }
+    pub(crate) fn take_kerosene_state_for_ai(&mut self) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.take_kerosene_state_for_ai() }
+    pub(crate) fn restore_kerosene_state_after_ai(&mut self, state: super::skills::kerosenestate::KeroseneState) { self.move_shape.restore_kerosene_state_after_ai(state); }
+    pub(crate) fn take_kerosene_state(&mut self) -> Option<super::skills::kerosenestate::KeroseneState> { self.move_shape.take_kerosene_state() }
+    pub(crate) fn finish_kerosene_state(&mut self, state: super::skills::kerosenestate::KeroseneState) { self.move_shape.finish_kerosene_state(state); }
 
     pub(crate) fn replace_battle_fairy_attribute_state(
         &mut self,

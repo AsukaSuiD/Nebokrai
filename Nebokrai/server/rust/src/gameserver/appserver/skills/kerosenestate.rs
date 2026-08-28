@@ -1,168 +1,53 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое периодическое состояние горючей смеси `CKeroseneState` (`0xF1`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/kerosenestate.cpp`. Состояние хранит снимок владельца,
+//! использует строгие границы срока и частоты и наносит один фиксированный
+//! урон типа `Poison` без RNG. DB-запись длиной 56 байт принадлежит этому типу;
+//! `CanonicalStateStorage` атомарно поддерживает её смещение и жизненный цикл.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CKeroseneState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:218
-// RVA: 0x001E93C0
-// ADDRESS: 005e93c0
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const KEROSENE_STATE_ID: u32 = 0xf1;
+pub(crate) const KEROSENE_STATE_BYTES: usize = 56;
+const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
-// ============================================================================
-// FUNCTION: CKeroseneState::CKeroseneState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:28
-// RVA: 0x001EB480
-// ADDRESS: 005eb480
-// PROTOTYPE: undefined __thiscall CKeroseneState(tagMasterInfo * param_1, ulong param_2, ulong param_3, ulong param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum KeroseneStateTick { Pending, Attack(AttackInformation), Ended }
 
-// ============================================================================
-// FUNCTION: CKeroseneState::CKeroseneState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:40
-// RVA: 0x001EB510
-// ADDRESS: 005eb510
-// PROTOTYPE: undefined __thiscall CKeroseneState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KeroseneState {
+    master: MasterInfo,
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    frequency_ms: u32,
+    hp_loss: u32,
+    attack_count: u32,
+    serialized_offset: Option<usize>,
+}
 
-// ============================================================================
-// FUNCTION: CKeroseneState::~CKeroseneState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:48
-// RVA: 0x001EB580
-// ADDRESS: 005eb580
-// PROTOTYPE: void __thiscall ~CKeroseneState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl KeroseneState {
+    pub(crate) const fn new(master: MasterInfo, started_at_ms: u32, keep_time_ms: u32, frequency_ms: u32, hp_loss: u32) -> Self { Self { master, started_at_ms, keep_time_ms, frequency_ms, hp_loss, attack_count: 0, serialized_offset: None } }
+    pub(crate) const fn skill_id(self) -> u32 { KEROSENE_STATE_ID }
+    pub(crate) const fn master(self) -> MasterInfo { self.master }
+    pub(crate) fn client_time(self, now_ms: u32) -> i32 { self.remaining_time(now_ms) as i32 }
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> { let mut reader = LegacyReader::at(payload, offset)?; if reader.read_u32()? != KEROSENE_STATE_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); } let mut values = [0i32; 10]; for value in &mut values { *value = reader.read_i32()?; } Ok(Self { master: MasterInfo { master_type: values[0], master_id: values[1], master_guild_id: values[2], master_team_id: values[3], master_union_id: values[4], master_country_id: values[5], permitted_to_kill_player: values[6], permitted_to_kill_teammate: values[7], permitted_to_kill_guild_member: values[8], permitted_to_kill_criminal: values[9] }, started_at_ms: now_ms, keep_time_ms: reader.read_u32()?, frequency_ms: reader.read_u32()?, hp_loss: reader.read_u32()?, attack_count: 0, serialized_offset: Some(offset) }) }
+    pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>, now_ms: u32) { let offset = payload.len(); payload.extend_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); }
+    pub(crate) fn write_serialized_at(&mut self, payload: &mut [u8], offset: usize, now_ms: u32) -> bool { let Some(destination) = payload.get_mut(offset..offset.saturating_add(KEROSENE_STATE_BYTES)) else { return false }; destination.copy_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); true }
+    fn encoded(self, now_ms: u32) -> Vec<u8> { let mut record = Vec::with_capacity(KEROSENE_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(KEROSENE_STATE_ID); for value in [self.master.master_type, self.master.master_id, self.master.master_guild_id, self.master.master_team_id, self.master.master_union_id, self.master.master_country_id, self.master.permitted_to_kill_player, self.master.permitted_to_kill_teammate, self.master.permitted_to_kill_guild_member, self.master.permitted_to_kill_criminal] { writer.write_i32(value); } writer.write_u32(self.remaining_time(now_ms)); writer.write_u32(self.frequency_ms); writer.write_u32(self.hp_loss); record }
+    pub(crate) fn update_serialized_runtime(self, payload: &mut [u8], now_ms: u32) { if let Some(offset) = self.serialized_offset { let _ = LegacyWriter::write_u32_at(payload, offset + 44, self.remaining_time(now_ms)); } }
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
+    pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { match self.serialized_offset { Some(offset) => Some((offset, KEROSENE_STATE_BYTES)), None => None } }
+    pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
+    fn remaining_time(self, now_ms: u32) -> u32 { let elapsed = now_ms.wrapping_sub(self.started_at_ms); if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) } }
+    pub(crate) fn ended(self, lifetime_now_ms: u32, target_dead: bool) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < lifetime_now_ms || target_dead }
+    pub(crate) fn tick(&mut self, frequency_now_ms: u32) -> KeroseneStateTick { if self.started_at_ms.wrapping_add(self.frequency_ms.wrapping_mul(self.attack_count)) >= frequency_now_ms { return KeroseneStateTick::Pending; } self.attack_count = self.attack_count.wrapping_add(1); KeroseneStateTick::Attack(AttackInformation { skill_id: 0, skill_level: 0, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Poison, hp_damage: self.hp_loss as i32, mp_damage: 0 }] }) }
+}
 
-// ============================================================================
-// FUNCTION: CKeroseneState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:85
-// RVA: 0x001EB5F0
-// ADDRESS: 005eb5f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKeroseneState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:105
-// RVA: 0x001EB690
-// ADDRESS: 005eb690
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKeroseneState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:66
-// RVA: 0x001EB760
-// ADDRESS: 005eb760
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKeroseneState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:233
-// RVA: 0x001EB800
-// ADDRESS: 005eb800
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKeroseneStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:252
-// RVA: 0x001EB850
-// ADDRESS: 005eb850
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKeroseneState::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:191
-// RVA: 0x001EB990
-// ADDRESS: 005eb990
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, tagAttackInformation * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CKeroseneState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\kerosenestate.cpp:135
-// RVA: 0x001EBA30
-// ADDRESS: 005eba30
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn send_kerosene_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KeroseneState, begin: bool, now_ms: u32) { let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(KEROSENE_STATE_ID as i32); if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message); }

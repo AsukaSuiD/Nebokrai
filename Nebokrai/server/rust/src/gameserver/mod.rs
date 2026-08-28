@@ -179,6 +179,9 @@ pub(crate) mod appserver {
         pub(crate) mod immediatestate;
         pub(crate) mod infernol;
         pub(crate) mod jucut;
+        pub(crate) mod kerosene;
+        pub(crate) mod kerosenestate;
+        pub(crate) mod ignition;
         pub(crate) mod lightningsword;
         pub(crate) mod lightningsword2;
         pub(crate) mod lightningsword3;
