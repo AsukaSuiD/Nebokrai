@@ -111,6 +111,7 @@ pub(crate) mod appserver {
         pub(crate) mod ghostcut;
         pub(crate) mod ghostcut2;
         pub(crate) mod ghostcut3;
+        pub(crate) mod frontcellsword;
         pub(crate) mod knightcut;
         pub(crate) mod knightcutstate;
         pub(crate) mod armybreak;
@@ -151,6 +152,7 @@ pub(crate) mod appserver {
         pub(crate) mod immediatestate;
         pub(crate) mod infernol;
         pub(crate) mod jucut;
+        pub(crate) mod lightningsword;
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod leafcut;

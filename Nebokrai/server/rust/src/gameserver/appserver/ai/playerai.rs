@@ -112,6 +112,8 @@ pub(crate) struct CPlayerAI {
     leaf_cut_last_used_ms: u32,
     ju_cut: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     ju_cut_last_used_ms: u32,
+    lightning_sword: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    lightning_sword_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -254,6 +256,7 @@ impl CPlayerAI {
         self.swallow = None;
         self.leaf_cut = None;
         self.ju_cut = None;
+        self.lightning_sword = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -407,6 +410,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение рубящего удара завершено");
         }
+        if let Some(mut execution) = self.lightning_sword.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение молниеносного меча завершено");
+        }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненной стены завершено");
@@ -554,6 +561,7 @@ impl CPlayerAI {
         self.swallow = None;
         self.leaf_cut = None;
         self.ju_cut = None;
+        self.lightning_sword = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -810,6 +818,11 @@ impl CPlayerAI {
     pub(crate) fn ju_cut_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.ju_cut.as_mut() }
     pub(crate) const fn ju_cut_last_used_ms(&self) -> u32 { self.ju_cut_last_used_ms }
     pub(crate) const fn mark_ju_cut_used(&mut self, now_ms: u32) { self.ju_cut_last_used_ms = now_ms; }
+    pub(crate) const fn lightning_sword(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.lightning_sword }
+    pub(crate) const fn begin_lightning_sword(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.lightning_sword = Some(state); }
+    pub(crate) fn lightning_sword_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.lightning_sword.as_mut() }
+    pub(crate) const fn lightning_sword_last_used_ms(&self) -> u32 { self.lightning_sword_last_used_ms }
+    pub(crate) const fn mark_lightning_sword_used(&mut self, now_ms: u32) { self.lightning_sword_last_used_ms = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall
