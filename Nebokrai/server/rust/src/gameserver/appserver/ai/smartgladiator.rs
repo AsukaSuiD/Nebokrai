@@ -102,6 +102,62 @@ impl SmartGladiatorSelection {
     }
 }
 
+/// Собирает достигнутый выбор AI2 по упорядоченным индексам игроков, затем
+/// питомцев. Владелец хранит одновременно ближайшую угрозу и наиболее слабую
+/// цель с уровнем здоровья ниже сорока процентов.
+pub(crate) fn select_smart_gladiator_enemy(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+) -> SmartGladiatorSelection {
+    let mut selection = SmartGladiatorSelection::default();
+    for player_id in region.player_ids_around_area(area_index) {
+        let Some(player) = game.find_player(player_id) else {
+            continue;
+        };
+        if player.server_region_id() != Some(region.id) || player.is_dead() {
+            continue;
+        }
+        let Some(view) = player.shape_view() else {
+            continue;
+        };
+        selection = selection.consider(
+            owner,
+            SmartGladiatorCandidate {
+                view,
+                hit_points: player.health(),
+                maximum_hit_points: player.combat_properties().maximum_hp,
+            },
+            guard_range,
+        );
+    }
+    for pet_id in region.pet_ids_around_area(area_index) {
+        let Some((view, hit_points, maximum_hit_points)) = region
+            .find_monster_by_id(pet_id)
+            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+            .and_then(|pet| {
+                let property =
+                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                Some((pet.shape_view(property)?, pet.hit_points(), property.maximum_hp))
+            })
+        else {
+            continue;
+        };
+        selection = selection.consider(
+            owner,
+            SmartGladiatorCandidate {
+                view,
+                hit_points,
+                maximum_hit_points,
+            },
+            guard_range,
+        );
+    }
+    selection
+}
+
 /// Один исходный шаг от угрозы: направление строится от цели к владельцу.
 pub(crate) fn retreat_step_from(
     owner: ShapeView,
