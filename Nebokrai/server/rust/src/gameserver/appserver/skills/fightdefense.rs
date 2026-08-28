@@ -8,7 +8,9 @@
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
 //! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
 //! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
-//! добавления состояний; прочие ещё не восстановленные состояния не
+//! добавления состояний. Коэффициент `PillarState` применяется в прежней
+//! поздней точке `PostDefense`, после обычного расчёта и PvP-множителя;
+//! прочие ещё не восстановленные состояния не
 //! подменяются этой реализацией.
 
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
@@ -48,6 +50,19 @@ fn apply_monster_promotion(
     }
     factor.map_or(damage, |factor| {
         truncate_original(f64::from(factor) * f64::from(damage) * 0.001)
+    })
+}
+
+fn apply_pillar_post_defense(
+    skill_id: u32,
+    pillar_damage_factor: Option<f32>,
+    damage: i32,
+) -> i32 {
+    if damage == 0 || (0x212..=0x224).contains(&skill_id) {
+        return damage;
+    }
+    pillar_damage_factor.map_or(damage, |factor| {
+        (damage as f32 * factor).round_ties_even() as i32
     })
 }
 
@@ -175,6 +190,7 @@ pub(crate) fn defend_player_base_attack(
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
     defense_shields: &mut [DefenseShieldState],
+    pillar_damage_factor: Option<f32>,
 ) {
     let (minimum_hit, maximum_hit) = setup.player_hit_limits(attacker_occupation);
     let hit = maximum_hit
@@ -290,6 +306,11 @@ pub(crate) fn defend_player_base_attack(
                 f64::from(power.hp_damage) * f64::from(setup.pvp_damage_factor()),
             );
         }
+        power.hp_damage = apply_pillar_post_defense(
+            attack.skill_id,
+            pillar_damage_factor,
+            power.hp_damage,
+        );
     }
 }
 
@@ -301,6 +322,7 @@ pub(crate) fn defend_player_from_monster_base_attack(
     setup: &GlobeSetupSnapshot,
     random: &mut dyn FnMut(i32) -> i32,
     defense_shields: &mut [DefenseShieldState],
+    pillar_damage_factor: Option<f32>,
 ) {
     let (minimum_hit, maximum_hit) = setup.monster_hit_limits();
     let hit = maximum_hit
@@ -349,6 +371,11 @@ pub(crate) fn defend_player_from_monster_base_attack(
                 truncate_original(f64::from(power.hp_damage) * f64::from(attack.damage_factor))
                     .max(1);
         }
+        power.hp_damage = apply_pillar_post_defense(
+            attack.skill_id,
+            pillar_damage_factor,
+            power.hp_damage,
+        );
     }
 }
 
@@ -449,20 +476,6 @@ pub(crate) fn defend_monster_from_monster_base_attack(
 // RVA: 0x001B0A50
 // ADDRESS: 005b0a50
 // PROTOTYPE: void __thiscall PreDefense(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3, tagAttackPower * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFightDefense::PostDefense
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fightdefense.cpp:835
-// RVA: 0x001B1050
-// ADDRESS: 005b1050
-// PROTOTYPE: void __thiscall PostDefense(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3, tagAttackPower * param_4)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -282,6 +282,8 @@ pub(crate) fn defend_owned_monster_attack(
         .flatten()
         .map(CPlayer::take_defense_shields)
         .unwrap_or_default();
+    let pillar_damage_factor = game.find_player(target.id)
+        .and_then(CPlayer::pillar_state).map(|state| state.damage_factor());
     let globe_setup = game.globe_setup().clone();
     let mut random = |maximum| game.skill_random_below(maximum);
     if let Some(properties) = target_player_properties {
@@ -293,6 +295,7 @@ pub(crate) fn defend_owned_monster_attack(
             &globe_setup,
             &mut random,
             &mut defense_shields,
+            pillar_damage_factor,
         );
     } else if let Some(properties) = target_monster_properties {
         defend_monster_from_monster_base_attack(

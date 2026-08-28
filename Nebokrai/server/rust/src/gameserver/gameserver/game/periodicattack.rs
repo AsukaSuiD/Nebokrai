@@ -283,6 +283,8 @@ impl CGame {
                 let _ = self.send_battle_fairy_goods_update(&outcome.update);
             }
         } else {
+            let pillar_damage_factor = self.find_player(target_id)
+                .and_then(CPlayer::pillar_state).map(|state| state.damage_factor());
             let mut defense_shields = self
                 .find_player_mut(target_id)
                 .map(CPlayer::take_defense_shields)
@@ -298,6 +300,7 @@ impl CGame {
                 &self.globe_setup,
                 &mut random,
                 &mut defense_shields,
+                pillar_damage_factor,
             );
             if let Some(target) = self.find_player_mut(target_id) {
                 target.restore_defense_shields(defense_shields);

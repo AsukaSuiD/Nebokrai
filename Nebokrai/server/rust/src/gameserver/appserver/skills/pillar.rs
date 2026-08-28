@@ -1,138 +1,83 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Защитная стойка `CPillar` (`0x74`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/pillar.cpp`. Навык проверяет только восстановление при
+//! постановке, списывает MP на первом проходе, после задержки заменяет
+//! канонический `PillarState` и обновляет свойства. Состояние и поздний
+//! коэффициент защиты принадлежат `pillarstate` и `fightdefense`; `CGame`
+//! выполняет только доставку и координацию владельца игрока.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.h
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::pillarstate::{PillarState, replace_player_pillar_state};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CPillar::CPillar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:18
-// RVA: 0x0016F970
-// ADDRESS: 0056f970
-// PROTOTYPE: undefined __thiscall CPillar(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const PILLAR_SKILL_ID: u32 = 0x74;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const PLAYER_TYPE: i32 = 400;
+const USER_MP_LOSE: u32 = 2;
+const STATE_PERSIST_TIME: u32 = 10_002;
+const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
-// ============================================================================
-// FUNCTION: CPillar::~CPillar
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:26
-// RVA: 0x0016F9E0
-// ADDRESS: 0056f9e0
-// PROTOTYPE: void __thiscall ~CPillar(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch {
+    PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. }
+    | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+} }
+pub(crate) fn is_pillar_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == PILLAR_SKILL_ID }
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
 
-// ============================================================================
-// FUNCTION: CPillar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:90
-// RVA: 0x0016FA00
-// ADDRESS: 0056fa00
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
+    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
+    match code { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", amount),
+        0x0d => game.send_skill_system_info(player_id, b"GS0278"), _ => {} }
+}
 
-// ============================================================================
-// FUNCTION: CPillar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:106
-// RVA: 0x0016FAD0
-// ADDRESS: 0056fad0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_visual(game: &mut CGame, player_id: i32, level: i32, fire: bool) {
+    let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(if fire { 2 } else { 1 }); message.add_long(PILLAR_SKILL_ID as i32);
+    message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id);
+    if fire { message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_tile_x().unwrap_or_default()); message.add_long(player.shape().get_tile_y().unwrap_or_default()); }
+    else { message.add_long(player.shape().get_direction()); }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
-// ============================================================================
-// FUNCTION: CPillar::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:73
-// RVA: 0x0016FBC0
-// ADDRESS: 0056fbc0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPillarEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:266
-// RVA: 0x0016FC80
-// ADDRESS: 0056fc80
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPillar::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:38
-// RVA: 0x00170000
-// ADDRESS: 00570000
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPillar::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillar.cpp:136
-// RVA: 0x00170110
-// ADDRESS: 00570110
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_pillar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(PILLAR_SKILL_ID)) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(PILLAR_SKILL_ID, level) else { if ai.pillar().is_some() { finish(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let keep = properties.query_property(STATE_PERSIST_TIME);
+    let damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR) as f32 * 0.001;
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    if ai.pillar().is_none() {
+        let started_at_ms = runtime.now_milliseconds(); let cooldown_now_ms = runtime.now_milliseconds();
+        if ai.pillar_last_used_ms() != 0 && !time_reached(cooldown_now_ms, ai.pillar_last_used_ms(), reuse) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(PILLAR_SKILL_ID)); }
+        ai.begin_pillar(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if ai.pillar().is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    if game.find_player(player_id).is_some_and(CPlayer::is_dead) { failure(game, player_id, 2, mp_loss); ai.mark_pillar_used(runtime.now_milliseconds()); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    if ai.pillar().is_some_and(|state| state.stage() == SkillStage::Begin) {
+        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if u64::from(mana) < u64::from(mp_loss) { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        send_visual(game, player_id, level, false);
+        if let Some(state) = ai.pillar_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+    }
+    let started_at_ms = ai.pillar().map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) { return terminal(QueuedSkillExecutionState::Pending) }
+    send_visual(game, player_id, level, true); let now_ms = runtime.now_milliseconds();
+    let state = PillarState::new(now_ms, keep, damage_factor); let _ = replace_player_pillar_state(game, player_id, state, now_ms);
+    let _ = game.update_player_properties(player_id, runtime);
+    if let Some(state) = ai.pillar_mut() { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
+    ai.mark_pillar_used(runtime.now_milliseconds()); finish(game, player_id);
+    terminal(QueuedSkillExecutionState::Completed)
+}

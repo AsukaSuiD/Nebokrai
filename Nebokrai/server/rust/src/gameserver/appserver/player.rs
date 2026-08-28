@@ -4557,6 +4557,26 @@ impl CPlayer {
         self.move_shape.replace_knock_out_state(state)
     }
 
+    pub(crate) fn pillar_state(&self) -> Option<super::skills::pillarstate::PillarState> {
+        self.move_shape.pillar_state()
+    }
+
+    pub(crate) fn replace_pillar_state(
+        &mut self, state: super::skills::pillarstate::PillarState,
+    ) -> Option<super::skills::pillarstate::PillarState> {
+        self.move_shape.replace_pillar_state(state)
+    }
+
+    pub(crate) fn take_expired_pillar_state(
+        &mut self, now_ms: u32,
+    ) -> Option<super::skills::pillarstate::PillarState> {
+        self.move_shape.take_expired_pillar_state(now_ms)
+    }
+
+    pub(crate) fn take_pillar_state(&mut self) -> Option<super::skills::pillarstate::PillarState> {
+        self.move_shape.take_pillar_state()
+    }
+
     pub(crate) fn take_expired_knock_out_state(
         &mut self,
         now_ms: u32,

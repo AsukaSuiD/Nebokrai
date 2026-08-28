@@ -1,112 +1,64 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние стойки `CPillarState` (`0x74`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/pillarstate.cpp`. Состояние хранит коэффициент поздней
+//! защиты и строгий срок, публикует `0xBFE03/0xBFE04` и остаётся единственным
+//! типизированным источником для проверки запрета рывков и `PostDefense`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CPillarState::CPillarState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp:15
-// RVA: 0x001F4A60
-// ADDRESS: 005f4a60
-// PROTOTYPE: undefined __thiscall CPillarState(float param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const PILLAR_STATE_ID: u32 = 0x74;
 
-// ============================================================================
-// FUNCTION: CPillarState::CPillarState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp:25
-// RVA: 0x001F4AE0
-// ADDRESS: 005f4ae0
-// PROTOTYPE: undefined __thiscall CPillarState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PillarState { started_at_ms: u32, keep_time_ms: u32, damage_factor_bits: u32 }
 
-// ============================================================================
-// FUNCTION: CPillarState::~CPillarState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp:35
-// RVA: 0x001F4B50
-// ADDRESS: 005f4b50
-// PROTOTYPE: void __thiscall ~CPillarState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl PillarState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, damage_factor: f32) -> Self {
+        Self { started_at_ms, keep_time_ms, damage_factor_bits: damage_factor.to_bits() }
+    }
+    pub(crate) const fn skill_id(self) -> u32 { PILLAR_STATE_ID }
+    pub(crate) const fn damage_factor(self) -> f32 { f32::from_bits(self.damage_factor_bits) }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool { now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms }
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
+        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
+        if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) as i32 }
+    }
+}
 
-// ============================================================================
-// FUNCTION: CPillarState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp:63
-// RVA: 0x001F4B60
-// ADDRESS: 005f4b60
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn send_pillar_state_visual(
+    game: &mut CGame, region_id: i32, identity: ShapeIdentity,
+    tile_x: i32, tile_y: i32, state: PillarState, begin: bool, now_ms: u32,
+) {
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type); message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
 
-// ============================================================================
-// FUNCTION: CPillarState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp:83
-// RVA: 0x001F4C30
-// ADDRESS: 005f4c30
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn replace_player_pillar_state(
+    game: &mut CGame, player_id: i32, state: PillarState, now_ms: u32,
+) -> bool {
+    let installed = game.find_player_mut(player_id).and_then(|player| {
+        let context = (player.server_region_id()?, player.shape().identity(),
+            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?);
+        let old = player.replace_pillar_state(state);
+        if old.is_some() { player.set_skill_moveable(true); }
+        player.set_skill_moveable(false); Some((old, context))
+    });
+    let Some((old, (region_id, identity, tile_x, tile_y))) = installed else { return false };
+    if let Some(old) = old { send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, old, false, now_ms); }
+    send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now_ms); true
+}
 
-// ============================================================================
-// FUNCTION: CPillarState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp:46
-// RVA: 0x001F4D30
-// ADDRESS: 005f4d30
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPillarStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\pillarstate.cpp:162
-// RVA: 0x001F4DF0
-// ADDRESS: 005f4df0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn expire_player_pillar_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    let finished = game.find_player_mut(player_id).and_then(|player| {
+        let state = player.take_expired_pillar_state(now_ms)?; player.set_skill_moveable(true);
+        Some((state, player.server_region_id()?, player.shape().identity(),
+            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+    });
+    let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
+    send_pillar_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms); true
+}

@@ -799,6 +799,8 @@ use crate::gameserver::appserver::skills::thunderslash::{
 use crate::gameserver::appserver::skills::thunderslashphalanx::{
     calculate_owned_thunder_slash_attack, ThunderSlashPhalanxTick,
 };
+use crate::gameserver::appserver::skills::pillar::{execute_player_pillar, is_pillar_dispatch};
+use crate::gameserver::appserver::skills::pillarstate::expire_player_pillar_state;
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
 };
@@ -26304,6 +26306,7 @@ impl CGame {
         let Some(now_ms) = sampled_at_ms else {
             return self.find_player(player_id).map(|_| ());
         };
+        let _ = expire_player_pillar_state(self, player_id, now_ms);
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
@@ -33565,6 +33568,7 @@ impl CGame {
                             || player.player_ai().lightning_sword().is_some()
                             || player.player_ai().little_flash().is_some()
                             || player.player_ai().thunder_slash().is_some()
+                            || player.player_ai().pillar().is_some()
                             || player.player_ai().knock_out().is_some())
                             && changes_command;
                         if interrupted_delayed_skill {
@@ -34042,6 +34046,7 @@ impl CGame {
                 || player.player_ai().lightning_sword().is_some()
                 || player.player_ai().little_flash().is_some()
                 || player.player_ai().thunder_slash().is_some()
+                || player.player_ai().pillar().is_some()
                 || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -35942,6 +35947,8 @@ impl CGame {
                         ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
                 }
             }
+            let pillar_damage_factor = self.find_player(target_id)
+                .and_then(CPlayer::pillar_state).map(|state| state.damage_factor());
             let mut defense_shields = self
                 .find_player_mut(target_id)
                 .map(CPlayer::take_defense_shields)
@@ -35957,6 +35964,7 @@ impl CGame {
                 &self.globe_setup,
                 &mut random,
                 &mut defense_shields,
+                pillar_damage_factor,
             );
             if let Some(target) = self.find_player_mut(target_id) {
                 target.restore_defense_shields(defense_shields);
@@ -36620,6 +36628,7 @@ impl CGame {
             let concrete_chain_lightning = is_chain_lightning_dispatch(dispatch);
             let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
             let concrete_thunder_slash = is_thunder_slash_dispatch(dispatch);
+            let concrete_pillar = is_pillar_dispatch(dispatch);
             let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
             let concrete_mosou = is_mosou_dispatch(dispatch);
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
@@ -36765,6 +36774,8 @@ impl CGame {
                 execute_player_thunder_blow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_slash {
                 execute_player_thunder_slash(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_pillar {
+                execute_player_pillar(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow_2 {
                 execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mosou {
@@ -39857,6 +39868,8 @@ impl CGame {
                 let _ = self.send_battle_fairy_goods_update(&outcome.update);
             }
         } else {
+            let pillar_damage_factor = self.find_player(target_id)
+                .and_then(CPlayer::pillar_state).map(|state| state.damage_factor());
             let mut defense_shields = self
                 .find_player_mut(target_id)
                 .map(CPlayer::take_defense_shields)
@@ -39872,6 +39885,7 @@ impl CGame {
                 &self.globe_setup,
                 &mut random,
                 &mut defense_shields,
+                pillar_damage_factor,
             );
             if let Some(target) = self.find_player_mut(target_id) {
                 target.restore_defense_shields(defense_shields);

@@ -183,6 +183,8 @@ pub(crate) mod appserver {
         pub(crate) mod origin;
         pub(crate) mod originstate;
         pub(crate) mod petscontrol;
+        pub(crate) mod pillar;
+        pub(crate) mod pillarstate;
         pub(crate) mod poisonarrow;
         pub(crate) mod poisonarrowstate;
         pub(crate) mod promotion;
