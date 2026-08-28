@@ -1,14 +1,16 @@
-//! Узкий runtime семейства пошаговых `CEnergyBolt/CZombieClaw` и конкретный
-//! owner энергетического снаряда для достигнутого monster-пути.
+//! Узкий механизм семейства пошаговых `CEnergyBolt/CZombieClaw/CSnakeBolt` и
+//! конкретный владелец энергетического снаряда для достигнутого пути монстра.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает принудительный
 //! путь длиной `SKILL_USAGE_TARGET_MAX_DISTANT`, один шаг за единицу времени
-//! полёта, живое перечитывание блока клетки и X→Y обход scope. Первый
+//! полёта, живое перечитывание блока клетки и обход области сначала по X,
+//! затем по Y. Первый
 //! успешный удар либо `BLOCK_UNFLY` посылает промежуточное завершение; на
-//! следующем такте исходный owner посылает его повторно и завершает cast.
+//! следующем такте исходный владелец посылает его повторно и завершает навык.
 //! Формула и единственный RNG-вызов на каждую реально атакованную цель остаются
 //! здесь, а `CGame` только применяет общую защиту, последствия смерти и сеть.
-//! Player MP, `CSoulCollectState` и координатные overload-ы ниже остаются RAW.
+//! MP игрока, `CSoulCollectState` и координатные перегрузки ниже остаются в
+//! исходном материале.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -243,13 +245,22 @@ pub(crate) const ENERGY_BOLT_SKILL_ID: u32 = 0x1a0;
 pub(crate) struct PathProjectileSpec {
     skill_id: u32,
     wide_scope_level: u16,
+    wide_scope_from_third: bool,
+    initial_position: usize,
 }
 
 impl PathProjectileSpec {
-    pub(crate) const fn new(skill_id: u32, wide_scope_level: u16) -> Self {
+    pub(crate) const fn new(
+        skill_id: u32,
+        wide_scope_level: u16,
+        wide_scope_from_third: bool,
+        initial_position: usize,
+    ) -> Self {
         Self {
             skill_id,
             wide_scope_level,
+            wide_scope_from_third,
+            initial_position,
         }
     }
 }
@@ -290,7 +301,12 @@ impl PathProjectileProgress {
         self.fired
     }
 
-    fn fire(&mut self, path: Vec<(i32, i32, u8)>, missile_unit_ms: u32) {
+    fn fire(
+        &mut self,
+        path: Vec<(i32, i32, u8)>,
+        missile_unit_ms: u32,
+        initial_position: usize,
+    ) {
         let unfly = path.iter().position(|cell| cell.2 == BLOCK_UNFLY);
         let end_index = unfly.unwrap_or(path.len());
         if let Some(&(x, y, _)) = unfly
@@ -302,7 +318,7 @@ impl PathProjectileProgress {
         }
         self.missile_flying_time_ms = missile_unit_ms.wrapping_mul(end_index as u32);
         self.path = path;
-        self.current_position = 1;
+        self.current_position = initial_position;
         self.visual_target = None;
         self.fired = true;
     }
@@ -407,7 +423,12 @@ fn attack_scope<Runtime: GameMainLoopRuntime>(
     progress: &mut PathProjectileProgress,
     deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
-    let scope_radius = (skill_level == spec.wide_scope_level)
+    let wide_scope = if spec.wide_scope_from_third {
+        !matches!(skill_level, 1 | 2)
+    } else {
+        skill_level == spec.wide_scope_level
+    };
+    let scope_radius = wide_scope
         .then_some(1)
         .unwrap_or(0);
     let mut attacked = Vec::new();
@@ -622,7 +643,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
             }
             return true;
         }
-        progress.fire(path, missile_unit_ms);
+        progress.fire(path, missile_unit_ms, spec.initial_position);
         send_fire(
             game,
             region,
@@ -717,7 +738,7 @@ pub(crate) fn execute_owned_energy_bolt<Runtime: GameMainLoopRuntime>(
         region,
         monster_id,
         target_identity,
-        PathProjectileSpec::new(ENERGY_BOLT_SKILL_ID, 1),
+        PathProjectileSpec::new(ENERGY_BOLT_SKILL_ID, 1, false, 1),
         skill_level,
         properties,
         now_ms,

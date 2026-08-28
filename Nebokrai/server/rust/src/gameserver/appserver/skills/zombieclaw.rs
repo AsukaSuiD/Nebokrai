@@ -213,7 +213,7 @@ pub(crate) fn execute_owned_zombie_claw<Runtime: GameMainLoopRuntime>(
         region,
         monster_id,
         target_identity,
-        PathProjectileSpec::new(ZOMBIE_CLAW_SKILL_ID, 3),
+        PathProjectileSpec::new(ZOMBIE_CLAW_SKILL_ID, 3, true, 1),
         skill_level,
         properties,
         now_ms,

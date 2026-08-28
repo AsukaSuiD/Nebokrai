@@ -1,6 +1,10 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Змеиный снаряд `CSnakeBolt` (`0x1a5`) для достигнутого пути монстра.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает общий пошаговый
+//! полёт с `CEnergyBolt/CZombieClaw`, но первый шаг начинается с позиции `0`,
+//! а область `3×3` применяется только на уровне 3. Живой тип клетки читается
+//! перед каждым шагом; столкновение и `BLOCK_UNFLY` сохраняют исходный двойной
+//! пакет завершения. Ветвь игрока с MP и `CSoulCollectState` остаётся ниже.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -11,7 +15,9 @@
 
 // ============================================================================
 // FUNCTION: CSnakeBoltEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Действия 0/1/3 монстра выполняет общий пошаговый владелец; клиентские
+// ответы об ошибках игрока остаются исходным материалом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\snakebolt.cpp:782
@@ -39,7 +45,8 @@
 
 // ============================================================================
 // FUNCTION: CSnakeBolt::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Объектная ветвь монстра достигнута в `execute_owned_snake_bolt`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\snakebolt.cpp:204
@@ -95,7 +102,9 @@
 
 // ============================================================================
 // FUNCTION: CSnakeBolt::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Дальность, повторное использование и доступность цели монстра достигнуты;
+// расход MP и сообщения игрока остаются исходным материалом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\snakebolt.cpp:119
@@ -109,7 +118,9 @@
 
 // ============================================================================
 // FUNCTION: CSnakeBolt::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Формула монстра достигнута общим пошаговым владельцем; множитель собранных
+// душ относится к ещё не подключённой ветви игрока.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\snakebolt.cpp:710
@@ -123,7 +134,8 @@
 
 // ============================================================================
 // FUNCTION: CSnakeBolt::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Объектная атака монстра достигнута общим пошаговым владельцем.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\snakebolt.cpp:664
@@ -137,7 +149,8 @@
 
 // ============================================================================
 // FUNCTION: CSnakeBolt::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Атака области монстра достигнута с областью уровня 3 размером `3×3`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\snakebolt.cpp:578
@@ -151,7 +164,8 @@
 
 // ============================================================================
 // FUNCTION: CSnakeBolt::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Полный пошаговый путь монстра достигнут через `execute_owned_snake_bolt`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\snakebolt.cpp:319
@@ -178,3 +192,38 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+use super::energybolt::{PathProjectileSpec, execute_owned_path_projectile};
+use super::monsterattack::MonsterAttackDeath;
+use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+
+pub(crate) const SNAKE_BOLT_SKILL_ID: u32 = 0x1a5;
+
+#[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
+pub(crate) fn execute_owned_snake_bolt<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    now_ms: u32,
+    runtime: &mut Runtime,
+    deaths: &mut Vec<MonsterAttackDeath>,
+) -> bool {
+    execute_owned_path_projectile(
+        game,
+        region,
+        monster_id,
+        target_identity,
+        PathProjectileSpec::new(SNAKE_BOLT_SKILL_ID, 3, true, 0),
+        skill_level,
+        properties,
+        now_ms,
+        runtime,
+        deaths,
+    )
+}
