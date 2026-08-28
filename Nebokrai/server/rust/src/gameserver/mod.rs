@@ -15,6 +15,8 @@ pub(crate) mod appserver {
         pub(crate) mod puninesscreature;
         pub(crate) mod stupidarcher;
         pub(crate) mod stupidgladiator;
+        pub(crate) mod warattackmonster;
+        pub(crate) mod wardeffendmonster;
     }
     pub(crate) mod area;
     pub(crate) mod baseobject;
