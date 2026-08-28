@@ -4250,18 +4250,15 @@ impl CPlayer {
             .replace_heal_state(removed_skill_id, state)
     }
 
-    pub(crate) fn update_heal_states(
+    pub(crate) fn take_heal_states(&mut self) -> Vec<super::skills::healstate::HealState> {
+        self.move_shape.take_heal_states()
+    }
+
+    pub(crate) fn restore_heal_states(
         &mut self,
-        now_ms: u32,
-    ) -> super::moveshape::HealStatesUpdate {
-        let health = self.health();
-        let maximum_health = self.maximum_health();
-        let dead = self.is_dead();
-        let update = self
-            .move_shape
-            .update_heal_states(now_ms, health, maximum_health, dead);
-        self.set_health(update.health);
-        update
+        states: Vec<super::skills::healstate::HealState>,
+    ) {
+        self.move_shape.restore_heal_states(states);
     }
 
     pub(crate) fn replace_boss_blue_quake_state(

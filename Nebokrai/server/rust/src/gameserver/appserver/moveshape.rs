@@ -46,7 +46,7 @@ use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissS
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
-use crate::gameserver::appserver::skills::healstate::{HealState, HealStatePass};
+use crate::gameserver::appserver::skills::healstate::HealState;
 use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
@@ -491,13 +491,6 @@ pub(crate) struct CanonicalStateStorage {
     undead_states: Vec<UndeadState>,
     script_states: Vec<ScriptMoveState>,
     ride_state: Option<RideState>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HealStatesUpdate {
-    pub(crate) health: u32,
-    pub(crate) changed: bool,
-    pub(crate) ended: Vec<HealState>,
 }
 
 impl Deref for CMoveShape {
@@ -1094,38 +1087,13 @@ impl CMoveShape {
         previous
     }
 
-    pub(crate) fn update_heal_states(
-        &mut self,
-        now_ms: u32,
-        mut health: u32,
-        maximum_health: u32,
-        dead: bool,
-    ) -> HealStatesUpdate {
-        let promotion_factor = self.promotion_heal_recover_factor();
-        let mut changed = false;
-        let mut ended = Vec::new();
-        let mut position = 0;
-        while position < self.heal_states.len() {
-            let pass: HealStatePass = self.heal_states[position].advance(
-                now_ms,
-                health,
-                maximum_health,
-                dead,
-                promotion_factor,
-            );
-            health = pass.health;
-            changed |= pass.changed;
-            if pass.ended {
-                ended.push(self.heal_states.remove(position));
-            } else {
-                position += 1;
-            }
-        }
-        HealStatesUpdate {
-            health,
-            changed,
-            ended,
-        }
+    pub(crate) fn take_heal_states(&mut self) -> Vec<HealState> {
+        std::mem::take(&mut self.heal_states)
+    }
+
+    pub(crate) fn restore_heal_states(&mut self, states: Vec<HealState>) {
+        debug_assert!(self.heal_states.is_empty());
+        self.heal_states = states;
     }
 
     pub(crate) fn push_fury_state(&mut self, state: FuryState) {

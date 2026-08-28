@@ -5,7 +5,9 @@
 //! лечения, даже если пропущено несколько интервалов. Счётчик увеличивается
 //! перед расчётом, прибавление HP использует DWORD-обёртку, а коэффициент
 //! `Promotion` считывается заново при каждом проходе. Визуальные пакеты
-//! `0xBFE03/0xBFE04` формируются в модуле-владельце состояния.
+//! `0xBFE03/0xBFE04` формируются в модуле-владельце состояния. Фактическая
+//! цель эффекта хранится отдельно от владельца записи только ради подтверждённой
+//! ветви `CSuperHeal2`; отдельного параллельного хранилища это не создаёт.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
@@ -17,6 +19,7 @@ pub(crate) const HEAL_STATE_END_MESSAGE: i32 = 0x000b_fe04;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HealState {
     skill_id: u32,
+    effect_target: ShapeIdentity,
     started_at_ms: u32,
     keep_time_ms: u32,
     frequency_ms: u32,
@@ -34,6 +37,7 @@ pub(crate) struct HealStatePass {
 impl HealState {
     pub(crate) const fn new(
         skill_id: u32,
+        effect_target: ShapeIdentity,
         started_at_ms: u32,
         keep_time_ms: u32,
         frequency_ms: u32,
@@ -41,6 +45,7 @@ impl HealState {
     ) -> Self {
         Self {
             skill_id,
+            effect_target,
             started_at_ms,
             keep_time_ms,
             frequency_ms,
@@ -51,6 +56,10 @@ impl HealState {
 
     pub(crate) const fn skill_id(self) -> u32 {
         self.skill_id
+    }
+
+    pub(crate) const fn effect_target(self) -> ShapeIdentity {
+        self.effect_target
     }
 
     pub(crate) const fn client_time(self, now_ms: u32) -> i32 {

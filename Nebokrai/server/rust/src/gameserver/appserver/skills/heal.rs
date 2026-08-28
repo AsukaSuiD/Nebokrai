@@ -1,18 +1,25 @@
-//! Семейство периодического лечения `CHeal/CHeal2` (`0xD3/0xE3`).
+//! Семейство периодического лечения `CHeal/CHeal2/CSuperHeal/CSuperHeal2`
+//! (`0xD3/0xE3/0xD9/0xE4`).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
-//! `appserver/skills/heal.cpp` и `heal2.cpp`. Совпадающий конвейер объединён:
+//! `appserver/skills/heal*.cpp` и `superheal*.cpp`. Совпадающий конвейер объединён:
 //! двойная проверка MP, время восстановления, расстояние, задержка, направление,
 //! точная формула усиления оружием с плавающей точкой и установка
 //! периодического состояния.
 //! Обычный нетранспортный монстр после начальной проверки заменяется самим
 //! заклинателем. `CGame` координирует владельцев и доставку; формула и пакеты
-//! остаются здесь. Координатные перегрузки выбора цели ещё не подключены.
+//! остаются здесь. У `CSuperHeal2` состояние подтверждённо хранится у выбранной
+//! цели, но лечит и визуализирует заклинателя; каноническое состояние поэтому
+//! отдельно хранит владельца эффекта. Координатные перегрузки ещё не подключены.
 
 use super::baseattack::time_reached;
 use super::heal2::HEAL_2_SKILL_ID;
 use super::healstate::{HealState, round_original, send_heal_state_visual, unsigned_float};
 use super::healstate2::HealState2;
+use super::superheal::SUPER_HEAL_SKILL_ID;
+use super::superheal2::SUPER_HEAL_2_SKILL_ID;
+use super::superhealstate::SuperHealState;
+use super::superhealstate2::SuperHealState2;
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -58,11 +65,20 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
 }
 
 pub(crate) const fn is_heal_skill(skill_id: u32) -> bool {
-    matches!(skill_id, HEAL_SKILL_ID | HEAL_2_SKILL_ID)
+    matches!(
+        skill_id,
+        HEAL_SKILL_ID | HEAL_2_SKILL_ID | SUPER_HEAL_SKILL_ID | SUPER_HEAL_2_SKILL_ID
+    )
 }
 
 fn family_index(skill_id: u32) -> usize {
-    usize::from(skill_id == HEAL_2_SKILL_ID)
+    match skill_id {
+        HEAL_SKILL_ID => 0,
+        HEAL_2_SKILL_ID => 1,
+        SUPER_HEAL_SKILL_ID => 2,
+        SUPER_HEAL_2_SKILL_ID => 3,
+        _ => unreachable!("идентификатор семейства лечения проверен"),
+    }
 }
 
 fn requested_target(player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(u32, ShapeIdentity)> {
@@ -165,13 +181,14 @@ fn replace_state(
     game: &mut CGame,
     region_id: i32,
     target: ShapeIdentity,
+    removed_skill_id: u32,
     state: HealState,
 ) -> Option<Option<HealState>> {
     match target.object_type {
         PLAYER_TYPE => {
             let player = game.find_player_mut(target.id)?;
             (player.server_region_id() == Some(region_id))
-                .then(|| player.replace_heal_state(state.skill_id(), state))
+                .then(|| player.replace_heal_state(removed_skill_id, state))
         }
         MONSTER_TYPE => {
             let mut owner = game.take_region_owner(region_id)?;
@@ -181,7 +198,7 @@ fn replace_state(
                 .map(|monster| {
                     monster
                         .move_shape_mut()
-                        .replace_heal_state(state.skill_id(), state)
+                        .replace_heal_state(removed_skill_id, state)
                 });
             game.restore_region_owner(owner);
             previous
@@ -358,30 +375,59 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
 
     send_cast(game, player_id, target, skill_id, skill_level, false);
     let now_ms = runtime.now_milliseconds();
-    let state: HealState = if skill_id == HEAL_2_SKILL_ID {
-        HealState2::new(skill_id, now_ms, keep_time_ms, frequency_ms, hp_gain)
+    let effect_target = if skill_id == SUPER_HEAL_2_SKILL_ID {
+        caster_identity(player_id)
     } else {
-        HealState::new(skill_id, now_ms, keep_time_ms, frequency_ms, hp_gain)
+        target.identity
     };
-    if let Some(previous) = replace_state(game, region_id, target.identity, state) {
+    let removed_skill_id = if skill_id == SUPER_HEAL_SKILL_ID {
+        HEAL_SKILL_ID
+    } else {
+        skill_id
+    };
+    let state: HealState = match skill_id {
+        HEAL_2_SKILL_ID => HealState2::new(
+            skill_id, effect_target, now_ms, keep_time_ms, frequency_ms, hp_gain,
+        ),
+        SUPER_HEAL_SKILL_ID => SuperHealState::new(
+            skill_id, effect_target, now_ms, keep_time_ms, frequency_ms, hp_gain,
+        ),
+        SUPER_HEAL_2_SKILL_ID => SuperHealState2::new(
+            skill_id, effect_target, now_ms, keep_time_ms, frequency_ms, hp_gain,
+        ),
+        _ => HealState::new(
+            skill_id, effect_target, now_ms, keep_time_ms, frequency_ms, hp_gain,
+        ),
+    };
+    if let Some(previous) = replace_state(
+        game,
+        region_id,
+        target.identity,
+        removed_skill_id,
+        state,
+    ) {
         if let Some(previous) = previous {
-            send_heal_state_visual(
-                game,
-                region_id,
-                target.identity,
-                target.tile_x,
-                target.tile_y,
-                previous,
-                false,
-                now_ms,
-            );
+            if let Some(previous_target) =
+                target_snapshot(game, region_id, previous.effect_target())
+            {
+                send_heal_state_visual(
+                    game,
+                    region_id,
+                    previous.effect_target(),
+                    previous_target.tile_x,
+                    previous_target.tile_y,
+                    previous,
+                    false,
+                    now_ms,
+                );
+            }
         }
         send_heal_state_visual(
             game,
             region_id,
-            target.identity,
-            target.tile_x,
-            target.tile_y,
+            effect_target,
+            if effect_target == target.identity { target.tile_x } else { source_x },
+            if effect_target == target.identity { target.tile_y } else { source_y },
             state,
             true,
             now_ms,

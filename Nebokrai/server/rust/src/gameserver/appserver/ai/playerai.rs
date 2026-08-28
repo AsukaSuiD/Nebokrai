@@ -89,8 +89,8 @@ pub(crate) struct CPlayerAI {
     hearten_last_used_ms: u32,
     promotion: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     promotion_last_used_ms: u32,
-    heal_family: [Option<SkillExecutionKernel<PlayerSkillDispatch>>; 2],
-    heal_family_last_used_ms: [u32; 2],
+    heal_family: [Option<SkillExecutionKernel<PlayerSkillDispatch>>; 4],
+    heal_family_last_used_ms: [u32; 4],
     pets_control: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     pets_control_last_used_ms: u32,
     monster_taming: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -155,7 +155,7 @@ impl CPlayerAI {
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
-        self.heal_family = [None; 2];
+        self.heal_family = [None; 4];
         self.pets_control = None;
         self.monster_taming = None;
         self.machine_shield = None;
@@ -305,7 +305,7 @@ impl CPlayerAI {
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
-        self.heal_family = [None; 2];
+        self.heal_family = [None; 4];
         self.pets_control = None;
         self.monster_taming = None;
         self.machine_shield = None;
