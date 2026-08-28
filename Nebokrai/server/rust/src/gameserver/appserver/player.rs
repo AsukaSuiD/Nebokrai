@@ -73,8 +73,9 @@
 //! Тот же persisted level/exp/vigour/base-stat owner теперь обслуживает reached
 //! auto-inc `CheckLevel`; multi-level scripts, property recompute и network
 //! результаты остаются у `CGame`, чтобы helper-ы не образовывали shadow path.
-//! World/country public talk timestamps принадлежат тому же player state:
-//! wrapping cooldown обновляется до проверки и списания channel-cost.
+//! Метки времени общих и государственных разговоров принадлежат тому же
+//! состоянию игрока: время восстановления с переполнением обновляется до
+//! проверки и списания стоимости канала.
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! RP/YP сохраняют соседние WORD offsets `0xAC/0xAE` base-wire. Изменение
 //! самих max не выполняет этот clamp без конкретного caller-а.
@@ -4299,6 +4300,12 @@ impl CPlayer {
         self.move_shape.take_expired_boss_blue_quake_state(now_ms)
     }
 
+    pub(crate) fn take_boss_blue_quake_state(
+        &mut self,
+    ) -> Option<super::skills::bossbluequakestate::BossBlueQuakeState> {
+        self.move_shape.take_boss_blue_quake_state()
+    }
+
     /// Применяет канонические состояния в исходном порядке общего
     /// `CPlayer::UpdateProperty`. Формулы остаются методами конкретных владельцев состояний;
     /// наружу выходят только визуальные действия, требующие сетевого владельца.
@@ -4420,6 +4427,10 @@ impl CPlayer {
         self.move_shape.take_cure_state_for_ai()
     }
 
+    pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
+        self.move_shape.curable_state_ids()
+    }
+
     pub(crate) fn replace_poison_arrow_state(
         &mut self,
         state: super::skills::poisonarrowstate::PoisonArrowState,
@@ -4444,6 +4455,12 @@ impl CPlayer {
         &mut self,
     ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
         self.move_shape.take_spider_poison_state_for_ai()
+    }
+
+    pub(crate) fn take_spider_poison_state(
+        &mut self,
+    ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
+        self.move_shape.take_spider_poison_state()
     }
 
     pub(crate) fn replace_spider_web_state(

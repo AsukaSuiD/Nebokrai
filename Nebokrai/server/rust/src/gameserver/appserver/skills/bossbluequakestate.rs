@@ -190,6 +190,21 @@ pub(crate) fn expire_player_boss_blue_quake_state(
     true
 }
 
+pub(crate) fn finish_player_boss_blue_quake_state_on_cure(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+) -> bool {
+    let Some((region_id, identity, tile_x, tile_y, state)) = game.find_player_mut(player_id).and_then(|player| {
+        let state = player.take_boss_blue_quake_state()?;
+        player.set_skill_moveable(true);
+        player.set_skill_fightable(true);
+        Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, state))
+    }) else { return false };
+    send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms);
+    true
+}
+
 pub(crate) fn expire_monster_boss_blue_quake_state(
     game: &mut CGame,
     region: &mut crate::gameserver::appserver::serverregion::CServerRegion,

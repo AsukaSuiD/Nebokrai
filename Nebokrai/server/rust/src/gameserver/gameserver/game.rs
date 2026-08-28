@@ -835,6 +835,7 @@ use crate::gameserver::appserver::skills::snowstormphalanx::{
 use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
 use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
+use crate::gameserver::appserver::skills::cure::{execute_player_cure, is_cure_target};
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
@@ -36452,6 +36453,7 @@ impl CGame {
             let concrete_snow_storm = is_snow_storm_target(dispatch);
             let concrete_weak = is_weak_target(dispatch);
             let concrete_god_bless = is_god_bless_skill(dispatch);
+            let concrete_cure = is_cure_target(dispatch);
             let concrete_self_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36509,6 +36511,8 @@ impl CGame {
                 execute_player_weak(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_god_bless {
                 execute_player_god_bless(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_cure {
+                execute_player_cure(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_self_shield {
                 execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {

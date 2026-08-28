@@ -115,6 +115,21 @@ pub(crate) fn send_spider_poison_state_visual(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
+pub(crate) fn finish_player_spider_poison_state_on_cure(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+) -> bool {
+    let finished = game.find_player_mut(player_id).and_then(|player| {
+        let state = player.take_spider_poison_state()?;
+        Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+    });
+    let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
+    send_spider_poison_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms);
+    true
+}
+
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E

@@ -9,18 +9,19 @@
 //! Известные состояния смены тела, расширенные состояния, бессмертие,
 //! сценарные состояния и езда принадлежат одному `CanonicalStateStorage`.
 //! Сырой `ex_states` скрыт внутри `LegacyStateCodec` и служит только для
-//! сохранения точного порядка, неизвестных записей и обратного wire-кодека;
+//! сохранения точного порядка, неизвестных записей и обратного двоичного кодека;
 //! игровое поведение читает типизированные состояния. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
 //! Паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
-//! Little-endian доступ к legacy codec выполняют общие `LegacyReader` и
-//! `LegacyWriter`; размещение записей и их смещения остаются у этого owner-а.
+//! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
+//! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
+//! остаются у этого владельца.
 //!
 //! Реализованные `AddSkill`, `DelSkill`, `AddState`, `GetStatesNum` и
 //! `UpdateAbnormality` используют это же хранилище. Ещё не восстановленные
-//! классы навыков и AI остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
+//! классы навыков и ИИ остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
 
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
@@ -483,6 +484,7 @@ pub(crate) struct CanonicalStateStorage {
     boss_blue_fury_state: Option<BossBlueFuryState>,
     boss_blue_quake_state: Option<BossBlueQuakeState>,
     cure_state: Option<CureState>,
+    curable_state_order: IndexSet<u32>,
     poison_arrow_state: Option<PoisonArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
     spider_web_state: Option<SpiderWebState>,
@@ -688,6 +690,7 @@ impl CMoveShape {
         self.boss_blue_fury_state = None;
         self.boss_blue_quake_state = None;
         self.cure_state = None;
+        self.curable_state_order.clear();
         self.poison_arrow_state = None;
         self.spider_poison_state = None;
         self.spider_web_state = None;
@@ -1236,6 +1239,7 @@ impl CMoveShape {
         &mut self,
         state: BossBlueQuakeState,
     ) -> Option<BossBlueQuakeState> {
+        self.curable_state_order.insert(state.skill_id());
         self.boss_blue_quake_state.replace(state)
     }
 
@@ -1244,7 +1248,15 @@ impl CMoveShape {
         now_ms: u32,
     ) -> Option<BossBlueQuakeState> {
         self.boss_blue_quake_state.filter(|state| state.expired(now_ms))?;
-        self.boss_blue_quake_state.take()
+        let state = self.boss_blue_quake_state.take()?;
+        self.curable_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn take_boss_blue_quake_state(&mut self) -> Option<BossBlueQuakeState> {
+        let state = self.boss_blue_quake_state.take()?;
+        self.curable_state_order.shift_remove(&state.skill_id());
+        Some(state)
     }
 
     pub(crate) fn replace_mana_shield_state(
@@ -1405,6 +1417,7 @@ impl CMoveShape {
         state: SpiderPoisonState,
     ) -> Option<SpiderPoisonState> {
         self.periodic_attack_order.insert(state.skill_id());
+        self.curable_state_order.insert(state.skill_id());
         self.spider_poison_state.replace(state)
     }
 
@@ -1415,6 +1428,7 @@ impl CMoveShape {
     pub(crate) fn take_spider_poison_state(&mut self) -> Option<SpiderPoisonState> {
         let state = self.spider_poison_state.take()?;
         self.periodic_attack_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
         Some(state)
     }
 
@@ -1423,6 +1437,7 @@ impl CMoveShape {
         state: SpiderWebState,
     ) -> Option<SpiderWebState> {
         self.blind_state_order.insert(state.skill_id());
+        self.curable_state_order.insert(state.skill_id());
         self.spider_web_state.replace(state)
     }
 
@@ -1475,17 +1490,20 @@ impl CMoveShape {
         let state = self.spider_web_state.filter(|state| state.expired(now_ms))?;
         self.spider_web_state = None;
         self.blind_state_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
         Some(state)
     }
 
     pub(crate) fn take_spider_web_state(&mut self) -> Option<SpiderWebState> {
         let state = self.spider_web_state.take()?;
         self.blind_state_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
         Some(state)
     }
 
     pub(crate) fn replace_knock_out_state(&mut self, state: KnockOutState) -> Option<KnockOutState> {
         self.blind_state_order.insert(state.skill_id());
+        self.curable_state_order.insert(state.skill_id());
         self.knock_out_state.replace(state)
     }
 
@@ -1493,13 +1511,19 @@ impl CMoveShape {
         let state = self.knock_out_state.filter(|state| state.expired(now_ms))?;
         self.knock_out_state = None;
         self.blind_state_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
         Some(state)
     }
 
     pub(crate) fn take_knock_out_state(&mut self) -> Option<KnockOutState> {
         let state = self.knock_out_state.take()?;
         self.blind_state_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
         Some(state)
+    }
+
+    pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
+        self.curable_state_order.iter().copied().collect()
     }
 
     pub(crate) fn blind_state_order(&self) -> [Option<u32>; 2] {
@@ -1561,6 +1585,7 @@ impl CMoveShape {
 
     pub(crate) fn finish_periodic_attack_state(&mut self, skill_id: u32) {
         self.periodic_attack_order.shift_remove(&skill_id);
+        self.curable_state_order.shift_remove(&skill_id);
     }
 
     pub(crate) fn agility_state(&self, skill_id: u32) -> Option<AgilityState> {
