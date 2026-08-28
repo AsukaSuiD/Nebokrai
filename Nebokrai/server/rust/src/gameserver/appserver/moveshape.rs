@@ -82,6 +82,7 @@ use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
+use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BossBlueFuryTick,
@@ -528,6 +529,7 @@ pub(crate) struct CanonicalStateStorage {
     blind_state_order: IndexSet<u32>,
     blood_loss_state: Option<BloodLossState>,
     leaf_cut_state: Option<LeafCutState>,
+    leaf_cut_3_state: Option<LeafCutState3>,
     swordship_states: Vec<SwordshipState>,
     wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
     automatic_restore_states: Vec<AutomaticRestoreState>,
@@ -682,6 +684,9 @@ impl CMoveShape {
         if let Some(state) = self.leaf_cut_state {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
+        if let Some(state) = self.leaf_cut_3_state {
+            state.update_serialized_runtime(&mut payload, now_ms);
+        }
         payload
     }
 
@@ -717,6 +722,15 @@ impl CMoveShape {
             .find(|offset| read_u32(&states, *offset) == Some(LEAF_CUT_STATE_ID))
             .and_then(|offset| LeafCutState::decode(&states, offset, 0).ok());
         if let Some(state) = self.leaf_cut_state {
+            self.periodic_attack_order.insert(state.skill_id());
+        }
+        self.periodic_attack_order.shift_remove(&LEAF_CUT_3_STATE_ID);
+        self.leaf_cut_3_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(LEAF_CUT_3_STATE_ID))
+            .and_then(|offset| LeafCutState3::decode(&states, offset, 0).ok());
+        if let Some(state) = self.leaf_cut_3_state {
             self.periodic_attack_order.insert(state.skill_id());
         }
         self.ex_states.replace(states);
@@ -764,6 +778,7 @@ impl CMoveShape {
         self.blind_state_order.clear();
         self.blood_loss_state = None;
         self.leaf_cut_state = None;
+        self.leaf_cut_3_state = None;
         self.wuxing_states.clear();
         self.automatic_restore_states.clear();
         self.battle_fairy_attribute_states.clear();
@@ -813,6 +828,7 @@ impl CMoveShape {
             || self.state_storage.knight_cut_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || self.state_storage.leaf_cut_state.is_some()
+            || self.state_storage.leaf_cut_3_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
             || !self.state_storage.change_body_states.is_empty()
@@ -1006,6 +1022,10 @@ impl CMoveShape {
             self.leaf_cut_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let leaf_cut_3 = usize::from(
+            self.leaf_cut_3_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let battle_fairy_attributes = self
             .battle_fairy_attribute_states
             .iter()
@@ -1044,6 +1064,7 @@ impl CMoveShape {
             .saturating_add(knight_cut)
             .saturating_add(blood_loss)
             .saturating_add(leaf_cut)
+            .saturating_add(leaf_cut_3)
             .saturating_add(battle_fairy_attributes)
             .saturating_add(shields)
             .saturating_add(change_body)
@@ -1135,6 +1156,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .leaf_cut_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .leaf_cut_3_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .swordship_states
@@ -1836,6 +1860,7 @@ impl CMoveShape {
         for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); }
         for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
         for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
     }
 
@@ -1844,6 +1869,70 @@ impl CMoveShape {
         state.activate_loaded(now_ms);
         state.update_serialized_runtime(&mut self.ex_states, now_ms);
         self.leaf_cut_state = Some(state);
+        Some(state)
+    }
+
+    pub(crate) fn replace_leaf_cut_3_state(
+        &mut self,
+        mut state: LeafCutState3,
+        now_ms: u32,
+    ) -> Option<LeafCutState3> {
+        let previous = self.leaf_cut_3_state.take();
+        let replaced_in_place = previous
+            .and_then(LeafCutState3::serialized_span)
+            .is_some_and(|(offset, amount)| {
+                amount == LEAF_CUT_3_STATE_BYTES
+                    && state.write_serialized_at(&mut self.ex_states, offset, now_ms)
+            });
+        if !replaced_in_place {
+            if self.ex_states.len() < 4 {
+                self.ex_states.clear();
+                LegacyWriter::new(&mut self.ex_states).write_u32(0);
+            }
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
+            state.append_serialized(&mut self.ex_states, now_ms);
+        }
+        self.periodic_attack_order.insert(state.skill_id());
+        self.leaf_cut_3_state = Some(state);
+        previous
+    }
+
+    pub(crate) fn take_leaf_cut_3_state_for_ai(&mut self) -> Option<LeafCutState3> {
+        self.leaf_cut_3_state.take()
+    }
+
+    pub(crate) fn restore_leaf_cut_3_state_after_ai(&mut self, state: LeafCutState3) {
+        debug_assert!(self.leaf_cut_3_state.is_none());
+        self.leaf_cut_3_state = Some(state);
+    }
+
+    pub(crate) fn finish_leaf_cut_3_state(&mut self, state: LeafCutState3) {
+        self.remove_leaf_cut_3_state_serialized(state);
+        self.periodic_attack_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
+    }
+
+    fn remove_leaf_cut_3_state_serialized(&mut self, state: LeafCutState3) {
+        let Some((offset, amount)) = state.serialized_span() else { return };
+        if offset.saturating_add(amount) > self.ex_states.len() { return }
+        self.ex_states.drain(offset..offset + amount);
+        if self.ex_states.len() >= 4 {
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
+        }
+        for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); }
+        for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
+        for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
+    }
+
+    pub(crate) fn activate_loaded_leaf_cut_3_state(&mut self, now_ms: u32) -> Option<LeafCutState3> {
+        let mut state = self.leaf_cut_3_state?;
+        state.activate_loaded(now_ms);
+        state.update_serialized_runtime(&mut self.ex_states, now_ms);
+        self.leaf_cut_3_state = Some(state);
         Some(state)
     }
 
@@ -2022,6 +2111,9 @@ impl CMoveShape {
             if let Some(state) = &mut self.leaf_cut_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
+            if let Some(state) = &mut self.leaf_cut_3_state {
+                state.shift_serialized_offset_after(offset, amount);
+            }
         }
         self.set_fightable(true);
         Some(state)
@@ -2150,6 +2242,9 @@ impl CMoveShape {
             state.shift_serialized_offset_after(offset, amount);
         }
         if let Some(state) = &mut self.leaf_cut_state {
+            state.shift_serialized_offset_after(offset, amount);
+        }
+        if let Some(state) = &mut self.leaf_cut_3_state {
             state.shift_serialized_offset_after(offset, amount);
         }
         if let Some(state) = &mut self.ride_state {
@@ -2300,6 +2395,9 @@ impl CMoveShape {
             if let Some(state) = &mut self.leaf_cut_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
+            if let Some(state) = &mut self.leaf_cut_3_state {
+                state.shift_serialized_offset_after(offset, amount);
+            }
             if let Some(state) = &mut self.ride_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
@@ -2434,6 +2532,9 @@ impl CMoveShape {
                 state.shift_serialized_offset_after(offset, amount);
             }
             if let Some(state) = &mut self.leaf_cut_state {
+                state.shift_serialized_offset_after(offset, amount);
+            }
+            if let Some(state) = &mut self.leaf_cut_3_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
             if let Some(state) = &mut self.ride_state {
@@ -2909,6 +3010,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             EX_STATE_NEW_ID => 56,
             UNDEAD_STATE_ID => 76,
             LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
+            LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

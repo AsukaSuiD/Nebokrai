@@ -484,6 +484,7 @@
 
 mod bloodloss;
 mod leafcut;
+mod leafcut3;
 mod fatalblow;
 mod firewall;
 mod godpunishment;
@@ -847,6 +848,7 @@ use crate::gameserver::appserver::skills::ragebreak::{execute_player_rage_break,
 use crate::gameserver::appserver::skills::flash::{execute_player_flash, is_flash_dispatch};
 use crate::gameserver::appserver::skills::swallow::{execute_player_swallow, is_swallow_dispatch};
 use crate::gameserver::appserver::skills::leafcut::{execute_player_leaf_cut, is_leaf_cut_dispatch};
+use crate::gameserver::appserver::skills::leafcut3::{execute_player_leaf_cut_3, is_leaf_cut_3_dispatch};
 use crate::gameserver::appserver::skills::jucut::{execute_player_ju_cut, is_ju_cut_dispatch};
 use crate::gameserver::appserver::skills::lightningsword::{
     execute_player_lightning_sword, is_lightning_sword_dispatch,
@@ -986,6 +988,9 @@ use crate::gameserver::appserver::skills::bloodlossstate::{
 };
 use crate::gameserver::appserver::skills::leafcutstate::{
     LeafCutState, LeafCutStateTick, send_leaf_cut_state_visual,
+};
+use crate::gameserver::appserver::skills::leafcutstate3::{
+    LeafCutState3, LEAF_CUT_3_STATE_ID, send_leaf_cut_3_state_visual,
 };
 use crate::gameserver::appserver::skills::fatalblow::{
     FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
@@ -26371,6 +26376,7 @@ impl CGame {
                 crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
                     self.update_player_leaf_cut_state(player_id, runtime)
                 }
+                LEAF_CUT_3_STATE_ID => self.update_player_leaf_cut_3_state(player_id, runtime),
                 _ => false,
             };
             periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
@@ -28151,6 +28157,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_leaf_cut_state(login_tick_ms);
+        let loaded_leaf_cut_3_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_leaf_cut_3_state(login_tick_ms);
         for state in &loaded_appellation_states {
             self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
         }
@@ -28168,6 +28179,21 @@ impl CGame {
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
         {
             send_leaf_cut_state_visual(
+                self,
+                region_id,
+                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                x,
+                y,
+                state,
+                true,
+                login_tick_ms,
+            );
+        }
+        if let Some(state) = loaded_leaf_cut_3_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_leaf_cut_3_state_visual(
                 self,
                 region_id,
                 ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
@@ -36815,6 +36841,38 @@ impl CGame {
         }
     }
 
+    pub(crate) fn replace_leaf_cut_3_state(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        state: LeafCutState3,
+        now_ms: u32,
+    ) -> Option<(Option<LeafCutState3>, ShapeIdentity, i32, i32)> {
+        match target.object_type {
+            PLAYER_TYPE => {
+                let player = self.find_player_mut(target.id)?;
+                let identity = player.shape().identity();
+                let x = player.shape().get_tile_x().ok()?;
+                let y = player.shape().get_tile_y().ok()?;
+                let previous = player.replace_leaf_cut_3_state(state, now_ms);
+                Some((previous, identity, x, y))
+            }
+            MONSTER_TYPE => {
+                let mut owner = self.take_region_owner(region_id)?;
+                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
+                    let identity = monster.move_shape().shape().identity();
+                    let x = monster.move_shape().shape().get_tile_x().ok()?;
+                    let y = monster.move_shape().shape().get_tile_y().ok()?;
+                    let previous = monster.move_shape_mut().replace_leaf_cut_3_state(state, now_ms);
+                    Some((previous, identity, x, y))
+                });
+                self.restore_region_owner(owner);
+                result
+            }
+            _ => None,
+        }
+    }
+
     fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -36859,6 +36917,7 @@ impl CGame {
             let concrete_flash = is_flash_dispatch(dispatch);
             let concrete_swallow = is_swallow_dispatch(dispatch);
             let concrete_leaf_cut = is_leaf_cut_dispatch(dispatch);
+            let concrete_leaf_cut_3 = is_leaf_cut_3_dispatch(dispatch);
             let concrete_ju_cut = is_ju_cut_dispatch(dispatch);
             let concrete_lightning_sword = is_lightning_sword_dispatch(dispatch);
             let concrete_little_flash = is_little_flash_dispatch(dispatch);
@@ -37026,6 +37085,8 @@ impl CGame {
                 execute_player_swallow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_leaf_cut {
                 execute_player_leaf_cut(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_leaf_cut_3 {
+                execute_player_leaf_cut_3(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_ju_cut {
                 execute_player_ju_cut(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning_sword {
@@ -41664,6 +41725,9 @@ impl CGame {
                         }
                         crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
                             let _ = self.update_monster_leaf_cut_state(region_id, monster_id, runtime);
+                        }
+                        LEAF_CUT_3_STATE_ID => {
+                            let _ = self.update_monster_leaf_cut_3_state(region_id, monster_id, runtime);
                         }
                         _ => {}
                     }

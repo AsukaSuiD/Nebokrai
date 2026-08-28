@@ -25,6 +25,7 @@ pub(crate) enum LeafCutStateTick { Pending, Attack(AttackInformation), Ended }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LeafCutState {
+    state_id: u32,
     master: MasterInfo,
     started_at_ms: u32,
     keep_time_ms: u32,
@@ -42,10 +43,15 @@ pub(crate) struct LeafCutState {
 impl LeafCutState {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют состоянию EXE")]
     pub(crate) const fn new(master: MasterInfo, started_at_ms: u32, keep_time_ms: u32, frequency_ms: u32, damage_factor: f32, damage_modifier: f32, minimum_attack: u16, maximum_attack: u16, element_attack: u16, soul_attack: u16) -> Self {
-        Self { master, started_at_ms, keep_time_ms, frequency_ms, damage_factor_bits: damage_factor.to_bits(), damage_modifier_bits: damage_modifier.to_bits(), minimum_attack, maximum_attack, element_attack, soul_attack, attack_count: 0, serialized_offset: None }
+        Self::new_with_id(LEAF_CUT_STATE_ID, master, started_at_ms, keep_time_ms, frequency_ms, damage_factor, damage_modifier, minimum_attack, maximum_attack, element_attack, soul_attack)
     }
 
-    pub(crate) const fn skill_id(self) -> u32 { LEAF_CUT_STATE_ID }
+    #[allow(clippy::too_many_arguments, reason = "общий layout двух подтверждённых классов EXE")]
+    pub(crate) const fn new_with_id(state_id: u32, master: MasterInfo, started_at_ms: u32, keep_time_ms: u32, frequency_ms: u32, damage_factor: f32, damage_modifier: f32, minimum_attack: u16, maximum_attack: u16, element_attack: u16, soul_attack: u16) -> Self {
+        Self { state_id, master, started_at_ms, keep_time_ms, frequency_ms, damage_factor_bits: damage_factor.to_bits(), damage_modifier_bits: damage_modifier.to_bits(), minimum_attack, maximum_attack, element_attack, soul_attack, attack_count: 0, serialized_offset: None }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 { self.state_id }
     pub(crate) const fn master(self) -> MasterInfo { self.master }
     pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { match self.serialized_offset { Some(offset) => Some((offset, LEAF_CUT_STATE_BYTES)), None => None } }
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
@@ -53,10 +59,14 @@ impl LeafCutState {
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+        Self::decode_with_id(payload, offset, now_ms, LEAF_CUT_STATE_ID)
+    }
+
+    pub(crate) fn decode_with_id(payload: &[u8], offset: usize, now_ms: u32, state_id: u32) -> Result<Self, LegacyReadBlock> {
         let mut reader = LegacyReader::at(payload, offset)?;
-        if reader.read_u32()? != LEAF_CUT_STATE_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); }
+        if reader.read_u32()? != state_id { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); }
         let mut values = [0i32; 10]; for value in &mut values { *value = reader.read_i32()?; }
-        Ok(Self { master: MasterInfo { master_type: values[0], master_id: values[1], master_guild_id: values[2], master_team_id: values[3], master_union_id: values[4], master_country_id: values[5], permitted_to_kill_player: values[6], permitted_to_kill_teammate: values[7], permitted_to_kill_guild_member: values[8], permitted_to_kill_criminal: values[9] }, started_at_ms: now_ms, keep_time_ms: reader.read_u32()?, frequency_ms: reader.read_u32()?, damage_factor_bits: reader.read_u32()?, damage_modifier_bits: reader.read_u32()?, minimum_attack: reader.read_u16()?, maximum_attack: reader.read_u16()?, element_attack: reader.read_u16()?, soul_attack: reader.read_u16()?, attack_count: 0, serialized_offset: Some(offset) })
+        Ok(Self { state_id, master: MasterInfo { master_type: values[0], master_id: values[1], master_guild_id: values[2], master_team_id: values[3], master_union_id: values[4], master_country_id: values[5], permitted_to_kill_player: values[6], permitted_to_kill_teammate: values[7], permitted_to_kill_guild_member: values[8], permitted_to_kill_criminal: values[9] }, started_at_ms: now_ms, keep_time_ms: reader.read_u32()?, frequency_ms: reader.read_u32()?, damage_factor_bits: reader.read_u32()?, damage_modifier_bits: reader.read_u32()?, minimum_attack: reader.read_u16()?, maximum_attack: reader.read_u16()?, element_attack: reader.read_u16()?, soul_attack: reader.read_u16()?, attack_count: 0, serialized_offset: Some(offset) })
     }
 
     pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>, now_ms: u32) {
@@ -68,7 +78,7 @@ impl LeafCutState {
     }
 
     fn encoded(self, now_ms: u32) -> Vec<u8> {
-        let mut record = Vec::with_capacity(LEAF_CUT_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(LEAF_CUT_STATE_ID);
+        let mut record = Vec::with_capacity(LEAF_CUT_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(self.state_id);
         for value in [self.master.master_type, self.master.master_id, self.master.master_guild_id, self.master.master_team_id, self.master.master_union_id, self.master.master_country_id, self.master.permitted_to_kill_player, self.master.permitted_to_kill_teammate, self.master.permitted_to_kill_guild_member, self.master.permitted_to_kill_criminal] { writer.write_i32(value); }
         writer.write_u32(self.remaining_time(now_ms)); writer.write_u32(self.frequency_ms); writer.write_u32(self.damage_factor_bits); writer.write_u32(self.damage_modifier_bits); writer.write_u16(self.minimum_attack); writer.write_u16(self.maximum_attack); writer.write_u16(self.element_attack); writer.write_u16(self.soul_attack); record
     }

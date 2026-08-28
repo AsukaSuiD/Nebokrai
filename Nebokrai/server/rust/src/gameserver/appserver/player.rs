@@ -4690,6 +4690,41 @@ impl CPlayer {
         self.move_shape.activate_loaded_leaf_cut_state(now_ms)
     }
 
+    pub(crate) fn replace_leaf_cut_3_state(
+        &mut self,
+        state: super::skills::leafcutstate3::LeafCutState3,
+        now_ms: u32,
+    ) -> Option<super::skills::leafcutstate3::LeafCutState3> {
+        self.move_shape.replace_leaf_cut_3_state(state, now_ms)
+    }
+
+    pub(crate) fn take_leaf_cut_3_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::leafcutstate3::LeafCutState3> {
+        self.move_shape.take_leaf_cut_3_state_for_ai()
+    }
+
+    pub(crate) fn restore_leaf_cut_3_state_after_ai(
+        &mut self,
+        state: super::skills::leafcutstate3::LeafCutState3,
+    ) {
+        self.move_shape.restore_leaf_cut_3_state_after_ai(state);
+    }
+
+    pub(crate) fn finish_leaf_cut_3_state(
+        &mut self,
+        state: super::skills::leafcutstate3::LeafCutState3,
+    ) {
+        self.move_shape.finish_leaf_cut_3_state(state);
+    }
+
+    pub(crate) fn activate_loaded_leaf_cut_3_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::leafcutstate3::LeafCutState3> {
+        self.move_shape.activate_loaded_leaf_cut_3_state(now_ms)
+    }
+
     pub(crate) fn replace_battle_fairy_attribute_state(
         &mut self,
         state: super::skills::battlefairyattributestate::BattleFairyAttributeState,
