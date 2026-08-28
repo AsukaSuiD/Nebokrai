@@ -49,7 +49,7 @@
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    SKILL_USAGE_USER_HIT_MODIFIER, real_distance, time_reached,
+    SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
 use super::monsterfastattack::{
     MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME,
@@ -106,14 +106,14 @@ use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
-use crate::gameserver::appserver::ai::gladiator::{GladiatorTarget, select_gladiator_enemy};
+use crate::gameserver::appserver::ai::gladiator::select_gladiator_enemy;
 use crate::gameserver::appserver::ai::godsbattlemonster::select_gods_battle_enemy;
 use crate::gameserver::appserver::ai::godsbattleguardwithsword::select_gods_battle_guard_enemy;
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::guardcountry::select_country_guard_target;
 use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
-use crate::gameserver::appserver::ai::nationgladiator::consider_nation_gladiator_target;
+use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
 use crate::gameserver::appserver::ai::smartgladiator::{
     SmartGladiatorCandidate, SmartGladiatorSelection,
@@ -736,68 +736,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && property.ai == 21
         && let Some(area_index) = area_index
     {
-        let mut selected = None;
-        for player_id in region.player_ids_around_area(area_index) {
-            let Some(player) = game.find_player(player_id) else {
-                continue;
-            };
-            if player.server_region_id() != Some(region.id) || player.is_dead() {
-                continue;
-            }
-            let Some(candidate) = player.shape_view() else {
-                continue;
-            };
-            selected = consider_nation_gladiator_target(
-                selected,
-                GladiatorTarget {
-                    identity: candidate.identity,
-                    distance: real_distance(
-                        monster_view.tile_x,
-                        monster_view.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ),
-                },
-                property.guard_range as i32,
-                property.race,
-                u32::from(player.country()),
-                player.is_badman(game.globe_setup().pk_count_per_kill()),
-            );
-        }
-        for pet_id in region.pet_ids_around_area(area_index) {
-            let Some((candidate, country)) = region
-                .find_monster_by_id(pet_id)
-                .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
-                .and_then(|pet| {
-                    let pet_property =
-                        game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
-                    Some((pet.shape_view(pet_property)?, pet.master_info().master_country_id))
-                })
-            else {
-                continue;
-            };
-            selected = consider_nation_gladiator_target(
-                selected,
-                GladiatorTarget {
-                    identity: candidate.identity,
-                    distance: real_distance(
-                        monster_view.tile_x,
-                        monster_view.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ),
-                },
-                property.guard_range as i32,
-                property.race,
-                country as u32,
-                false,
-            );
-        }
-        if let Some(selected) = selected {
+        if let Some(selected) = select_nation_gladiator_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            property.guard_range as i32,
+            property.race,
+        ) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected.identity);
+                monster.set_ai_target(selected);
             }
-            target = Some(selected.identity);
+            target = Some(selected);
         }
     }
     if target.is_none()

@@ -15,6 +15,11 @@
 use crate::gameserver::appserver::ai::gladiator::{
     GladiatorTarget, consider_gladiator_target,
 };
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::gameserver::game::CGame;
 
 /// Применяет национальный фильтр перед общим выбором ближайшей цели.
 pub(crate) fn consider_nation_gladiator_target(
@@ -30,4 +35,74 @@ pub(crate) fn consider_nation_gladiator_target(
     } else {
         consider_gladiator_target(selected, candidate, guard_range)
     }
+}
+
+/// Выполняет достигнутый поиск AI21 по игрокам и питомцам, сохраняя разные
+/// источники страны и правило преступника только для игрока.
+pub(crate) fn select_nation_gladiator_enemy(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+    owner_country: u32,
+) -> Option<ShapeIdentity> {
+    let mut selected = None;
+    for player_id in region.player_ids_around_area(area_index) {
+        let Some(player) = game.find_player(player_id) else {
+            continue;
+        };
+        if player.server_region_id() != Some(region.id) || player.is_dead() {
+            continue;
+        }
+        let Some(candidate) = player.shape_view() else {
+            continue;
+        };
+        selected = consider_nation_gladiator_target(
+            selected,
+            GladiatorTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            owner_country,
+            u32::from(player.country()),
+            player.is_badman(game.globe_setup().pk_count_per_kill()),
+        );
+    }
+    for pet_id in region.pet_ids_around_area(area_index) {
+        let Some((candidate, country)) = region
+            .find_monster_by_id(pet_id)
+            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+            .and_then(|pet| {
+                let property =
+                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                Some((pet.shape_view(property)?, pet.master_info().master_country_id))
+            })
+        else {
+            continue;
+        };
+        selected = consider_nation_gladiator_target(
+            selected,
+            GladiatorTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            owner_country,
+            country as u32,
+            false,
+        );
+    }
+    selected.map(|selected| selected.identity)
 }
