@@ -296,7 +296,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 5 | 6 | 8)
+        && matches!(property.ai, 0 | 3 | 4 | 5 | 6 | 8 | 9)
         && let Some(area_index) = area_index
         && region.player_ids_around_area(area_index).is_empty()
     {
@@ -662,7 +662,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             target = Some(selected.identity);
         }
     }
-    if target.is_none() && cast.is_none() && !tamed && property.ai == 8 {
+    if target.is_none() && cast.is_none() && !tamed && matches!(property.ai, 8 | 9) {
         let minimum_skill_distance = game
             .skill_base_properties(skill_id, i32::from(skill.level))
             .map_or(0, |properties| properties.query_property(5_004) as i32);
