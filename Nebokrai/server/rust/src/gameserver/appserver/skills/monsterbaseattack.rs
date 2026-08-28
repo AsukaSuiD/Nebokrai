@@ -107,6 +107,9 @@ use crate::gameserver::appserver::ai::fixedpositionarcher::{
 };
 use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
+use crate::gameserver::appserver::ai::stupidarcher::{
+    StupidArcherTarget, consider_stupid_archer_target, stupid_archer_retreat_delay_ms,
+};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -285,7 +288,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 5)
+        && matches!(property.ai, 0 | 3 | 4 | 5 | 6)
         && let Some(area_index) = area_index
         && region.player_ids_around_area(area_index).is_empty()
     {
@@ -462,6 +465,120 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             );
         }
         if let Some(selected) = selected {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected.identity);
+            }
+            target = Some(selected.identity);
+        }
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 6
+        && let Some(area_index) = area_index
+    {
+        if let Some(delay) = region
+            .find_monster_by_id(monster_id)
+            .and_then(|monster| monster.trace_move_delay())
+        {
+            let retreat_now_ms = runtime.now_milliseconds();
+            if !time_reached(retreat_now_ms, delay.started_at_ms, delay.delay_ms) {
+                return true;
+            }
+        }
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_trace_move_delay();
+        }
+        let minimum_skill_distance = game
+            .skill_base_properties(skill_id, i32::from(skill.level))
+            .map_or(0, |properties| properties.query_property(5_004) as i32);
+        let mut selected = None;
+        for player_id in region.player_ids_around_area(area_index) {
+            let Some(player) = game.find_player(player_id) else {
+                continue;
+            };
+            if player.server_region_id() != Some(region.id) || player.is_dead() {
+                continue;
+            }
+            let Some(candidate) = player.shape_view() else {
+                continue;
+            };
+            selected = consider_stupid_archer_target(
+                selected,
+                StupidArcherTarget {
+                    identity: candidate.identity,
+                    distance: real_distance(
+                        monster_view.tile_x,
+                        monster_view.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ),
+                },
+                property.guard_range as i32,
+            );
+        }
+        for pet_id in region.pet_ids_around_area(area_index) {
+            let Some(candidate) = region
+                .find_monster_by_id(pet_id)
+                .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+                .and_then(|pet| {
+                    let property =
+                        game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                    pet.shape_view(property)
+                })
+            else {
+                continue;
+            };
+            selected = consider_stupid_archer_target(
+                selected,
+                StupidArcherTarget {
+                    identity: candidate.identity,
+                    distance: real_distance(
+                        monster_view.tile_x,
+                        monster_view.tile_y,
+                        candidate.tile_x,
+                        candidate.tile_y,
+                    ),
+                },
+                property.guard_range as i32,
+            );
+        }
+        if let Some(selected) = selected {
+            if selected.distance < minimum_skill_distance {
+                let direction = game.skill_random_below(8);
+                let origin = crate::gameserver::appserver::shape::ShapeAreaCoordinates {
+                    x: monster_view.tile_x,
+                    y: monster_view.tile_y,
+                };
+                if let Ok(destination) =
+                    crate::gameserver::appserver::shape::CShape::get_direction_position(
+                        direction, origin,
+                    )
+                {
+                    let figure = CMonster::figure(&property);
+                    let moved = game.move_owned_monster_for_skill(
+                        region,
+                        monster_id,
+                        destination.x,
+                        destination.y,
+                        figure,
+                    );
+                    if moved
+                        && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+                    {
+                        let retreat_started_at_ms = runtime.now_milliseconds();
+                        monster.begin_trace_move_delay(
+                            retreat_started_at_ms,
+                            stupid_archer_retreat_delay_ms(
+                                direction,
+                                monster_shape.get_speed(),
+                                property.stop_frame,
+                            ),
+                        );
+                    }
+                }
+                return true;
+            }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.set_ai_target(selected.identity);
             }
