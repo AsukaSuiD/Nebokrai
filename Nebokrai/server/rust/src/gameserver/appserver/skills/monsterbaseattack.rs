@@ -68,6 +68,9 @@ use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptoma
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
+use super::machinerystomp::{
+    MACHINERY_STOMP_SKILL_ID, MachineryStompDispatch, prepare_owned_machinery_stomp,
+};
 use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
@@ -127,6 +130,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
             | SPRITE_BURN_SKILL_ID
+            | MACHINERY_STOMP_SKILL_ID
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
@@ -183,6 +187,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     deaths: &mut Vec<MonsterAttackDeath>,
     range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
+    machinery_dispatch: &mut Option<MachineryStompDispatch>,
     projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
 ) -> bool {
     let Some((
@@ -510,6 +515,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &skill_properties,
             now_ms,
             runtime,
+        );
+    }
+    if skill_id == MACHINERY_STOMP_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return prepare_owned_machinery_stomp(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
+            machinery_dispatch,
         );
     }
     if skill_id == MONSTER_THORN_SKILL_ID {

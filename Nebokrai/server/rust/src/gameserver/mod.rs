@@ -108,6 +108,7 @@ pub(crate) mod appserver {
         pub(crate) mod lingzhishu;
         pub(crate) mod machineshield;
         pub(crate) mod machineshieldstate;
+        pub(crate) mod machinerystomp;
         pub(crate) mod manashield;
         pub(crate) mod manashieldstate;
         pub(crate) mod monsterbaseattack;
