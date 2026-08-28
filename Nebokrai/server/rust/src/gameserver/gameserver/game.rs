@@ -486,6 +486,7 @@ mod bloodloss;
 mod fatalblow;
 mod thunder;
 mod leiming2;
+mod tianhuo;
 mod periodicattack;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -825,6 +826,12 @@ use crate::gameserver::appserver::skills::thunder2::{
 };
 use crate::gameserver::appserver::skills::thunder2phalanx::{
     CLeimingPhalanx2, Leiming2PhalanxTick,
+};
+use crate::gameserver::appserver::skills::tianhuo::{
+    TIANHUO_SKILL_ID, TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY, execute_battle_fairy_tianhuo,
+};
+use crate::gameserver::appserver::skills::tianhuophalanx::{
+    CTianhuoPhalanx, TianhuoPhalanxTick,
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
@@ -36777,6 +36784,14 @@ impl CGame {
                 execute_battle_fairy_fatal_blow(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
+                BattleFairySkillDispatch::Object {
+                    skill_id: TIANHUO_SKILL_ID,
+                    ..
+                }
+            ) {
+                execute_battle_fairy_tianhuo(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
                 BattleFairySkillDispatch::SelfTarget {
                     skill_id: LEIMING2_SKILL_ID,
                     ..
@@ -39636,6 +39651,7 @@ impl CGame {
                 self.calculate_thunder_attack(phalanx, target_level)
             }
             SummonedSkillShape::Leiming2(phalanx) => self.calculate_leiming2_attack(phalanx),
+            SummonedSkillShape::Tianhuo(phalanx) => self.calculate_tianhuo_attack(phalanx),
         }
     }
 
@@ -39645,7 +39661,7 @@ impl CGame {
         target_id: i32,
         region_id: i32,
         runtime: &mut Runtime,
-    ) {
+    ) -> bool {
         let master = phalanx.master();
         let Some((
             target_properties,
@@ -39666,17 +39682,17 @@ impl CGame {
                 )
             })
         else {
-            return;
+            return false;
         };
         if !self.player_base_attackable(master.master_id, target_id) {
             self.enter_player_combat_state(master.master_id);
-            return;
+            return false;
         }
         let _ = self.player_on_first_skill(master.master_id, target_id, Some(region_id), runtime);
         let Some((mut attack, attacker_properties, attacker_occupation, _)) =
             self.calculate_summoned_skill_attack(phalanx, target_level)
         else {
-            return;
+            return true;
         };
         let mut defense_shields = self
             .find_player_mut(target_id)
@@ -39705,10 +39721,10 @@ impl CGame {
             missed.add_long(PLAYER_TYPE);
             missed.add_long(target_id);
             let _ = self.send_player_shape_around(target_id, None, &missed);
-            return;
+            return true;
         }
         if damage == 0 && mana_damage == 0 {
-            return;
+            return true;
         }
         let current_health = target_health - damage;
         if let Some(target) = self.find_player_mut(target_id) {
@@ -39749,6 +39765,7 @@ impl CGame {
             let _ = self.send_player_shape_around(target_id, None, &hurt);
             self.damage_player_armor(target_id, runtime);
         }
+        true
     }
 
     fn apply_summoned_skill_to_monster<Runtime: GameMainLoopRuntime>(
@@ -39758,7 +39775,7 @@ impl CGame {
         region_id: i32,
         now_ms: u32,
         runtime: &mut Runtime,
-    ) {
+    ) -> bool {
         let master = phalanx.master();
         let Some(property) = self
             .find_region(region_id)
@@ -39767,7 +39784,7 @@ impl CGame {
             .and_then(|key| self.find_monster_property_by_origin_name(key))
             .cloned()
         else {
-            return;
+            return false;
         };
         let Some((target_properties, target_health, tamed, carriage, god, target_master, x, y, pos_x, pos_y)) =
             self.find_region(region_id).and_then(|owner| {
@@ -39787,10 +39804,10 @@ impl CGame {
                 ))
             })
         else {
-            return;
+            return false;
         };
         if target_health == 0 || god || !self.guard_monster_attackable(master.master_id, region_id, &property) {
-            return;
+            return false;
         }
         let owned_target_player = ((tamed || carriage)
             && target_master.master_type == PLAYER_TYPE
@@ -39804,7 +39821,7 @@ impl CGame {
             };
             if !permitted {
                 self.enter_player_combat_state(master.master_id);
-                return;
+                return false;
             }
             let _ = self.player_on_first_skill(master.master_id, owner_id, Some(region_id), runtime);
         }
@@ -39812,7 +39829,7 @@ impl CGame {
         let Some((mut attack, attacker_properties, attacker_occupation, attacker_level)) =
             self.calculate_summoned_skill_attack(phalanx, target_properties.level)
         else {
-            return;
+            return true;
         };
         let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
         defend_monster_base_attack(
@@ -39871,10 +39888,10 @@ impl CGame {
             missed.add_long(MONSTER_TYPE);
             missed.add_long(target_id);
             let _ = self.send_shape_position_around(region_id, x, y, &missed);
-            return;
+            return true;
         }
         if damage == 0 {
-            return;
+            return true;
         }
         if current_health != 0 {
             let mut hurt = CMessage::new(0x000b_f60a);
@@ -39894,7 +39911,7 @@ impl CGame {
                 master.master_type,
                 master.master_id,
             );
-            return;
+            return true;
         }
 
         let mut died = CMessage::new(0x000b_f60b);
@@ -39953,6 +39970,7 @@ impl CGame {
             owner.base_mut().finish_owned_monster_death(target_id);
             self.restore_region_owner(owner);
         }
+        true
     }
 
     fn run_owned_skill_phalanx<Runtime: GameMainLoopRuntime>(
@@ -40020,6 +40038,13 @@ impl CGame {
                         sampled_at_ms,
                     ))),
                 },
+                SummonedSkillShape::Tianhuo(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    TianhuoPhalanxTick::Scan { sampled_at_ms } => Some(Some((
+                        phalanx.shape().identity(),
+                        sampled_at_ms,
+                    ))),
+                    TianhuoPhalanxTick::Expired => None,
+                },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
@@ -40060,8 +40085,8 @@ impl CGame {
                         sampled_at_ms,
                         runtime,
                     ),
-                    _ => {}
-                }
+                    _ => false,
+                };
             }
             return true;
         }
@@ -40085,11 +40110,45 @@ impl CGame {
                         sampled_at_ms,
                         runtime,
                     ),
-                    _ => {}
-                }
+                    _ => false,
+                };
             }
             if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
                 let _ = self.send_shape_exit_around(region, phalanx.shape());
+            }
+            return true;
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::Tianhuo(tianhuo),
+        ) = (tick, &phalanx)
+        {
+            for target in self.tianhuo_targets(region_id, tianhuo) {
+                let applied = match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        runtime,
+                    ),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        sampled_at_ms,
+                        runtime,
+                    ),
+                    _ => false,
+                };
+                if applied {
+                    if let Some(mut owner) = self.take_region_owner(region_id) {
+                        owner.base_mut().finish_tianhuo_phalanx(phalanx_id);
+                        self.restore_region_owner(owner);
+                    }
+                    if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+                        let _ = self.send_shape_exit_around(region, phalanx.shape());
+                    }
+                }
             }
             return true;
         }
@@ -40111,8 +40170,8 @@ impl CGame {
                         sampled_at_ms,
                         runtime,
                     ),
-                    _ => {}
-                }
+                    _ => false,
+                };
             }
         }
         if !matches!(&phalanx, SummonedSkillShape::Archery(_))

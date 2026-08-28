@@ -10,8 +10,8 @@
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, машинный и
-//! мана-щит, а также атака боевой феи сохраняют незавершённое состояние между
-//! проходами ИИ. Хвост
+//! мана-щит, атака боевой феи и её призываемые громовые и огненные области
+//! сохраняют незавершённое состояние между проходами ИИ. Хвост
 //! `CPlayerAI::Run` хранит часы
 //! автоматического прироста,
 //! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
@@ -77,6 +77,8 @@ pub(crate) struct CPlayerAI {
     thunder_last_used_ms: u32,
     leiming2: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     leiming2_last_used_ms: u32,
+    tianhuo: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    tianhuo_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -158,6 +160,7 @@ impl CPlayerAI {
         self.fatal_blow = None;
         self.thunder = None;
         self.leiming2 = None;
+        self.tianhuo = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -252,6 +255,7 @@ impl CPlayerAI {
         self.fatal_blow = None;
         self.thunder = None;
         self.leiming2 = None;
+        self.tianhuo = None;
         true
     }
 
@@ -520,6 +524,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение отложенного грома завершено");
         }
+        if let Some(mut execution) = self.tianhuo.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение небесного огня завершено");
+        }
         true
     }
 
@@ -778,6 +786,33 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_leiming2_used(&mut self, now_ms: u32) {
         self.leiming2_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn tianhuo(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.tianhuo
+    }
+
+    pub(crate) const fn begin_tianhuo(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.tianhuo = Some(state);
+    }
+
+    pub(crate) fn tianhuo_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.tianhuo.as_mut()
+    }
+
+    pub(crate) const fn tianhuo_last_used_ms(&self) -> u32 {
+        self.tianhuo_last_used_ms
+    }
+
+    pub(crate) const fn mark_tianhuo_used(&mut self, now_ms: u32) {
+        self.tianhuo_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]
