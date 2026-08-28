@@ -426,6 +426,28 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         );
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
+    if target.is_none() && cast.is_none() && !tamed && property.ai == 1 {
+        let Some(mut state) = region
+            .find_monster_by_id_mut(monster_id)
+            .and_then(CMonster::take_passive_gladiator_ai)
+        else {
+            return false;
+        };
+        let selected = state.select_target(monster_view, property.chase_range as i32, |player_id| {
+            game.find_player(player_id).and_then(|player| {
+                (player.server_region_id() == Some(region.id) && !player.is_dead())
+                    .then(|| player.shape_view())
+                    .flatten()
+            })
+        });
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.restore_passive_gladiator_ai(state);
+            if let Some(selected) = selected {
+                monster.set_ai_target(selected);
+            }
+        }
+        target = selected;
+    }
     if target.is_none()
         && cast.is_none()
         && !tamed

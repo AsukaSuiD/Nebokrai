@@ -344,6 +344,14 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         return;
     }
     let current_health = target_health - damage;
+    let passive_attacker_is_owned_creature = region
+        .find_monster_by_id(monster_id)
+        .and_then(|attacker| {
+            let property = game
+                .find_monster_property_by_origin_name(attacker.base_property_key()?)?;
+            Some(attacker.is_tamed() || attacker.is_carriage(property))
+        })
+        .unwrap_or(false);
     if target.object_type == PLAYER_TYPE {
         if let Some(player) = game.find_player_mut(target.id) {
             player.set_health(current_health);
@@ -378,6 +386,15 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             };
             if target_tamed {
                 monster.when_pet_been_hurted_by(attacker, now_ms);
+            } else if target_monster_property
+                .as_ref()
+                .is_some_and(|property| property.ai == 1)
+            {
+                monster.when_passive_gladiator_hurted_by(
+                    attacker,
+                    now_ms,
+                    passive_attacker_is_owned_creature,
+                );
             } else if target_monster_property
                 .as_ref()
                 .is_some_and(|property| matches!(property.ai, 8 | 13 | 14 | 20))

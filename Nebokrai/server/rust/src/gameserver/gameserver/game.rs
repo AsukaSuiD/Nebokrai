@@ -36707,6 +36707,16 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
                         monster.when_been_killed(now_ms);
+                    } else if monster_property.ai == 1 {
+                        monster.when_passive_gladiator_hurted_by(
+                            ShapeIdentity {
+                                object_type: PLAYER_TYPE,
+                                id: player_id,
+                                ex_id: CGuid::GUID_INVALID,
+                            },
+                            now_ms,
+                            false,
+                        );
                     } else if matches!(monster_property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -40688,6 +40698,16 @@ impl CGame {
                         .set_action(if current_health == 0 { 6 } else { 5 });
                     if current_health == 0 {
                         monster.when_been_killed(now_ms);
+                    } else if property.ai == 1 {
+                        monster.when_passive_gladiator_hurted_by(
+                            ShapeIdentity {
+                                object_type: master.master_type,
+                                id: master.master_id,
+                                ex_id: CGuid::GUID_INVALID,
+                            },
+                            now_ms,
+                            false,
+                        );
                     } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {

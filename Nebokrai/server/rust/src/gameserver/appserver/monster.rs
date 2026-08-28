@@ -65,6 +65,7 @@
 use super::ai::baseai::CBaseAI;
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
+use super::ai::passivegladiator::PassiveGladiatorState;
 use super::masterinfo::MasterInfo;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
@@ -136,6 +137,7 @@ pub(crate) struct CMonster {
     trace_move_delay: Option<MonsterTraceMoveDelay>,
     boss_blue_ai: BossBlueAiState,
     boss_fiend_ai: Option<BossFiendAiState>,
+    passive_gladiator_ai: Option<PassiveGladiatorState>,
     base_ai: CBaseAI,
 }
 
@@ -282,6 +284,7 @@ impl CMonster {
             trace_move_delay: None,
             boss_blue_ai: BossBlueAiState::default(),
             boss_fiend_ai: None,
+            passive_gladiator_ai: None,
             base_ai: CBaseAI::default(),
         }
     }
@@ -674,6 +677,7 @@ impl CMonster {
 
     pub(crate) fn initialize_special_ai(&mut self, ai_type: u32, now_ms: u32) {
         self.boss_fiend_ai = (ai_type == 0x68).then(|| BossFiendAiState::new(now_ms));
+        self.passive_gladiator_ai = (ai_type == 1).then(PassiveGladiatorState::default);
     }
 
     pub(crate) fn boss_fiend_ai_mut(&mut self) -> Option<&mut BossFiendAiState> {
@@ -682,6 +686,18 @@ impl CMonster {
 
     pub(crate) const fn boss_fiend_ai(&self) -> Option<&BossFiendAiState> {
         self.boss_fiend_ai.as_ref()
+    }
+
+    pub(crate) fn passive_gladiator_ai_mut(&mut self) -> Option<&mut PassiveGladiatorState> {
+        self.passive_gladiator_ai.as_mut()
+    }
+
+    pub(crate) fn take_passive_gladiator_ai(&mut self) -> Option<PassiveGladiatorState> {
+        self.passive_gladiator_ai.take()
+    }
+
+    pub(crate) fn restore_passive_gladiator_ai(&mut self, state: PassiveGladiatorState) {
+        self.passive_gladiator_ai = Some(state);
     }
 
     pub(crate) fn combat_properties(
@@ -837,6 +853,22 @@ impl CMonster {
         self.base_ai.when_been_hurted(now_ms);
     }
 
+    pub(crate) fn when_passive_gladiator_hurted_by(
+        &mut self,
+        attacker: ShapeIdentity,
+        now_ms: u32,
+        attacker_is_owned_creature: bool,
+    ) {
+        self.when_been_hurted(now_ms);
+        let already_fighting = self.ai_target.is_some();
+        let selected = self.passive_gladiator_ai.as_mut().and_then(|state| {
+            state.on_hurt(attacker, already_fighting, attacker_is_owned_creature)
+        });
+        if let Some(selected) = selected {
+            self.ai_target = Some(selected);
+        }
+    }
+
     pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
         self.base_ai.when_been_hurted(now_ms);
         if self.ai_target.is_none()
@@ -854,6 +886,9 @@ impl CMonster {
     pub(crate) fn when_been_killed(&mut self, now_ms: u32) {
         self.base_ai.when_been_killed(now_ms);
         self.ai_target = None;
+        if let Some(state) = self.passive_gladiator_ai.as_mut() {
+            state.clear();
+        }
     }
 
     pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
