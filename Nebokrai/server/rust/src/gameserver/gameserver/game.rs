@@ -484,6 +484,7 @@
 
 mod bloodloss;
 mod fatalblow;
+mod firewall;
 mod thunder;
 mod snowstorm;
 mod leiming2;
@@ -768,6 +769,12 @@ use crate::gameserver::appserver::skills::basemagicphalanx::{
 use crate::gameserver::appserver::skills::firebolt::{execute_player_fire_bolt, is_fire_bolt_target};
 use crate::gameserver::appserver::skills::fireboltphalanx::{
     calculate_owned_fire_bolt_attack, FireBoltPhalanxTick,
+};
+use crate::gameserver::appserver::skills::firewall::{
+    execute_player_fire_wall, is_fire_wall_target,
+};
+use crate::gameserver::appserver::skills::firewallphalanx::{
+    calculate_owned_fire_wall_attack, FireWallPhalanxTick,
 };
 use crate::gameserver::appserver::skills::lightning::{
     execute_player_lightning, is_lightning_target,
@@ -36388,6 +36395,7 @@ impl CGame {
                 _ => false,
             };
             let concrete_fire_bolt = is_fire_bolt_target(dispatch);
+            let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
             let concrete_archery = match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
@@ -36500,6 +36508,8 @@ impl CGame {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
                 execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_fire_wall {
+                execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {
                 execute_player_lightning(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
@@ -39445,6 +39455,9 @@ impl CGame {
             SummonedSkillShape::FireBolt(phalanx) => {
                 calculate_owned_fire_bolt_attack(self, phalanx, target_level)
             }
+            SummonedSkillShape::FireWall(phalanx) => {
+                calculate_owned_fire_wall_attack(self, phalanx, target_level)
+            }
             SummonedSkillShape::Thunder(phalanx) => {
                 self.calculate_thunder_attack(phalanx, target_level)
             }
@@ -39850,6 +39863,19 @@ impl CGame {
                         FireBoltPhalanxTick::Expired => None,
                     }
                 }
+                SummonedSkillShape::FireWall(phalanx) => {
+                    match phalanx.tick(
+                        lifetime_now_ms,
+                        || runtime.now_milliseconds(),
+                    ) {
+                        FireWallPhalanxTick::Pending => Some(None),
+                        FireWallPhalanxTick::Scan { sampled_at_ms } => Some(Some((
+                            phalanx.shape().identity(),
+                            sampled_at_ms,
+                        ))),
+                        FireWallPhalanxTick::Expired => None,
+                    }
+                }
                 SummonedSkillShape::Thunder(phalanx) => match phalanx.tick(lifetime_now_ms) {
                     ThunderPhalanxTick::Pending => Some(None),
                     ThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((
@@ -39942,6 +39968,31 @@ impl CGame {
                     tick = None;
                 }
             }
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::FireWall(fire_wall),
+        ) = (tick, &phalanx)
+        {
+            for target in self.fire_wall_targets(region_id, fire_wall) {
+                match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        runtime,
+                    ),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        sampled_at_ms,
+                        runtime,
+                    ),
+                    _ => false,
+                };
+            }
+            return true;
         }
         if let (
             Some(Some((_, sampled_at_ms))),
