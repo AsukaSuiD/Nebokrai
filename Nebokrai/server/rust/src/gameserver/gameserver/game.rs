@@ -34766,10 +34766,10 @@ impl CGame {
         true
     }
 
-    /// Reached `CMonsterAI/CPet::OnSchedule -> CBaseAttack(1)` path:
-    /// retaliation, aggressive melee `dwAI 0/3` search/tracing и concrete
-    /// pet-to-wild-monster либо policy-checked pet-to-player base attack.
-    /// `false` оставляет guard policy, idle/multi-skill и прочие derived AI.
+    /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для `0x2bd/0x2d1`:
+    /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
+    /// питомцем дикого монстра либо разрешённого политикой игрока. `false`
+    /// оставляет сторожевые, бездействующие и многокомандные варианты ИИ.
     fn run_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -34904,44 +34904,16 @@ impl CGame {
         target_y: i32,
         forced_length: Option<u32>,
     ) -> Vec<(i32, i32, u8)> {
-        let delta_x = target_x.wrapping_sub(source_x) as f32;
-        let delta_y = target_y.wrapping_sub(source_y) as f32;
-        let length_value = delta_x.mul_add(delta_x, delta_y * delta_y).sqrt();
-        let truncated = length_value.trunc() as i32;
-        let computed_length = if length_value - truncated as f32 > 0.5 {
-            truncated.wrapping_add(1)
-        } else {
-            truncated
-        };
-        if computed_length <= 0 {
-            return Vec::new();
-        }
-        let path_length = forced_length.map_or(computed_length as u32, |length| length);
-        let step_x = delta_x / computed_length as f32;
-        let step_y = delta_y / computed_length as f32;
         let Some(region) = self.find_region(region_id) else {
             return Vec::new();
         };
-        let mut cursor_x = source_x as f32;
-        let mut cursor_y = source_y as f32;
-        let mut path = Vec::with_capacity(path_length as usize);
-        for _ in 0..path_length {
-            cursor_x += step_x;
-            cursor_y += step_y;
-            let round_original = |value: f32| {
-                let truncated = value.trunc() as i32;
-                if value - truncated as f32 > 0.5 {
-                    truncated.wrapping_add(1)
-                } else {
-                    truncated
-                }
-            };
-            let x = round_original(cursor_x);
-            let y = round_original(cursor_y);
-            let block = region.base().region.get_block(x, y).unwrap_or(2);
-            path.push((x, y, block));
-        }
-        path
+        region.base().straight_skill_path(
+            source_x,
+            source_y,
+            target_x,
+            target_y,
+            forced_length,
+        )
     }
 
     pub(crate) fn allocate_summon_shape_id(&mut self) -> i32 {

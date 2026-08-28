@@ -802,6 +802,53 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    /// Строит подтверждённый прямой путь навыка с исходным округлением и
+    /// снимком блоков; решение об отказе остаётся у конкретного навыка.
+    pub(crate) fn straight_skill_path(
+        &self,
+        source_x: i32,
+        source_y: i32,
+        target_x: i32,
+        target_y: i32,
+        forced_length: Option<u32>,
+    ) -> Vec<(i32, i32, u8)> {
+        let delta_x = target_x.wrapping_sub(source_x) as f32;
+        let delta_y = target_y.wrapping_sub(source_y) as f32;
+        let length_value = delta_x.mul_add(delta_x, delta_y * delta_y).sqrt();
+        let truncated = length_value.trunc() as i32;
+        let computed_length = if length_value - truncated as f32 > 0.5 {
+            truncated.wrapping_add(1)
+        } else {
+            truncated
+        };
+        if computed_length <= 0 {
+            return Vec::new();
+        }
+        let path_length = forced_length.map_or(computed_length as u32, |length| length);
+        let step_x = delta_x / computed_length as f32;
+        let step_y = delta_y / computed_length as f32;
+        let mut cursor_x = source_x as f32;
+        let mut cursor_y = source_y as f32;
+        let mut path = Vec::with_capacity(path_length as usize);
+        for _ in 0..path_length {
+            cursor_x += step_x;
+            cursor_y += step_y;
+            let round_original = |value: f32| {
+                let truncated = value.trunc() as i32;
+                if value - truncated as f32 > 0.5 {
+                    truncated.wrapping_add(1)
+                } else {
+                    truncated
+                }
+            };
+            let x = round_original(cursor_x);
+            let y = round_original(cursor_y);
+            let block = self.region.get_block(x, y).unwrap_or(2);
+            path.push((x, y, block));
+        }
+        path
+    }
+
     pub(crate) const fn tax_rate(&self) -> i32 {
         self.param.current_tax_rate
     }

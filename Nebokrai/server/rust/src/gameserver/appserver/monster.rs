@@ -18,14 +18,15 @@
 //! завершающие действия удаления из региона. `Defense` и `Died` идут через
 //! каноническую очередь `passive_actions` владельца `CBaseAI`; достигнутый
 //! `Defense` обрабатывается до активного хода монстра без отдельной
-//! диагностической передачи. Для обычного монстра с
-//! единственным skill `1` тот же owner хранит target, cast/reuse и передаёт
-//! удар монстра по игроку в живой проход region/player/network/death. Для
-//! aggressive melee AI `0/3` player/pet search и blocked-step tracing хранят
-//! здесь target/move delay; pet hurt/death сохраняют target priority и master
-//! unlink. Passive/command pet target теперь доходит через pet-scaled
-//! base-attack до wild monster death/beneficiary owner-а; pet schedule хранит
-//! one-second master checks, 6-hour age counter и wild-timeout state, а
+//! диагностической передачи. Для обычного монстра с единственным навыком
+//! `0x2bd` либо `0x2d1` тот же владелец хранит цель, выполнение и задержку
+//! повторного применения; быстрая атака дополнительно хранит визуальную фазу
+//! и первый из двух ударов. Поиск игроков и питомцев, преследование ИИ `0/3`
+//! и задержка обходного шага остаются здесь; урон и смерть питомца сохраняют
+//! приоритет цели и связь с хозяином. Пассивная либо командная цель питомца
+//! доходит через масштабированную атаку до смерти дикого монстра; расписание
+//! питомца хранит ежесекундную проверку хозяина, шестичасовой счётчик возраста
+//! и срок одичания, а
 //! `CGame` завершает поиск целей активного режима относительно хозяина,
 //! возврат питомца, уведомления и исчезновение. Случайное перемещение без цели,
 //! специальные сторожевые AI и выбор между несколькими навыками этим не
@@ -48,6 +49,7 @@ use super::masterinfo::MasterInfo;
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -90,6 +92,7 @@ pub(crate) struct CMonster {
     killed_by: Option<MonsterKillingAttack>,
     ai_target: Option<ShapeIdentity>,
     base_attack_cast: Option<MonsterBaseAttackCast>,
+    fast_attack_progress: Option<MonsterFastAttackProgress>,
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
@@ -136,6 +139,7 @@ pub(crate) struct PetExperienceUpdate {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MonsterBaseAttackDispatch {
     pub(crate) target: ShapeIdentity,
+    pub(crate) skill_id: u32,
     pub(crate) skill_level: u16,
 }
 
@@ -221,6 +225,7 @@ impl CMonster {
             killed_by: None,
             ai_target: None,
             base_attack_cast: None,
+            fast_attack_progress: None,
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
             trace_move_delay: None,
@@ -739,21 +744,36 @@ impl CMonster {
     pub(crate) fn begin_base_attack_cast(
         &mut self,
         target: ShapeIdentity,
+        skill_id: u32,
         skill_level: u16,
         now_ms: u32,
     ) {
         let mut execution = MonsterBaseAttackCast::begin(MonsterBaseAttackDispatch {
             target,
+            skill_id,
             skill_level,
         }, now_ms);
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         self.base_attack_cast = Some(execution);
-        self.last_base_attack_ms = now_ms;
     }
 
-    pub(crate) fn finish_base_attack_cast(&mut self) -> Option<MonsterBaseAttackCast> {
+    pub(crate) fn begin_fast_attack_progress(&mut self) {
+        self.fast_attack_progress = Some(MonsterFastAttackProgress::default());
+    }
+
+    pub(crate) const fn fast_attack_progress(&self) -> Option<MonsterFastAttackProgress> {
+        self.fast_attack_progress
+    }
+
+    pub(crate) fn fast_attack_progress_mut(&mut self) -> Option<&mut MonsterFastAttackProgress> {
+        self.fast_attack_progress.as_mut()
+    }
+
+    pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
+        self.fast_attack_progress = None;
         let _ = execution.terminate(SkillTermination::Completed);
+        self.last_base_attack_ms = now_ms;
         Some(execution)
     }
 
@@ -777,6 +797,7 @@ impl CMonster {
     }
 
     fn cancel_base_attack_cast(&mut self) {
+        self.fast_attack_progress = None;
         if let Some(mut execution) = self.base_attack_cast.take() {
             let _ = execution.terminate(SkillTermination::Cancelled);
         }
