@@ -68,6 +68,7 @@ use super::skeletonarchery::{
     SKELETON_ARCHERY_SKILL_ID, SkeletonArcheryDispatch, prepare_owned_skeleton_archery,
 };
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
+use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
 use super::spiderweb::{SPIDER_WEB_SKILL_ID, execute_owned_spider_web};
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::monster::CMonster;
@@ -103,6 +104,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | MONSTER_THORN_SKILL_ID
             | SKELETON_ARCHERY_SKILL_ID
             | SPIDER_POISON_SKILL_ID
+            | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
     )
 }
@@ -399,6 +401,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             now_ms,
             runtime,
             deaths,
+        );
+    }
+    if skill_id == SPIDER_MIST_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_spider_mist(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
         );
     }
     if skill_id == SPIDER_WEB_SKILL_ID {

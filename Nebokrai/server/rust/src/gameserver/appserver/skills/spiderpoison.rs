@@ -233,7 +233,7 @@ fn target_has_cure(game: &CGame, region: &CServerRegion, target: ShapeIdentity) 
     }
 }
 
-fn install_state(
+pub(crate) fn install_spider_poison_state(
     game: &mut CGame,
     region: &mut CServerRegion,
     target: ShapeIdentity,
@@ -377,7 +377,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         target.monster_property, target.tamed, target.carriage, attack, deaths);
     if !target_has_cure(game, region, target_identity)
         && game.skill_random_below(100) <= properties.query_property(SKILL_USAGE_BASE_PROBABILITY) as i32 {
-        install_state(game, region, target_identity, SpiderPoisonState::new(
+        install_spider_poison_state(game, region, target_identity, SpiderPoisonState::new(
             MasterInfo { master_type: MONSTER_TYPE, master_id: monster_id, ..MasterInfo::default() },
             now_ms, properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
             properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY),

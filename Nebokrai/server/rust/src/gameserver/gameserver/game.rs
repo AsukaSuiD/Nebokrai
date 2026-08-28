@@ -487,6 +487,7 @@ mod fatalblow;
 mod thunder;
 mod leiming2;
 mod tianhuo;
+mod spidermist;
 mod periodicattack;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -34784,7 +34785,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x199/0x1a1`, включая их полностью достигнутые
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x1a1`, включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
     /// питомцем дикого монстра либо разрешённого политикой игрока. `false`
@@ -38946,6 +38947,7 @@ impl CGame {
             }
             SummonedSkillShape::Leiming2(phalanx) => self.calculate_leiming2_attack(phalanx),
             SummonedSkillShape::Tianhuo(phalanx) => self.calculate_tianhuo_attack(phalanx),
+            SummonedSkillShape::SpiderMist(_) => None,
         }
     }
 
@@ -39354,12 +39356,38 @@ impl CGame {
                     ))),
                     TianhuoPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::SpiderMist(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    crate::gameserver::appserver::skills::spidermistphalanx::SpiderMistPhalanxTick::Scan => Some(Some((
+                        phalanx.shape().identity(),
+                        lifetime_now_ms,
+                    ))),
+                    crate::gameserver::appserver::skills::spidermistphalanx::SpiderMistPhalanxTick::Expired => None,
+                },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
         let (Some(mut tick), Some(phalanx)) = (tick, phalanx) else {
             return false;
         };
+        if let (
+            Some(Some(_)),
+            SummonedSkillShape::SpiderMist(spider_mist),
+        ) = (tick, &phalanx)
+        {
+            let candidates = self.spider_mist_targets(region_id, spider_mist);
+            if let Some(mut owner) = self.take_region_owner(region_id) {
+                let applied = crate::gameserver::appserver::skills::spidermistphalanx::apply_spider_mist_targets(
+                    self,
+                    owner.base_mut(),
+                    spider_mist,
+                    candidates,
+                    || runtime.now_milliseconds(),
+                );
+                self.restore_region_owner(owner);
+                tracing::trace!(region_id, phalanx_id, applied, "обновлена область паучьего тумана");
+            }
+            return true;
+        }
         if let (
             Some(Some((target, _))),
             SummonedSkillShape::FatalBlow(fatal_blow),

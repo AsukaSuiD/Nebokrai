@@ -19,7 +19,7 @@
 //! каноническую очередь `passive_actions` владельца `CBaseAI`; достигнутый
 //! `Defense` обрабатывается до активного хода монстра без отдельной
 //! диагностической передачи. Для обычного монстра, чей список состоит из
-//! навыков `0x2bd`, `0x2d1`, `0x2ef`, `0x197`, `0x191`, `0x199` и `0x1a1`, тот же владелец
+//! навыков `0x2bd`, `0x2d1`, `0x2ef`, `0x197`, `0x191`, `0x198`, `0x199` и `0x1a1`, тот же владелец
 //! хранит цель, выбранный по исходным `odds` текущий навык, выполнение и задержку
 //! повторного применения; быстрая атака дополнительно хранит визуальную фазу
 //! и первый из двух ударов. Поиск игроков и питомцев, преследование ИИ `0/3`
@@ -53,6 +53,7 @@ use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::skeletonarchery::SkeletonArcheryProgress;
 use super::skills::spiderweb::SpiderWebProgress;
+use super::skills::spidermist::SpiderMistProgress;
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -98,6 +99,7 @@ pub(crate) struct CMonster {
     fast_attack_progress: Option<MonsterFastAttackProgress>,
     skeleton_archery_progress: Option<SkeletonArcheryProgress>,
     spider_web_progress: Option<SpiderWebProgress>,
+    spider_mist_progress: Option<SpiderMistProgress>,
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
@@ -233,6 +235,7 @@ impl CMonster {
             fast_attack_progress: None,
             skeleton_archery_progress: None,
             spider_web_progress: None,
+            spider_mist_progress: None,
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
             trace_move_delay: None,
@@ -798,11 +801,20 @@ impl CMonster {
         self.spider_web_progress = Some(progress);
     }
 
+    pub(crate) const fn spider_mist_progress(&self) -> Option<SpiderMistProgress> {
+        self.spider_mist_progress
+    }
+
+    pub(crate) const fn set_spider_mist_progress(&mut self, progress: SpiderMistProgress) {
+        self.spider_mist_progress = Some(progress);
+    }
+
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
         self.fast_attack_progress = None;
         self.skeleton_archery_progress = None;
         self.spider_web_progress = None;
+        self.spider_mist_progress = None;
         self.move_shape.set_current_skill_id(None);
         let _ = execution.terminate(SkillTermination::Completed);
         self.last_base_attack_ms = now_ms;
@@ -832,6 +844,7 @@ impl CMonster {
         self.fast_attack_progress = None;
         self.skeleton_archery_progress = None;
         self.spider_web_progress = None;
+        self.spider_mist_progress = None;
         if let Some(mut execution) = self.base_attack_cast.take() {
             self.move_shape.set_current_skill_id(None);
             let _ = execution.terminate(SkillTermination::Cancelled);
