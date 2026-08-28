@@ -151,6 +151,8 @@ pub(crate) mod appserver {
         pub(crate) mod infernol;
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
+        pub(crate) mod leafcut;
+        pub(crate) mod leafcutstate;
         pub(crate) mod lifeshieldstate;
         pub(crate) mod littlestar;
         pub(crate) mod lingzhishu;

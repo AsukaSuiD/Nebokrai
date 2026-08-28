@@ -4601,6 +4601,41 @@ impl CPlayer {
         self.move_shape.replace_blood_loss_state(state)
     }
 
+    pub(crate) fn replace_leaf_cut_state(
+        &mut self,
+        state: super::skills::leafcutstate::LeafCutState,
+        now_ms: u32,
+    ) -> Option<super::skills::leafcutstate::LeafCutState> {
+        self.move_shape.replace_leaf_cut_state(state, now_ms)
+    }
+
+    pub(crate) fn take_leaf_cut_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::leafcutstate::LeafCutState> {
+        self.move_shape.take_leaf_cut_state_for_ai()
+    }
+
+    pub(crate) fn restore_leaf_cut_state_after_ai(
+        &mut self,
+        state: super::skills::leafcutstate::LeafCutState,
+    ) {
+        self.move_shape.restore_leaf_cut_state_after_ai(state);
+    }
+
+    pub(crate) fn finish_leaf_cut_state(
+        &mut self,
+        state: super::skills::leafcutstate::LeafCutState,
+    ) {
+        self.move_shape.finish_leaf_cut_state(state);
+    }
+
+    pub(crate) fn activate_loaded_leaf_cut_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::leafcutstate::LeafCutState> {
+        self.move_shape.activate_loaded_leaf_cut_state(now_ms)
+    }
+
     pub(crate) fn replace_battle_fairy_attribute_state(
         &mut self,
         state: super::skills::battlefairyattributestate::BattleFairyAttributeState,

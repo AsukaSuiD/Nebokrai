@@ -15,7 +15,7 @@
 //! и зеркало душ,
 //! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
 //! рыцарский удар, подготовка яростного удара, последующий рывок и двойной
-//! направленный удар,
+//! направленный удар и периодический удар листвы,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -105,6 +105,8 @@ pub(crate) struct CPlayerAI {
     flash_last_used_ms: u32,
     swallow: Option<SwallowExecutionState>,
     swallow_last_used_ms: u32,
+    leaf_cut: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    leaf_cut_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -244,6 +246,7 @@ impl CPlayerAI {
         self.rage_break = None;
         self.flash = None;
         self.swallow = None;
+        self.leaf_cut = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -384,6 +387,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.swallow.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение двойного направленного удара завершено");
+        }
+        if let Some(mut execution) = self.leaf_cut.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение периодического удара завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -529,6 +536,7 @@ impl CPlayerAI {
         self.rage_break = None;
         self.flash = None;
         self.swallow = None;
+        self.leaf_cut = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -770,6 +778,11 @@ impl CPlayerAI {
     pub(crate) fn swallow_mut(&mut self) -> Option<&mut SwallowExecutionState> { self.swallow.as_mut() }
     pub(crate) const fn swallow_last_used_ms(&self) -> u32 { self.swallow_last_used_ms }
     pub(crate) const fn mark_swallow_used(&mut self, now_ms: u32) { self.swallow_last_used_ms = now_ms; }
+    pub(crate) const fn leaf_cut(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut }
+    pub(crate) const fn begin_leaf_cut(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.leaf_cut = Some(state); }
+    pub(crate) fn leaf_cut_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut.as_mut() }
+    pub(crate) const fn leaf_cut_last_used_ms(&self) -> u32 { self.leaf_cut_last_used_ms }
+    pub(crate) const fn mark_leaf_cut_used(&mut self, now_ms: u32) { self.leaf_cut_last_used_ms = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall

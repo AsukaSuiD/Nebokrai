@@ -483,6 +483,7 @@
 //! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
 
 mod bloodloss;
+mod leafcut;
 mod fatalblow;
 mod firewall;
 mod godpunishment;
@@ -819,6 +820,7 @@ use crate::gameserver::appserver::skills::armybreak::{execute_player_army_break,
 use crate::gameserver::appserver::skills::ragebreak::{execute_player_rage_break, is_rage_break_dispatch};
 use crate::gameserver::appserver::skills::flash::{execute_player_flash, is_flash_dispatch};
 use crate::gameserver::appserver::skills::swallow::{execute_player_swallow, is_swallow_dispatch};
+use crate::gameserver::appserver::skills::leafcut::{execute_player_leaf_cut, is_leaf_cut_dispatch};
 use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
@@ -948,6 +950,9 @@ use crate::gameserver::appserver::skills::bloodloss::{
 };
 use crate::gameserver::appserver::skills::bloodlossstate::{
     BloodLossState, BloodLossStateTick, send_blood_loss_state_visual,
+};
+use crate::gameserver::appserver::skills::leafcutstate::{
+    LeafCutState, LeafCutStateTick, send_leaf_cut_state_visual,
 };
 use crate::gameserver::appserver::skills::fatalblow::{
     FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
@@ -26326,6 +26331,9 @@ impl CGame {
                     self.update_player_spider_poison_state(player_id, runtime)
                 }
                 BLOOD_LOSS_SKILL_ID => self.update_player_blood_loss_state(player_id, runtime),
+                crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
+                    self.update_player_leaf_cut_state(player_id, runtime)
+                }
                 _ => false,
             };
             periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
@@ -28100,6 +28108,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_appellation_states(login_tick_ms);
+        let loaded_leaf_cut_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_leaf_cut_state(login_tick_ms);
         for state in &loaded_appellation_states {
             self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
         }
@@ -28111,6 +28124,21 @@ impl CGame {
         }
         if let Some(state) = &loaded_ride_state {
             self.send_ride_visual(expected_player_id, state, true);
+        }
+        if let Some(state) = loaded_leaf_cut_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_leaf_cut_state_visual(
+                self,
+                region_id,
+                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                x,
+                y,
+                state,
+                true,
+                login_tick_ms,
+            );
         }
         self.restore_player_login_pets(expected_player_id, region_id, context);
         self.restore_player_login_carriage(expected_player_id, region_id, context);
@@ -33956,6 +33984,7 @@ impl CGame {
                 || player.player_ai().rage_break().is_some()
                 || player.player_ai().flash().is_some()
                 || player.player_ai().swallow().is_some()
+                || player.player_ai().leaf_cut().is_some()
                 || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -36460,6 +36489,38 @@ impl CGame {
         }
     }
 
+    pub(crate) fn replace_leaf_cut_state(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        state: LeafCutState,
+        now_ms: u32,
+    ) -> Option<(Option<LeafCutState>, ShapeIdentity, i32, i32)> {
+        match target.object_type {
+            PLAYER_TYPE => {
+                let player = self.find_player_mut(target.id)?;
+                let identity = player.shape().identity();
+                let x = player.shape().get_tile_x().ok()?;
+                let y = player.shape().get_tile_y().ok()?;
+                let previous = player.replace_leaf_cut_state(state, now_ms);
+                Some((previous, identity, x, y))
+            }
+            MONSTER_TYPE => {
+                let mut owner = self.take_region_owner(region_id)?;
+                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
+                    let identity = monster.move_shape().shape().identity();
+                    let x = monster.move_shape().shape().get_tile_x().ok()?;
+                    let y = monster.move_shape().shape().get_tile_y().ok()?;
+                    let previous = monster.move_shape_mut().replace_leaf_cut_state(state, now_ms);
+                    Some((previous, identity, x, y))
+                });
+                self.restore_region_owner(owner);
+                result
+            }
+            _ => None,
+        }
+    }
+
     fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -36495,6 +36556,7 @@ impl CGame {
             let concrete_rage_break = is_rage_break_dispatch(dispatch);
             let concrete_flash = is_flash_dispatch(dispatch);
             let concrete_swallow = is_swallow_dispatch(dispatch);
+            let concrete_leaf_cut = is_leaf_cut_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36641,6 +36703,8 @@ impl CGame {
                 execute_player_flash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_swallow {
                 execute_player_swallow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_leaf_cut {
+                execute_player_leaf_cut(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {
@@ -41227,6 +41291,9 @@ impl CGame {
                                 monster_id,
                                 runtime,
                             );
+                        }
+                        crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
+                            let _ = self.update_monster_leaf_cut_state(region_id, monster_id, runtime);
                         }
                         _ => {}
                     }
