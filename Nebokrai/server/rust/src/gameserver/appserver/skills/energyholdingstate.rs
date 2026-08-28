@@ -1,26 +1,65 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое накопительное состояние `CEnergyHoldingState` (`0x89`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/energyholdingstate.cpp`. Число зарядов увеличивается не
+//! выше уровня навыка; каждое успешное увеличение публикует `End → Begin`.
+//! Параметр процента хранится для будущих подтверждённых потребителей заряда.
+//!
+//! Не достигнуты реальные вызывающие цепочки `Serialize/Unserialize` из БД:
+//! без базового кодека состояний не подтверждена граница первого из трёх
+//! записываемых `DWORD`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::GetEnergyNum
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:75
-// RVA: 0x000D7090
-// ADDRESS: 004d7090
-// PROTOTYPE: ulong __thiscall GetEnergyNum(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const ENERGY_HOLDING_STATE_ID: u32 = 0x89;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EnergyHoldingState {
+    skill_level: u32,
+    energy_count: u32,
+    parameter_percent: u32,
+}
+
+impl EnergyHoldingState {
+    pub(crate) const fn new(skill_level: u32, parameter_percent: u32) -> Self {
+        Self { skill_level, energy_count: 0, parameter_percent }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 { ENERGY_HOLDING_STATE_ID }
+    pub(crate) const fn energy_count(self) -> u32 { self.energy_count }
+    pub(crate) const fn parameter_percent(self) -> u32 { self.parameter_percent }
+
+    pub(crate) const fn add_energy(&mut self) -> bool {
+        if self.energy_count >= self.skill_level { return false }
+        self.energy_count = self.energy_count.wrapping_add(1);
+        true
+    }
+}
+
+pub(crate) fn send_energy_holding_state_visual(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    x: i32,
+    y: i32,
+    state: EnergyHoldingState,
+    begin: bool,
+) {
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(ENERGY_HOLDING_STATE_ID as i32);
+    if begin {
+        message.add_long(0);
+        message.add_long(state.parameter_percent() as i32);
+    }
+    let _ = game.send_shape_position_around(region_id, x, y, &message);
+}
+
+// Сохранены недостигнутые функции исходного владельца: их реальные caller-ы
+// потребления и DB-кодека ещё не материализованы.
 
 // ============================================================================
 // FUNCTION: CEnergyHoldingState::End
@@ -63,118 +102,3 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::CEnergyHoldingState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:25
-// RVA: 0x001EC410
-// ADDRESS: 005ec410
-// PROTOTYPE: undefined __thiscall CEnergyHoldingState(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::CEnergyHoldingState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:36
-// RVA: 0x001EC450
-// ADDRESS: 005ec450
-// PROTOTYPE: undefined __thiscall CEnergyHoldingState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::~CEnergyHoldingState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:44
-// RVA: 0x001EC480
-// ADDRESS: 005ec480
-// PROTOTYPE: void __thiscall ~CEnergyHoldingState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::AddEnergy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:57
-// RVA: 0x001EC490
-// ADDRESS: 005ec490
-// PROTOTYPE: void __thiscall AddEnergy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:101
-// RVA: 0x001EC4D0
-// ADDRESS: 005ec4d0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:119
-// RVA: 0x001EC560
-// ADDRESS: 005ec560
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:84
-// RVA: 0x001EC610
-// ADDRESS: 005ec610
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:189
-// RVA: 0x001EC6A0
-// ADDRESS: 005ec6a0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer

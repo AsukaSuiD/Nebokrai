@@ -1,9 +1,9 @@
 //! Боевой клич `CRoar` (`0x83`).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/roar.cpp`. Владелец сохраняет проверку меча, cooldown,
-//! единственный расход MP, задержку, X-major обход окна 5×5 через одиночный
-//! `CServerRegion::GetShape`, PK-контакт от клетки заклинателя и replacement
+//! `appserver/skills/roar.cpp`. Владелец сохраняет проверку меча, перезарядку,
+//! единственный расход MP, обход окна 5×5 сначала по X через одиночный
+//! `CServerRegion::GetShape`, PK-контакт от клетки заклинателя и замену
 //! `RoarState`. `CGame` только связывает владельцев, свойства и доставку.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};

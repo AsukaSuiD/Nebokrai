@@ -125,6 +125,8 @@ pub(crate) mod appserver {
         pub(crate) mod rushstate2;
         pub(crate) mod roar;
         pub(crate) mod roarstate;
+        pub(crate) mod energyholding;
+        pub(crate) mod energyholdingstate;
         pub(crate) mod flash;
         pub(crate) mod thunder;
         pub(crate) mod swallow;

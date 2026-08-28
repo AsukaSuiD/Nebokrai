@@ -1,138 +1,117 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Накопление энергии `CEnergyHolding` (`0x89`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/energyholding.cpp`. Здесь находятся проверка лука,
+//! перезарядка, предел зарядов по уровню навыка, расход MP, задержка и
+//! визуальная последовательность. `CGame` оставляет только доступ к владельцу
+//! `CPlayer` и рассылку изменения канонического состояния вокруг него.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::CEnergyHolding
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:26
-// RVA: 0x00149BB0
-// ADDRESS: 00549bb0
-// PROTOTYPE: undefined __thiscall CEnergyHolding(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const ENERGY_HOLDING_SKILL_ID: u32 = 0x89;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const PLAYER_TYPE: i32 = 400;
+const USER_MP_LOSE: u32 = 2;
+const PARAMETER_PERCENT: u32 = 20_020;
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::~CEnergyHolding
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:33
-// RVA: 0x00149BE0
-// ADDRESS: 00549be0
-// PROTOTYPE: void __thiscall ~CEnergyHolding(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const fn is_energy_holding_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: ENERGY_HOLDING_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: ENERGY_HOLDING_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: ENERGY_HOLDING_SKILL_ID, .. })
+}
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:189
-// RVA: 0x00149BF0
-// ADDRESS: 00549bf0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:211
-// RVA: 0x00149CC0
-// ADDRESS: 00549cc0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
+    player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2)
+}
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:169
-// RVA: 0x00149DB0
-// ADDRESS: 00549db0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
+    if code != 0x0e {
+        game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
+    }
+    match code {
+        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
+        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
+        0x0e => game.send_skill_system_info(player_id, b"GS0292"),
+        _ => {}
+    }
+}
 
-// ============================================================================
-// FUNCTION: CEnergyHoldingEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:383
-// RVA: 0x00149E70
-// ADDRESS: 00549e70
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_visual(game: &mut CGame, player_id: i32, level: i32, apply: bool) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(if apply { 2 } else { 1 });
+    message.add_long(ENERGY_HOLDING_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    if apply {
+        message.add_long(PLAYER_TYPE);
+        message.add_long(player_id);
+        message.add_long(player.shape().get_tile_x().unwrap_or_default());
+        message.add_long(player.shape().get_tile_y().unwrap_or_default());
+    } else {
+        message.add_long(player.shape().get_direction());
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:49
-// RVA: 0x0014A190
-// ADDRESS: 0054a190
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn finish(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); }
+}
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:246
-// RVA: 0x0014A4A0
-// ADDRESS: 0054a4a0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_energy_holding_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((level, mana, energy_count)) = game.find_player(player_id).map(|player| (player.learned_skill_level(ENERGY_HOLDING_SKILL_ID), player.mana(), player.energy_holding_state().map_or(0, |state| state.energy_count()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(ENERGY_HOLDING_SKILL_ID, level) else { if ai.energy_holding().is_some() { finish(game, player_id) } return terminal(QueuedSkillExecutionState::Rejected) };
+    let mp_loss = properties.query_property(USER_MP_LOSE);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let parameter_percent = properties.query_property(PARAMETER_PERCENT);
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-// ============================================================================
-// FUNCTION: CEnergyHolding::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholding.cpp:229
-// RVA: 0x001502F0
-// ADDRESS: 005502f0
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if ai.energy_holding().is_none() {
+        let started_at_ms = runtime.now_milliseconds();
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if ai.energy_holding_last_used_ms() != 0 && !time_reached(cooldown_now_ms, ai.energy_holding_last_used_ms(), reuse_delay_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
+        if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if u32::try_from(level).is_ok_and(|level| level <= energy_count) { game.send_skill_system_info(player_id, b"GS0299"); return terminal(QueuedSkillExecutionState::Rejected) }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(ENERGY_HOLDING_SKILL_ID)); }
+        ai.begin_energy_holding(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if ai.energy_holding().is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
-
-// COMPONENT_VARIANT_END: GameServer
+    if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
+        failure(game, player_id, 2, mp_loss);
+        ai.mark_energy_holding_used(runtime.now_milliseconds());
+        finish(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if ai.energy_holding().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        send_visual(game, player_id, level, false);
+        if let Some(execution) = ai.energy_holding_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+    }
+    let started_at_ms = ai.energy_holding().map(SkillExecutionKernel::started_at_ms).expect("выполнение накопления энергии создано выше");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
+    send_visual(game, player_id, level, true);
+    let installed = u32::try_from(level).is_ok_and(|level| game.add_player_energy_holding(player_id, level, parameter_percent));
+    if let Some(execution) = ai.energy_holding_mut() {
+        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    ai.mark_energy_holding_used(runtime.now_milliseconds());
+    finish(game, player_id);
+    terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
+}

@@ -66,6 +66,7 @@ use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::rushstate::RushState;
 use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::RoarState;
+use crate::gameserver::appserver::skills::energyholdingstate::EnergyHoldingState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
@@ -521,6 +522,7 @@ pub(crate) struct CanonicalStateStorage {
     rush_state: Option<RushState>,
     rush_2_state: Option<Rush2State>,
     roar_state: Option<RoarState>,
+    energy_holding_state: Option<EnergyHoldingState>,
     pillar_state: Option<PillarState>,
     knight_cut_state: Option<KnightCutState>,
     blind_state_order: IndexSet<u32>,
@@ -756,6 +758,7 @@ impl CMoveShape {
         self.rush_state = None;
         self.rush_2_state = None;
         self.roar_state = None;
+        self.energy_holding_state = None;
         self.pillar_state = None;
         self.knight_cut_state = None;
         self.blind_state_order.clear();
@@ -1122,6 +1125,7 @@ impl CMoveShape {
             || self.rush_state.is_some_and(|state| state.skill_id() == state_id)
             || self.rush_2_state.is_some_and(|state| state.skill_id() == state_id)
             || self.roar_state.is_some_and(|state| state.skill_id() == state_id)
+            || self.energy_holding_state.is_some_and(|state| state.skill_id() == state_id)
             || self.pillar_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .knight_cut_state
@@ -1636,6 +1640,9 @@ impl CMoveShape {
         self.roar_state_order = None;
         Some(state)
     }
+    pub(crate) const fn energy_holding_state(&self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state }
+    pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut EnergyHoldingState> { self.state_storage.energy_holding_state.as_mut() }
+    pub(crate) fn begin_energy_holding_state(&mut self, state: EnergyHoldingState) { self.state_storage.energy_holding_state = Some(state); }
     pub(crate) fn reached_property_states(&self) -> Vec<ReachedPropertyState> {
         let current = self.reached_property_state_order;
         let mut states = Vec::with_capacity(3);

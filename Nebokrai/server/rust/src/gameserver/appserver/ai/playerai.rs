@@ -15,7 +15,8 @@
 //! и зеркало душ,
 //! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
 //! рыцарский удар, подготовка яростного удара, последующий рывок, громовое
-//! рассечение, прямой рывок, боевой клич и двойной направленный удар,
+//! рассечение, прямой рывок, боевой клич, накопление энергии и двойной
+//! направленный удар,
 //! периодический удар листвы и фронтальный рубящий удар,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
@@ -102,6 +103,8 @@ pub(crate) struct CPlayerAI {
     rush_2_last_used_ms: u32,
     roar: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     roar_last_used_ms: u32,
+    energy_holding: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    energy_holding_last_used_ms: u32,
     thunder_blow_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     thunder_blow_2_last_used_ms: u32,
     mosou: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -264,6 +267,7 @@ impl CPlayerAI {
         self.rush = None;
         self.rush_2 = None;
         self.roar = None;
+        self.energy_holding = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -405,6 +409,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.roar.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение боевого клича завершено");
+        }
+        if let Some(mut execution) = self.energy_holding.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение накопления энергии завершено");
         }
         if let Some(mut execution) = self.thunder_blow_2.take() {
             let _ = execution.terminate(termination);
@@ -599,6 +607,7 @@ impl CPlayerAI {
         self.rush = None;
         self.rush_2 = None;
         self.roar = None;
+        self.energy_holding = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -835,6 +844,12 @@ impl CPlayerAI {
     pub(crate) fn roar_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.roar.as_mut() }
     pub(crate) const fn roar_last_used_ms(&self) -> u32 { self.roar_last_used_ms }
     pub(crate) const fn mark_roar_used(&mut self, now_ms: u32) { self.roar_last_used_ms = now_ms; }
+
+    pub(crate) const fn energy_holding(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.energy_holding }
+    pub(crate) const fn begin_energy_holding(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.energy_holding = Some(state); }
+    pub(crate) fn energy_holding_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.energy_holding.as_mut() }
+    pub(crate) const fn energy_holding_last_used_ms(&self) -> u32 { self.energy_holding_last_used_ms }
+    pub(crate) const fn mark_energy_holding_used(&mut self, now_ms: u32) { self.energy_holding_last_used_ms = now_ms; }
 
     pub(crate) const fn thunder_blow_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow_2 }
     pub(crate) const fn begin_thunder_blow_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.thunder_blow_2 = Some(state); }

@@ -496,6 +496,7 @@ mod thunderblow2;
 mod mosou;
 mod rush;
 mod roar;
+mod energyholding;
 mod seal;
 mod thunder;
 mod snowstorm;
@@ -812,6 +813,7 @@ use crate::gameserver::appserver::skills::rushstate2::{
     expire_monster_rush_2_state, expire_player_rush_2_state,
 };
 use crate::gameserver::appserver::skills::roar::{execute_player_roar, is_roar_dispatch};
+use crate::gameserver::appserver::skills::energyholding::{execute_player_energy_holding, is_energy_holding_dispatch};
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
 };
@@ -36844,6 +36846,7 @@ impl CGame {
             let concrete_rush = is_rush_dispatch(dispatch);
             let concrete_rush_2 = is_rush_2_dispatch(dispatch);
             let concrete_roar = is_roar_dispatch(dispatch);
+            let concrete_energy_holding = is_energy_holding_dispatch(dispatch);
             let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
             let concrete_mosou = is_mosou_dispatch(dispatch);
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
@@ -36997,6 +37000,8 @@ impl CGame {
                 execute_player_rush_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_roar {
                 execute_player_roar(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_energy_holding {
+                execute_player_energy_holding(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow_2 {
                 execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mosou {
