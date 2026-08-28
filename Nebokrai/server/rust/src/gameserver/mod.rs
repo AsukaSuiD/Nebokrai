@@ -198,6 +198,9 @@ pub(crate) mod appserver {
         pub(crate) mod pillarstate;
         pub(crate) mod poisonarrow;
         pub(crate) mod poisonarrowstate;
+        pub(crate) mod poisonfog;
+        pub(crate) mod poisonfogphalanx;
+        pub(crate) mod poisonfogstate;
         pub(crate) mod promotion;
         pub(crate) mod promotionstate;
         pub(crate) mod pojia;

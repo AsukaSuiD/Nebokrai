@@ -4386,6 +4386,7 @@ impl CPlayer {
         for state in self.move_shape.reached_property_states() {
             properties = match state {
                 super::moveshape::ReachedPropertyState::Weak(state) => state.apply_to_player(properties),
+                super::moveshape::ReachedPropertyState::PoisonFog(state) => state.apply_to_player(self.level(), properties),
                 super::moveshape::ReachedPropertyState::GodBless(state) => state.apply_to_player(properties),
                 super::moveshape::ReachedPropertyState::Roar(state) => state.apply_to_player(properties),
             };
@@ -4466,6 +4467,11 @@ impl CPlayer {
     ) -> Option<super::skills::poisonarrowstate::PoisonArrowState> {
         self.move_shape.replace_poison_arrow_state(state)
     }
+
+    pub(crate) fn replace_poison_fog_state(&mut self, state: super::skills::poisonfogstate::PoisonFogState, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.replace_poison_fog_state(state, now_ms) }
+    pub(crate) fn take_expired_poison_fog_state(&mut self, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_expired_poison_fog_state(now_ms) }
+    pub(crate) fn take_poison_fog_state(&mut self) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.take_poison_fog_state() }
+    pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Option<super::skills::poisonfogstate::PoisonFogState> { self.move_shape.activate_loaded_poison_fog_state(now_ms) }
 
     pub(crate) fn take_poison_arrow_state_for_ai(
         &mut self,

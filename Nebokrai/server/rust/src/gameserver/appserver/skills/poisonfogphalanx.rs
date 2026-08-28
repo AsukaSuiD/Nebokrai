@@ -1,69 +1,37 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Область ядовитого тумана `CPoisonFogPhalanx` (`0xC9`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/poisonfogphalanx.cpp`. В RU-варианте все достигнутые
+//! уровни используют одну клетку. Каждый проход `AI` заново заменяет состояние
+//! подходящих целей; `CGame` сохраняет порядок `GetShape`, правила PK и
+//! координацию заимствований.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogphalanx.cpp
+use super::poisonfogstate::PoisonFogState;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CPoisonFogPhalanx::ReplaceAffectRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogphalanx.cpp:239
-// RVA: 0x001FBA60
-// ADDRESS: 005fba60
-// PROTOTYPE: void __thiscall ReplaceAffectRegion(long param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PoisonFogPhalanxTick { Scan, Expired }
 
-// ============================================================================
-// FUNCTION: CPoisonFogPhalanx::CPoisonFogPhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogphalanx.cpp:39
-// RVA: 0x001FBD90
-// ADDRESS: 005fbd90
-// PROTOTYPE: undefined __thiscall CPoisonFogPhalanx(tagMasterInfo * param_1, ulong param_2, long param_3, ulong param_4, ulong param_5, ulong param_6, ulong param_7, ulong param_8, ulong param_9, ulong param_10)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CPoisonFogPhalanx {
+    shape: CShape, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,
+    skill_level: i32, state_keep_time_ms: u32, defense_loss: u32,
+    defense_loss_coefficient: u32, dodge_loss: u32, element_resistance_loss: u32,
+    element_resistance_loss_coefficient: u32, weapon_damage_level: u32,
+    scope_active: bool,
+}
 
-// ============================================================================
-// FUNCTION: CPoisonFogPhalanx::~CPoisonFogPhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogphalanx.cpp:58
-// RVA: 0x001FBF30
-// ADDRESS: 005fbf30
-// PROTOTYPE: void __thiscall ~CPoisonFogPhalanx(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogPhalanx::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogphalanx.cpp:109
-// RVA: 0x001FC040
-// ADDRESS: 005fc040
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+impl CPoisonFogPhalanx {
+    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
+    pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, state_keep_time_ms: u32, defense_loss: u32, defense_loss_coefficient: u32, dodge_loss: u32, element_resistance_loss: u32, element_resistance_loss_coefficient: u32, weapon_damage_level: u32) -> Self { let mut shape = CShape::with_constructor_defaults(); shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID }); Self { shape, master, started_at_ms, lifetime_ms, skill_level, state_keep_time_ms, defense_loss, defense_loss_coefficient, dodge_loss, element_resistance_loss, element_resistance_loss_coefficient, weapon_damage_level, scope_active: true } }
+    pub(crate) const fn shape(&self) -> &CShape { &self.shape }
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
+    pub(crate) const fn master(&self) -> MasterInfo { self.master }
+    pub(crate) fn replace_affect_region(&mut self, tile_x: i32, tile_y: i32) { if self.shape.get_tile_x() == Ok(tile_x) && self.shape.get_tile_y() == Ok(tile_y) { self.scope_active = false; } }
+    pub(crate) fn tick(&mut self, now_ms: u32) -> PoisonFogPhalanxTick { if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms || !self.scope_active { self.shape.set_change_state(SHAPE_CHANGE_DELETE); PoisonFogPhalanxTick::Expired } else { PoisonFogPhalanxTick::Scan } }
+    pub(crate) fn state(&self, now_ms: u32) -> PoisonFogState { PoisonFogState::new(self.skill_level, now_ms, self.state_keep_time_ms, self.defense_loss, self.defense_loss_coefficient, self.dodge_loss, self.element_resistance_loss, self.element_resistance_loss_coefficient, self.weapon_damage_level) }
+    pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> { let mut payload = Vec::new(); self.shape.encode_to_byte_array(&mut payload, true).then_some(payload) }
+}

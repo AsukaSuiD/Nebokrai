@@ -133,6 +133,7 @@ pub(crate) struct CMonster {
 pub(crate) struct MonsterCombatProperties {
     pub(crate) level: u8,
     pub(crate) defense: u32,
+    pub(crate) dodge: u32,
     pub(crate) element_resistance: u32,
     pub(crate) soul_resistance: u16,
     pub(crate) attack_avoid: u16,
@@ -659,15 +660,18 @@ impl CMonster {
         let factor = |index: usize| f32::from_bits(self.factors[index]);
         let scaled =
             |value: u32, index: usize| ((value as f32) * factor(index)).round_ties_even() as u32;
-        MonsterCombatProperties {
+        let mut properties = MonsterCombatProperties {
             level: property.level as u8,
             defense: scaled(property.defence, 5),
+            dodge: property.dodge,
             element_resistance: scaled(property.element_resistant, 3),
             soul_resistance: property.soul_resistant as u16,
             attack_avoid: property.attack_avoid,
             element_avoid: property.element_avoid,
             promotion_magic_attack_factor: self.move_shape.promotion_magic_attack_factor(),
-        }
+        };
+        for state in self.move_shape.reached_property_states() { if let super::moveshape::ReachedPropertyState::PoisonFog(state) = state { properties = state.apply_to_monster(properties); } }
+        properties
     }
 
     pub(crate) fn pet_attack_properties(
@@ -716,6 +720,7 @@ impl CMonster {
                 super::moveshape::ReachedPropertyState::Weak(state) => {
                     (minimum, maximum) = state.apply_to_monster(minimum, maximum);
                 }
+                super::moveshape::ReachedPropertyState::PoisonFog(_) => {}
                 super::moveshape::ReachedPropertyState::GodBless(state) => {
                     (minimum, maximum, _) = state.apply_to_monster(minimum, maximum, 0);
                 }
@@ -741,6 +746,7 @@ impl CMonster {
                     (_, _, value) = state.apply_to_monster(0, 0, value);
                 }
                 super::moveshape::ReachedPropertyState::Weak(_) => {}
+                super::moveshape::ReachedPropertyState::PoisonFog(_) => {}
             }
         }
         for state in self.move_shape.battle_fairy_attribute_states() {

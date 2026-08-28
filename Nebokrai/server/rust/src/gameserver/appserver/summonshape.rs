@@ -17,6 +17,7 @@ use crate::gameserver::appserver::skills::fireboltphalanx::CFireBoltPhalanx;
 use crate::gameserver::appserver::skills::fireballphalanx::CFireBallPhalanx;
 use crate::gameserver::appserver::skills::chaosspherephalanx::CChaosSpherePhalanx;
 use crate::gameserver::appserver::skills::firewallphalanx::CFireWallPhalanx;
+use crate::gameserver::appserver::skills::poisonfogphalanx::CPoisonFogPhalanx;
 use crate::gameserver::appserver::skills::thunderphalanx::CThunderPhalanx;
 use crate::gameserver::appserver::skills::thunderblowphalanx::CThunderBlowPhalanx;
 use crate::gameserver::appserver::skills::thunderslashphalanx::CThunderSlashPhalanx;
@@ -42,6 +43,7 @@ pub(crate) enum SummonedSkillShape {
     FireBall(CFireBallPhalanx),
     ChaosSphere(CChaosSpherePhalanx),
     FireWall(CFireWallPhalanx),
+    PoisonFog(CPoisonFogPhalanx),
     Thunder(CThunderPhalanx),
     ThunderBlow(CThunderBlowPhalanx),
     ThunderSlash(CThunderSlashPhalanx),
@@ -67,6 +69,7 @@ impl SummonedSkillShape {
             Self::FireBall(shape) => shape.shape(),
             Self::ChaosSphere(shape) => shape.shape(),
             Self::FireWall(shape) => shape.shape(),
+            Self::PoisonFog(shape) => shape.shape(),
             Self::Thunder(shape) => shape.shape(),
             Self::ThunderBlow(shape) => shape.shape(),
             Self::ThunderSlash(shape) => shape.shape(),
@@ -92,6 +95,7 @@ impl SummonedSkillShape {
             Self::FireBall(shape) => shape.shape_mut(),
             Self::ChaosSphere(shape) => shape.shape_mut(),
             Self::FireWall(shape) => shape.shape_mut(),
+            Self::PoisonFog(shape) => shape.shape_mut(),
             Self::Thunder(shape) => shape.shape_mut(),
             Self::ThunderBlow(shape) => shape.shape_mut(),
             Self::ThunderSlash(shape) => shape.shape_mut(),
@@ -117,6 +121,7 @@ impl SummonedSkillShape {
             Self::FireBall(shape) => shape.master(),
             Self::ChaosSphere(shape) => shape.master(),
             Self::FireWall(shape) => shape.master(),
+            Self::PoisonFog(shape) => shape.master(),
             Self::Thunder(shape) => shape.master(),
             Self::ThunderBlow(shape) => shape.master(),
             Self::ThunderSlash(shape) => shape.master(),

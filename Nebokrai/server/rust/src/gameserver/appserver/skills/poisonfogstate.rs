@@ -1,182 +1,49 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое ослабление ядовитого тумана `CPoisonFogState` (`0xC9`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/poisonfogstate.cpp`. Сохранены 36-байтовая DB-запись,
+//! строгая граница срока и legacy-преобразования через `float`. Поле
+//! `dodge_loss` сохраняется в двоичной записи, хотя достигнутый русский вариант
+//! использует для `CMonster` округлённую потерю defense, а для `CPlayer` это
+//! поле не читает.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::monster::MonsterCombatProperties;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CPoisonFogState::CPoisonFogState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:91
-// RVA: 0x00207C40
-// ADDRESS: 00607c40
-// PROTOTYPE: undefined __thiscall CPoisonFogState(long param_1, long param_2, long param_3, ulong param_4, ulong param_5, ulong param_6, ulong param_7, ulong param_8, ulong param_9, ulong param_10)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const POISON_FOG_STATE_ID: u32 = 0xc9;
+pub(crate) const POISON_FOG_STATE_BYTES: usize = 36;
+const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
-// ============================================================================
-// FUNCTION: CPoisonFogState::CPoisonFogState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:114
-// RVA: 0x00207DC0
-// ADDRESS: 00607dc0
-// PROTOTYPE: undefined __thiscall CPoisonFogState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PoisonFogState {
+    skill_level: i32, started_at_ms: u32, keep_time_ms: u32,
+    defense_loss: u32, defense_loss_coefficient: u32, dodge_loss: u32,
+    element_resistance_loss: u32, element_resistance_loss_coefficient: u32,
+    weapon_damage_level: u32, serialized_offset: Option<usize>,
+}
 
-// ============================================================================
-// FUNCTION: CPoisonFogState::GetRemainedTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:136
-// RVA: 0x00207E00
-// ADDRESS: 00607e00
-// PROTOTYPE: ulong __thiscall GetRemainedTime(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl PoisonFogState {
+    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют состоянию EXE")]
+    pub(crate) const fn new(skill_level: i32, started_at_ms: u32, keep_time_ms: u32, defense_loss: u32, defense_loss_coefficient: u32, dodge_loss: u32, element_resistance_loss: u32, element_resistance_loss_coefficient: u32, weapon_damage_level: u32) -> Self { Self { skill_level, started_at_ms, keep_time_ms, defense_loss, defense_loss_coefficient, dodge_loss, element_resistance_loss, element_resistance_loss_coefficient, weapon_damage_level, serialized_offset: None } }
+    pub(crate) const fn skill_id(self) -> u32 { POISON_FOG_STATE_ID }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 { let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms); if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 } }
+    pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { match self.serialized_offset { Some(offset) => Some((offset, POISON_FOG_STATE_BYTES)), None => None } }
+    pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
+    fn scaled_loss(self, target_level: u8, coefficient: u32, maximum: u32) -> f32 { if coefficient == 0 { return 0.0; } maximum as f32 * ((self.weapon_damage_level as f32 - f32::from(target_level)) / coefficient as f32).clamp(0.0, 1.0) }
+    pub(crate) fn apply_to_player(self, target_level: u8, mut properties: PlayerCombatProperties) -> PlayerCombatProperties { let defense = self.scaled_loss(target_level, self.defense_loss_coefficient, self.defense_loss) as u32 & 0xffff; let resistance = self.scaled_loss(target_level, self.element_resistance_loss_coefficient, self.element_resistance_loss) as u32 & 0xffff; properties.defense = properties.defense.wrapping_sub(defense).min(i32::MAX as u32); properties.element_resistance = properties.element_resistance.wrapping_sub(resistance).min(i32::MAX as u32); properties }
+    pub(crate) fn apply_to_monster(self, mut properties: MonsterCombatProperties) -> MonsterCombatProperties { let loss = self.scaled_loss(properties.level, self.defense_loss_coefficient, self.defense_loss).round_ties_even() as u32; properties.defense = properties.defense.wrapping_sub(loss); properties.dodge = properties.dodge.wrapping_sub(loss); properties }
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> { let mut reader = LegacyReader::at(payload, offset)?; if reader.read_u32()? != POISON_FOG_STATE_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); } Ok(Self { skill_level: reader.read_i32()?, started_at_ms: now_ms, keep_time_ms: reader.read_u32()?, defense_loss: reader.read_u32()?, defense_loss_coefficient: reader.read_u32()?, dodge_loss: reader.read_u32()?, element_resistance_loss: reader.read_u32()?, element_resistance_loss_coefficient: reader.read_u32()?, weapon_damage_level: reader.read_u32()?, serialized_offset: Some(offset) }) }
+    fn encoded(self, now_ms: u32) -> Vec<u8> { let mut record = Vec::with_capacity(POISON_FOG_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(POISON_FOG_STATE_ID); writer.write_i32(self.skill_level); writer.write_u32(self.client_time(now_ms) as u32); writer.write_u32(self.defense_loss); writer.write_u32(self.defense_loss_coefficient); writer.write_u32(self.dodge_loss); writer.write_u32(self.element_resistance_loss); writer.write_u32(self.element_resistance_loss_coefficient); writer.write_u32(self.weapon_damage_level); record }
+    pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>, now_ms: u32) { let offset = payload.len(); payload.extend_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); }
+    pub(crate) fn write_serialized_at(&mut self, payload: &mut [u8], offset: usize, now_ms: u32) -> bool { let Some(destination) = payload.get_mut(offset..offset.saturating_add(POISON_FOG_STATE_BYTES)) else { return false }; destination.copy_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); true }
+    pub(crate) fn update_serialized_runtime(self, payload: &mut [u8], now_ms: u32) { if let Some(offset) = self.serialized_offset { let _ = LegacyWriter::write_u32_at(payload, offset + 8, self.client_time(now_ms) as u32); } }
+}
 
-// ============================================================================
-// FUNCTION: CPoisonFogState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:259
-// RVA: 0x00207E30
-// ADDRESS: 00607e30
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:267
-// RVA: 0x00207EC0
-// ADDRESS: 00607ec0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:293
-// RVA: 0x00207F50
-// ADDRESS: 00607f50
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:364
-// RVA: 0x00207FD0
-// ADDRESS: 00607fd0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogState::~CPoisonFogState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:131
-// RVA: 0x00207FF0
-// ADDRESS: 00607ff0
-// PROTOTYPE: void __thiscall ~CPoisonFogState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:143
-// RVA: 0x00208060
-// ADDRESS: 00608060
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:248
-// RVA: 0x00208420
-// ADDRESS: 00608420
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:325
-// RVA: 0x002084C0
-// ADDRESS: 006084c0
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonFogStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonfogstate.cpp:397
-// RVA: 0x00208660
-// ADDRESS: 00608660
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn send_poison_fog_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: PoisonFogState, begin: bool, now_ms: u32) { let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(POISON_FOG_STATE_ID as i32); if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message); }

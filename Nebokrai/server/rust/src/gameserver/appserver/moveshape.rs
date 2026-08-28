@@ -75,6 +75,7 @@ use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::PillarState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
+use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
 use crate::gameserver::appserver::skills::promotionstate::PromotionState;
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
@@ -510,6 +511,7 @@ pub(crate) struct CanonicalStateStorage {
     seal_state: Option<SealState>,
     curable_state_order: IndexSet<u32>,
     poison_arrow_state: Option<PoisonArrowState>,
+    poison_fog_state: Option<PoisonFogState>,
     spider_poison_state: Option<SpiderPoisonState>,
     spider_web_state: Option<SpiderWebState>,
     weak_state: Option<WeakState>,
@@ -517,6 +519,7 @@ pub(crate) struct CanonicalStateStorage {
     soul_collect_state: Option<SoulCollectState>,
     reached_property_state_order: u32,
     weak_state_order: Option<u32>,
+    poison_fog_state_order: Option<u32>,
     god_bless_state_order: Option<u32>,
     roar_state_order: Option<u32>,
     knock_out_state: Option<KnockOutState>,
@@ -561,6 +564,7 @@ impl DerefMut for CMoveShape {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReachedPropertyState {
     Weak(WeakState),
+    PoisonFog(PoisonFogState),
     GodBless(GodBlessState),
     Roar(RoarState),
 }
@@ -687,6 +691,7 @@ impl CMoveShape {
         if let Some(state) = self.leaf_cut_3_state {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
+        if let Some(state) = self.poison_fog_state { state.update_serialized_runtime(&mut payload, now_ms); }
         payload
     }
 
@@ -733,6 +738,10 @@ impl CMoveShape {
         if let Some(state) = self.leaf_cut_3_state {
             self.periodic_attack_order.insert(state.skill_id());
         }
+        self.curable_state_order.shift_remove(&POISON_FOG_STATE_ID);
+        self.poison_fog_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(POISON_FOG_STATE_ID)).and_then(|offset| PoisonFogState::decode(&states, offset, 0).ok());
+        self.poison_fog_state_order = None;
+        if let Some(state) = self.poison_fog_state { self.curable_state_order.insert(state.skill_id()); self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1); self.poison_fog_state_order = Some(self.reached_property_state_order); }
         self.ex_states.replace(states);
     }
 
@@ -759,6 +768,7 @@ impl CMoveShape {
         self.seal_state = None;
         self.curable_state_order.clear();
         self.poison_arrow_state = None;
+        self.poison_fog_state = None;
         self.spider_poison_state = None;
         self.spider_web_state = None;
         self.weak_state = None;
@@ -766,6 +776,7 @@ impl CMoveShape {
         self.soul_collect_state = None;
         self.reached_property_state_order = 0;
         self.weak_state_order = None;
+        self.poison_fog_state_order = None;
         self.god_bless_state_order = None;
         self.roar_state_order = None;
         self.knock_out_state = None;
@@ -815,6 +826,7 @@ impl CMoveShape {
             || self.state_storage.cure_state.is_some()
             || self.state_storage.seal_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
+            || self.state_storage.poison_fog_state.is_some()
             || self.state_storage.spider_poison_state.is_some()
             || self.state_storage.spider_web_state.is_some()
             || self.state_storage.weak_state.is_some()
@@ -985,6 +997,7 @@ impl CMoveShape {
             self.poison_arrow_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let poison_fog = usize::from(self.poison_fog_state.is_some_and(|state| state.skill_id() as i32 == state_id));
         let spider_poison = usize::from(
             self.spider_poison_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -1053,6 +1066,7 @@ impl CMoveShape {
             .saturating_add(cure)
             .saturating_add(seal)
             .saturating_add(poison_arrow)
+            .saturating_add(poison_fog)
             .saturating_add(spider_poison)
             .saturating_add(spider_web)
             .saturating_add(weak)
@@ -1129,6 +1143,7 @@ impl CMoveShape {
             || self
                 .poison_arrow_state
                 .is_some_and(|state| state.skill_id() == state_id)
+            || self.poison_fog_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .spider_poison_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -1670,10 +1685,11 @@ impl CMoveShape {
     pub(crate) fn take_energy_holding_state(&mut self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state.take() }
     pub(crate) fn reached_property_states(&self) -> Vec<ReachedPropertyState> {
         let current = self.reached_property_state_order;
-        let mut states = Vec::with_capacity(3);
+        let mut states = Vec::with_capacity(4);
         if let (Some(order), Some(state)) = (self.weak_state_order, self.weak_state) {
             states.push((current.wrapping_sub(order), ReachedPropertyState::Weak(state)));
         }
+        if let (Some(order), Some(state)) = (self.poison_fog_state_order, self.poison_fog_state) { states.push((current.wrapping_sub(order), ReachedPropertyState::PoisonFog(state))); }
         if let (Some(order), Some(state)) = (self.god_bless_state_order, self.god_bless_state) {
             states.push((current.wrapping_sub(order), ReachedPropertyState::GodBless(state)));
         }
@@ -1796,6 +1812,17 @@ impl CMoveShape {
         self.curable_state_order.iter().copied().collect()
     }
 
+    pub(crate) fn replace_poison_fog_state(&mut self, mut state: PoisonFogState, now_ms: u32) -> Option<PoisonFogState> {
+        let previous = self.poison_fog_state.take();
+        let replaced = previous.and_then(PoisonFogState::serialized_span).is_some_and(|(offset, amount)| amount == POISON_FOG_STATE_BYTES && state.write_serialized_at(&mut self.ex_states, offset, now_ms));
+        if !replaced { if self.ex_states.len() < 4 { self.ex_states.clear(); LegacyWriter::new(&mut self.ex_states).write_u32(0); } let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.wrapping_add(1)); state.append_serialized(&mut self.ex_states, now_ms); }
+        self.curable_state_order.shift_remove(&state.skill_id()); self.curable_state_order.insert(state.skill_id()); self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1); self.poison_fog_state_order = Some(self.reached_property_state_order); self.poison_fog_state = Some(state); previous
+    }
+    pub(crate) fn take_expired_poison_fog_state(&mut self, now_ms: u32) -> Option<PoisonFogState> { let state = self.poison_fog_state.filter(|state| state.expired(now_ms))?; self.finish_poison_fog_state(state); Some(state) }
+    pub(crate) fn take_poison_fog_state(&mut self) -> Option<PoisonFogState> { let state = self.poison_fog_state?; self.finish_poison_fog_state(state); Some(state) }
+    fn finish_poison_fog_state(&mut self, state: PoisonFogState) { self.poison_fog_state = None; self.poison_fog_state_order = None; self.curable_state_order.shift_remove(&state.skill_id()); let Some((offset, amount)) = state.serialized_span() else { return }; if offset.saturating_add(amount) > self.ex_states.len() { return } self.ex_states.drain(offset..offset + amount); if self.ex_states.len() >= 4 { let count = read_u32(&self.ex_states, 0).expect("счётчик состояний"); write_u32(&mut self.ex_states, 0, count.saturating_sub(1)); } for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); } for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); } if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); } }
+    pub(crate) fn activate_loaded_poison_fog_state(&mut self, now_ms: u32) -> Option<PoisonFogState> { let mut state = self.poison_fog_state?; state.activate_loaded(now_ms); state.update_serialized_runtime(&mut self.ex_states, now_ms); self.poison_fog_state = Some(state); Some(state) }
+
     pub(crate) fn blind_state_order(&self) -> Vec<u32> {
         self.blind_state_order.iter().copied().collect()
     }
@@ -1861,6 +1888,7 @@ impl CMoveShape {
         for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
         for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
     }
 
@@ -1925,6 +1953,7 @@ impl CMoveShape {
         for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
         for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
     }
 
@@ -2114,6 +2143,7 @@ impl CMoveShape {
             if let Some(state) = &mut self.leaf_cut_3_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
+            if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
         }
         self.set_fightable(true);
         Some(state)
@@ -2247,6 +2277,7 @@ impl CMoveShape {
         if let Some(state) = &mut self.leaf_cut_3_state {
             state.shift_serialized_offset_after(offset, amount);
         }
+        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
         if let Some(state) = &mut self.ride_state {
             state.shift_serialized_offset_after(offset, amount);
         }
@@ -2398,6 +2429,7 @@ impl CMoveShape {
             if let Some(state) = &mut self.leaf_cut_3_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
+            if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
             if let Some(state) = &mut self.ride_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
@@ -2537,6 +2569,7 @@ impl CMoveShape {
             if let Some(state) = &mut self.leaf_cut_3_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
+            if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
             if let Some(state) = &mut self.ride_state {
                 state.shift_serialized_offset_after(offset, amount);
             }
@@ -3011,6 +3044,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             UNDEAD_STATE_ID => 76,
             LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
             LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
+            POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

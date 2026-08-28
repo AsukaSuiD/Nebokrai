@@ -5,7 +5,7 @@
 //! время восстановления, путь и препятствия, задержку, направление, точную
 //! вероятность и один вызов генератора MSVCRT на каждое подходящее состояние
 //! в порядке исходного вектора состояний. Из уже типизированных состояний
-//! достигнуты `0x138`, `0x191`, `0x192`, `0x199` и `0x1F8`; неизвестные старые записи
+//! достигнуты `0xC9`, `0x138`, `0x191`, `0x192`, `0x199` и `0x1F8`; неизвестные старые записи
 //! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
 //! доставку. Координатная перегрузка
 //! `Begin` остаётся ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -36,6 +36,7 @@ use super::spiderwebstate::{
     send_spider_web_state_visual,
 };
 use super::sealstate::{SEAL_STATE_ID, SealState, send_seal_state_visual};
+use super::poisonfogstate::{POISON_FOG_STATE_ID, PoisonFogState, send_poison_fog_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -172,6 +173,7 @@ enum RemovedMonsterCurableState {
     KnockOut(KnockOutState),
     BossBlueQuake(BossBlueQuakeState),
     KnightCut(KnightCutState),
+    PoisonFog(PoisonFogState),
 }
 
 fn finish_monster_curable_state(
@@ -215,6 +217,7 @@ fn finish_monster_curable_state(
                 monster.move_shape_mut().set_fightable(true);
                 RemovedMonsterCurableState::KnightCut(state)
             }
+            POISON_FOG_STATE_ID => RemovedMonsterCurableState::PoisonFog(monster.move_shape_mut().take_poison_fog_state()?),
             _ => return None,
         };
         Some((removed, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?))
@@ -228,6 +231,7 @@ fn finish_monster_curable_state(
         RemovedMonsterCurableState::KnockOut(state) => send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::BossBlueQuake(state) => send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::KnightCut(state) => send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
+        RemovedMonsterCurableState::PoisonFog(state) => send_poison_fog_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
     }
     true
 }
@@ -239,6 +243,7 @@ pub(crate) fn finish_curable_state(game: &mut CGame, region_id: i32, target: Sha
         (PLAYER_TYPE, KNOCK_OUT_STATE_ID) => finish_player_knock_out_state_on_defense(game, target.id, now_ms),
         (PLAYER_TYPE, BOSS_BLUE_QUAKE_STATE_ID) => finish_player_boss_blue_quake_state_on_cure(game, target.id, now_ms),
         (PLAYER_TYPE, KNIGHT_CUT_STATE_ID) => finish_player_knight_cut_state_on_cure(game, target.id, now_ms),
+        (PLAYER_TYPE, POISON_FOG_STATE_ID) => { let removed = game.find_player_mut(target.id).and_then(|player| { let region = player.server_region_id()?; let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; let state = player.take_poison_fog_state()?; Some((region, x, y, state)) }); let Some((region, x, y, state)) = removed else { return false }; send_poison_fog_state_visual(game, region, target, x, y, state, false, now_ms); true },
         (MONSTER_TYPE, _) => finish_monster_curable_state(game, region_id, target.id, state_id, now_ms),
         _ => false,
     }
@@ -374,13 +379,15 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     send_cast(game, player_id, &target, level, true);
     let element_modify = game.find_player(player_id).map(|player| player.combat_properties().element_modify).unwrap_or_default();
     let threshold = cure_threshold(element_modify, base_probability, constant, em_modifier);
+    let mut properties_changed = false;
     for state_id in curable_state_ids(game, region_id, target.identity) {
         if game.skill_random_below(100) < threshold {
             // Пакеты завершения этих состояний не содержат время; дополнительное
             // чтение часов между вызовами генератора MSVCRT исходный `CastCure` не делал.
-            let _ = finish_curable_state(game, region_id, target.identity, state_id, 0);
+            properties_changed |= finish_curable_state(game, region_id, target.identity, state_id, 0);
         }
     }
+    if properties_changed && target.identity.object_type == PLAYER_TYPE { let _ = game.update_player_properties(target.identity.id, runtime); }
     let installed = install_cure_state(game, region_id, &target, CureState::new(keep_time_ms));
     if let Some(execution) = player_ai.cure_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);

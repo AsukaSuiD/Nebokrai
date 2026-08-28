@@ -137,6 +137,9 @@ pub(crate) struct CPlayerAI {
     little_flash_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
+    poison_fog: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    poison_fog_destination: Option<(i32, i32)>,
+    poison_fog_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     infernol_last_used_ms: u32,
     seven_shooting_star: Option<SevenShootingStarExecutionState>,
@@ -288,6 +291,8 @@ impl CPlayerAI {
         self.lightning_sword = None;
         self.little_flash = None;
         self.fire_wall = None;
+        self.poison_fog = None;
+        self.poison_fog_destination = None;
         self.infernol = None;
         self.seven_shooting_star = None;
         self.chaos_sphere = None;
@@ -484,6 +489,7 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненной стены завершено");
         }
+        if let Some(mut execution) = self.poison_fog.take() { self.poison_fog_destination = None; let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитого тумана завершено"); }
         if let Some(mut execution) = self.infernol.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного круга завершено");
@@ -638,6 +644,8 @@ impl CPlayerAI {
         self.lightning_sword = None;
         self.little_flash = None;
         self.fire_wall = None;
+        self.poison_fog = None;
+        self.poison_fog_destination = None;
         self.infernol = None;
         self.seven_shooting_star = None;
         self.chaos_sphere = None;
@@ -975,6 +983,13 @@ impl CPlayerAI {
     pub(crate) const fn mark_fire_wall_used(&mut self, now_ms: u32) {
         self.fire_wall_last_used_ms = now_ms;
     }
+
+    pub(crate) const fn poison_fog(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.poison_fog }
+    pub(crate) const fn begin_poison_fog(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) { self.poison_fog = Some(state); self.poison_fog_destination = Some(destination); }
+    pub(crate) fn poison_fog_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.poison_fog.as_mut() }
+    pub(crate) const fn poison_fog_last_used_ms(&self) -> u32 { self.poison_fog_last_used_ms }
+    pub(crate) const fn mark_poison_fog_used(&mut self, now_ms: u32) { self.poison_fog_last_used_ms = now_ms; }
+    pub(crate) const fn poison_fog_destination(&self) -> Option<(i32, i32)> { self.poison_fog_destination }
 
     pub(crate) const fn infernol(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.infernol

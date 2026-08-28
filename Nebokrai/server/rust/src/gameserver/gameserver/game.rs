@@ -487,6 +487,7 @@ mod leafcut;
 mod leafcut3;
 mod fatalblow;
 mod firewall;
+mod poisonfog;
 mod godpunishment;
 mod godthunder;
 mod chaossphere;
@@ -822,6 +823,8 @@ use crate::gameserver::appserver::skills::firewall::{
 use crate::gameserver::appserver::skills::firewallphalanx::{
     calculate_owned_fire_wall_attack, FireWallPhalanxTick,
 };
+use crate::gameserver::appserver::skills::poisonfog::{execute_player_poison_fog, is_poison_fog_target};
+use crate::gameserver::appserver::skills::poisonfogphalanx::PoisonFogPhalanxTick;
 use crate::gameserver::appserver::skills::infernol::{
     execute_player_infernol, is_infernol_dispatch,
 };
@@ -26331,6 +26334,7 @@ impl CGame {
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
+        let _ = self.expire_player_poison_fog(player_id, now_ms, runtime);
         let rage_break_context = self.find_player(player_id).and_then(|player| {
             Some((
                 player.server_region_id()?,
@@ -28162,6 +28166,7 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_leaf_cut_3_state(login_tick_ms);
+        let loaded_poison_fog_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_poison_fog_state(login_tick_ms);
         for state in &loaded_appellation_states {
             self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
         }
@@ -28204,6 +28209,10 @@ impl CGame {
                 login_tick_ms,
             );
         }
+        if let Some(state) = loaded_poison_fog_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        { crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, true, login_tick_ms); }
         self.restore_player_login_pets(expected_player_id, region_id, context);
         self.restore_player_login_carriage(expected_player_id, region_id, context);
 
@@ -36922,6 +36931,7 @@ impl CGame {
             let concrete_lightning_sword = is_lightning_sword_dispatch(dispatch);
             let concrete_little_flash = is_little_flash_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
+            let concrete_poison_fog = is_poison_fog_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
             let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
@@ -37095,6 +37105,8 @@ impl CGame {
                 execute_player_little_flash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_poison_fog {
+                execute_player_poison_fog(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {
                 execute_player_infernol(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_seven_shooting_star {
@@ -40071,6 +40083,7 @@ impl CGame {
             SummonedSkillShape::FireWall(phalanx) => {
                 calculate_owned_fire_wall_attack(self, phalanx, target_level)
             }
+            SummonedSkillShape::PoisonFog(_) => None,
             SummonedSkillShape::Thunder(phalanx) => {
                 self.calculate_thunder_attack(phalanx, target_level)
             }
@@ -40539,6 +40552,7 @@ impl CGame {
                         FireWallPhalanxTick::Expired => None,
                     }
                 }
+                SummonedSkillShape::PoisonFog(phalanx) => match phalanx.tick(lifetime_now_ms) { PoisonFogPhalanxTick::Scan => Some(Some((phalanx.shape().identity(), lifetime_now_ms))), PoisonFogPhalanxTick::Expired => None },
                 SummonedSkillShape::Thunder(phalanx) => match phalanx.tick(lifetime_now_ms) {
                     ThunderPhalanxTick::Pending => Some(None),
                     ThunderPhalanxTick::Attack { sampled_at_ms } => Some(Some((
@@ -40759,6 +40773,7 @@ impl CGame {
             }
             return true;
         }
+        if let (Some(Some(_)), SummonedSkillShape::PoisonFog(poison_fog)) = (tick, &phalanx) { let applied = self.apply_poison_fog_phalanx(region_id, poison_fog, runtime); tracing::trace!(region_id, phalanx_id, applied, "обновлена область ядовитого тумана"); return true; }
         if let (
             Some(Some((_, sampled_at_ms))),
             SummonedSkillShape::Thunder(thunder),
@@ -41659,6 +41674,7 @@ impl CGame {
                         monster_id,
                         now_ms,
                     );
+                    let expired_poison_fog = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| { let x = monster.move_shape().shape().get_tile_x().ok()?; let y = monster.move_shape().shape().get_tile_y().ok()?; let state = monster.move_shape_mut().take_expired_poison_fog_state(now_ms)?; Some((x, y, state)) });
                     let promotion_ended = owner
                         .base_mut()
                         .find_monster_by_id_mut(monster_id)
@@ -41672,6 +41688,7 @@ impl CGame {
                         tracing::trace!(region_id, monster_id, "состояние усиления монстра завершено");
                     }
                     self.restore_region_owner(owner);
+                    if let Some((x, y, state)) = expired_poison_fog { crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual(self, region_id, ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID }, x, y, state, false, now_ms); }
                 }
                 let expired_attribute_states = if let Some(mut owner) = self.take_region_owner(region_id) {
                     let result = owner.base_mut().find_monster_by_id_mut(monster_id).map(|monster| {
