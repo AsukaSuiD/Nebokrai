@@ -1,13 +1,16 @@
 //! Рабочий владелец исполнения `CKnockOut` (`0x192`) с объектом-целью.
 //!
-//! Формулы, RNG, проверки, время восстановления и сетевой формат принадлежат
+//! Формулы, последовательность случайных чисел, проверки, время восстановления
+//! и сетевой формат принадлежат
 //! навыку; `CGame` остаётся координатором общей защиты, жизненного цикла цели
 //! и доставки.
 
 use super::baseattack::time_reached;
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::kernel::{SkillExecutionKernel, SkillStage};
-use super::knockoutstate::{KnockOutState, send_knock_out_state_visual};
+use super::knockoutstate::{
+    KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -119,28 +122,27 @@ fn attack(game: &mut CGame, player_id: i32, target_level: u8) -> Option<(MasterI
 }
 
 fn install(game: &mut CGame, region_id: i32, target: Target, state: KnockOutState, now_ms: u32) {
-    let installed = match target.identity.object_type {
-        PLAYER_TYPE => game.find_player_mut(target.identity.id).map(|player| {
-            let old = player.replace_knock_out_state(state);
-            if old.is_some() { player.set_skill_fightable(true); player.set_skill_moveable(true); }
-            player.set_skill_moveable(false); player.set_skill_fightable(false); old
-        }),
+    match target.identity.object_type {
+        PLAYER_TYPE => {
+            let _ = replace_player_knock_out_state(game, target.identity.id, state, now_ms);
+        }
         MONSTER_TYPE => {
             let mut owner = game.take_region_owner(region_id);
-            let old = owner.as_mut().and_then(|owner| owner.base_mut().find_monster_by_id_mut(target.identity.id)).map(|monster| {
-                let old = monster.move_shape_mut().replace_knock_out_state(state);
-                if old.is_some() { monster.move_shape_mut().set_fightable(true); monster.move_shape_mut().set_moveable(true); }
-                monster.move_shape_mut().set_moveable(false); monster.move_shape_mut().set_fightable(false); old
-            });
-            if let Some(owner) = owner { game.restore_region_owner(owner); }
-            old
+            if let Some(owner) = owner.as_mut() {
+                let _ = replace_monster_knock_out_state(
+                    game,
+                    owner.base_mut(),
+                    target.identity.id,
+                    state,
+                    now_ms,
+                );
+            }
+            if let Some(owner) = owner {
+                game.restore_region_owner(owner);
+            }
         }
-        _ => None,
-    };
-    let Some(old) = installed else { return };
-    if let Some(old) = old { send_knock_out_state_visual(game, region_id, target.identity, target.x, target.y, old, false, now_ms); }
-    send_knock_out_state_visual(game, region_id, target.identity, target.x, target.y, state, true, now_ms);
-    if target.identity.object_type == PLAYER_TYPE { let _ = game.publish_player_states(target.identity.id); }
+        _ => {}
+    }
 }
 
 fn release(game: &mut CGame, player_id: i32) {

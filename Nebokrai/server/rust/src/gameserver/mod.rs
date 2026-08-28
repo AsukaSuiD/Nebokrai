@@ -170,6 +170,7 @@ pub(crate) mod appserver {
         pub(crate) mod spidermistphalanx;
         pub(crate) mod spiderweb;
         pub(crate) mod spiderwebstate;
+        pub(crate) mod sporeblasting;
         pub(crate) mod spriteburn;
         pub(crate) mod swordship;
         pub(crate) mod swordshipstate;

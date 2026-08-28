@@ -44,6 +44,67 @@ pub(crate) fn send_knock_out_state_visual(game: &mut CGame, region_id: i32, iden
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
+pub(crate) fn replace_player_knock_out_state(
+    game: &mut CGame,
+    player_id: i32,
+    state: KnockOutState,
+    now_ms: u32,
+) -> bool {
+    let installed = game.find_player_mut(player_id).and_then(|player| {
+        let region_id = player.server_region_id()?;
+        let identity = player.shape().identity();
+        let tile_x = player.shape().get_tile_x().ok()?;
+        let tile_y = player.shape().get_tile_y().ok()?;
+        let old = player.replace_knock_out_state(state);
+        if old.is_some() {
+            player.set_skill_fightable(true);
+            player.set_skill_moveable(true);
+        }
+        player.set_skill_moveable(false);
+        player.set_skill_fightable(false);
+        Some((old, region_id, identity, tile_x, tile_y))
+    });
+    let Some((old, region_id, identity, tile_x, tile_y)) = installed else {
+        return false;
+    };
+    if let Some(old) = old {
+        send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, old, false, now_ms);
+    }
+    send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now_ms);
+    let _ = game.publish_player_states(player_id);
+    true
+}
+
+pub(crate) fn replace_monster_knock_out_state(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    state: KnockOutState,
+    now_ms: u32,
+) -> bool {
+    let installed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let identity = monster.move_shape().shape().identity();
+        let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
+        let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
+        let old = monster.move_shape_mut().replace_knock_out_state(state);
+        if old.is_some() {
+            monster.move_shape_mut().set_fightable(true);
+            monster.move_shape_mut().set_moveable(true);
+        }
+        monster.move_shape_mut().set_moveable(false);
+        monster.move_shape_mut().set_fightable(false);
+        Some((old, identity, tile_x, tile_y))
+    });
+    let Some((old, identity, tile_x, tile_y)) = installed else {
+        return false;
+    };
+    if let Some(old) = old {
+        send_knock_out_state_visual(game, region.id, identity, tile_x, tile_y, old, false, now_ms);
+    }
+    send_knock_out_state_visual(game, region.id, identity, tile_x, tile_y, state, true, now_ms);
+    true
+}
+
 fn finish_player_state(game: &mut CGame, player_id: i32, now_ms: u32, only_expired: bool) -> bool {
     let finished = game.find_player_mut(player_id).and_then(|player| {
         let state = if only_expired { player.take_expired_knock_out_state(now_ms)? } else { player.take_knock_out_state()? };

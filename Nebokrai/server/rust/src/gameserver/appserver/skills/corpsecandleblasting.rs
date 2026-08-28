@@ -69,7 +69,7 @@ fn calculate_attack(
     let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
     let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
     // Виртуальный `CMonster::GetAddElementAtk` возвращает ноль; здесь остаётся
-    // ровно один RNG-вызов на каждую допустимую цель.
+    // ровно один вызов генератора случайных чисел на допустимую цель.
     let damage = minimum
         .wrapping_add(game.skill_random_below(width))
         .max(0);
@@ -236,8 +236,7 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
         }
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.set_hit_points(0);
-        monster.move_shape_mut().shape_mut().set_action(6);
+        monster.stage_for_delete();
         monster.move_shape_mut().set_moveable(true);
     }
     if target_identity.object_type == PLAYER_TYPE

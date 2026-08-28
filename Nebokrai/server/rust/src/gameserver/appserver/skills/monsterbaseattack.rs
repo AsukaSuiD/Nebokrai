@@ -91,6 +91,7 @@ use super::snakebolt::{SNAKE_BOLT_SKILL_ID, execute_owned_snake_bolt};
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
 use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
 use super::spiderweb::{SPIDER_WEB_SKILL_ID, execute_owned_spider_web};
+use super::sporeblasting::{SPORE_BLASTING_SKILL_ID, execute_owned_spore_blasting};
 use super::spriteburn::{SPRITE_BURN_SKILL_ID, execute_owned_sprite_burn};
 use super::summoncorpsecandle::SUMMON_CORPSE_CANDLE_SKILL_ID;
 use super::summoncreatureskill::execute_owned_summon_creature;
@@ -136,6 +137,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | YUNSHENG_LIGHTNING_SKILL_ID
             | CORPSE_PTOMAINE_SKILL_ID
             | CORPSE_CANDLE_BLASTING_SKILL_ID
+            | SPORE_BLASTING_SKILL_ID
             | ENERGY_BOLT_SKILL_ID
             | ZOMBIE_CLAW_SKILL_ID
             | FURY_SKILL_ID
@@ -480,6 +482,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             now_ms,
             runtime,
             deaths,
+        );
+    }
+    if skill_id == SPORE_BLASTING_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_spore_blasting(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
         );
     }
     if skill_id == ENERGY_BOLT_SKILL_ID {
