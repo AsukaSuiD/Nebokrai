@@ -849,6 +849,11 @@ impl CServerRegion {
         path
     }
 
+    /// Возвращает живой тип блока клетки для пошагового полёта навыка.
+    pub(crate) fn skill_cell_block(&self, x: i32, y: i32) -> u8 {
+        self.region.get_block(x, y).unwrap_or(2)
+    }
+
     pub(crate) const fn tax_rate(&self) -> i32 {
         self.param.current_tax_rate
     }

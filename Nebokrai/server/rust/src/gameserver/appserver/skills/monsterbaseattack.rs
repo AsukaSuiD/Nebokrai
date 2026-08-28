@@ -63,10 +63,11 @@ use super::monsterrangeattack::{
     MONSTER_RANGE_ATTACK_SKILL_ID, MonsterRangeAttackDispatch,
     prepare_owned_monster_range_cast,
 };
-use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::chuckstone::CHUCK_STONE_SKILL_ID;
 use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptomaine};
+use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
+use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
 use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
@@ -112,6 +113,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | CHUCK_STONE_SKILL_ID
             | YUNSHENG_LIGHTNING_SKILL_ID
             | CORPSE_PTOMAINE_SKILL_ID
+            | ENERGY_BOLT_SKILL_ID
             | SPIDER_POISON_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
@@ -413,6 +415,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &skill_properties,
             now_ms,
             runtime,
+        );
+    }
+    if skill_id == ENERGY_BOLT_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_energy_bolt(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
+            deaths,
         );
     }
     if skill_id == MONSTER_THORN_SKILL_ID {
