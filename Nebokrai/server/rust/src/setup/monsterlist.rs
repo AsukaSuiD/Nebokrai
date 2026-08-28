@@ -617,6 +617,18 @@ pub(crate) fn get_monster_property_by_origin_index(
         .find(|properties| properties.index == origin_index)
 }
 
+/// Ищет первое свойство с клиентским `picture_id` в порядке ключей реестра.
+/// `CServerRegion::AddSummonedCreature` выполнял такой же линейный проход
+/// исходного `std::map`; порядок важен при дублирующихся идентификаторах.
+pub(crate) fn get_monster_property_by_picture_id(
+    monsters: &MonsterRegistry,
+    picture_id: u32,
+) -> Option<&MonsterProperties> {
+    monsters
+        .values()
+        .find(|properties| properties.picture_id == picture_id)
+}
+
 pub(crate) fn get_monster_property_by_origin_name_mut<'registry>(
     monsters: &'registry mut MonsterRegistry,
     origin_name: &[u8],

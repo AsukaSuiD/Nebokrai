@@ -70,6 +70,10 @@ use super::skeletonarchery::{
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
 use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
 use super::spiderweb::{SPIDER_WEB_SKILL_ID, execute_owned_spider_web};
+use super::summoncorpsecandle::SUMMON_CORPSE_CANDLE_SKILL_ID;
+use super::summoncreatureskill::execute_owned_summon_creature;
+use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
+use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -106,6 +110,9 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | SPIDER_POISON_SKILL_ID
             | SPIDER_MIST_SKILL_ID
             | SPIDER_WEB_SKILL_ID
+            | SUMMON_CORPSE_CANDLE_SKILL_ID
+            | SUMMON_SKELETON_SKILL_ID
+            | SUMMON_SPORE_SKILL_ID
     )
 }
 
@@ -426,6 +433,23 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             skill.level,
             &skill_properties,
             now_ms,
+        );
+    }
+    if matches!(
+        skill_id,
+        SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID
+    ) {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_summon_creature(
+            game,
+            region,
+            monster_id,
+            target,
+            skill_id,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
         );
     }
     if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID && cast.is_some() {

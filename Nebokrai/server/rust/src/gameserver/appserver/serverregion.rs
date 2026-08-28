@@ -1223,6 +1223,78 @@ impl CServerRegion {
         Ok(id)
     }
 
+    /// Создаёт `CSummonedCreature` сразу в каноническом `MonsterWorld`.
+    /// Хозяин и срок жизни назначаются до пространственной регистрации и
+    /// `0xBF502`, как в исходном `AddSummonedCreature`; отдельной копии
+    /// сущности не существует.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "граница сохраняет исходный порядок создания, назначения хозяина, срока и публикации"
+    )]
+    pub(crate) fn add_summoned_creature<Context: ServerRegionMonsterContext>(
+        &mut self,
+        property: &MonsterProperties,
+        master: super::masterinfo::MasterInfo,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        lifetime_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+        mut now_ms: impl FnMut(&mut Context) -> u32,
+    ) -> Result<i32, RegionMembershipBlock> {
+        let id = self.next_monster_id.take();
+        let mut monster = CBaseObject::create_monster(id);
+        monster.bind_spawn_property(property);
+        context.initialize_monster(&mut monster, property);
+        monster
+            .move_shape_mut()
+            .shape_mut()
+            .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        monster.set_spawn_speed(property);
+        let direction = if (0..8).contains(&direction) {
+            direction
+        } else {
+            context.random_below(8)
+        };
+        monster
+            .move_shape_mut()
+            .shape_mut()
+            .set_direction(direction);
+        monster.set_master_info(master);
+        let started_at_ms = now_ms(context);
+        let lifecycle = if lifetime_ms == u32::MAX {
+            super::summonedcreature::SummonedCreatureLifecycle::new(0, 0)
+        } else {
+            super::summonedcreature::SummonedCreatureLifecycle::new(started_at_ms, lifetime_ms)
+        };
+        monster.set_summoned_creature_lifecycle(Some(lifecycle));
+
+        let facts = ShapeRuntimeFacts {
+            monster: Some(super::shape::MonsterAreaClass::Active),
+            is_move_shape: true,
+            figure: CMonster::figure(property),
+            ..ShapeRuntimeFacts::default()
+        };
+        self.add_object(
+            monster.move_shape_mut().shape_mut(),
+            facts,
+            area_width,
+            area_height,
+            started_at_ms,
+            context,
+        )?;
+        self.owned_monsters.insert(id, monster);
+        context.send_monster_entered_around(
+            self.owned_monsters
+                .get(&id)
+                .expect("призванный монстр опубликован перед сообщением о входе"),
+        );
+        self.total_spawned_monsters = self.total_spawned_monsters.wrapping_add(1);
+        Ok(id)
+    }
+
     pub(crate) fn find_monster_by_id(&self, id: i32) -> Option<&CMonster> {
         self.owned_monsters.get(&id)
     }

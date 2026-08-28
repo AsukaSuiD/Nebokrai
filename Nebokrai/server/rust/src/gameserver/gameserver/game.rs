@@ -879,6 +879,7 @@ use crate::gameserver::appserver::states::attackpower::{
 use crate::gameserver::appserver::summonshape::{
     NextSummonShapeId, SUMMON_SHAPE_TYPE, SummonedSkillShape,
 };
+use crate::gameserver::appserver::summonedcreature::SummonedCreatureTick;
 use crate::gameserver::gameserver::honorranks::CHonorRanks;
 use crate::gameserver::gameserver::playerranks::{
     CPlayerRanks, PlayerRanksRequestOutcome, PlayerRanksSerializeError,
@@ -11221,6 +11222,16 @@ impl CGame {
         origin_index: u32,
     ) -> Option<&MonsterProperties> {
         get_monster_property_by_origin_index(&self.monster_registry, origin_index)
+    }
+
+    pub(crate) fn find_monster_property_by_picture_id(
+        &self,
+        picture_id: u32,
+    ) -> Option<&MonsterProperties> {
+        crate::setup::monsterlist::get_monster_property_by_picture_id(
+            &self.monster_registry,
+            picture_id,
+        )
     }
 
     pub(crate) fn find_monster_property_by_origin_name_mut(
@@ -34735,6 +34746,50 @@ impl CGame {
         true
     }
 
+    /// Исполняет достигнутую начальную часть `CSummonedCreature::AI`: смерть и
+    /// строгое истечение срока вызывают `CMoveShape::Evanish` до обычного ИИ
+    /// монстра.
+    fn run_owned_summoned_creature_lifecycle(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        now_ms: u32,
+    ) -> Option<bool> {
+        let mut owner = self.take_region_owner(region_id)?;
+        let snapshot = owner
+            .base()
+            .find_monster_by_id(monster_id)
+            .and_then(|monster| {
+                monster
+                    .is_summoned_creature()
+                    .then(|| {
+                        (
+                            monster.move_shape().shape().clone(),
+                            monster.tick_summoned_creature(now_ms),
+                        )
+                    })
+            });
+        let Some((shape, tick)) = snapshot else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        let vanish = tick == Some(SummonedCreatureTick::Vanish);
+        if vanish {
+            if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                monster.stage_for_delete();
+            }
+            let mut message = CMessage::new(0x000b_f504);
+            message.add_long(MONSTER_TYPE);
+            message.add_long(monster_id);
+            message.add_long(0);
+            message.base_mut().add(&shape.get_pos_x().to_bits().to_le_bytes());
+            message.base_mut().add(&shape.get_pos_y().to_bits().to_le_bytes());
+            let _ = self.send_game_shape_around(owner.base(), &shape, None, &message);
+        }
+        self.restore_region_owner(owner);
+        Some(vanish)
+    }
+
     fn apply_monster_attack_deaths<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -34785,7 +34840,8 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x1a1`, включая их полностью достигнутые
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x1a1`,
+    /// включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
     /// питомцем дикого монстра либо разрешённого политикой игрока. `false`
@@ -40131,6 +40187,11 @@ impl CGame {
                 .unwrap_or_default();
             for monster_id in monster_ids {
                 let now_ms = runtime.now_milliseconds();
+                if self.run_owned_summoned_creature_lifecycle(region_id, monster_id, now_ms)
+                    == Some(true)
+                {
+                    continue;
+                }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let _ = expire_monster_spider_web_state(
                         self,

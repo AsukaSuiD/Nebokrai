@@ -19,7 +19,8 @@
 //! каноническую очередь `passive_actions` владельца `CBaseAI`; достигнутый
 //! `Defense` обрабатывается до активного хода монстра без отдельной
 //! диагностической передачи. Для обычного монстра, чей список состоит из
-//! навыков `0x2bd`, `0x2d1`, `0x2ef`, `0x197`, `0x191`, `0x198`, `0x199` и `0x1a1`, тот же владелец
+//! навыков `0x2bd`, `0x2d1`, `0x2ef`, `0x197`, `0x191`, `0x198`, `0x199`,
+//! `0x19a`, `0x19b`, `0x19c` и `0x1a1`, тот же владелец
 //! хранит цель, выбранный по исходным `odds` текущий навык, выполнение и задержку
 //! повторного применения; быстрая атака дополнительно хранит визуальную фазу
 //! и первый из двух ударов. Поиск игроков и питомцев, преследование ИИ `0/3`
@@ -31,7 +32,9 @@
 //! `CGame` завершает поиск целей активного режима относительно хозяина,
 //! возврат питомца, уведомления и исчезновение. Случайное перемещение без цели,
 //! специальные сторожевые AI и списки с ещё не достигнутыми навыками этим не
-//! подменяются. Для достигнутого обычного
+//! подменяются. Призванный монстр хранит срок в том же владельце и исчезает
+//! до обычного хода ИИ, а создание сразу публикует его в `MonsterWorld` без
+//! параллельного контейнера. Для достигнутого обычного
 //! пути бездействия `CBaseAI` хранит время начала и интервал сна; `CGame`
 //! восстанавливает HP и рассылает `OnChangeStates` до возврата ID в список
 //! активных объектов области. Владелец повозки хранит режимы следования и
@@ -47,6 +50,7 @@
 
 use super::ai::baseai::CBaseAI;
 use super::masterinfo::MasterInfo;
+use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -54,6 +58,7 @@ use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::skeletonarchery::SkeletonArcheryProgress;
 use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::SpiderMistProgress;
+use super::skills::summoncreatureskill::SummonCreatureProgress;
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -100,6 +105,8 @@ pub(crate) struct CMonster {
     skeleton_archery_progress: Option<SkeletonArcheryProgress>,
     spider_web_progress: Option<SpiderWebProgress>,
     spider_mist_progress: Option<SpiderMistProgress>,
+    summon_creature_progress: Option<SummonCreatureProgress>,
+    summoned_creature: Option<SummonedCreatureLifecycle>,
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
@@ -236,6 +243,8 @@ impl CMonster {
             skeleton_archery_progress: None,
             spider_web_progress: None,
             spider_mist_progress: None,
+            summon_creature_progress: None,
+            summoned_creature: None,
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
             trace_move_delay: None,
@@ -257,6 +266,22 @@ impl CMonster {
 
     pub(crate) const fn set_master_info(&mut self, master_info: MasterInfo) {
         self.master_info = master_info;
+    }
+
+    pub(crate) const fn set_summoned_creature_lifecycle(
+        &mut self,
+        lifecycle: Option<SummonedCreatureLifecycle>,
+    ) {
+        self.summoned_creature = lifecycle;
+    }
+
+    pub(crate) const fn is_summoned_creature(&self) -> bool {
+        self.summoned_creature.is_some()
+    }
+
+    pub(crate) fn tick_summoned_creature(&self, now_ms: u32) -> Option<SummonedCreatureTick> {
+        self.summoned_creature
+            .map(|lifecycle| lifecycle.tick(now_ms, CMoveShape::is_died(self.hit_points)))
     }
 
     pub(crate) const fn set_tamed(&mut self, tamed: bool) {
@@ -809,12 +834,21 @@ impl CMonster {
         self.spider_mist_progress = Some(progress);
     }
 
+    pub(crate) const fn summon_creature_progress(&self) -> Option<SummonCreatureProgress> {
+        self.summon_creature_progress
+    }
+
+    pub(crate) const fn set_summon_creature_progress(&mut self, progress: SummonCreatureProgress) {
+        self.summon_creature_progress = Some(progress);
+    }
+
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
         self.fast_attack_progress = None;
         self.skeleton_archery_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
+        self.summon_creature_progress = None;
         self.move_shape.set_current_skill_id(None);
         let _ = execution.terminate(SkillTermination::Completed);
         self.last_base_attack_ms = now_ms;
@@ -845,6 +879,7 @@ impl CMonster {
         self.skeleton_archery_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
+        self.summon_creature_progress = None;
         if let Some(mut execution) = self.base_attack_cast.take() {
             self.move_shape.set_current_skill_id(None);
             let _ = execution.terminate(SkillTermination::Cancelled);

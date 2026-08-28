@@ -135,6 +135,10 @@ pub(crate) mod appserver {
         pub(crate) mod spidermistphalanx;
         pub(crate) mod spiderweb;
         pub(crate) mod spiderwebstate;
+        pub(crate) mod summoncorpsecandle;
+        pub(crate) mod summoncreatureskill;
+        pub(crate) mod summonskeleton;
+        pub(crate) mod summonspore;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
         pub(crate) mod shieldstate;
@@ -227,6 +231,7 @@ pub(crate) mod appserver {
     }
     pub(crate) mod shape;
     pub(crate) mod summonshape;
+    pub(crate) mod summonedcreature;
 }
 
 #[allow(
