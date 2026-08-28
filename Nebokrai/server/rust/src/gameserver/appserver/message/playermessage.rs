@@ -121,9 +121,6 @@ pub(crate) enum PlayerItemRuntimeEffect {
     },
     RecallToReturnPoint,
     RecallInsideRegion,
-    SkillWire {
-        skill_id: u32,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -137,7 +134,6 @@ pub(crate) struct PlayerItemSkillWire {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerItemRuntimeResult {
     pub(crate) applied: bool,
-    pub(crate) skill_wire: Option<PlayerItemSkillWire>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -884,12 +880,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                     .expect("skill-book player сохранён для add")
                                     .learn_item_skill(skill_id, requested_level, &skill_factory);
                                 if added {
-                                    let result = runtime.apply_player_item_runtime_effect(
-                                        game,
-                                        player_id,
-                                        PlayerItemRuntimeEffect::SkillWire { skill_id },
-                                    );
-                                    if let Some(wire) = result.skill_wire {
+                                    if let Some(wire) =
+                                        item_skill_wire(game, skill_id, requested_level)
+                                    {
                                         let _ = send_item_skill_wire(
                                             game,
                                             player_id,
