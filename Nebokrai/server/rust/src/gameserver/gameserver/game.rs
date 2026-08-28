@@ -787,6 +787,11 @@ use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_player_base_attack,
 };
 use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
+use crate::gameserver::appserver::skills::monsterattack::MonsterAttackDeath;
+use crate::gameserver::appserver::skills::monsterrangeattack::{
+    execute_owned_monster_range_target, finish_owned_monster_range_cast,
+    range_attack_cell_candidates, range_attack_scope_cells,
+};
 use crate::gameserver::appserver::skills::hearten::{
     execute_player_hearten, HEARTEN_SKILL_ID,
 };
@@ -33395,7 +33400,7 @@ impl CGame {
         attackable
     }
 
-    fn guard_monster_attackable(
+    pub(crate) fn guard_monster_attackable(
         &self,
         attacker_id: i32,
         region_id: i32,
@@ -34766,37 +34771,20 @@ impl CGame {
         true
     }
 
-    /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для `0x2bd/0x2d1`:
-    /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
-    /// питомцем дикого монстра либо разрешённого политикой игрока. `false`
-    /// оставляет сторожевые, бездействующие и многокомандные варианты ИИ.
-    fn run_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
+    fn apply_monster_attack_deaths<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
-        monster_id: i32,
+        deaths: Vec<MonsterAttackDeath>,
         runtime: &mut Runtime,
-    ) -> bool {
-        let Some(mut owner) = self.take_region_owner(region_id) else {
-            return false;
-        };
-        let mut killing_blow = None;
-        let mut monster_killing_blow = None;
-        let handled = execute_owned_monster_base_attack(
-            self,
-            owner.base_mut(),
-            monster_id,
-            runtime,
-            &mut killing_blow,
-            &mut monster_killing_blow,
-        );
-        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-            monster.set_base_attack_owned_tick(handled);
-        }
-        self.restore_region_owner(owner);
-        if let Some(killing_blow) = killing_blow {
-            let _ = self.player_on_death(killing_blow, runtime);
-        }
-        if let Some(blow) = monster_killing_blow {
+    ) {
+        for death in deaths {
+            let blow = match death {
+                MonsterAttackDeath::Player(killing_blow) => {
+                    let _ = self.player_on_death(killing_blow, runtime);
+                    continue;
+                }
+                MonsterAttackDeath::Monster(blow) => blow,
+            };
             let _ = self.gods_battle_monster_died(
                 region_id,
                 blow.victim_id,
@@ -34819,9 +34807,87 @@ impl CGame {
             exit.add_long(0);
             exit.add_ulong(blow.pos_x_bits);
             exit.add_ulong(blow.pos_y_bits);
-            let _ = self.send_shape_position_around(region_id, blow.target_x, blow.target_y, &exit);
+            let _ = self.send_shape_position_around(
+                region_id,
+                blow.target_x,
+                blow.target_y,
+                &exit,
+            );
             if let Some(mut owner) = self.take_region_owner(region_id) {
                 owner.base_mut().finish_owned_monster_death(blow.victim_id);
+                self.restore_region_owner(owner);
+            }
+        }
+    }
+
+    /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
+    /// `0x2bd/0x2d1/0x2ef`:
+    /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
+    /// питомцем дикого монстра либо разрешённого политикой игрока. `false`
+    /// оставляет сторожевые, бездействующие и многокомандные варианты ИИ.
+    fn run_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let mut deaths = Vec::new();
+        let mut range_dispatch = None;
+        let handled = execute_owned_monster_base_attack(
+            self,
+            owner.base_mut(),
+            monster_id,
+            runtime,
+            &mut deaths,
+            &mut range_dispatch,
+        );
+        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            monster.set_base_attack_owned_tick(handled);
+        }
+        self.restore_region_owner(owner);
+        self.apply_monster_attack_deaths(region_id, deaths, runtime);
+        if let Some(dispatch) = range_dispatch {
+            let mut attacked = Vec::new();
+            'cells: for (offset_x, offset_y) in range_attack_scope_cells() {
+                let Some(owner) = self.take_region_owner(region_id) else {
+                    break 'cells;
+                };
+                let candidates = range_attack_cell_candidates(
+                    self,
+                    owner.base(),
+                    dispatch.monster_id,
+                    dispatch.center_x.wrapping_add(offset_x),
+                    dispatch.center_y.wrapping_add(offset_y),
+                );
+                self.restore_region_owner(owner);
+                for identity in candidates {
+                    if attacked.contains(&identity) {
+                        continue;
+                    }
+                    let Some(mut owner) = self.take_region_owner(region_id) else {
+                        break 'cells;
+                    };
+                    let mut deaths = Vec::new();
+                    let applied = execute_owned_monster_range_target(
+                        self,
+                        owner.base_mut(),
+                        &dispatch,
+                        identity,
+                        runtime,
+                        &mut deaths,
+                    );
+                    self.restore_region_owner(owner);
+                    if applied {
+                        attacked.push(identity);
+                        self.apply_monster_attack_deaths(region_id, deaths, runtime);
+                    }
+                }
+            }
+            if let Some(mut owner) = self.take_region_owner(region_id) {
+                finish_owned_monster_range_cast(owner.base_mut(), &dispatch);
                 self.restore_region_owner(owner);
             }
         }

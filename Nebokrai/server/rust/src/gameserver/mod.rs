@@ -103,7 +103,9 @@ pub(crate) mod appserver {
         pub(crate) mod manashield;
         pub(crate) mod manashieldstate;
         pub(crate) mod monsterbaseattack;
+        pub(crate) mod monsterattack;
         pub(crate) mod monsterfastattack;
+        pub(crate) mod monsterrangeattack;
         pub(crate) mod monstertaming;
         pub(crate) mod natural;
         pub(crate) mod origin;

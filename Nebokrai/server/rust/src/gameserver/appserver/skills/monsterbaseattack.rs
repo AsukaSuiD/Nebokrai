@@ -2,8 +2,9 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/monsterbaseattack.cpp`. Модуль навыка хранит выбор цели,
-//! стадии атаки, преследование, два исходных броска урона, защиту, применение
-//! повреждений и точные пакеты. `CGame` оставляет возврат владельца региона и
+//! стадии атаки, преследование и два исходных броска урона. Общие защита,
+//! применение повреждений и точные пакеты принадлежат узкому
+//! `monsterattack`; `CGame` оставляет возврат владельца региона и
 //! межвладельческие последствия смерти. Неиспользуемые координатный и
 //! типизированно-координатный варианты `Begin` сохранены как RAW: их реальный
 //! вызывающий путь и отличия от достигнутого объектного пути пока не подтверждены.
@@ -50,16 +51,20 @@ use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     SKILL_USAGE_USER_HIT_MODIFIER, real_distance, time_reached,
 };
-use super::fightdefense::{
-    defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
-};
 use super::monsterfastattack::{
     MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME,
     fast_attack_fire_message,
 };
-use crate::gameserver::appserver::monster::{CMonster, MonsterKillingAttack};
+use super::monsterattack::{
+    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    monster_attackable_by_monster,
+};
+use super::monsterrangeattack::{
+    MONSTER_RANGE_ATTACK_SKILL_ID, MonsterRangeAttackDispatch,
+    prepare_owned_monster_range_cast,
+};
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
-use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity,
@@ -68,37 +73,22 @@ use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, PlayerKillingBlow,
-};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
-use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
 pub(crate) const MONSTER_BASE_ATTACK_SKILL_ID: u32 = 0x2bd;
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct MonsterVictimDeath {
-    pub(crate) victim_id: i32,
-    pub(crate) attacker_id: i32,
-    pub(crate) master_id: i32,
-    pub(crate) target_x: i32,
-    pub(crate) target_y: i32,
-    pub(crate) pos_x_bits: u32,
-    pub(crate) pos_y_bits: u32,
-    pub(crate) property: MonsterProperties,
-}
 
 pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     runtime: &mut Runtime,
-    killing_blow: &mut Option<PlayerKillingBlow>,
-    monster_killing_blow: &mut Option<MonsterVictimDeath>,
+    deaths: &mut Vec<MonsterAttackDeath>,
+    range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
 ) -> bool {
     let Some((
         property,
@@ -155,7 +145,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let skill_id = u32::from(skill.id);
-    if !matches!(skill_id, MONSTER_BASE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID) {
+    if !matches!(
+        skill_id,
+        MONSTER_BASE_ATTACK_SKILL_ID
+            | MONSTER_FAST_ATTACK_SKILL_ID
+            | MONSTER_RANGE_ATTACK_SKILL_ID
+    ) {
         return false;
     }
     let fast_attack = skill_id == MONSTER_FAST_ATTACK_SKILL_ID;
@@ -281,11 +276,22 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
+    let now_ms = runtime.now_milliseconds();
+    if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID && cast.is_some() {
+        let skill_properties = skill_properties.clone();
+        return prepare_owned_monster_range_cast(
+            game,
+            region,
+            monster_id,
+            &skill_properties,
+            now_ms,
+            range_dispatch,
+        );
+    }
     let delay_ms = skill_properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = skill_properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let now_ms = runtime.now_milliseconds();
     let target_snapshot = match target.object_type {
         PLAYER_TYPE => game.find_player(target.id).and_then(|player| {
             (player.server_region_id() == Some(region.id)).then(|| {
@@ -299,7 +305,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     player.is_dead(),
                     player.is_god_mode(),
                     player.city_war_died_state(),
-                    player.is_badman(game.globe_setup().pk_count_per_kill()),
                     None,
                     None,
                     false,
@@ -313,13 +318,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 let target_property = game.find_monster_property_by_origin_name(
                     target_monster.base_property_key()?,
                 )?;
-                let guard_attackable =
-                    !tamed
-                        || target_property.kind != 5
-                        || (attacker_master.master_type == PLAYER_TYPE
-                            && game.find_player(attacker_master.master_id).is_some_and(
-                                |master| master.is_badman(game.globe_setup().pk_count_per_kill()),
-                            ));
                 let carriage = target_monster.is_carriage(target_property);
                 let target_master = target_monster.master_info();
                 let target_attackable = if carriage {
@@ -331,9 +329,16 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         region.id,
                     )
                 } else {
-                    !(!tamed && property.kind == 5)
-                        && target_monster.is_tamed() != tamed
-                        && guard_attackable
+                    monster_attackable_by_monster(
+                        game,
+                        &property,
+                        tamed,
+                        attacker_master,
+                        target_property,
+                        target_monster.is_tamed(),
+                        target_master,
+                        region.id,
+                    )
                 };
                 target_attackable.then(|| {
                     (
@@ -346,7 +351,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         CMoveShape::is_died(target_monster.hit_points()),
                         target_monster.move_shape().is_god(),
                         false,
-                        true,
                         Some(target_master),
                         Some(target_property.clone()),
                         target_monster.is_tamed(),
@@ -366,7 +370,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         target_dead,
         target_god,
         target_city_dead,
-        target_badman,
         target_master,
         target_monster_property,
         target_tamed,
@@ -381,7 +384,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target_dead
         || target_god
         || target_city_dead
-        || (!tamed && property.kind == 5 && !target_badman)
+        || (!tamed
+            && property.kind == 5
+            && target.object_type == PLAYER_TYPE
+            && !game.guard_monster_attackable(target.id, region.id, &property))
     {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
@@ -570,7 +576,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 .max(0)
                 .wrapping_add(1);
             let element = element_minimum.wrapping_add(game.skill_random_below(element_span));
-            let mut attack = AttackInformation {
+            let attack = AttackInformation {
                 skill_id: dispatch.skill_id,
                 skill_level: dispatch.skill_level as u8,
                 attacker_type: MONSTER_TYPE,
@@ -602,34 +608,15 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     },
                 ],
             };
-            let mut defense_shields = (target.object_type == PLAYER_TYPE)
-                .then(|| game.find_player_mut(target.id))
-                .flatten()
-                .map(CPlayer::take_defense_shields)
-                .unwrap_or_default();
-            let globe_setup = game.globe_setup().clone();
-            let mut random = |maximum| game.skill_random_below(maximum);
-            if let Some(target_properties) = target_player_properties {
-                defend_player_from_monster_base_attack(
-                    &mut attack,
-                    target_properties,
-                    target_mana,
-                    target_war_soul_mana,
-                    &globe_setup,
-                    &mut random,
-                    &mut defense_shields,
-                );
-            } else if let Some(target_properties) = target_monster_properties {
-                defend_monster_from_monster_base_attack(
-                    &mut attack,
-                    target_properties,
-                    &globe_setup,
-                    &mut random,
-                );
-            }
-            if let Some(player) = game.find_player_mut(target.id) {
-                player.restore_defense_shields(defense_shields);
-            }
+            let attack = defend_owned_monster_attack(
+                game,
+                target,
+                target_mana,
+                target_war_soul_mana,
+                target_player_properties,
+                target_monster_properties,
+                attack,
+            );
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if dispatch.skill_id == MONSTER_FAST_ATTACK_SKILL_ID {
                     let _ = monster
@@ -645,158 +632,24 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         .advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
                 }
             }
-            let (damage, mana_damage) =
-                CGame::applied_attack_damage(&attack, target_health, target_mana);
-            if attack.full_miss != 0 {
-                let mut missed = CMessage::new(0x000b_f612);
-                missed.add_byte(attack.full_miss);
-                missed.add_long(target.object_type);
-                missed.add_long(target.id);
-                let _ = game.send_game_shape_around(region, &target_shape, None, &missed);
-            } else if damage != 0 || mana_damage != 0 {
-                let current_health = target_health - damage;
-                if target.object_type == PLAYER_TYPE {
-                    if let Some(player) = game.find_player_mut(target.id) {
-                        player.set_health(current_health);
-                        player.set_mana(target_mana - mana_damage);
-                        player
-                            .movement_shape_mut()
-                            .set_action(if current_health == 0 { 6 } else { 5 });
-                    }
-                } else if let Some(pet) = region.find_monster_by_id_mut(target.id) {
-                    pet.set_hit_points(current_health);
-                    pet.move_shape_mut()
-                        .shape_mut()
-                        .set_action(if current_health == 0 { 6 } else { 5 });
-                    if current_health == 0 {
-                        pet.when_been_killed(now_ms);
-                        if !target_tamed && !target_carriage {
-                            pet.set_killed_by(MonsterKillingAttack {
-                                attacker_type: MONSTER_TYPE,
-                                attacker_id: monster_id,
-                                skill_id: attack.skill_id,
-                                skill_level: attack.skill_level,
-                                critical: attack.critical,
-                                blast_attack: attack.blast_attack,
-                            });
-                        }
-                    } else {
-                        let attacker = ShapeIdentity {
-                            object_type: MONSTER_TYPE,
-                            id: monster_id,
-                            ex_id: CGuid::GUID_INVALID,
-                        };
-                        if target_tamed {
-                            pet.when_pet_been_hurted_by(attacker, now_ms);
-                        } else {
-                            pet.when_been_hurted_by(attacker, now_ms);
-                        }
-                    }
-                    if !target_tamed
-                        && !target_carriage
-                        && attacker_master.master_type == PLAYER_TYPE
-                        && attacker_master.master_id != 0
-                    {
-                        let _ = pet.register_attacking_player(
-                            attacker_master.master_id,
-                            now_ms,
-                            game.globe_setup().attack_monster_protection_ms(),
-                        );
-                    }
-                }
-                if current_health == 0 {
-                    let mut died = CMessage::new(0x000b_f60b);
-                    died.add_long(MONSTER_TYPE);
-                    died.add_long(monster_id);
-                    died.add_long(target.object_type);
-                    died.add_long(target.id);
-                    died.add_ulong(damage);
-                    died.base_mut().add_char(1);
-                    CGame::append_base_attack_tail(&mut died, &attack);
-                    let _ = game.send_game_shape_around(region, &target_shape, None, &died);
-                    if target.object_type == PLAYER_TYPE {
-                        *killing_blow = Some(PlayerKillingBlow {
-                            victim_id: target.id,
-                            attacker_type: MONSTER_TYPE,
-                            attacker_id: monster_id,
-                            attacker_faction_id: 0,
-                        });
-                    } else if target_tamed || target_carriage {
-                        if let Some(master) = target_master
-                            && master.master_type == PLAYER_TYPE
-                            && game
-                                .find_player(master.master_id)
-                                .is_some_and(|player| player.server_region_id() == Some(region.id))
-                            && let Some(player) = game.find_player_mut(master.master_id)
-                        {
-                            if target_carriage {
-                                player.clear_active_carriage(target.id);
-                            } else {
-                                let _ = player.remove_active_pet(MONSTER_TYPE, target.id);
-                            }
-                        }
-                        if let Some(pet) = region.find_monster_by_id_mut(target.id) {
-                            if target_carriage {
-                                pet.stage_for_delete();
-                            } else {
-                                pet.evanish_pet();
-                            }
-                        }
-                        let mut vanished = CMessage::new(0x000b_f504);
-                        vanished.add_long(MONSTER_TYPE);
-                        vanished.add_long(target.id);
-                        vanished.add_long(0);
-                        vanished
-                            .base_mut()
-                            .add(&target_shape.get_pos_x().to_bits().to_le_bytes());
-                        vanished
-                            .base_mut()
-                            .add(&target_shape.get_pos_y().to_bits().to_le_bytes());
-                        let _ = game.send_game_shape_around(region, &target_shape, None, &vanished);
-                    } else if let Some(property) = target_monster_property.clone() {
-                        *monster_killing_blow = Some(MonsterVictimDeath {
-                            victim_id: target.id,
-                            attacker_id: monster_id,
-                            master_id: (attacker_master.master_type == PLAYER_TYPE)
-                                .then_some(attacker_master.master_id)
-                                .unwrap_or(0),
-                            target_x,
-                            target_y,
-                            pos_x_bits: target_shape.get_pos_x().to_bits(),
-                            pos_y_bits: target_shape.get_pos_y().to_bits(),
-                            property,
-                        });
-                    }
-                } else {
-                    let mut hurt = CMessage::new(0x000b_f60a);
-                    hurt.add_long(MONSTER_TYPE);
-                    hurt.add_long(monster_id);
-                    hurt.add_long(target.object_type);
-                    hurt.add_long(target.id);
-                    CGame::append_hurt_damage_records(&mut hurt, damage, mana_damage);
-                    hurt.add_ulong(current_health);
-                    CGame::append_base_attack_tail(&mut hurt, &attack);
-                    let _ = game.send_game_shape_around(region, &target_shape, None, &hurt);
-                    if target.object_type == PLAYER_TYPE {
-                        let pets = game
-                            .find_player(target.id)
-                            .map(|player| player.active_pets().to_vec())
-                            .unwrap_or_default();
-                        for pet in pets {
-                            if pet.object_type == MONSTER_TYPE
-                                && let Some(monster) = region.find_monster_by_id_mut(pet.id)
-                            {
-                                let _ = monster.retarget_passive_pet(ShapeIdentity {
-                                    object_type: MONSTER_TYPE,
-                                    id: monster_id,
-                                    ex_id: CGuid::GUID_INVALID,
-                                });
-                            }
-                        }
-                        game.damage_player_armor(target.id, runtime);
-                    }
-                }
-            }
+            apply_owned_monster_attack_hit(
+                game,
+                region,
+                runtime,
+                now_ms,
+                monster_id,
+                attacker_master,
+                target,
+                &target_shape,
+                target_health,
+                target_mana,
+                target_master,
+                target_monster_property.clone(),
+                target_tamed,
+                target_carriage,
+                attack,
+                deaths,
+            );
         }
         if finish_cast
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)

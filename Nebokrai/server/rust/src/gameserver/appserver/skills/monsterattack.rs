@@ -1,0 +1,382 @@
+//! Общая узкая ветвь применения уже рассчитанного удара монстра.
+//!
+//! Конкретный навык сохраняет формулу, RNG и выбор целей у своего владельца.
+//! Здесь остаются общие `CFightDefense::PreDefense`, изменение цели, точные
+//! пакеты ранения и смерти и семантические хвосты, которые `CGame` применяет после
+//! возврата владельца региона. Смерти игроков и монстров проходят одним
+//! `MonsterAttackDeath` в порядке их фактического возникновения.
+
+use super::fightdefense::{
+    defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
+};
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::{MonsterCombatProperties, MonsterKillingAttack};
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::player::{CPlayer, PlayerCombatProperties};
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::states::attackpower::AttackInformation;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, PlayerKillingBlow};
+use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
+use crate::setup::monsterlist::MonsterProperties;
+
+const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MonsterVictimDeath {
+    pub(crate) victim_id: i32,
+    pub(crate) attacker_id: i32,
+    pub(crate) master_id: i32,
+    pub(crate) target_x: i32,
+    pub(crate) target_y: i32,
+    pub(crate) pos_x_bits: u32,
+    pub(crate) pos_y_bits: u32,
+    pub(crate) property: MonsterProperties,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum MonsterAttackDeath {
+    Player(PlayerKillingBlow),
+    Monster(MonsterVictimDeath),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OwnedMonsterAttackTarget {
+    pub(crate) shape: CShape,
+    pub(crate) health: u32,
+    pub(crate) mana: u32,
+    pub(crate) war_soul_mana: Option<i32>,
+    pub(crate) player_properties: Option<PlayerCombatProperties>,
+    pub(crate) monster_properties: Option<MonsterCombatProperties>,
+    pub(crate) dead: bool,
+    pub(crate) god: bool,
+    pub(crate) city_dead: bool,
+    pub(crate) master: Option<MasterInfo>,
+    pub(crate) monster_property: Option<MonsterProperties>,
+    pub(crate) tamed: bool,
+    pub(crate) carriage: bool,
+}
+
+pub(crate) fn resolve_owned_monster_attack_target(
+    game: &CGame,
+    region: &CServerRegion,
+    identity: ShapeIdentity,
+) -> Option<OwnedMonsterAttackTarget> {
+    match identity.object_type {
+        PLAYER_TYPE => {
+            let player = game.find_player(identity.id)?;
+            (player.server_region_id() == Some(region.id)).then(|| OwnedMonsterAttackTarget {
+                shape: player.shape().clone(),
+                health: player.health(),
+                mana: player.mana(),
+                war_soul_mana: player.war_soul_mana(game.goods_factory()),
+                player_properties: Some(player.combat_properties()),
+                monster_properties: None,
+                dead: player.is_dead(),
+                god: player.is_god_mode(),
+                city_dead: player.city_war_died_state(),
+                master: None,
+                monster_property: None,
+                tamed: false,
+                carriage: false,
+            })
+        }
+        MONSTER_TYPE => {
+            let monster = region.find_monster_by_id(identity.id)?;
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            Some(OwnedMonsterAttackTarget {
+                shape: monster.move_shape().shape().clone(),
+                health: monster.hit_points(),
+                mana: 0,
+                war_soul_mana: None,
+                player_properties: None,
+                monster_properties: Some(monster.combat_properties(&property)),
+                dead: CMoveShape::is_died(monster.hit_points()),
+                god: monster.move_shape().is_god(),
+                city_dead: false,
+                master: Some(monster.master_info()),
+                monster_property: Some(property.clone()),
+                tamed: monster.is_tamed(),
+                carriage: monster.is_carriage(&property),
+            })
+        }
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "аргументы задают обе стороны исходного CMonster::IsAttackAble")]
+pub(crate) fn monster_attackable_by_monster(
+    game: &CGame,
+    attacker_property: &MonsterProperties,
+    attacker_tamed: bool,
+    attacker_master: MasterInfo,
+    target_property: &MonsterProperties,
+    target_tamed: bool,
+    target_master: MasterInfo,
+    region_id: i32,
+) -> bool {
+    if target_property.kind == 5 {
+        if !attacker_tamed {
+            return attacker_property.kind != 5;
+        }
+        return (attacker_master.master_type != PLAYER_TYPE || attacker_master.master_id == 0)
+            || game.find_player(attacker_master.master_id).is_some_and(|master| {
+                master.is_badman(game.globe_setup().pk_count_per_kill())
+            });
+    }
+    if target_tamed {
+        let Some(target_player_id) = (target_master.master_type == PLAYER_TYPE
+            && target_master.master_id != 0)
+            .then_some(target_master.master_id)
+        else {
+            return true;
+        };
+        if attacker_tamed {
+            if attacker_master.master_type != PLAYER_TYPE || attacker_master.master_id == 0 {
+                return true;
+            }
+            if let Some((string_id, limit)) = game.player_base_attack_level_block(
+                attacker_master.master_id,
+                target_player_id,
+            ) {
+                game.send_base_attack_level_block(
+                    attacker_master.master_id,
+                    string_id,
+                    limit,
+                );
+                return false;
+            }
+            return game.player_base_attackable(attacker_master.master_id, target_player_id);
+        }
+        return attacker_property.kind != 5
+            || game.guard_monster_attackable(target_player_id, region_id, attacker_property);
+    }
+    attacker_tamed || attacker_property.kind == 5
+}
+
+#[allow(clippy::too_many_arguments, reason = "поля сохраняют атомарный снимок цели исходного OnBeenAttacked")]
+pub(crate) fn defend_owned_monster_attack(
+    game: &mut CGame,
+    target: ShapeIdentity,
+    target_mana: u32,
+    target_war_soul_mana: Option<i32>,
+    target_player_properties: Option<PlayerCombatProperties>,
+    target_monster_properties: Option<MonsterCombatProperties>,
+    mut attack: AttackInformation,
+) -> AttackInformation {
+    let mut defense_shields = (target.object_type == PLAYER_TYPE)
+        .then(|| game.find_player_mut(target.id))
+        .flatten()
+        .map(CPlayer::take_defense_shields)
+        .unwrap_or_default();
+    let globe_setup = game.globe_setup().clone();
+    let mut random = |maximum| game.skill_random_below(maximum);
+    if let Some(properties) = target_player_properties {
+        defend_player_from_monster_base_attack(
+            &mut attack,
+            properties,
+            target_mana,
+            target_war_soul_mana,
+            &globe_setup,
+            &mut random,
+            &mut defense_shields,
+        );
+    } else if let Some(properties) = target_monster_properties {
+        defend_monster_from_monster_base_attack(
+            &mut attack,
+            properties,
+            &globe_setup,
+            &mut random,
+        );
+    }
+    if let Some(player) = game.find_player_mut(target.id) {
+        player.restore_defense_shields(defense_shields);
+    }
+    attack
+}
+
+#[allow(clippy::too_many_arguments, reason = "поля сохраняют атомарный снимок цели исходного OnBeenAttacked")]
+pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    runtime: &mut Runtime,
+    now_ms: u32,
+    monster_id: i32,
+    attacker_master: MasterInfo,
+    target: ShapeIdentity,
+    target_shape: &CShape,
+    target_health: u32,
+    target_mana: u32,
+    target_master: Option<MasterInfo>,
+    target_monster_property: Option<MonsterProperties>,
+    target_tamed: bool,
+    target_carriage: bool,
+    attack: AttackInformation,
+    deaths: &mut Vec<MonsterAttackDeath>,
+) {
+    let (damage, mana_damage) = CGame::applied_attack_damage(&attack, target_health, target_mana);
+    if attack.full_miss != 0 {
+        let mut missed = CMessage::new(0x000b_f612);
+        missed.add_byte(attack.full_miss);
+        missed.add_long(target.object_type);
+        missed.add_long(target.id);
+        let _ = game.send_game_shape_around(region, target_shape, None, &missed);
+        return;
+    }
+    if damage == 0 && mana_damage == 0 {
+        return;
+    }
+    let current_health = target_health - damage;
+    if target.object_type == PLAYER_TYPE {
+        if let Some(player) = game.find_player_mut(target.id) {
+            player.set_health(current_health);
+            player.set_mana(target_mana - mana_damage);
+            player
+                .movement_shape_mut()
+                .set_action(if current_health == 0 { 6 } else { 5 });
+        }
+    } else if let Some(monster) = region.find_monster_by_id_mut(target.id) {
+        monster.set_hit_points(current_health);
+        monster
+            .move_shape_mut()
+            .shape_mut()
+            .set_action(if current_health == 0 { 6 } else { 5 });
+        if current_health == 0 {
+            monster.when_been_killed(now_ms);
+            if !target_tamed && !target_carriage {
+                monster.set_killed_by(MonsterKillingAttack {
+                    attacker_type: MONSTER_TYPE,
+                    attacker_id: monster_id,
+                    skill_id: attack.skill_id,
+                    skill_level: attack.skill_level,
+                    critical: attack.critical,
+                    blast_attack: attack.blast_attack,
+                });
+            }
+        } else {
+            let attacker = ShapeIdentity {
+                object_type: MONSTER_TYPE,
+                id: monster_id,
+                ex_id: CGuid::GUID_INVALID,
+            };
+            if target_tamed {
+                monster.when_pet_been_hurted_by(attacker, now_ms);
+            } else {
+                monster.when_been_hurted_by(attacker, now_ms);
+            }
+        }
+        if !target_tamed
+            && !target_carriage
+            && attacker_master.master_type == PLAYER_TYPE
+            && attacker_master.master_id != 0
+        {
+            let protection_ms = game.globe_setup().attack_monster_protection_ms();
+            let _ = monster.register_attacking_player(
+                attacker_master.master_id,
+                now_ms,
+                protection_ms,
+            );
+        }
+    }
+    if current_health == 0 {
+        let mut died = CMessage::new(0x000b_f60b);
+        died.add_long(MONSTER_TYPE);
+        died.add_long(monster_id);
+        died.add_long(target.object_type);
+        died.add_long(target.id);
+        died.add_ulong(damage);
+        died.base_mut().add_char(1);
+        CGame::append_base_attack_tail(&mut died, &attack);
+        let _ = game.send_game_shape_around(region, target_shape, None, &died);
+        if target.object_type == PLAYER_TYPE {
+            deaths.push(MonsterAttackDeath::Player(PlayerKillingBlow {
+                victim_id: target.id,
+                attacker_type: MONSTER_TYPE,
+                attacker_id: monster_id,
+                attacker_faction_id: 0,
+            }));
+        } else if target_tamed || target_carriage {
+            if let Some(master) = target_master
+                && master.master_type == PLAYER_TYPE
+                && game
+                    .find_player(master.master_id)
+                    .is_some_and(|player| player.server_region_id() == Some(region.id))
+                && let Some(player) = game.find_player_mut(master.master_id)
+            {
+                if target_carriage {
+                    player.clear_active_carriage(target.id);
+                } else {
+                    let _ = player.remove_active_pet(MONSTER_TYPE, target.id);
+                }
+            }
+            if let Some(monster) = region.find_monster_by_id_mut(target.id) {
+                if target_carriage {
+                    monster.stage_for_delete();
+                } else {
+                    monster.evanish_pet();
+                }
+            }
+            let mut vanished = CMessage::new(0x000b_f504);
+            vanished.add_long(MONSTER_TYPE);
+            vanished.add_long(target.id);
+            vanished.add_long(0);
+            vanished
+                .base_mut()
+                .add(&target_shape.get_pos_x().to_bits().to_le_bytes());
+            vanished
+                .base_mut()
+                .add(&target_shape.get_pos_y().to_bits().to_le_bytes());
+            let _ = game.send_game_shape_around(region, target_shape, None, &vanished);
+        } else if let Some(property) = target_monster_property {
+            let (Ok(target_x), Ok(target_y)) =
+                (target_shape.get_tile_x(), target_shape.get_tile_y())
+            else {
+                return;
+            };
+            deaths.push(MonsterAttackDeath::Monster(MonsterVictimDeath {
+                victim_id: target.id,
+                attacker_id: monster_id,
+                master_id: (attacker_master.master_type == PLAYER_TYPE)
+                    .then_some(attacker_master.master_id)
+                    .unwrap_or(0),
+                target_x,
+                target_y,
+                pos_x_bits: target_shape.get_pos_x().to_bits(),
+                pos_y_bits: target_shape.get_pos_y().to_bits(),
+                property,
+            }));
+        }
+    } else {
+        let mut hurt = CMessage::new(0x000b_f60a);
+        hurt.add_long(MONSTER_TYPE);
+        hurt.add_long(monster_id);
+        hurt.add_long(target.object_type);
+        hurt.add_long(target.id);
+        CGame::append_hurt_damage_records(&mut hurt, damage, mana_damage);
+        hurt.add_ulong(current_health);
+        CGame::append_base_attack_tail(&mut hurt, &attack);
+        let _ = game.send_game_shape_around(region, target_shape, None, &hurt);
+        if target.object_type == PLAYER_TYPE {
+            let pets = game
+                .find_player(target.id)
+                .map(|player| player.active_pets().to_vec())
+                .unwrap_or_default();
+            for pet in pets {
+                if pet.object_type == MONSTER_TYPE
+                    && let Some(monster) = region.find_monster_by_id_mut(pet.id)
+                {
+                    let _ = monster.retarget_passive_pet(ShapeIdentity {
+                        object_type: MONSTER_TYPE,
+                        id: monster_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    });
+                }
+            }
+            game.damage_player_armor(target.id, runtime);
+        }
+    }
+}
