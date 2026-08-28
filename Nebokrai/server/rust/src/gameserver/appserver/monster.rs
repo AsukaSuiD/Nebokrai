@@ -19,6 +19,9 @@
 //! сценарий и окончательное удаление из региона. `Defense` и `Died` проходят
 //! через каноническую очередь `passive_actions` владельца `CBaseAI`, причём
 //! достигнутый `Defense` обрабатывается до активного хода монстра.
+//! Специализированный ИИ синего босса с ID `0x67` хранит здесь восемь
+//! одноразовых HP-порогов ярости как часть жизненного цикла конкретного
+//! монстра; выбор навыка остаётся в `ai/bossblue.rs`.
 //!
 //! Для обычного монстра со списком навыков `0x2bd`, `0x2d1`, `0x2ef`,
 //! `0x197`, `0x191`, `0x198`, `0x199`, `0x19a`, `0x19b`, `0x19c`, `0x19d`,
@@ -57,6 +60,7 @@
 //! включая исходную недостижимость успеха на последней разрешённой попытке.
 
 use super::ai::baseai::CBaseAI;
+use super::ai::bossblue::BossBlueAiState;
 use super::masterinfo::MasterInfo;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
@@ -126,6 +130,7 @@ pub(crate) struct CMonster {
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
+    boss_blue_ai: BossBlueAiState,
     base_ai: CBaseAI,
 }
 
@@ -270,6 +275,7 @@ impl CMonster {
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
             trace_move_delay: None,
+            boss_blue_ai: BossBlueAiState::default(),
             base_ai: CBaseAI::default(),
         }
     }
@@ -647,10 +653,17 @@ impl CMonster {
                     .min(maximum_hp);
             }
         }
+        if property.ai == 0x67 {
+            self.boss_blue_ai.wake(self.hit_points, maximum_hp);
+        }
         MonsterWakeMutation {
             hit_points: self.hit_points,
             publish_states,
         }
+    }
+
+    pub(crate) fn boss_blue_ai_mut(&mut self) -> &mut BossBlueAiState {
+        &mut self.boss_blue_ai
     }
 
     pub(crate) fn combat_properties(

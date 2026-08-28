@@ -100,6 +100,7 @@ use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
+use crate::gameserver::appserver::ai::bossblue::select_boss_blue_attack_skill;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -283,11 +284,23 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         skill_id as u16
     } else {
         let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
-        let selected = select_attack_skill(
-            &property.skills,
-            game.skill_random_below(10_000),
-            default_skill_id,
-        );
+        let roll = game.skill_random_below(10_000);
+        let selected = if property.ai == 0x67 {
+            region.find_monster_by_id_mut(monster_id).map_or(default_skill_id, |monster| {
+                let has_fury_state = monster.move_shape().boss_blue_fury_state().is_some();
+                select_boss_blue_attack_skill(
+                    monster.boss_blue_ai_mut(),
+                    monster_health,
+                    property.maximum_hp,
+                    has_fury_state,
+                    &property.skills,
+                    roll,
+                    default_skill_id,
+                )
+            })
+        } else {
+            select_attack_skill(&property.skills, roll, default_skill_id)
+        };
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster
                 .move_shape_mut()
