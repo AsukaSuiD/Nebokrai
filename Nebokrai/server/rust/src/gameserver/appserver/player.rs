@@ -4532,7 +4532,7 @@ impl CPlayer {
         self.move_shape.take_knock_out_state()
     }
 
-    pub(crate) fn blind_state_order(&self) -> [Option<u32>; 2] {
+    pub(crate) fn blind_state_order(&self) -> Vec<u32> {
         self.move_shape.blind_state_order()
     }
 

@@ -13,7 +13,7 @@
 //! игровое поведение читает типизированные состояния. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
-//! Паутина и оглушение дополнительно сохраняют общий порядок вставки для
+//! Печать, паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
@@ -60,6 +60,7 @@ use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::promotionstate::PromotionState;
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
+use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
@@ -484,6 +485,7 @@ pub(crate) struct CanonicalStateStorage {
     boss_blue_fury_state: Option<BossBlueFuryState>,
     boss_blue_quake_state: Option<BossBlueQuakeState>,
     cure_state: Option<CureState>,
+    seal_state: Option<SealState>,
     curable_state_order: IndexSet<u32>,
     poison_arrow_state: Option<PoisonArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
@@ -690,6 +692,7 @@ impl CMoveShape {
         self.boss_blue_fury_state = None;
         self.boss_blue_quake_state = None;
         self.cure_state = None;
+        self.seal_state = None;
         self.curable_state_order.clear();
         self.poison_arrow_state = None;
         self.spider_poison_state = None;
@@ -735,6 +738,7 @@ impl CMoveShape {
             || !self.state_storage.fury_states.is_empty()
             || self.state_storage.boss_blue_fury_state.is_some()
             || self.state_storage.cure_state.is_some()
+            || self.state_storage.seal_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
             || self.state_storage.spider_poison_state.is_some()
             || self.state_storage.spider_web_state.is_some()
@@ -886,6 +890,10 @@ impl CMoveShape {
             self.cure_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let seal = usize::from(
+            self.seal_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let poison_arrow = usize::from(
             self.poison_arrow_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -935,6 +943,7 @@ impl CMoveShape {
             .saturating_add(boss_blue_fury)
             .saturating_add(boss_blue_quake)
             .saturating_add(cure)
+            .saturating_add(seal)
             .saturating_add(poison_arrow)
             .saturating_add(spider_poison)
             .saturating_add(spider_web)
@@ -996,6 +1005,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .cure_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .seal_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .poison_arrow_state
@@ -1400,6 +1412,27 @@ impl CMoveShape {
         self.cure_state.take()
     }
 
+    pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {
+        self.blind_state_order.insert(state.skill_id());
+        self.curable_state_order.insert(state.skill_id());
+        self.seal_state.replace(state)
+    }
+
+    pub(crate) fn take_expired_seal_state(&mut self, now_ms: u32) -> Option<SealState> {
+        let state = self.seal_state.filter(|state| state.expired(now_ms))?;
+        self.seal_state = None;
+        self.blind_state_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn take_seal_state(&mut self) -> Option<SealState> {
+        let state = self.seal_state.take()?;
+        self.blind_state_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
     pub(crate) fn replace_poison_arrow_state(
         &mut self,
         state: PoisonArrowState,
@@ -1526,12 +1559,8 @@ impl CMoveShape {
         self.curable_state_order.iter().copied().collect()
     }
 
-    pub(crate) fn blind_state_order(&self) -> [Option<u32>; 2] {
-        let mut order = [None; 2];
-        for (slot, state_id) in order.iter_mut().zip(self.blind_state_order.iter().copied()) {
-            *slot = Some(state_id);
-        }
-        order
+    pub(crate) fn blind_state_order(&self) -> Vec<u32> {
+        self.blind_state_order.iter().copied().collect()
     }
 
     pub(crate) fn replace_blood_loss_state(

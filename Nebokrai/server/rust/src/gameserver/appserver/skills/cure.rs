@@ -5,7 +5,7 @@
 //! время восстановления, путь и препятствия, задержку, направление, точную
 //! вероятность и один вызов генератора MSVCRT на каждое подходящее состояние
 //! в порядке исходного вектора состояний. Из уже типизированных состояний
-//! достигнуты `0x191`, `0x192`, `0x199` и `0x1F8`; неизвестные старые записи
+//! достигнуты `0x138`, `0x191`, `0x192`, `0x199` и `0x1F8`; неизвестные старые записи
 //! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
 //! доставку. Координатная перегрузка
 //! `Begin` остаётся ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -31,6 +31,7 @@ use super::spiderwebstate::{
     SpiderWebState, finish_player_spider_web_state_on_defense,
     send_spider_web_state_visual,
 };
+use super::sealstate::{SEAL_STATE_ID, SealState, send_seal_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -161,6 +162,7 @@ fn curable_state_ids(game: &CGame, region_id: i32, target: ShapeIdentity) -> Vec
 }
 
 enum RemovedMonsterCurableState {
+    Seal(SealState),
     SpiderPoison(SpiderPoisonState),
     SpiderWeb(SpiderWebState),
     KnockOut(KnockOutState),
@@ -177,6 +179,12 @@ fn finish_monster_curable_state(
     let Some(mut owner) = game.take_region_owner(region_id) else { return false };
     let removed = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
         let removed = match state_id {
+            SEAL_STATE_ID => {
+                let state = monster.move_shape_mut().take_seal_state()?;
+                monster.move_shape_mut().set_moveable(true);
+                monster.move_shape_mut().set_fightable(true);
+                RemovedMonsterCurableState::Seal(state)
+            }
             SPIDER_POISON_SKILL_ID => RemovedMonsterCurableState::SpiderPoison(monster.move_shape_mut().take_spider_poison_state()?),
             SPIDER_WEB_SKILL_ID => {
                 let state = monster.move_shape_mut().take_spider_web_state()?;
@@ -203,6 +211,7 @@ fn finish_monster_curable_state(
     game.restore_region_owner(owner);
     let Some((removed, identity, tile_x, tile_y)) = removed else { return false };
     match removed {
+        RemovedMonsterCurableState::Seal(state) => send_seal_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpiderPoison(state) => send_spider_poison_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpiderWeb(state) => send_spider_web_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::KnockOut(state) => send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),

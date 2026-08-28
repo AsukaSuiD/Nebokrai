@@ -149,6 +149,7 @@ use super::furystate::{FuryState, send_fury_state_visual};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoisonstate::send_spider_poison_state_visual;
 use super::spiderwebstate::send_spider_web_state_visual;
+use super::sealstate::send_seal_state_visual;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -216,36 +217,40 @@ fn remove_reached_conflict_states(
     monster_id: i32,
     now_ms: u32,
 ) {
-    let removed_poison = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_spider_poison_state()?;
-        Some((
-            state,
-            monster.move_shape().shape().identity(),
-            monster.move_shape().shape().get_tile_x().unwrap_or_default(),
-            monster.move_shape().shape().get_tile_y().unwrap_or_default(),
-        ))
-    });
-    if let Some((state, identity, tile_x, tile_y)) = removed_poison {
-        send_spider_poison_state_visual(
-            game, region.id, identity, tile_x, tile_y, state, false, now_ms,
-        );
-    }
-
-    let removed_web = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_spider_web_state()?;
-        monster.move_shape_mut().set_moveable(true);
-        monster.move_shape_mut().set_fightable(true);
-        Some((
-            state,
-            monster.move_shape().shape().identity(),
-            monster.move_shape().shape().get_tile_x().unwrap_or_default(),
-            monster.move_shape().shape().get_tile_y().unwrap_or_default(),
-        ))
-    });
-    if let Some((state, identity, tile_x, tile_y)) = removed_web {
-        send_spider_web_state_visual(
-            game, region.id, identity, tile_x, tile_y, state, false, now_ms,
-        );
+    let order = region
+        .find_monster_by_id(monster_id)
+        .map(|monster| monster.move_shape().curable_state_ids())
+        .unwrap_or_default();
+    for state_id in order {
+        if state_id == super::sealstate::SEAL_STATE_ID {
+            let removed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+                let state = monster.move_shape_mut().take_seal_state()?;
+                monster.move_shape_mut().set_moveable(true);
+                monster.move_shape_mut().set_fightable(true);
+                Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().unwrap_or_default(), monster.move_shape().shape().get_tile_y().unwrap_or_default()))
+            });
+            if let Some((state, identity, tile_x, tile_y)) = removed {
+                send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+            }
+        } else if state_id == super::spiderpoison::SPIDER_POISON_SKILL_ID {
+            let removed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+                let state = monster.move_shape_mut().take_spider_poison_state()?;
+                Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().unwrap_or_default(), monster.move_shape().shape().get_tile_y().unwrap_or_default()))
+            });
+            if let Some((state, identity, tile_x, tile_y)) = removed {
+                send_spider_poison_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+            }
+        } else if state_id == super::spiderweb::SPIDER_WEB_SKILL_ID {
+            let removed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+                let state = monster.move_shape_mut().take_spider_web_state()?;
+                monster.move_shape_mut().set_moveable(true);
+                monster.move_shape_mut().set_fightable(true);
+                Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().unwrap_or_default(), monster.move_shape().shape().get_tile_y().unwrap_or_default()))
+            });
+            if let Some((state, identity, tile_x, tile_y)) = removed {
+                send_spider_web_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+            }
+        }
     }
 }
 

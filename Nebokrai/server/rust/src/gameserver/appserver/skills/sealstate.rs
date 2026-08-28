@@ -1,6 +1,148 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние печати `CSealState` (`0x138`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/sealstate.cpp`. Достигнутая объектная перегрузка запрещает
+//! монстру движение и бой и публикует `0xBFE03`. Унаследованные от
+//! `CBlindState` таймер, `End` и реакция на защиту снимают оба запрета и
+//! публикуют `0xBFE04`; беззнаковая строгая проверка срока и порядок вставки
+//! сохраняются каноническим хранилищем. Конструктор по умолчанию и
+//! координатные перегрузки остаются в RAW ниже.
+
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
+
+pub(crate) const SEAL_STATE_ID: u32 = 0x138;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SealState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+}
+
+impl SealState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
+        Self { started_at_ms, keep_time_ms }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        SEAL_STATE_ID
+    }
+
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+    }
+
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
+        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
+        if elapsed >= self.keep_time_ms {
+            0
+        } else {
+            self.keep_time_ms.wrapping_sub(elapsed) as i32
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
+pub(crate) fn send_seal_state_visual(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: SealState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(0);
+    }
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn replace_monster_seal_state(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    state: SealState,
+    now_ms: u32,
+) -> bool {
+    let installed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let identity = monster.move_shape().shape().identity();
+        let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
+        let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
+        let previous = monster.move_shape_mut().replace_seal_state(state);
+        if previous.is_some() {
+            monster.move_shape_mut().set_moveable(true);
+            monster.move_shape_mut().set_fightable(true);
+        }
+        monster.move_shape_mut().set_moveable(false);
+        monster.move_shape_mut().set_fightable(false);
+        Some((previous, identity, tile_x, tile_y))
+    });
+    let Some((previous, identity, tile_x, tile_y)) = installed else {
+        return false;
+    };
+    if let Some(previous) = previous {
+        send_seal_state_visual(game, region.id, identity, tile_x, tile_y, previous, false, now_ms);
+    }
+    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, true, now_ms);
+    true
+}
+
+pub(crate) fn expire_monster_seal_state(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    now_ms: u32,
+) -> bool {
+    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let state = monster.move_shape_mut().take_expired_seal_state(now_ms)?;
+        monster.move_shape_mut().set_moveable(true);
+        monster.move_shape_mut().set_fightable(true);
+        Some((
+            state,
+            monster.move_shape().shape().identity(),
+            monster.move_shape().shape().get_tile_x().ok()?,
+            monster.move_shape().shape().get_tile_y().ok()?,
+        ))
+    });
+    let Some((state, identity, tile_x, tile_y)) = finished else {
+        return false;
+    };
+    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+    true
+}
+
+pub(crate) fn finish_monster_seal_state_on_defense(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    now_ms: u32,
+) -> bool {
+    let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let state = monster.move_shape_mut().take_seal_state()?;
+        monster.move_shape_mut().set_moveable(true);
+        monster.move_shape_mut().set_fightable(true);
+        Some((
+            state,
+            monster.move_shape().shape().identity(),
+            monster.move_shape().shape().get_tile_x().ok()?,
+            monster.move_shape().shape().get_tile_y().ok()?,
+        ))
+    });
+    let Some((state, identity, tile_x, tile_y)) = finished else {
+        return false;
+    };
+    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+    true
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -14,38 +156,10 @@
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\sealstate.cpp:15
-// RVA: 0x001FF800
-// ADDRESS: 005ff800
-// PROTOTYPE: undefined __thiscall CSealState(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSealState::CSealState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\sealstate.cpp:24
 // RVA: 0x001FF870
 // ADDRESS: 005ff870
 // PROTOTYPE: undefined __thiscall CSealState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSealState::~CSealState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\sealstate.cpp:33
-// RVA: 0x001FF8E0
-// ADDRESS: 005ff8e0
-// PROTOTYPE: void __thiscall ~CSealState(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -78,37 +192,6 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CSealState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\sealstate.cpp:44
-// RVA: 0x001FFAD0
-// ADDRESS: 005ffad0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSealStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\sealstate.cpp:144
-// RVA: 0x001FFB90
-// ADDRESS: 005ffb90
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
 
 
 // COMPONENT_VARIANT_END: GameServer

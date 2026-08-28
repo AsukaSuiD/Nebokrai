@@ -18,6 +18,9 @@ use super::spiderwebstate::{
     expire_monster_spider_web_state, expire_player_spider_web_state,
     finish_player_spider_web_state_on_defense, finish_spider_web_state_on_defense,
 };
+use super::sealstate::{
+    SEAL_STATE_ID, expire_monster_seal_state, finish_monster_seal_state_on_defense,
+};
 
 pub(crate) const KNOCK_OUT_STATE_ID: u32 = 0x192;
 
@@ -139,7 +142,7 @@ pub(crate) fn finish_knock_out_state_on_defense(game: &mut CGame, region: &mut C
 pub(crate) fn expire_player_blind_states(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
     let order = game.find_player(player_id).map(|player| player.blind_state_order()).unwrap_or_default();
     let mut changed = false;
-    for state_id in order.into_iter().flatten() {
+    for state_id in order {
         changed |= match state_id {
             SPIDER_WEB_SKILL_ID => expire_player_spider_web_state(game, player_id, now_ms),
             KNOCK_OUT_STATE_ID => expire_player_knock_out_state(game, player_id, now_ms),
@@ -152,7 +155,7 @@ pub(crate) fn expire_player_blind_states(game: &mut CGame, player_id: i32, now_m
 pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
     let order = game.find_player(player_id).map(|player| player.blind_state_order()).unwrap_or_default();
     let mut changed = false;
-    for state_id in order.into_iter().flatten() {
+    for state_id in order {
         changed |= match state_id {
             SPIDER_WEB_SKILL_ID => finish_player_spider_web_state_on_defense(game, player_id, now_ms),
             KNOCK_OUT_STATE_ID => finish_player_knock_out_state_on_defense(game, player_id, now_ms),
@@ -165,10 +168,11 @@ pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id:
 pub(crate) fn expire_monster_blind_states(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool {
     let order = region.find_monster_by_id(monster_id).map(|monster| monster.move_shape().blind_state_order()).unwrap_or_default();
     let mut changed = false;
-    for state_id in order.into_iter().flatten() {
+    for state_id in order {
         changed |= match state_id {
             SPIDER_WEB_SKILL_ID => expire_monster_spider_web_state(game, region, monster_id, now_ms),
             KNOCK_OUT_STATE_ID => expire_monster_knock_out_state(game, region, monster_id, now_ms),
+            SEAL_STATE_ID => expire_monster_seal_state(game, region, monster_id, now_ms),
             _ => false,
         };
     }
@@ -182,10 +186,13 @@ pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region: &mut CSer
         _ => None,
     }.unwrap_or_default();
     let mut changed = false;
-    for state_id in order.into_iter().flatten() {
+    for state_id in order {
         changed |= match state_id {
             SPIDER_WEB_SKILL_ID => finish_spider_web_state_on_defense(game, region, target, now_ms),
             KNOCK_OUT_STATE_ID => finish_knock_out_state_on_defense(game, region, target, now_ms),
+            SEAL_STATE_ID if target.object_type == 600 => {
+                finish_monster_seal_state_on_defense(game, region, target.id, now_ms)
+            }
             _ => false,
         };
     }

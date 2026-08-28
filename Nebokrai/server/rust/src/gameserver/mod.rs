@@ -178,6 +178,8 @@ pub(crate) mod appserver {
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;
         pub(crate) mod sevenshootingstar;
+        pub(crate) mod seal;
+        pub(crate) mod sealstate;
         pub(crate) mod realmappellation;
         pub(crate) mod skeletonarchery;
         pub(crate) mod snakebolt;

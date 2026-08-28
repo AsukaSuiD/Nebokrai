@@ -11,7 +11,7 @@
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
-//! стена, огненный круг, молния,
+//! стена, огненный круг, молния, печать,
 //! сфера хаоса и семь падающих звёзд,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
@@ -38,6 +38,7 @@ use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
+use crate::gameserver::appserver::skills::seal::SealExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransferKind;
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
@@ -80,6 +81,8 @@ pub(crate) struct CPlayerAI {
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
     lightning_last_used_ms: u32,
+    seal: Option<SealExecutionState>,
+    seal_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
@@ -187,6 +190,7 @@ impl CPlayerAI {
         self.seven_shooting_star = None;
         self.chaos_sphere = None;
         self.lightning = None;
+        self.seal = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -291,6 +295,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение молнии завершено");
         }
+        if let Some(mut execution) = self.seal.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение печати завершено");
+        }
         if let Some(mut execution) = self.callosity.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
@@ -392,6 +400,7 @@ impl CPlayerAI {
         self.seven_shooting_star = None;
         self.chaos_sphere = None;
         self.lightning = None;
+        self.seal = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -644,6 +653,26 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_lightning_used(&mut self, now_ms: u32) {
         self.lightning_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn seal(&self) -> Option<SealExecutionState> {
+        self.seal
+    }
+
+    pub(crate) const fn begin_seal(&mut self, state: SealExecutionState) {
+        self.seal = Some(state);
+    }
+
+    pub(crate) fn seal_mut(&mut self) -> Option<&mut SealExecutionState> {
+        self.seal.as_mut()
+    }
+
+    pub(crate) const fn seal_last_used_ms(&self) -> u32 {
+        self.seal_last_used_ms
+    }
+
+    pub(crate) const fn mark_seal_used(&mut self, now_ms: u32) {
+        self.seal_last_used_ms = now_ms;
     }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {

@@ -486,6 +486,7 @@ mod bloodloss;
 mod fatalblow;
 mod firewall;
 mod chaossphere;
+mod seal;
 mod thunder;
 mod snowstorm;
 mod leiming2;
@@ -792,6 +793,7 @@ use crate::gameserver::appserver::skills::chaosspherephalanx::{
 use crate::gameserver::appserver::skills::lightning::{
     execute_player_lightning, is_lightning_target,
 };
+use crate::gameserver::appserver::skills::seal::{execute_player_seal, is_seal_target};
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     execute_battle_fairy_base_magic, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
 };
@@ -36413,6 +36415,7 @@ impl CGame {
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
             let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
+            let concrete_seal = is_seal_target(dispatch);
             let concrete_archery = match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == ARCHERY_SKILL_ID
@@ -36534,6 +36537,8 @@ impl CGame {
                 execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {
                 execute_player_lightning(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_seal {
+                execute_player_seal(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
                 execute_player_callosity(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_agility_family {
