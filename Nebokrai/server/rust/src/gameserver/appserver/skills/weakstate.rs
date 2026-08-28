@@ -1,180 +1,71 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние ослабления `CWeakState` (`0x12E`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/weakstate.cpp`. Состояние хранит прямоугольник призванной
+//! области и исходное снижение атаки. Для игрока сохраняется legacy-маска
+//! `0xFFFF` и ограничение `INT_MAX`; для монстра применяется то же знаковое
+//! вычитание к обеим границам атаки. `CGame` отвечает только за каноническую
+//! установку, перерасчёт независимого владельца и around-доставку.
+//! DB-восстановление без координат области не материализуется: неизвестная
+//! запись остаётся в закрытом legacy codec `CanonicalStateStorage`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CWeakState::CWeakState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:31
-// RVA: 0x00206CA0
-// ADDRESS: 00606ca0
-// PROTOTYPE: undefined __thiscall CWeakState(long param_1, long param_2, long param_3, long param_4, long param_5)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const WEAK_STATE_ID: u32 = 0x12e;
+const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
-// ============================================================================
-// FUNCTION: CWeakState::CWeakState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:46
-// RVA: 0x00206D40
-// ADDRESS: 00606d40
-// PROTOTYPE: undefined __thiscall CWeakState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WeakState {
+    attack_loss: u32,
+    center_x: i32,
+    center_y: i32,
+    length: i32,
+    height: i32,
+}
 
-// ============================================================================
-// FUNCTION: CWeakState::~CWeakState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:61
-// RVA: 0x00206DC0
-// ADDRESS: 00606dc0
-// PROTOTYPE: void __thiscall ~CWeakState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl WeakState {
+    pub(crate) const fn new(attack_loss: u32, center_x: i32, center_y: i32, length: i32, height: i32) -> Self {
+        Self { attack_loss, center_x, center_y, length, height }
+    }
 
-// ============================================================================
-// FUNCTION: CWeakState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:126
-// RVA: 0x00206DD0
-// ADDRESS: 00606dd0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn attack_loss(self) -> u32 { self.attack_loss }
+    pub(crate) const fn skill_id(self) -> u32 { WEAK_STATE_ID }
 
-// ============================================================================
-// FUNCTION: CWeakState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:135
-// RVA: 0x00206E60
-// ADDRESS: 00606e60
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn contains(self, tile_x: i32, tile_y: i32) -> bool {
+        let start_x = self.center_x.wrapping_sub(self.length / 2);
+        let start_y = self.center_y.wrapping_sub(self.height / 2);
+        tile_x >= start_x
+            && tile_x < start_x.wrapping_add(self.length)
+            && tile_y >= start_y
+            && tile_y < start_y.wrapping_add(self.height)
+    }
 
-// ============================================================================
-// FUNCTION: CWeakState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:160
-// RVA: 0x00206EF0
-// ADDRESS: 00606ef0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) fn apply_to_player(self, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
+        let minimum_loss = properties.minimum_attack.min(self.attack_loss) & 0xffff;
+        let maximum_loss = properties.maximum_attack.min(self.attack_loss) & 0xffff;
+        properties.minimum_attack = properties.minimum_attack.wrapping_sub(minimum_loss).min(i32::MAX as u32);
+        properties.maximum_attack = properties.maximum_attack.wrapping_sub(maximum_loss).min(i32::MAX as u32);
+        properties
+    }
 
-// ============================================================================
-// FUNCTION: CWeakState::OnChangeRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:193
-// RVA: 0x00206FA0
-// ADDRESS: 00606fa0
-// PROTOTYPE: void __thiscall OnChangeRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn apply_to_monster(self, minimum: u32, maximum: u32) -> (u32, u32) {
+        (minimum.wrapping_sub(self.attack_loss), maximum.wrapping_sub(self.attack_loss))
+    }
+}
 
-// ============================================================================
-// FUNCTION: CWeakState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:202
-// RVA: 0x00206FC0
-// ADDRESS: 00606fc0
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWeakState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:72
-// RVA: 0x00207020
-// ADDRESS: 00607020
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWeakState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:114
-// RVA: 0x00207150
-// ADDRESS: 00607150
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWeakState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:218
-// RVA: 0x002071F0
-// ADDRESS: 006071f0
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CWeakStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakstate.cpp:235
-// RVA: 0x00207230
-// ADDRESS: 00607230
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
+#[allow(clippy::too_many_arguments, reason = "поля задают точку фактической around-доставки")]
+pub(crate) fn send_weak_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: WeakState, begin: bool) {
+    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(WEAK_STATE_ID as i32);
+    if begin {
+        message.add_long(0);
+        message.add_long(state.attack_loss() as i32);
+    }
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}

@@ -4346,7 +4346,10 @@ impl CPlayer {
         for state in self.move_shape.battle_fairy_attribute_states() {
             properties = state.apply_to_player(properties);
         }
-        let (properties, script_visuals) = self.apply_script_move_state_properties(properties);
+        let (mut properties, script_visuals) = self.apply_script_move_state_properties(properties);
+        if let Some(state) = self.move_shape.weak_state() {
+            properties = state.apply_to_player(properties);
+        }
         PlayerStatePropertyPass {
             properties,
             callosity_visual,
@@ -4444,6 +4447,25 @@ impl CPlayer {
         state: super::skills::spiderwebstate::SpiderWebState,
     ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
         self.move_shape.replace_spider_web_state(state)
+    }
+
+    pub(crate) fn replace_weak_state(
+        &mut self,
+        state: super::skills::weakstate::WeakState,
+    ) -> Option<super::skills::weakstate::WeakState> {
+        self.move_shape.replace_weak_state(state)
+    }
+
+    pub(crate) fn take_weak_state(&mut self) -> Option<super::skills::weakstate::WeakState> {
+        self.move_shape.take_weak_state()
+    }
+
+    pub(crate) fn take_weak_state_outside(
+        &mut self,
+        tile_x: i32,
+        tile_y: i32,
+    ) -> Option<super::skills::weakstate::WeakState> {
+        self.move_shape.take_weak_state_outside(tile_x, tile_y)
     }
 
     pub(crate) fn take_expired_spider_web_state(

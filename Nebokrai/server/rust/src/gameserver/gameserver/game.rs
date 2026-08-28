@@ -489,6 +489,7 @@ mod snowstorm;
 mod leiming2;
 mod tianhuo;
 mod spidermist;
+mod weak;
 mod periodicattack;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -830,6 +831,8 @@ use crate::gameserver::appserver::skills::snowstorm::{
 use crate::gameserver::appserver::skills::snowstormphalanx::{
     CSnowStormPhalanx, SnowStormPhalanxTick,
 };
+use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
+use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
@@ -26202,6 +26205,7 @@ impl CGame {
         };
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
+        let weak_ended = self.finish_player_weak_outside(player_id, runtime);
         let expired_cure = self
             .find_player_mut(player_id)
             .and_then(CPlayer::take_cure_state_for_ai);
@@ -26317,6 +26321,7 @@ impl CGame {
             appellation_states_ended,
             appellation_items_consumed,
             ride_ended,
+            weak_ended,
             agility_state_2_ended,
             hearten_ended = expired_hearten.is_some(),
             cure_ended = expired_cure.is_some(),
@@ -36441,6 +36446,7 @@ impl CGame {
                 }
             );
             let concrete_snow_storm = is_snow_storm_target(dispatch);
+            let concrete_weak = is_weak_target(dispatch);
             let concrete_self_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36494,6 +36500,8 @@ impl CGame {
                 execute_player_knock_out(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_snow_storm {
                 execute_player_snow_storm(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_weak {
+                execute_player_weak(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_self_shield {
                 execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
@@ -39419,6 +39427,7 @@ impl CGame {
             SummonedSkillShape::Leiming2(phalanx) => self.calculate_leiming2_attack(phalanx),
             SummonedSkillShape::Tianhuo(phalanx) => self.calculate_tianhuo_attack(phalanx),
             SummonedSkillShape::SpiderMist(_) => None,
+            SummonedSkillShape::Weak(_) => None,
         }
     }
 
@@ -39842,6 +39851,10 @@ impl CGame {
                     ))),
                     crate::gameserver::appserver::skills::spidermistphalanx::SpiderMistPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::Weak(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    WeakPhalanxTick::Scan => Some(Some((phalanx.shape().identity(), lifetime_now_ms))),
+                    WeakPhalanxTick::Expired => None,
+                },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
@@ -39864,6 +39877,19 @@ impl CGame {
                 );
                 self.restore_region_owner(owner);
                 tracing::trace!(region_id, phalanx_id, applied, "обновлена область паучьего тумана");
+            }
+            return true;
+        }
+        if let SummonedSkillShape::Weak(weak) = &phalanx {
+            if tick.is_some() {
+                let applied = self.apply_weak_phalanx(region_id, weak, runtime);
+                tracing::trace!(region_id, phalanx_id, applied, "обновлена область ослабления");
+            } else {
+                let ended = self.finish_weak_phalanx_targets(region_id, weak, runtime);
+                tracing::trace!(region_id, phalanx_id, ended, "завершена область ослабления");
+                if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+                    let _ = self.send_shape_exit_around(region, phalanx.shape());
+                }
             }
             return true;
         }
@@ -40641,6 +40667,7 @@ impl CGame {
                 {
                     continue;
                 }
+                let _ = self.finish_monster_weak_outside(region_id, monster_id);
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let _ = expire_monster_blind_states(
                         self,

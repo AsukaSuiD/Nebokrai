@@ -711,6 +711,9 @@ impl CMonster {
         for state in self.move_shape.fury_states() {
             maximum = state.apply_to_monster_max_attack(maximum);
         }
+        if let Some(state) = self.move_shape.weak_state() {
+            (minimum, maximum) = state.apply_to_monster(minimum, maximum);
+        }
         if let Some(state) = self.move_shape.boss_blue_fury_state() {
             minimum = state.apply_to_monster_attack(minimum);
             maximum = state.apply_to_monster_attack(maximum);

@@ -1,70 +1,74 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Область ослабления `CWeakPhalanx` (`0x12E`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/weakphalanx.cpp`. Владелец хранит прямоугольник 1×1,
+//! снижение атаки и строгий wrapping-срок жизни. Обход клеток сохраняет
+//! исходный порядок X→Y. Разрешение форм и применение состояния остаются у
+//! `CGame`, поскольку игроки и монстры принадлежат разным runtime-owner-ам.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakphalanx.cpp
+use super::weak::WEAK_SKILL_ID;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CWeakPhalanx::CWeakPhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakphalanx.cpp:18
-// RVA: 0x00200730
-// ADDRESS: 00600730
-// PROTOTYPE: undefined __thiscall CWeakPhalanx(tagMasterInfo * param_1, ulong param_2, long param_3, long param_4, long param_5, long param_6)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WeakPhalanxTick { Scan, Expired }
 
-// ============================================================================
-// FUNCTION: CWeakPhalanx::~CWeakPhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakphalanx.cpp:27
-// RVA: 0x00200790
-// ADDRESS: 00600790
-// PROTOTYPE: void __thiscall ~CWeakPhalanx(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CWeakPhalanx {
+    shape: CShape,
+    master: MasterInfo,
+    started_at_ms: u32,
+    lifetime_ms: u32,
+    skill_level: i32,
+    length: i32,
+    height: i32,
+    attack_loss: u32,
+}
 
-// ============================================================================
-// FUNCTION: CWeakPhalanx::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakphalanx.cpp:200
-// RVA: 0x00200840
-// ADDRESS: 00600840
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl CWeakPhalanx {
+    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
+    pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, length: i32, height: i32, attack_loss: u32) -> Self {
+        let mut shape = CShape::with_constructor_defaults();
+        shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
+        Self { shape, master, started_at_ms, lifetime_ms, skill_level, length, height, attack_loss }
+    }
 
-// ============================================================================
-// FUNCTION: CWeakPhalanx::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\weakphalanx.cpp:31
-// RVA: 0x00200A70
-// ADDRESS: 00600a70
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn shape(&self) -> &CShape { &self.shape }
+    pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
+    pub(crate) const fn master(&self) -> MasterInfo { self.master }
+    pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
+    pub(crate) const fn attack_loss(&self) -> u32 { self.attack_loss }
+    pub(crate) const fn length(&self) -> i32 { self.length }
+    pub(crate) const fn height(&self) -> i32 { self.height }
+    pub(crate) const fn skill_id(&self) -> u32 { WEAK_SKILL_ID }
 
+    pub(crate) fn tick(&mut self, now_ms: u32) -> WeakPhalanxTick {
+        if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
+            self.shape.set_change_state(SHAPE_CHANGE_DELETE);
+            WeakPhalanxTick::Expired
+        } else {
+            WeakPhalanxTick::Scan
+        }
+    }
 
+    pub(crate) fn active_cells(&self) -> Vec<(i32, i32)> {
+        let Ok(center_x) = self.shape.get_tile_x() else { return Vec::new() };
+        let Ok(center_y) = self.shape.get_tile_y() else { return Vec::new() };
+        let start_x = center_x.wrapping_sub(self.length / 2);
+        let start_y = center_y.wrapping_sub(self.height / 2);
+        let mut cells = Vec::new();
+        for x in 0..self.length.max(0) {
+            for y in 0..self.height.max(0) {
+                cells.push((start_x.wrapping_add(x), start_y.wrapping_add(y)));
+            }
+        }
+        cells
+    }
 
-
-// COMPONENT_VARIANT_END: GameServer
+    pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> {
+        let mut payload = Vec::new();
+        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+    }
+}

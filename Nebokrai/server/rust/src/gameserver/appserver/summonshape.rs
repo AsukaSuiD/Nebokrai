@@ -18,6 +18,7 @@ use crate::gameserver::appserver::skills::thunder2phalanx::CLeimingPhalanx2;
 use crate::gameserver::appserver::skills::tianhuophalanx::CTianhuoPhalanx;
 use crate::gameserver::appserver::skills::spidermistphalanx::CSpiderMistPhalanx;
 use crate::gameserver::appserver::skills::snowstormphalanx::CSnowStormPhalanx;
+use crate::gameserver::appserver::skills::weakphalanx::CWeakPhalanx;
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
@@ -32,6 +33,7 @@ pub(crate) enum SummonedSkillShape {
     Tianhuo(CTianhuoPhalanx),
     SpiderMist(CSpiderMistPhalanx),
     SnowStorm(CSnowStormPhalanx),
+    Weak(CWeakPhalanx),
 }
 
 impl SummonedSkillShape {
@@ -46,6 +48,7 @@ impl SummonedSkillShape {
             Self::Tianhuo(shape) => shape.shape(),
             Self::SpiderMist(shape) => shape.shape(),
             Self::SnowStorm(shape) => shape.shape(),
+            Self::Weak(shape) => shape.shape(),
         }
     }
 
@@ -60,6 +63,7 @@ impl SummonedSkillShape {
             Self::Tianhuo(shape) => shape.shape_mut(),
             Self::SpiderMist(shape) => shape.shape_mut(),
             Self::SnowStorm(shape) => shape.shape_mut(),
+            Self::Weak(shape) => shape.shape_mut(),
         }
     }
 
@@ -74,6 +78,7 @@ impl SummonedSkillShape {
             Self::Tianhuo(shape) => shape.master(),
             Self::SpiderMist(shape) => shape.master(),
             Self::SnowStorm(shape) => shape.master(),
+            Self::Weak(shape) => shape.master(),
         }
     }
 }

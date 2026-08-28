@@ -11,7 +11,7 @@
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
 //! питомцами, усиление, периодическое лечение, машинный и мана-щит,
-//! оглушение,
+//! оглушение, ослабление,
 //! атака боевой феи и её призываемые области
 //! и приручение монстров сохраняют незавершённое состояние между проходами ИИ.
 //! Хвост
@@ -100,6 +100,8 @@ pub(crate) struct CPlayerAI {
     knock_out_last_used_ms: u32,
     snow_storm: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     snow_storm_last_used_ms: u32,
+    weak: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    weak_last_used_ms: u32,
     machine_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     machine_shield_last_used_ms: u32,
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -165,6 +167,7 @@ impl CPlayerAI {
         self.monster_taming = None;
         self.knock_out = None;
         self.snow_storm = None;
+        self.weak = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -271,6 +274,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение снежной бури завершено");
         }
+        if let Some(mut execution) = self.weak.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ослабления завершено");
+        }
         if let Some(mut execution) = self.machine_shield.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение машинного щита завершено");
@@ -325,6 +332,7 @@ impl CPlayerAI {
         self.monster_taming = None;
         self.knock_out = None;
         self.snow_storm = None;
+        self.weak = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -626,6 +634,24 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_snow_storm_used(&mut self, now_ms: u32) {
         self.snow_storm_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn weak(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.weak
+    }
+
+    pub(crate) const fn begin_weak(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) {
+        self.weak = Some(state);
+    }
+
+    pub(crate) fn weak_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.weak.as_mut()
+    }
+
+    pub(crate) const fn weak_last_used_ms(&self) -> u32 { self.weak_last_used_ms }
+
+    pub(crate) const fn mark_weak_used(&mut self, now_ms: u32) {
+        self.weak_last_used_ms = now_ms;
     }
 
     pub(crate) const fn machine_shield(

@@ -159,6 +159,9 @@ pub(crate) mod appserver {
         pub(crate) mod knockoutstate;
         pub(crate) mod snowstorm;
         pub(crate) mod snowstormphalanx;
+        pub(crate) mod weak;
+        pub(crate) mod weakphalanx;
+        pub(crate) mod weakstate;
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;
         pub(crate) mod realmappellation;
