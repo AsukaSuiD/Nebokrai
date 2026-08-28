@@ -162,6 +162,10 @@ pub(crate) mod appserver {
         pub(crate) mod weak;
         pub(crate) mod weakphalanx;
         pub(crate) mod weakstate;
+        pub(crate) mod godbless;
+        pub(crate) mod godblessstate;
+        pub(crate) mod godbless2;
+        pub(crate) mod godblessstate2;
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;
         pub(crate) mod realmappellation;

@@ -95,8 +95,8 @@ impl CGame {
                         Some((x, y))
                     });
                     if let Some((x, y)) = position {
-                        let _ = self.update_player_properties(target.id, runtime);
                         send_weak_state_visual(self, region_id, target, x, y, state, true);
+                        let _ = self.update_player_properties(target.id, runtime);
                         applied = applied.wrapping_add(1);
                     }
                 }
@@ -131,8 +131,8 @@ impl CGame {
             Some((region_id, x, y, state))
         });
         let Some((region_id, x, y, state)) = ended else { return false };
-        let _ = self.update_player_properties(player_id, runtime);
         send_weak_state_visual(self, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, false);
+        let _ = self.update_player_properties(player_id, runtime);
         true
     }
 
@@ -148,8 +148,8 @@ impl CGame {
                         Some((x, y, state))
                     });
                     if let Some((x, y, state)) = removed {
-                        let _ = self.update_player_properties(target.id, runtime);
                         send_weak_state_visual(self, region_id, target, x, y, state, false);
+                        let _ = self.update_player_properties(target.id, runtime);
                         ended = ended.wrapping_add(1);
                     }
                 }

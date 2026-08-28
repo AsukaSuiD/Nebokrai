@@ -102,6 +102,8 @@ pub(crate) struct CPlayerAI {
     snow_storm_last_used_ms: u32,
     weak: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     weak_last_used_ms: u32,
+    god_bless: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    god_bless_last_used_ms: [u32; 2],
     machine_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     machine_shield_last_used_ms: u32,
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -168,6 +170,7 @@ impl CPlayerAI {
         self.knock_out = None;
         self.snow_storm = None;
         self.weak = None;
+        self.god_bless = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -278,6 +281,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ослабления завершено");
         }
+        if let Some(mut execution) = self.god_bless.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественного благословения завершено");
+        }
         if let Some(mut execution) = self.machine_shield.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение машинного щита завершено");
@@ -333,6 +340,7 @@ impl CPlayerAI {
         self.knock_out = None;
         self.snow_storm = None;
         self.weak = None;
+        self.god_bless = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -653,6 +661,12 @@ impl CPlayerAI {
     pub(crate) const fn mark_weak_used(&mut self, now_ms: u32) {
         self.weak_last_used_ms = now_ms;
     }
+
+    pub(crate) const fn god_bless(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_bless }
+    pub(crate) const fn begin_god_bless(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.god_bless = Some(state); }
+    pub(crate) fn god_bless_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_bless.as_mut() }
+    pub(crate) const fn god_bless_last_used_ms(&self, index: usize) -> u32 { self.god_bless_last_used_ms[index] }
+    pub(crate) const fn mark_god_bless_used(&mut self, index: usize, now_ms: u32) { self.god_bless_last_used_ms[index] = now_ms; }
 
     pub(crate) const fn machine_shield(
         &self,

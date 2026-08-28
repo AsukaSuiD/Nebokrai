@@ -711,8 +711,12 @@ impl CMonster {
         for state in self.move_shape.fury_states() {
             maximum = state.apply_to_monster_max_attack(maximum);
         }
-        if let Some(state) = self.move_shape.weak_state() {
-            (minimum, maximum) = state.apply_to_monster(minimum, maximum);
+        if self.move_shape.weak_precedes_god_bless() {
+            if let Some(state) = self.move_shape.weak_state() { (minimum, maximum) = state.apply_to_monster(minimum, maximum); }
+            if let Some(state) = self.move_shape.god_bless_state() { (minimum, maximum, _) = state.apply_to_monster(minimum, maximum, 0); }
+        } else {
+            if let Some(state) = self.move_shape.god_bless_state() { (minimum, maximum, _) = state.apply_to_monster(minimum, maximum, 0); }
+            if let Some(state) = self.move_shape.weak_state() { (minimum, maximum) = state.apply_to_monster(minimum, maximum); }
         }
         if let Some(state) = self.move_shape.boss_blue_fury_state() {
             minimum = state.apply_to_monster_attack(minimum);
@@ -722,6 +726,9 @@ impl CMonster {
     }
 
     pub(crate) fn battle_fairy_element_modify(&self, mut value: i32) -> i32 {
+        if let Some(state) = self.move_shape.god_bless_state() {
+            (_, _, value) = state.apply_to_monster(0, 0, value);
+        }
         for state in self.move_shape.battle_fairy_attribute_states() {
             value = state.apply_to_monster_element(value);
         }

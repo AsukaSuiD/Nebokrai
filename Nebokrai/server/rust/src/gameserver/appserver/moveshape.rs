@@ -70,6 +70,7 @@ use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::weakstate::WeakState;
+use crate::gameserver::appserver::skills::godblessstate::GodBlessState;
 use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
@@ -486,6 +487,10 @@ pub(crate) struct CanonicalStateStorage {
     spider_poison_state: Option<SpiderPoisonState>,
     spider_web_state: Option<SpiderWebState>,
     weak_state: Option<WeakState>,
+    god_bless_state: Option<GodBlessState>,
+    reached_property_state_order: u32,
+    weak_state_order: Option<u32>,
+    god_bless_state_order: Option<u32>,
     knock_out_state: Option<KnockOutState>,
     blind_state_order: IndexSet<u32>,
     blood_loss_state: Option<BloodLossState>,
@@ -687,6 +692,10 @@ impl CMoveShape {
         self.spider_poison_state = None;
         self.spider_web_state = None;
         self.weak_state = None;
+        self.god_bless_state = None;
+        self.reached_property_state_order = 0;
+        self.weak_state_order = None;
+        self.god_bless_state_order = None;
         self.knock_out_state = None;
         self.blind_state_order.clear();
         self.blood_loss_state = None;
@@ -727,6 +736,7 @@ impl CMoveShape {
             || self.state_storage.spider_poison_state.is_some()
             || self.state_storage.spider_web_state.is_some()
             || self.state_storage.weak_state.is_some()
+            || self.state_storage.god_bless_state.is_some()
             || self.state_storage.knock_out_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
@@ -889,6 +899,7 @@ impl CMoveShape {
             self.weak_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let god_bless = usize::from(self.god_bless_state.is_some_and(|state| state.skill_id() as i32 == state_id));
         let knock_out = usize::from(
             self.knock_out_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -925,6 +936,7 @@ impl CMoveShape {
             .saturating_add(spider_poison)
             .saturating_add(spider_web)
             .saturating_add(weak)
+            .saturating_add(god_bless)
             .saturating_add(knock_out)
             .saturating_add(blood_loss)
             .saturating_add(battle_fairy_attributes)
@@ -994,6 +1006,7 @@ impl CMoveShape {
             || self
                 .weak_state
                 .is_some_and(|state| state.skill_id() == state_id)
+            || self.god_bless_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .knock_out_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -1418,17 +1431,41 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_weak_state(&mut self, state: WeakState) -> Option<WeakState> {
+        self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
+        self.weak_state_order = Some(self.reached_property_state_order);
         self.weak_state.replace(state)
     }
 
     pub(crate) fn take_weak_state(&mut self) -> Option<WeakState> {
-        self.weak_state.take()
+        let state = self.weak_state.take()?;
+        self.weak_state_order = None;
+        Some(state)
     }
 
     pub(crate) fn take_weak_state_outside(&mut self, tile_x: i32, tile_y: i32) -> Option<WeakState> {
         let state = self.weak_state.filter(|state| !state.contains(tile_x, tile_y))?;
         self.weak_state = None;
+        self.weak_state_order = None;
         Some(state)
+    }
+
+    pub(crate) const fn god_bless_state(&self) -> Option<GodBlessState> { self.state_storage.god_bless_state }
+    pub(crate) fn replace_god_bless_state(&mut self, state: GodBlessState) -> Option<GodBlessState> {
+        self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
+        self.god_bless_state_order = Some(self.reached_property_state_order);
+        self.god_bless_state.replace(state)
+    }
+    pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<GodBlessState> {
+        let state = self.god_bless_state.filter(|state| state.expired(now_ms))?;
+        self.god_bless_state = None;
+        self.god_bless_state_order = None;
+        Some(state)
+    }
+    pub(crate) const fn weak_precedes_god_bless(&self) -> bool {
+        match (self.state_storage.weak_state_order, self.state_storage.god_bless_state_order) {
+            (Some(weak), Some(bless)) => bless.wrapping_sub(weak) < 0x8000_0000,
+            _ => false,
+        }
     }
 
     pub(crate) fn take_expired_spider_web_state(

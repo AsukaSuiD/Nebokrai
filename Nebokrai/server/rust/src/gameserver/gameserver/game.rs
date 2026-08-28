@@ -490,6 +490,7 @@ mod leiming2;
 mod tianhuo;
 mod spidermist;
 mod weak;
+mod godbless;
 mod periodicattack;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -833,6 +834,7 @@ use crate::gameserver::appserver::skills::snowstormphalanx::{
 };
 use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
+use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
@@ -26206,6 +26208,7 @@ impl CGame {
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let weak_ended = self.finish_player_weak_outside(player_id, runtime);
+        let god_bless_ended = self.finish_player_god_bless(player_id, now_ms, runtime);
         let expired_cure = self
             .find_player_mut(player_id)
             .and_then(CPlayer::take_cure_state_for_ai);
@@ -26322,6 +26325,7 @@ impl CGame {
             appellation_items_consumed,
             ride_ended,
             weak_ended,
+            god_bless_ended,
             agility_state_2_ended,
             hearten_ended = expired_hearten.is_some(),
             cure_ended = expired_cure.is_some(),
@@ -36447,6 +36451,7 @@ impl CGame {
             );
             let concrete_snow_storm = is_snow_storm_target(dispatch);
             let concrete_weak = is_weak_target(dispatch);
+            let concrete_god_bless = is_god_bless_skill(dispatch);
             let concrete_self_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36502,6 +36507,8 @@ impl CGame {
                 execute_player_snow_storm(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_weak {
                 execute_player_weak(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_god_bless {
+                execute_player_god_bless(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_self_shield {
                 execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
@@ -40668,6 +40675,7 @@ impl CGame {
                     continue;
                 }
                 let _ = self.finish_monster_weak_outside(region_id, monster_id);
+                let _ = self.finish_monster_god_bless(region_id, monster_id, now_ms);
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let _ = expire_monster_blind_states(
                         self,
