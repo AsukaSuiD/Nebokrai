@@ -492,6 +492,7 @@ mod godpunishment;
 mod godthunder;
 mod chaossphere;
 mod fireball;
+mod lightingarrow;
 mod thunderblow;
 mod thunderslash;
 mod thunderblow2;
@@ -775,6 +776,12 @@ use crate::gameserver::appserver::skills::archery::{
 };
 use crate::gameserver::appserver::skills::heartlessarrow::{
     execute_player_heartless_arrow, is_heartless_arrow_dispatch,
+};
+use crate::gameserver::appserver::skills::lightingarrow::{
+    execute_player_lighting_arrow, is_lighting_arrow_dispatch,
+};
+use crate::gameserver::appserver::skills::lightingarrowphalanx::{
+    calculate_owned_lighting_arrow_attack, LightingArrowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -33618,6 +33625,8 @@ impl CGame {
                             && changes_command;
                         let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
                             || player.player_ai().archery().is_some()
+                            || player.player_ai().heartless_arrow().is_some()
+                            || player.player_ai().lighting_arrow().is_some()
                             || player.player_ai().agility_family().is_some()
                             || player.player_ai().callosity().is_some()
                             || player.player_ai().ju_cut().is_some()
@@ -34282,6 +34291,8 @@ impl CGame {
             interrupted_little_flash = player.player_ai().little_flash().is_some();
             let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
+                || player.player_ai().heartless_arrow().is_some()
+                || player.player_ai().lighting_arrow().is_some()
                 || player.player_ai().agility_family().is_some()
                 || player.player_ai().callosity().is_some()
                 || player.player_ai().mosou().is_some()
@@ -36948,6 +36959,7 @@ impl CGame {
                 _ => false,
             };
             let concrete_heartless_arrow = is_heartless_arrow_dispatch(dispatch);
+            let concrete_lighting_arrow = is_lighting_arrow_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37057,6 +37069,8 @@ impl CGame {
                 execute_player_archery(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_heartless_arrow {
                 execute_player_heartless_arrow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_lighting_arrow {
+                execute_player_lighting_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
@@ -40068,6 +40082,9 @@ impl CGame {
             SummonedSkillShape::Archery(phalanx) => {
                 calculate_owned_archery_attack(self, phalanx, target_level)
             }
+            SummonedSkillShape::LightingArrow(phalanx) => {
+                calculate_owned_lighting_arrow_attack(self, phalanx, target_level)
+            }
             SummonedSkillShape::BaseMagic(phalanx) => {
                 calculate_owned_base_magic_attack(self, phalanx, target_level)
             }
@@ -40488,6 +40505,7 @@ impl CGame {
         };
         let mut chaos_tick = None;
         let mut fire_ball_tick = None;
+        let mut lighting_arrow_tick = None;
         let tick = owner
             .base_mut()
             .find_skill_phalanx_mut(phalanx_id)
@@ -40501,6 +40519,10 @@ impl CGame {
                         } => Some(Some((target, sampled_at_ms))),
                         ArcheryPhalanxTick::Expired => None,
                     }
+                }
+                SummonedSkillShape::LightingArrow(phalanx) => {
+                    lighting_arrow_tick = Some(phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()));
+                    Some(None)
                 }
                 SummonedSkillShape::BaseMagic(phalanx) => {
                     match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
@@ -40629,6 +40651,21 @@ impl CGame {
         let (Some(mut tick), Some(phalanx)) = (tick, phalanx) else {
             return false;
         };
+        if let (Some(lighting_arrow_tick), SummonedSkillShape::LightingArrow(_)) = (lighting_arrow_tick, &phalanx) {
+            match lighting_arrow_tick {
+                LightingArrowPhalanxTick::Pending => {}
+                LightingArrowPhalanxTick::Active { force_move, cell } => {
+                    if let Some((x, y, duration)) = force_move {
+                        let _ = self.force_move_lighting_arrow(region_id, phalanx_id, x, y, duration);
+                    }
+                    if let Some((x, y, sampled_at_ms)) = cell {
+                        self.apply_lighting_arrow_cell(region_id, phalanx_id, x, y, sampled_at_ms, runtime);
+                    }
+                }
+                LightingArrowPhalanxTick::Expired => {}
+            }
+            return true;
+        }
         if let (Some(fire_ball_tick), SummonedSkillShape::FireBall(fire_ball)) =
             (fire_ball_tick, &phalanx)
         {

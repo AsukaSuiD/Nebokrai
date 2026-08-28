@@ -153,11 +153,16 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, hit_modifier: 
     Some((master, attack))
 }
 
-fn apply_daub_poison(game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity, now_ms: u32) {
-    let Some((level, master, weapon_level)) = game.find_player(player_id).and_then(|player| {
+pub(crate) fn apply_daub_poison(game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity, now_ms: u32) {
+    let Some(master) = game.find_player(player_id).map(master_info) else { return };
+    apply_daub_poison_with_master(game, player_id, master, region_id, target, now_ms);
+}
+
+pub(crate) fn apply_daub_poison_with_master(game: &mut CGame, player_id: i32, master: MasterInfo, region_id: i32, target: ShapeIdentity, now_ms: u32) {
+    let Some((level, weapon_level)) = game.find_player(player_id).and_then(|player| {
         if !player.has_state_by_skill_id(DAUB_POISON_SKILL_ID) { return None; }
         let level = player.learned_skill_level(DAUB_POISON_SKILL_ID);
-        (level != 0).then(|| (level, master_info(player), player.weapon_damage_level(game.goods_factory())))
+        (level != 0).then(|| (level, player.weapon_damage_level(game.goods_factory())))
     }) else { return };
     let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level) else { return };
     let keep_time_ms = properties.query_property(STATE_PERSIST_TIME_MODIFIER);

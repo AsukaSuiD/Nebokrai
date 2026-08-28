@@ -152,6 +152,8 @@ pub(crate) mod appserver {
         pub(crate) mod hearten;
         pub(crate) mod heartenstate;
         pub(crate) mod heartlessarrow;
+        pub(crate) mod lightingarrow;
+        pub(crate) mod lightingarrowphalanx;
         pub(crate) mod heal;
         pub(crate) mod heal2;
         pub(crate) mod healstate;

@@ -9,7 +9,7 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба, бессердечная стрела, семейство ловкости, парная закалка,
+//! стрельба, бессердечная и световая стрелы, семейство ловкости, парная закалка,
 //! воодушевление, управление
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
@@ -55,6 +55,7 @@ use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
 use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
 use crate::gameserver::appserver::skills::heartlessarrow::HeartlessArrowExecutionState;
+use crate::gameserver::appserver::skills::lightingarrow::LightingArrowExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -85,6 +86,8 @@ pub(crate) struct CPlayerAI {
     archery_last_used_ms: u32,
     heartless_arrow: Option<HeartlessArrowExecutionState>,
     heartless_arrow_last_used_ms: u32,
+    lighting_arrow: Option<LightingArrowExecutionState>,
+    lighting_arrow_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -267,6 +270,8 @@ impl CPlayerAI {
         self.player_skills.clear();
         self.base_attack = None;
         self.archery = None;
+        self.heartless_arrow = None;
+        self.lighting_arrow = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -384,6 +389,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.heartless_arrow.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение бессердечной стрелы завершено");
+        }
+        if let Some(mut execution) = self.lighting_arrow.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение световой стрелы завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -625,6 +634,7 @@ impl CPlayerAI {
         self.base_attack = None;
         self.archery = None;
         self.heartless_arrow = None;
+        self.lighting_arrow = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -749,6 +759,11 @@ impl CPlayerAI {
     pub(crate) fn heartless_arrow_mut(&mut self) -> Option<&mut HeartlessArrowExecutionState> { self.heartless_arrow.as_mut() }
     pub(crate) const fn heartless_arrow_last_used_ms(&self) -> u32 { self.heartless_arrow_last_used_ms }
     pub(crate) const fn mark_heartless_arrow_used(&mut self, now_ms: u32) { self.heartless_arrow_last_used_ms = now_ms; }
+    pub(crate) const fn lighting_arrow(&self) -> Option<LightingArrowExecutionState> { self.lighting_arrow }
+    pub(crate) const fn begin_lighting_arrow(&mut self, state: LightingArrowExecutionState) { self.lighting_arrow = Some(state); }
+    pub(crate) fn lighting_arrow_mut(&mut self) -> Option<&mut LightingArrowExecutionState> { self.lighting_arrow.as_mut() }
+    pub(crate) const fn lighting_arrow_last_used_ms(&self) -> u32 { self.lighting_arrow_last_used_ms }
+    pub(crate) const fn mark_lighting_arrow_used(&mut self, now_ms: u32) { self.lighting_arrow_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);
