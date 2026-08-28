@@ -1,112 +1,73 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние подготовки яростного удара `CRageBreakState` (`0x6E`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/ragebreakstate.cpp`. Состояние заменяет предыдущий
+//! экземпляр, строго истекает после `started + keep`, увеличивает только
+//! максимальную атаку и сохраняет исходное округление с границей дробной
+//! части `> 0.5`. Для игрока прибавка сужается до `WORD` и ограничивается
+//! суммой `0xFFFF`; начало и завершение публикуются как `0xBFE03/04`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CRageBreakState::CRageBreakState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp:15
-// RVA: 0x001FD1C0
-// ADDRESS: 005fd1c0
-// PROTOTYPE: undefined __thiscall CRageBreakState(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const RAGE_BREAK_STATE_ID: u32 = 0x6e;
 
-// ============================================================================
-// FUNCTION: CRageBreakState::CRageBreakState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp:26
-// RVA: 0x001FD240
-// ADDRESS: 005fd240
-// PROTOTYPE: undefined __thiscall CRageBreakState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RageBreakState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    attack_gain_percent: i32,
+}
 
-// ============================================================================
-// FUNCTION: CRageBreakState::~CRageBreakState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp:37
-// RVA: 0x001FD2B0
-// ADDRESS: 005fd2b0
-// PROTOTYPE: void __thiscall ~CRageBreakState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl RageBreakState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, attack_gain_percent: i32) -> Self {
+        Self { started_at_ms, keep_time_ms, attack_gain_percent }
+    }
 
-// ============================================================================
-// FUNCTION: CRageBreakState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp:93
-// RVA: 0x001FD2C0
-// ADDRESS: 005fd2c0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn skill_id(self) -> u32 { RAGE_BREAK_STATE_ID }
 
-// ============================================================================
-// FUNCTION: CRageBreakState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp:106
-// RVA: 0x001FD370
-// ADDRESS: 005fd370
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
+    }
 
-// ============================================================================
-// FUNCTION: CRageBreakState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp:83
-// RVA: 0x001FD5C0
-// ADDRESS: 005fd5c0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn remaining_ms(self, now_ms: u32) -> i32 {
+        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
+        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
+    }
 
-// ============================================================================
-// FUNCTION: CRageBreakStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\ragebreakstate.cpp:184
-// RVA: 0x001FD690
-// ADDRESS: 005fd690
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    fn rounded_gain(self, maximum: u32) -> i32 {
+        let scaled = self.attack_gain_percent as f32 * 0.01 * maximum as f32;
+        let truncated = scaled.trunc() as i32;
+        if scaled - truncated as f32 > 0.5 { truncated.wrapping_add(1) } else { truncated }
+    }
 
+    pub(crate) fn apply_to_player_maximum_attack(self, maximum: u32) -> u32 {
+        let mut gain = self.rounded_gain(maximum) as u16 as u32;
+        if maximum.wrapping_add(gain) > u16::MAX as u32 {
+            gain = (u16::MAX as u32).wrapping_sub(maximum);
+        }
+        maximum.wrapping_add(gain).min(i32::MAX as u32)
+    }
+}
 
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn send_rage_break_state_visual(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: RageBreakState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.remaining_ms(now_ms));
+        message.add_long(0);
+    }
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}

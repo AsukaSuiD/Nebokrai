@@ -18,6 +18,9 @@
 //! завершения через унаследованное защитное действие `CBlindState`.
 //! Рыцарский удар хранит здесь единственную каноническую блокировку движения
 //! и боя; замена, истечение и снятие очищением меняют те же счётчики.
+//! Подготовка яростного удара также имеет здесь единственный типизированный
+//! экземпляр: replacement, истечение и потребление `Flash` не касаются
+//! скрытого legacy payload.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
 //! остаются у этого владельца.
@@ -54,6 +57,7 @@ use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
 use crate::gameserver::appserver::skills::healstate::HealState;
 use crate::gameserver::appserver::skills::furystate::FuryState;
+use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
@@ -487,6 +491,7 @@ pub(crate) struct CanonicalStateStorage {
     hearten_state: Option<HeartenState>,
     heal_states: Vec<HealState>,
     fury_states: Vec<FuryState>,
+    rage_break_state: Option<RageBreakState>,
     boss_blue_fury_state: Option<BossBlueFuryState>,
     boss_blue_quake_state: Option<BossBlueQuakeState>,
     cure_state: Option<CureState>,
@@ -696,6 +701,7 @@ impl CMoveShape {
         self.hearten_state = None;
         self.heal_states.clear();
         self.fury_states.clear();
+        self.rage_break_state = None;
         self.boss_blue_fury_state = None;
         self.boss_blue_quake_state = None;
         self.cure_state = None;
@@ -745,6 +751,7 @@ impl CMoveShape {
             || self.state_storage.hearten_state.is_some()
             || !self.state_storage.heal_states.is_empty()
             || !self.state_storage.fury_states.is_empty()
+            || self.state_storage.rage_break_state.is_some()
             || self.state_storage.boss_blue_fury_state.is_some()
             || self.state_storage.cure_state.is_some()
             || self.state_storage.seal_state.is_some()
@@ -889,6 +896,10 @@ impl CMoveShape {
             .iter()
             .filter(|state| state.skill_id() as i32 == state_id)
             .count();
+        let rage_break = usize::from(
+            self.rage_break_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let boss_blue_fury = usize::from(
             self.boss_blue_fury_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -956,6 +967,7 @@ impl CMoveShape {
             .saturating_add(hearten)
             .saturating_add(heal)
             .saturating_add(fury)
+            .saturating_add(rage_break)
             .saturating_add(boss_blue_fury)
             .saturating_add(boss_blue_quake)
             .saturating_add(cure)
@@ -1015,6 +1027,9 @@ impl CMoveShape {
                 .fury_states
                 .iter()
                 .any(|state| state.skill_id() == state_id)
+            || self
+                .rage_break_state
+                .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .boss_blue_fury_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -1241,6 +1256,23 @@ impl CMoveShape {
             }
         }
         expired
+    }
+
+    pub(crate) const fn rage_break_state(&self) -> Option<RageBreakState> {
+        self.state_storage.rage_break_state
+    }
+
+    pub(crate) fn replace_rage_break_state(&mut self, state: RageBreakState) -> Option<RageBreakState> {
+        self.rage_break_state.replace(state)
+    }
+
+    pub(crate) fn take_rage_break_state(&mut self) -> Option<RageBreakState> {
+        self.rage_break_state.take()
+    }
+
+    pub(crate) fn take_expired_rage_break_state(&mut self, now_ms: u32) -> Option<RageBreakState> {
+        self.rage_break_state.filter(|state| state.expired(now_ms))?;
+        self.rage_break_state.take()
     }
 
     pub(crate) fn take_boss_blue_fury_state(&mut self) -> Option<BossBlueFuryState> {

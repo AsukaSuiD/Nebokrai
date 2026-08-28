@@ -4286,6 +4286,28 @@ impl CPlayer {
         self.move_shape.take_heal_states()
     }
 
+    pub(crate) const fn rage_break_state(&self) -> Option<super::skills::ragebreakstate::RageBreakState> {
+        self.move_shape.rage_break_state()
+    }
+
+    pub(crate) fn replace_rage_break_state(
+        &mut self,
+        state: super::skills::ragebreakstate::RageBreakState,
+    ) -> Option<super::skills::ragebreakstate::RageBreakState> {
+        self.move_shape.replace_rage_break_state(state)
+    }
+
+    pub(crate) fn take_rage_break_state(&mut self) -> Option<super::skills::ragebreakstate::RageBreakState> {
+        self.move_shape.take_rage_break_state()
+    }
+
+    pub(crate) fn take_expired_rage_break_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::ragebreakstate::RageBreakState> {
+        self.move_shape.take_expired_rage_break_state(now_ms)
+    }
+
     pub(crate) fn restore_heal_states(
         &mut self,
         states: Vec<super::skills::healstate::HealState>,
@@ -5054,6 +5076,9 @@ impl CPlayer {
                 coefficients,
                 usize::from(self.base_properties.occupation).min(2),
             );
+        }
+        if let Some(state) = self.move_shape.rage_break_state() {
+            properties.maximum_attack = state.apply_to_player_maximum_attack(properties.maximum_attack);
         }
         self.apply_recomputed_combat_properties(properties, goods_factory);
     }

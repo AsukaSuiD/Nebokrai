@@ -4,8 +4,8 @@
 //! повторное использование, пакеты `0xBFE01`, накопление `CFuryState`, порядок
 //! снятия конфликтующих состояний и последующее краткоживущее `CCureState`.
 //! Модуль владеет всей семантикой навыка; общий диспетчер только предоставляет
-//! владельца региона. Ветвь игрока и ещё не типизированный `CRageBreakState`
-//! сохранены ниже как частично достигнутый исходный материал.
+//! владельца региона. Ветвь игрока с уже типизированным `CRageBreakState`
+//! сохранена ниже как ещё не достигнутый исходный материал.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -120,7 +120,7 @@
 // FUNCTION: CFury::AI
 // STATUS: PARTIALLY_IMPLEMENTED
 // Полная достигнутая ветвь монстра находится в `execute_owned_fury`.
-// Ветвь игрока и снятие ещё не типизированного `CRageBreakState` сохранены.
+// Ветвь игрока и снятие типизированного `CRageBreakState` ещё не подключены.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fury.cpp:175

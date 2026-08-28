@@ -816,6 +816,9 @@ use crate::gameserver::appserver::skills::mosou::{execute_player_mosou, is_mosou
 use crate::gameserver::appserver::skills::ghostcut::{execute_player_ghost_cut, is_ghost_cut_dispatch};
 use crate::gameserver::appserver::skills::knightcut::{execute_player_knight_cut, is_knight_cut_dispatch};
 use crate::gameserver::appserver::skills::armybreak::{execute_player_army_break, is_army_break_dispatch};
+use crate::gameserver::appserver::skills::ragebreak::{execute_player_rage_break, is_rage_break_dispatch};
+use crate::gameserver::appserver::skills::flash::{execute_player_flash, is_flash_dispatch};
+use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
 };
@@ -26281,6 +26284,25 @@ impl CGame {
         let _ = expire_player_blind_states(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
+        let rage_break_context = self.find_player(player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.shape().identity(),
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+            ))
+        });
+        let expired_rage_break = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.take_expired_rage_break_state(now_ms));
+        if let (Some(state), Some((region_id, identity, tile_x, tile_y))) =
+            (expired_rage_break, rage_break_context)
+        {
+            send_rage_break_state_visual(
+                self, region_id, identity, tile_x, tile_y, state, false, now_ms,
+            );
+            let _ = self.update_player_properties(player_id, runtime);
+        }
         let weak_ended = self.finish_player_weak_outside(player_id, runtime);
         let god_bless_ended = self.finish_player_god_bless(player_id, now_ms, runtime);
         let expired_cure = self
@@ -33930,6 +33952,8 @@ impl CGame {
                 || player.player_ai().ghost_cut().is_some()
                 || player.player_ai().knight_cut().is_some()
                 || player.player_ai().army_break().is_some()
+                || player.player_ai().rage_break().is_some()
+                || player.player_ai().flash().is_some()
                 || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -36466,6 +36490,8 @@ impl CGame {
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
             let concrete_knight_cut = is_knight_cut_dispatch(dispatch);
             let concrete_army_break = is_army_break_dispatch(dispatch);
+            let concrete_rage_break = is_rage_break_dispatch(dispatch);
+            let concrete_flash = is_flash_dispatch(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
@@ -36606,6 +36632,10 @@ impl CGame {
                 execute_player_knight_cut(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_army_break {
                 execute_player_army_break(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_rage_break {
+                execute_player_rage_break(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_flash {
+                execute_player_flash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_infernol {

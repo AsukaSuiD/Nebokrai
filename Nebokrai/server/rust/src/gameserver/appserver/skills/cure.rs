@@ -232,7 +232,7 @@ fn finish_monster_curable_state(
     true
 }
 
-fn finish_curable_state(game: &mut CGame, region_id: i32, target: ShapeIdentity, state_id: u32, now_ms: u32) -> bool {
+pub(crate) fn finish_curable_state(game: &mut CGame, region_id: i32, target: ShapeIdentity, state_id: u32, now_ms: u32) -> bool {
     match (target.object_type, state_id) {
         (PLAYER_TYPE, SPIDER_POISON_SKILL_ID) => finish_player_spider_poison_state_on_cure(game, target.id, now_ms),
         (PLAYER_TYPE, SPIDER_WEB_SKILL_ID) => finish_player_spider_web_state_on_defense(game, target.id, now_ms),

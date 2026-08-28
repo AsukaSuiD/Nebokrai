@@ -14,7 +14,7 @@
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
 //! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
-//! а также рыцарский удар,
+//! рыцарский удар, подготовка яростного удара и последующий рывок,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -39,6 +39,7 @@ use crate::gameserver::appserver::skills::agility::{
 use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::armybreak::{ARMY_BREAK_SKILL_ID, ArmyBreakExecutionState};
 use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
+use crate::gameserver::appserver::skills::flash::FlashExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
@@ -96,6 +97,10 @@ pub(crate) struct CPlayerAI {
     knight_cut_last_used_ms: u32,
     army_break: Option<ArmyBreakExecutionState>,
     army_break_last_used_ms: [u32; 2],
+    rage_break: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    rage_break_last_used_ms: u32,
+    flash: Option<FlashExecutionState>,
+    flash_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -232,6 +237,8 @@ impl CPlayerAI {
         self.ghost_cut = None;
         self.knight_cut = None;
         self.army_break = None;
+        self.rage_break = None;
+        self.flash = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -360,6 +367,14 @@ impl CPlayerAI {
         if let Some(mut execution) = self.army_break.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение армейского удара завершено");
+        }
+        if let Some(mut execution) = self.rage_break.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение подготовки яростного удара завершено");
+        }
+        if let Some(mut execution) = self.flash.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рывка сквозь строй завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -502,6 +517,8 @@ impl CPlayerAI {
         self.ghost_cut = None;
         self.knight_cut = None;
         self.army_break = None;
+        self.rage_break = None;
+        self.flash = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -728,6 +745,16 @@ impl CPlayerAI {
     const fn army_break_index(skill_id: u32) -> usize { match skill_id { ARMY_BREAK_SKILL_ID => 0, ARMY_BREAK_2_SKILL_ID => 1, _ => unreachable!() } }
     pub(crate) const fn army_break_last_used_ms(&self, skill_id: u32) -> u32 { self.army_break_last_used_ms[Self::army_break_index(skill_id)] }
     pub(crate) fn mark_army_break_used(&mut self, skill_id: u32, now_ms: u32) { self.army_break_last_used_ms[Self::army_break_index(skill_id)] = now_ms; }
+    pub(crate) const fn rage_break(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.rage_break }
+    pub(crate) const fn begin_rage_break(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.rage_break = Some(state); }
+    pub(crate) fn rage_break_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rage_break.as_mut() }
+    pub(crate) const fn rage_break_last_used_ms(&self) -> u32 { self.rage_break_last_used_ms }
+    pub(crate) const fn mark_rage_break_used(&mut self, now_ms: u32) { self.rage_break_last_used_ms = now_ms; }
+    pub(crate) const fn flash(&self) -> Option<&FlashExecutionState> { self.flash.as_ref() }
+    pub(crate) fn begin_flash(&mut self, state: FlashExecutionState) { self.flash = Some(state); }
+    pub(crate) fn flash_mut(&mut self) -> Option<&mut FlashExecutionState> { self.flash.as_mut() }
+    pub(crate) const fn flash_last_used_ms(&self) -> u32 { self.flash_last_used_ms }
+    pub(crate) const fn mark_flash_used(&mut self, now_ms: u32) { self.flash_last_used_ms = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall
