@@ -62,6 +62,7 @@ use crate::gameserver::appserver::skills::heartlessarrow2::{
 };
 use crate::gameserver::appserver::skills::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
 use crate::gameserver::appserver::skills::lightingarrow::LightingArrowExecutionState;
+use crate::gameserver::appserver::skills::lightingarrow2::LightingArrow2ExecutionState;
 use crate::gameserver::appserver::skills::meteorarrowmass::MeteorArrowMassExecutionState;
 use crate::gameserver::appserver::skills::meteorarrow::MeteorArrowExecutionState;
 use crate::gameserver::appserver::skills::rainarrow::RainArrowExecutionState;
@@ -109,6 +110,8 @@ pub(crate) struct CPlayerAI {
     heartless_arrow_area_last_used_ms: [u32; 2],
     lighting_arrow: Option<LightingArrowExecutionState>,
     lighting_arrow_last_used_ms: u32,
+    lighting_arrow_2: Option<LightingArrow2ExecutionState>,
+    lighting_arrow_2_last_used_ms: u32,
     meteor_arrow_mass: Option<MeteorArrowMassExecutionState>,
     meteor_arrow_mass_last_used_ms: u32,
     meteor_arrow: Option<MeteorArrowExecutionState>,
@@ -318,6 +321,7 @@ impl CPlayerAI {
         self.heartless_arrow = None;
         self.heartless_arrow_area = None;
         self.lighting_arrow = None;
+        self.lighting_arrow_2 = None;
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
         self.rain_arrow = None;
@@ -455,6 +459,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.lighting_arrow.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение световой стрелы завершено");
+        }
+        if let Some(mut execution) = self.lighting_arrow_2.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение второй световой стрелы завершено");
         }
         if let Some(mut execution) = self.meteor_arrow_mass.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -746,6 +754,7 @@ impl CPlayerAI {
         self.heartless_arrow = None;
         self.heartless_arrow_area = None;
         self.lighting_arrow = None;
+        self.lighting_arrow_2 = None;
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
         self.rain_arrow = None;
@@ -899,6 +908,11 @@ impl CPlayerAI {
     pub(crate) fn lighting_arrow_mut(&mut self) -> Option<&mut LightingArrowExecutionState> { self.lighting_arrow.as_mut() }
     pub(crate) const fn lighting_arrow_last_used_ms(&self) -> u32 { self.lighting_arrow_last_used_ms }
     pub(crate) const fn mark_lighting_arrow_used(&mut self, now_ms: u32) { self.lighting_arrow_last_used_ms = now_ms; }
+    pub(crate) fn lighting_arrow_2(&self) -> Option<&LightingArrow2ExecutionState> { self.lighting_arrow_2.as_ref() }
+    pub(crate) fn begin_lighting_arrow_2(&mut self, state: LightingArrow2ExecutionState) { self.lighting_arrow_2 = Some(state); }
+    pub(crate) fn lighting_arrow_2_mut(&mut self) -> Option<&mut LightingArrow2ExecutionState> { self.lighting_arrow_2.as_mut() }
+    pub(crate) const fn lighting_arrow_2_last_used_ms(&self) -> u32 { self.lighting_arrow_2_last_used_ms }
+    pub(crate) const fn mark_lighting_arrow_2_used(&mut self, now_ms: u32) { self.lighting_arrow_2_last_used_ms = now_ms; }
     pub(crate) const fn meteor_arrow_mass(&self) -> Option<MeteorArrowMassExecutionState> { self.meteor_arrow_mass }
     pub(crate) const fn begin_meteor_arrow_mass(&mut self, state: MeteorArrowMassExecutionState) { self.meteor_arrow_mass = Some(state); }
     pub(crate) fn meteor_arrow_mass_mut(&mut self) -> Option<&mut MeteorArrowMassExecutionState> { self.meteor_arrow_mass.as_mut() }

@@ -1,195 +1,130 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Клеточный полёт `CLightingArrow2` (`0xE7`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/lightingarrow2.cpp`. Навык после общей задержки сохраняет
+//! путь и обрабатывает не более одной клетки за проход `CPlayerAI`. Первая
+//! непролётная клетка не атакуется; уже задетая фигура повторно не выбирается.
+//! Урон использует текущие свойства стрелка и ровно два собственных RNG-вызова,
+//! а активный яд оружия применяется после основного `OnBeenAttacked`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
+use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::heartlessarrow::apply_daub_poison;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::poisonmoth::{cell_targets, master_info, target_level, target_position};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{GAP_WEAPON_CATEGORY, GAP_WEAPON_DAMAGE_LEVEL};
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::nets::netserver::message::CMessage;
+use crate::public::tools::get_line_direction;
 
-// ============================================================================
-// FUNCTION: CLightingArrow2Effect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:820
-// RVA: 0x0014BAD0
-// ADDRESS: 0054bad0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const LIGHTING_ARROW_2_SKILL_ID: u32 = 0xe7;
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
+const USER_MP_LOSE: u32 = 2;
+const TARGET_MAX_DISTANCE: u32 = 5_003;
+const MISSILE_FLYING_TIME: u32 = 10_008;
+const TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
-// ============================================================================
-// FUNCTION: CLightingArrow2::~CLightingArrow2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:35
-// RVA: 0x0014C060
-// ADDRESS: 0054c060
-// PROTOTYPE: void __thiscall ~CLightingArrow2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LightingArrow2ExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    destination: (i32, i32),
+    condition_checked: bool,
+    attacking_started: bool,
+    path: Vec<(i32, i32, u8)>,
+    attack_cell_count: usize,
+    current_cell: usize,
+    attacked_creatures: Vec<ShapeIdentity>,
+}
 
-// ============================================================================
-// FUNCTION: CLightingArrow2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:174
-// RVA: 0x0014C0F0
-// ADDRESS: 0054c0f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl LightingArrow2ExecutionState {
+    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination, condition_checked: false, attacking_started: false, path: Vec::new(), attack_cell_count: 0, current_cell: 0, attacked_creatures: Vec::new() }
+    }
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+}
 
-// ============================================================================
-// FUNCTION: CLightingArrow2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:197
-// RVA: 0x0014C1F0
-// ADDRESS: 0054c1f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
+fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3) }
+fn target_is_dead(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> bool {
+    match dispatch {
+        PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
+        PlayerSkillDispatch::Object { target, .. } if target.object_type == MONSTER_TYPE => game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(target.id)).is_none_or(|target: &CMonster| target.hit_points() == 0),
+        PlayerSkillDispatch::Object { .. } => true,
+        _ => false,
+    }
+}
+fn failure(game: &CGame, player_id: i32, action: u8, mp_loss: u32) {
+    game.send_base_magic_failure(player_id, action);
+    match action { 7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss), 0x0b => game.send_skill_system_info(player_id, b"GS0290"), 0x0d => game.send_skill_system_info(player_id, b"GS0278"), 0x0e => game.send_skill_system_info(player_id, b"GS0297"), 10 => game.send_skill_system_info(player_id, b"GS0285"), _ => {} }
+}
+fn send_start(game: &mut CGame, player_id: i32, level: i32) {
+    let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE); message.add_byte(1); message.add_long(LIGHTING_ARROW_2_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); let _ = game.send_player_shape_around(player_id, None, &message);
+}
+fn send_broken(game: &mut CGame, player_id: i32, level: i32) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+    message.add_byte(3);
+    message.add_long(LIGHTING_ARROW_2_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(player.shape().get_direction());
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+fn send_fire(game: &mut CGame, player_id: i32, level: i32, dispatch: PlayerSkillDispatch, destination: (i32, i32), missile_time_ms: u32) {
+    let target = match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None }; let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE); message.add_byte(2); message.add_long(LIGHTING_ARROW_2_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(target.map_or(0, |value| value.object_type)); message.add_long(target.map_or(0, |value| value.id)); message.add_long(destination.0); message.add_long(destination.1); message.add_ulong(missile_time_ms); let _ = game.send_player_shape_around(player_id, None, &message);
+}
+pub(crate) const fn is_lighting_arrow_2_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Point { skill_id: LIGHTING_ARROW_2_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: LIGHTING_ARROW_2_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }) }
 
-// ============================================================================
-// FUNCTION: CLightingArrow2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:219
-// RVA: 0x0014C300
-// ADDRESS: 0054c300
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i32, factor: u32, hit: i32) -> Option<(MasterInfo, AttackInformation)> {
+    let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let weapon_level = player.equipment().get_goods(2).map_or(0, |weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)); let (divisor, floor) = game.globe_setup().weapon_damage_factors(); let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0); let weapon_factor = (if divisor == 0.0 { 1.0 } else { delta as f32 / divisor }).min(1.0).max(floor); let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
+    let mut attack = AttackInformation { skill_id: LIGHTING_ARROW_2_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
+    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } }
+    Some((master, attack))
+}
 
-// ============================================================================
-// FUNCTION: CLightingArrow2::CLightingArrow2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:23
-// RVA: 0x0014C430
-// ADDRESS: 0054c430
-// PROTOTYPE: undefined __thiscall CLightingArrow2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной клеточной атаки")]
+fn attack_cell<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, level: i32, factor: u32, hit: i32, x: i32, y: i32, attacked: &mut Vec<ShapeIdentity>, runtime: &mut Runtime) {
+    if x == 0 && y == 0 { return } let Some(master) = game.find_player(player_id).map(master_info) else { return };
+    for target in cell_targets(game, region_id, x, y) {
+        if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || attacked.contains(&target) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue }
+        attacked.push(target); let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, factor, hit) else { continue };
+        match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} }
+        apply_daub_poison(game, player_id, region_id, target, runtime.now_milliseconds());
+    }
+}
 
-// ============================================================================
-// FUNCTION: CLightingArrow2::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:48
-// RVA: 0x0014C4C0
-// ADDRESS: 0054c4c0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLightingArrow2::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:656
-// RVA: 0x0014C820
-// ADDRESS: 0054c820
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLightingArrow2::AddPoisonState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:731
-// RVA: 0x0014CAB0
-// ADDRESS: 0054cab0
-// PROTOTYPE: void __thiscall AddPoisonState(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLightingArrow2::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:613
-// RVA: 0x0014CD50
-// ADDRESS: 0054cd50
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLightingArrow2::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:584
-// RVA: 0x0014CEA0
-// ADDRESS: 0054cea0
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLightingArrow2::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightingarrow2.cpp:260
-// RVA: 0x0014CFB0
-// ADDRESS: 0054cfb0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_lighting_arrow_2_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(LIGHTING_ARROW_2_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(LIGHTING_ARROW_2_SKILL_ID, level) else { if ai.lighting_arrow_2().is_some() { finish(game, player_id) } return terminal(QueuedSkillExecutionState::Rejected) };
+    let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_time = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    if ai.lighting_arrow_2().is_none() {
+        let Some(destination) = target_position(game, region_id, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) }; let now = runtime.now_milliseconds();
+        if ai.lighting_arrow_2_last_used_ms() != 0 && !time_reached(now, ai.lighting_arrow_2_last_used_ms(), reuse) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { failure(game, player_id, 0x0b, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if let Some(player) = game.find_player_mut(player_id) { if mp_loss != 0 { player.set_skill_moveable(false) } player.set_current_skill_id(Some(LIGHTING_ARROW_2_SKILL_ID)); }
+        ai.begin_lighting_arrow_2(LightingArrow2ExecutionState::begin(dispatch, destination, now));
+    } else if ai.lighting_arrow_2().is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+    let destination = target_position(game, region_id, player_id, dispatch).unwrap_or_else(|| ai.lighting_arrow_2().map(|state| state.destination).unwrap_or_default()); if target_is_dead(game, region_id, dispatch) { failure(game, player_id, 10, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    if ai.lighting_arrow_2().is_some_and(|state| !state.condition_checked) {
+        let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_valid(game, player)) { failure(game, player_id, 0x0e, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } send_start(game, player_id, level); if let Some(state) = ai.lighting_arrow_2_mut() { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+    }
+    let started = ai.lighting_arrow_2().map(|state| state.kernel().started_at_ms()).unwrap_or_default();
+    if ai.lighting_arrow_2().is_some_and(|state| !state.attacking_started) {
+        if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true) } let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, Some(maximum)); if path.is_empty() { send_broken(game, player_id, level); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if maximum != 0 && path.len() > maximum.wrapping_add(1) as usize { failure(game, player_id, 0x0b, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let count = path.iter().position(|cell| cell.2 == 2).unwrap_or(path.len()); let endpoint = path.get(count).or_else(|| path.last()).copied().unwrap_or((destination.0, destination.1, 2)); let visual_destination = if matches!(dispatch, PlayerSkillDispatch::Object { .. }) { destination } else { (endpoint.0, endpoint.1) }; send_fire(game, player_id, level, dispatch, visual_destination, missile_time); if let Some(state) = ai.lighting_arrow_2_mut() { state.path = path; state.attack_cell_count = count; state.current_cell = 0; state.attacking_started = true; let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
+    }
+    let Some((current, count, cell)) = ai.lighting_arrow_2().map(|state| (state.current_cell, state.attack_cell_count, state.path.get(state.current_cell).copied())) else { return terminal(QueuedSkillExecutionState::Rejected) }; if current >= count { if let Some(state) = ai.lighting_arrow_2_mut() { let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); } ai.mark_lighting_arrow_2_used(runtime.now_milliseconds()); finish(game, player_id); return terminal(QueuedSkillExecutionState::Completed) } if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(missile_time.wrapping_mul(current as u32))) { return terminal(QueuedSkillExecutionState::Pending) }
+    if let Some((x, y, _)) = cell { let mut attacked = ai.lighting_arrow_2_mut().map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default(); attack_cell(game, player_id, region_id, level, factor, hit, x, y, &mut attacked, runtime); if let Some(state) = ai.lighting_arrow_2_mut() { state.attacked_creatures = attacked; state.current_cell = state.current_cell.wrapping_add(1); } }
+    terminal(QueuedSkillExecutionState::Pending)
+}

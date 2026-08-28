@@ -790,6 +790,9 @@ use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
 use crate::gameserver::appserver::skills::lightingarrow::{
     execute_player_lighting_arrow, is_lighting_arrow_dispatch,
 };
+use crate::gameserver::appserver::skills::lightingarrow2::{
+    execute_player_lighting_arrow_2, is_lighting_arrow_2_dispatch,
+};
 use crate::gameserver::appserver::skills::lightingarrowphalanx::{
     calculate_owned_lighting_arrow_attack, LightingArrowPhalanxTick,
 };
@@ -33666,6 +33669,7 @@ impl CGame {
                             || player.player_ai().heartless_arrow().is_some()
                             || player.player_ai().heartless_arrow_area().is_some()
                             || player.player_ai().lighting_arrow().is_some()
+                            || player.player_ai().lighting_arrow_2().is_some()
                             || player.player_ai().meteor_arrow_mass().is_some()
                             || player.player_ai().meteor_arrow().is_some()
                             || player.player_ai().rain_arrow().is_some()
@@ -34343,6 +34347,7 @@ impl CGame {
                 || player.player_ai().heartless_arrow().is_some()
                 || player.player_ai().heartless_arrow_area().is_some()
                 || player.player_ai().lighting_arrow().is_some()
+                || player.player_ai().lighting_arrow_2().is_some()
                 || player.player_ai().meteor_arrow_mass().is_some()
                 || player.player_ai().meteor_arrow().is_some()
                 || player.player_ai().rain_arrow().is_some()
@@ -37044,6 +37049,7 @@ impl CGame {
             let concrete_heartless_arrow = is_heartless_arrow_dispatch(dispatch);
             let concrete_heartless_arrow_area = is_heartless_arrow_area_dispatch(dispatch);
             let concrete_lighting_arrow = is_lighting_arrow_dispatch(dispatch);
+            let concrete_lighting_arrow_2 = is_lighting_arrow_2_dispatch(dispatch);
             let concrete_meteor_arrow_mass = is_meteor_arrow_mass_dispatch(dispatch);
             let concrete_meteor_arrow = is_meteor_arrow_dispatch(dispatch);
             let concrete_rain_arrow = is_rain_arrow_dispatch(dispatch);
@@ -37169,6 +37175,8 @@ impl CGame {
                 execute_player_heartless_arrow_area(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lighting_arrow {
                 execute_player_lighting_arrow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_lighting_arrow_2 {
+                execute_player_lighting_arrow_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_meteor_arrow_mass {
                 execute_player_meteor_arrow_mass(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_meteor_arrow {
