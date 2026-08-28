@@ -63,6 +63,7 @@ use super::monsterrangeattack::{
     MONSTER_RANGE_ATTACK_SKILL_ID, MonsterRangeAttackDispatch,
     prepare_owned_monster_range_cast,
 };
+use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -150,6 +151,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_FAST_ATTACK_SKILL_ID
             | MONSTER_RANGE_ATTACK_SKILL_ID
+            | MONSTER_THORN_SKILL_ID
     ) {
         return false;
     }
@@ -277,6 +279,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let now_ms = runtime.now_milliseconds();
+    if skill_id == MONSTER_THORN_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_monster_thorn(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
+            deaths,
+        );
+    }
     if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID && cast.is_some() {
         let skill_properties = skill_properties.clone();
         return prepare_owned_monster_range_cast(

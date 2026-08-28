@@ -163,7 +163,7 @@ use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBasePropert
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::skills::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit,
-    defend_owned_monster_attack, monster_attackable_by_monster,
+    defend_owned_monster_attack, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -400,52 +400,15 @@ pub(crate) fn execute_owned_monster_range_target<Runtime: GameMainLoopRuntime>(
     if target.dead || target.god || target.city_dead {
         return false;
     }
-    let attackable = if identity.object_type == PLAYER_TYPE {
-        if dispatch.attacker_tamed
-            && dispatch.attacker_master.master_type == PLAYER_TYPE
-            && dispatch.attacker_master.master_id != 0
-        {
-            if let Some((string_id, limit)) = game.player_base_attack_level_block(
-                dispatch.attacker_master.master_id,
-                identity.id,
-            ) {
-                game.send_base_attack_level_block(
-                    dispatch.attacker_master.master_id,
-                    string_id,
-                    limit,
-                );
-                false
-            } else {
-                game.player_base_attackable(dispatch.attacker_master.master_id, identity.id)
-            }
-        } else if dispatch.property.kind == 5 {
-            game.guard_monster_attackable(identity.id, region.id, &dispatch.property)
-        } else {
-            true
-        }
-    } else if target.carriage {
-        game.carriage_attackable_by_monster(
-            &dispatch.property,
-            dispatch.attacker_tamed,
-            dispatch.attacker_master,
-            target.master.unwrap_or_default(),
-            region.id,
-        )
-    } else {
-        target.monster_property.as_ref().is_some_and(|target_property| {
-            monster_attackable_by_monster(
-                game,
-                &dispatch.property,
-                dispatch.attacker_tamed,
-                dispatch.attacker_master,
-                target_property,
-                target.tamed,
-                target.master.unwrap_or_default(),
-                region.id,
-            )
-        })
-    };
-    if !attackable {
+    if !owned_monster_attackable(
+        game,
+        region.id,
+        &dispatch.property,
+        dispatch.attacker_tamed,
+        dispatch.attacker_master,
+        identity,
+        &target,
+    ) {
         return false;
     }
     let mut random = |maximum| game.skill_random_below(maximum);

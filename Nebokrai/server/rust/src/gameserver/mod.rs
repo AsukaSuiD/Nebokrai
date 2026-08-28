@@ -107,6 +107,7 @@ pub(crate) mod appserver {
         pub(crate) mod monsterfastattack;
         pub(crate) mod monsterrangeattack;
         pub(crate) mod monstertaming;
+        pub(crate) mod monsterthorn;
         pub(crate) mod natural;
         pub(crate) mod origin;
         pub(crate) mod originstate;

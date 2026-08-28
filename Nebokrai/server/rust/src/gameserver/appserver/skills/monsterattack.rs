@@ -158,6 +158,57 @@ pub(crate) fn monster_attackable_by_monster(
     attacker_tamed || attacker_property.kind == 5
 }
 
+/// Применяет исходную `CMonster::IsAttackAble` к уже разрешённой цели. Проверка
+/// уровня хозяев питомцев сохраняет немедленное клиентское уведомление.
+#[allow(clippy::too_many_arguments, reason = "аргументы задают владельца и разрешённую цель без параллельного снимка")]
+pub(crate) fn owned_monster_attackable(
+    game: &CGame,
+    region_id: i32,
+    attacker_property: &MonsterProperties,
+    attacker_tamed: bool,
+    attacker_master: MasterInfo,
+    target_identity: ShapeIdentity,
+    target: &OwnedMonsterAttackTarget,
+) -> bool {
+    if target_identity.object_type == PLAYER_TYPE {
+        if attacker_tamed
+            && attacker_master.master_type == PLAYER_TYPE
+            && attacker_master.master_id != 0
+        {
+            if let Some((string_id, limit)) =
+                game.player_base_attack_level_block(attacker_master.master_id, target_identity.id)
+            {
+                game.send_base_attack_level_block(attacker_master.master_id, string_id, limit);
+                return false;
+            }
+            return game.player_base_attackable(attacker_master.master_id, target_identity.id);
+        }
+        return attacker_property.kind != 5
+            || game.guard_monster_attackable(target_identity.id, region_id, attacker_property);
+    }
+    if target.carriage {
+        return game.carriage_attackable_by_monster(
+            attacker_property,
+            attacker_tamed,
+            attacker_master,
+            target.master.unwrap_or_default(),
+            region_id,
+        );
+    }
+    target.monster_property.as_ref().is_some_and(|property| {
+        monster_attackable_by_monster(
+            game,
+            attacker_property,
+            attacker_tamed,
+            attacker_master,
+            property,
+            target.tamed,
+            target.master.unwrap_or_default(),
+            region_id,
+        )
+    })
+}
+
 #[allow(clippy::too_many_arguments, reason = "поля сохраняют атомарный снимок цели исходного OnBeenAttacked")]
 pub(crate) fn defend_owned_monster_attack(
     game: &mut CGame,
