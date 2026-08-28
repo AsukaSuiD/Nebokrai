@@ -787,8 +787,8 @@ use crate::gameserver::appserver::skills::fightdefense::{
 use crate::gameserver::appserver::skills::furystate::expire_monster_fury_states;
 use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
 use crate::gameserver::appserver::skills::machinerystomp::{
-    execute_owned_machinery_stomp_target, finish_owned_machinery_stomp,
-    machinery_stomp_cell_candidates,
+    execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
+    wide_arc_attack_cell_candidates,
 };
 use crate::gameserver::appserver::skills::monsterattack::{
     MonsterAttackDeath, monster_attack_cell_candidates,
@@ -34847,7 +34847,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7`,
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f6`,
     /// включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
@@ -34865,7 +34865,7 @@ impl CGame {
         };
         let mut deaths = Vec::new();
         let mut range_dispatch = None;
-        let mut machinery_dispatch = None;
+        let mut wide_arc_dispatch = None;
         let mut projectile_dispatch = None;
         let handled = execute_owned_monster_base_attack(
             self,
@@ -34874,7 +34874,7 @@ impl CGame {
             runtime,
             &mut deaths,
             &mut range_dispatch,
-            &mut machinery_dispatch,
+            &mut wide_arc_dispatch,
             &mut projectile_dispatch,
         );
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
@@ -34882,12 +34882,12 @@ impl CGame {
         }
         self.restore_region_owner(owner);
         self.apply_monster_attack_deaths(region_id, deaths, runtime);
-        if let Some(dispatch) = machinery_dispatch {
+        if let Some(dispatch) = wide_arc_dispatch {
             'cells: for (tile_x, tile_y) in dispatch.cells.iter().copied() {
                 let Some(owner) = self.take_region_owner(region_id) else {
                     break 'cells;
                 };
-                let candidates = machinery_stomp_cell_candidates(
+                let candidates = wide_arc_attack_cell_candidates(
                     self,
                     owner.base(),
                     &dispatch,
@@ -34900,7 +34900,7 @@ impl CGame {
                         break 'cells;
                     };
                     let mut deaths = Vec::new();
-                    let applied = execute_owned_machinery_stomp_target(
+                    let applied = execute_owned_wide_arc_attack_target(
                         self,
                         owner.base_mut(),
                         &dispatch,
@@ -34915,7 +34915,7 @@ impl CGame {
                 }
             }
             if let Some(mut owner) = self.take_region_owner(region_id) {
-                finish_owned_machinery_stomp(owner.base_mut(), &dispatch);
+                finish_owned_wide_arc_attack(owner.base_mut(), &dispatch);
                 self.restore_region_owner(owner);
             }
         }

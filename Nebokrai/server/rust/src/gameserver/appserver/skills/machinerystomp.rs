@@ -2,11 +2,15 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/machinerystomp.cpp`. Точечная проверка EXE подтвердила
-//! отдельные globals этого owner-а: полную маску `5×5`, `g_dwBesideCells == 3`
+//! отдельные глобальные данные этого владельца: полную маску `5×5`,
+//! `g_dwBesideCells == 3`
 //! и адреса `0x006A16C8..0x006A16EC`. После основной площади навык обходит две
 //! трёхклеточные дуги вокруг исходной цели; каждая допустимая цель отдельно
-//! потребляет physical и critical RNG. `CGame` только чередует владельца региона
-//! с немедленными последствиями смерти. Варианты игрока остаются RAW ниже.
+//! потребляет вызовы RNG для физического урона и критического удара. `CGame`
+//! только чередует владельца региона
+//! с немедленными последствиями смерти. Совпадающий `CLordWiderangingAttack`
+//! использует тот же узкий семейный путь исполнения с собственным ID. Варианты игрока
+//! остаются RAW ниже.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -47,7 +51,7 @@
 // FUNCTION: CMachineryStomp::Begin
 // STATUS: PARTIALLY_IMPLEMENTED
 // Объектный вход монстра материализован `prepare_owned_machinery_stomp`;
-// координатные и player-варианты остаются в телах ниже.
+// координатные варианты и варианты игрока остаются в телах ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:141
@@ -106,8 +110,8 @@
 // ============================================================================
 // FUNCTION: CMachineryStomp::CheckCastCondition
 // STATUS: PARTIALLY_IMPLEMENTED
-// Cooldown, дальность, `BLOCK_UNFLY` и блокировка движения достигнутого
-// monster-входа выполняются `prepare_owned_machinery_stomp`.
+// Перезарядка, дальность, `BLOCK_UNFLY` и блокировка движения для достигнутого
+// входа монстра выполняются `prepare_owned_machinery_stomp`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:45
@@ -137,7 +141,7 @@
 // ============================================================================
 // FUNCTION: CMachineryStomp::CalculateAttackPower
 // STATUS: PARTIALLY_IMPLEMENTED
-// Monster-формула и оба RNG-вызова реализованы `machinery_stomp_attack`;
+// Формула монстра и оба вызова RNG реализованы `wide_arc_attack`;
 // свойства игрока остаются в исходном теле.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -153,8 +157,8 @@
 // ============================================================================
 // FUNCTION: CMachineryStomp::Attack
 // STATUS: PARTIALLY_IMPLEMENTED
-// Monster-цель проходит `execute_owned_machinery_stomp_target`; player-source
-// и его permission-снимок остаются в теле ниже.
+// Цель-монстр проходит `execute_owned_wide_arc_attack_target`; источник-игрок
+// и снимок его разрешений остаются в теле ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:545
@@ -169,8 +173,8 @@
 // ============================================================================
 // FUNCTION: CMachineryStomp::AI
 // STATUS: PARTIALLY_IMPLEMENTED
-// Стадии monster-cast, точный порядок клеток и завершение материализованы
-// production-вызовами ниже; player-вход остаётся RAW.
+// Стадии выполнения монстра, точный порядок клеток и завершение материализованы
+// рабочими вызовами ниже; вход игрока остаётся RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:194
@@ -228,10 +232,16 @@ const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
 pub(crate) const MACHINERY_STOMP_SKILL_ID: u32 = 0x1a7;
 
-fn send_start(game: &CGame, region: &CServerRegion, source: &CShape, skill_level: u16) {
+fn send_start(
+    game: &CGame,
+    region: &CServerRegion,
+    source: &CShape,
+    skill_id: u32,
+    skill_level: u16,
+) {
     let mut message = CMessage::new(0x000b_fe01);
     message.add_byte(1);
-    message.add_long(MACHINERY_STOMP_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(skill_level as i16);
     message.add_long(MONSTER_TYPE);
     message.add_long(source.identity().id);
@@ -244,6 +254,7 @@ fn send_fire(
     region: &CServerRegion,
     source: &CShape,
     target: &CShape,
+    skill_id: u32,
     skill_level: u16,
 ) {
     let (Ok(target_x), Ok(target_y)) = (target.get_tile_x(), target.get_tile_y()) else {
@@ -251,7 +262,7 @@ fn send_fire(
     };
     let mut message = CMessage::new(0x000b_fe01);
     message.add_byte(2);
-    message.add_long(MACHINERY_STOMP_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(skill_level as i16);
     message.add_long(MONSTER_TYPE);
     message.add_long(source.identity().id);
@@ -348,9 +359,10 @@ fn outside_cells(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct MachineryStompDispatch {
+pub(crate) struct WideArcAttackDispatch {
     pub(crate) monster_id: i32,
     pub(crate) cells: Vec<(i32, i32)>,
+    skill_id: u32,
     skill_level: u16,
     properties: CSkillBaseProperties,
     property: MonsterProperties,
@@ -361,16 +373,17 @@ pub(crate) struct MachineryStompDispatch {
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель выбора ИИ и текущий такт")]
-pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
+pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     target_identity: ShapeIdentity,
+    skill_id: u32,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
     _runtime: &mut Runtime,
-    dispatch: &mut Option<MachineryStompDispatch>,
+    dispatch: &mut Option<WideArcAttackDispatch>,
 ) -> bool {
     let Some((source, property, master, tamed, pet_attack, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
@@ -448,7 +461,7 @@ pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
             monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(
                 target_identity,
-                MACHINERY_STOMP_SKILL_ID,
+                skill_id,
                 skill_level,
                 now_ms,
             );
@@ -457,12 +470,12 @@ pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
             .find_monster_by_id(monster_id)
             .map(|monster| monster.move_shape().shape())
             .unwrap_or(&source);
-        send_start(game, region, source, skill_level);
+        send_start(game, region, source, skill_id, skill_level);
         return true;
     }
 
     let cast = cast.expect("выполнение механического топота проверено выше");
-    if cast.dispatch().skill_id != MACHINERY_STOMP_SKILL_ID
+    if cast.dispatch().skill_id != skill_id
         || cast.dispatch().target != target_identity
     {
         return false;
@@ -477,7 +490,7 @@ pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
     }
-    send_fire(game, region, &source, &target.shape, skill_level);
+    send_fire(game, region, &source, &target.shape, skill_id, skill_level);
     let mut cells = Vec::with_capacity(32);
     for offset_x in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
         for offset_y in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
@@ -488,9 +501,10 @@ pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
         }
     }
     cells.extend(outside_cells(source_x, source_y, target_x, target_y));
-    *dispatch = Some(MachineryStompDispatch {
+    *dispatch = Some(WideArcAttackDispatch {
         monster_id,
         cells,
+        skill_id,
         skill_level,
         properties: properties.clone(),
         property,
@@ -502,10 +516,10 @@ pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
     true
 }
 
-fn machinery_stomp_attack(
+fn wide_arc_attack(
     game: &mut CGame,
     region: &CServerRegion,
-    dispatch: &MachineryStompDispatch,
+    dispatch: &WideArcAttackDispatch,
 ) -> AttackInformation {
     let (minimum, maximum) = region
         .find_monster_by_id(dispatch.monster_id)
@@ -525,7 +539,7 @@ fn machinery_stomp_attack(
     let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
     let _critical_roll = game.skill_random_below(100);
     AttackInformation {
-        skill_id: MACHINERY_STOMP_SKILL_ID,
+        skill_id: dispatch.skill_id,
         skill_level: dispatch.skill_level as u8,
         attacker_type: MONSTER_TYPE,
         attacker_id: dispatch.monster_id,
@@ -550,20 +564,20 @@ fn machinery_stomp_attack(
     }
 }
 
-pub(crate) fn machinery_stomp_cell_candidates(
+pub(crate) fn wide_arc_attack_cell_candidates(
     game: &CGame,
     region: &CServerRegion,
-    dispatch: &MachineryStompDispatch,
+    dispatch: &WideArcAttackDispatch,
     tile_x: i32,
     tile_y: i32,
 ) -> Vec<ShapeIdentity> {
     monster_attack_cell_candidates(game, region, dispatch.monster_id, tile_x, tile_y)
 }
 
-pub(crate) fn execute_owned_machinery_stomp_target<Runtime: GameMainLoopRuntime>(
+pub(crate) fn execute_owned_wide_arc_attack_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
-    dispatch: &MachineryStompDispatch,
+    dispatch: &WideArcAttackDispatch,
     identity: ShapeIdentity,
     runtime: &mut Runtime,
     deaths: &mut Vec<MonsterAttackDeath>,
@@ -586,7 +600,7 @@ pub(crate) fn execute_owned_machinery_stomp_target<Runtime: GameMainLoopRuntime>
     {
         return false;
     }
-    let attack = machinery_stomp_attack(game, region, dispatch);
+    let attack = wide_arc_attack(game, region, dispatch);
     let attack = defend_owned_monster_attack(
         game,
         identity,
@@ -617,9 +631,9 @@ pub(crate) fn execute_owned_machinery_stomp_target<Runtime: GameMainLoopRuntime>
     true
 }
 
-pub(crate) fn finish_owned_machinery_stomp(
+pub(crate) fn finish_owned_wide_arc_attack(
     region: &mut CServerRegion,
-    dispatch: &MachineryStompDispatch,
+    dispatch: &WideArcAttackDispatch,
 ) {
     if let Some(monster) = region.find_monster_by_id_mut(dispatch.monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
@@ -628,4 +642,30 @@ pub(crate) fn finish_owned_machinery_stomp(
         monster.move_shape_mut().set_moveable(true);
         let _ = monster.finish_base_attack_cast(dispatch.now_ms);
     }
+}
+
+#[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
+pub(crate) fn prepare_owned_machinery_stomp<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    now_ms: u32,
+    runtime: &mut Runtime,
+    dispatch: &mut Option<WideArcAttackDispatch>,
+) -> bool {
+    prepare_owned_wide_arc_attack(
+        game,
+        region,
+        monster_id,
+        target_identity,
+        MACHINERY_STOMP_SKILL_ID,
+        skill_level,
+        properties,
+        now_ms,
+        runtime,
+        dispatch,
+    )
 }

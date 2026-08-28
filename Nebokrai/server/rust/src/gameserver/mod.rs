@@ -106,6 +106,7 @@ pub(crate) mod appserver {
         pub(crate) mod lifeshieldstate;
         pub(crate) mod littlestar;
         pub(crate) mod lingzhishu;
+        pub(crate) mod lordwiderangingattack;
         pub(crate) mod machineshield;
         pub(crate) mod machineshieldstate;
         pub(crate) mod machinerystomp;

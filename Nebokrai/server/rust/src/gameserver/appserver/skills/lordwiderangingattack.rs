@@ -1,6 +1,12 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Широкая атака владыки `CLordWiderangingAttack` (`0x1f6`) для пути монстра.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/lordwiderangingattack.cpp`. Точечная проверка EXE
+//! подтвердила отдельные глобальные данные `0x006A1608..0x006A162C`: полную маску
+//! `5×5` и две дуги по три клетки. Исполнение, формула и wire-контракт полностью
+//! совпадают с `CMachineryStomp`, кроме ID и таблицы свойств, поэтому достигнутый
+//! путь монстра использует один узкий семейный механизм. Варианты игрока остаются
+//! RAW ниже.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -39,7 +45,9 @@
 
 // ============================================================================
 // FUNCTION: CLordWiderangingAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Объектный вход монстра использует `prepare_owned_lord_wideranging_attack`;
+// координатные варианты и варианты игрока остаются ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:141
@@ -81,7 +89,9 @@
 
 // ============================================================================
 // FUNCTION: CLordWiderangingAttackEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Действия 0/1 монстра формирует общий семейный механизм; клиентские ошибки игрока
+// остаются исходным материалом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:635
@@ -95,7 +105,9 @@
 
 // ============================================================================
 // FUNCTION: CLordWiderangingAttack::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Перезарядка, дальность, `BLOCK_UNFLY` и блокировка движения для входа монстра
+// выполняются общим семейным механизмом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:45
@@ -109,7 +121,9 @@
 
 // ============================================================================
 // FUNCTION: CLordWiderangingAttack::GetOutsideCells
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// Точная знаковая граница и обе дуги совпадают с `CMachineryStomp` и выполняются
+// общим семейным механизмом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:358
@@ -123,7 +137,9 @@
 
 // ============================================================================
 // FUNCTION: CLordWiderangingAttack::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Формула монстра и оба вызова RNG выполняются общим семейным механизмом;
+// свойства игрока остаются в теле ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:567
@@ -137,7 +153,9 @@
 
 // ============================================================================
 // FUNCTION: CLordWiderangingAttack::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Цель-монстр проходит общий упорядоченный владелец исполнения; снимок разрешений
+// игрока остаётся в теле ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:543
@@ -151,7 +169,9 @@
 
 // ============================================================================
 // FUNCTION: CLordWiderangingAttack::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Стадии выполнения монстра, порядок клеток и завершение выполняет рабочий путь;
+// вход игрока остаётся RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:194
@@ -177,3 +197,37 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+use super::machinerystomp::{WideArcAttackDispatch, prepare_owned_wide_arc_attack};
+use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+
+pub(crate) const LORD_WIDERANGING_ATTACK_SKILL_ID: u32 = 0x1f6;
+
+#[allow(clippy::too_many_arguments, reason = "обёртка сохраняет конкретного владельца навыка")]
+pub(crate) fn prepare_owned_lord_wideranging_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    now_ms: u32,
+    runtime: &mut Runtime,
+    dispatch: &mut Option<WideArcAttackDispatch>,
+) -> bool {
+    prepare_owned_wide_arc_attack(
+        game,
+        region,
+        monster_id,
+        target_identity,
+        LORD_WIDERANGING_ATTACK_SKILL_ID,
+        skill_level,
+        properties,
+        now_ms,
+        runtime,
+        dispatch,
+    )
+}
