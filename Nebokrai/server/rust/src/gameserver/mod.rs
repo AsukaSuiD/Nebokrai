@@ -127,6 +127,7 @@ pub(crate) mod appserver {
         pub(crate) mod monstertaming;
         pub(crate) mod monsterthorn;
         pub(crate) mod natural;
+        pub(crate) mod nonfun;
         pub(crate) mod origin;
         pub(crate) mod originstate;
         pub(crate) mod petscontrol;

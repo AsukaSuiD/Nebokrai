@@ -815,6 +815,9 @@ use crate::gameserver::appserver::skills::immediatestate::{
     execute_player_immediate_state, is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::nonfun::{
+    execute_player_non_fun, is_non_fun_skill,
+};
 use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
 };
@@ -36190,6 +36193,11 @@ impl CGame {
                     is_immediate_state_skill(skill_id)
                 }
             };
+            let concrete_non_fun = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => is_non_fun_skill(skill_id),
+            };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)
             } else if concrete_archery {
@@ -36210,6 +36218,8 @@ impl CGame {
                 execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
                 execute_player_immediate_state(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_non_fun {
+                execute_player_non_fun(self, player_id, dispatch, player_ai, runtime)
             } else {
                 runtime.execute_player_skill_dispatch(self, player_id, dispatch)
             };

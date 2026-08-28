@@ -1,125 +1,67 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Общее исполнение пустых навыков `CNonFun`.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/nonfun.cpp`. Семейство `900..946` и `960..962` принимает
+//! все три формы цели при существующем игроке, устанавливает текущий навык и
+//! на том же вызове AI завершает его с признаком `false`. Оно не расходует
+//! ресурсы, не вызывает RNG, не формирует пакеты и не изменяет цель.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.h
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 
-// ============================================================================
-// FUNCTION: CNonFun::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:32
-// RVA: 0x0010DF50
-// ADDRESS: 0050df50
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const fn is_non_fun_skill(skill_id: u32) -> bool {
+    matches!(skill_id, 0x384..=0x3b2 | 0x3c0..=0x3c2)
+}
 
-// ============================================================================
-// FUNCTION: CNonFun::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:40
-// RVA: 0x0010E010
-// ADDRESS: 0050e010
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    }
+}
 
-// ============================================================================
-// FUNCTION: CNonFun::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:23
-// RVA: 0x0010E7B0
-// ADDRESS: 0050e7b0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNonFun::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:60
-// RVA: 0x0010E860
-// ADDRESS: 0050e860
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNonFun::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:54
-// RVA: 0x0010E9B0
-// ADDRESS: 0050e9b0
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNonFun::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:47
-// RVA: 0x0010F5A0
-// ADDRESS: 0050f5a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNonFun::CNonFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:12
-// RVA: 0x00110B80
-// ADDRESS: 00510b80
-// PROTOTYPE: undefined __thiscall CNonFun(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNonFun::~CNonFun
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\nonfun.cpp:18
-// RVA: 0x00110BE0
-// ADDRESS: 00510be0
-// PROTOTYPE: void __thiscall ~CNonFun(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn execute_player_non_fun<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let skill_id = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. }
+            if is_non_fun_skill(skill_id) => skill_id,
+        _ => return terminal(QueuedSkillExecutionState::Rejected),
+    };
+    if game.find_player(player_id).is_none() {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if player_ai.non_fun().is_none() {
+        let started_at_ms = runtime.now_milliseconds();
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_current_skill_id(Some(skill_id));
+        }
+        player_ai.begin_non_fun(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai
+        .non_fun()
+        .is_none_or(|state| state.dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if let Some(state) = player_ai.non_fun_mut() {
+        let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    terminal(QueuedSkillExecutionState::Completed)
+}

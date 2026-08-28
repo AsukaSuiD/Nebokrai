@@ -95,6 +95,7 @@ pub(crate) struct CPlayerAI {
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     mana_shield_last_used_ms: u32,
     immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -150,6 +151,7 @@ impl CPlayerAI {
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
+        self.non_fun = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -241,6 +243,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение немедленного состояния завершено");
         }
+        if let Some(mut execution) = self.non_fun.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение пустого навыка завершено");
+        }
         true
     }
 
@@ -270,6 +276,7 @@ impl CPlayerAI {
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
+        self.non_fun = None;
         self.poison_arrow = None;
         self.blood_loss = None;
         self.fatal_blow = None;
@@ -542,6 +549,23 @@ impl CPlayerAI {
         &mut self,
     ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
         self.immediate_state.as_mut()
+    }
+
+    pub(crate) const fn non_fun(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.non_fun
+    }
+
+    pub(crate) const fn begin_non_fun(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.non_fun = Some(state);
+    }
+
+    pub(crate) fn non_fun_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.non_fun.as_mut()
     }
 
     pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
