@@ -76,6 +76,8 @@ pub(crate) mod appserver {
         pub(crate) mod bloodlossstate;
         pub(crate) mod bossbluefury;
         pub(crate) mod bossbluefurystate;
+        pub(crate) mod bossbluequake;
+        pub(crate) mod bossbluequakestate;
         pub(crate) mod bossfiendpenetrate;
         pub(crate) mod bossfiendsummon;
         pub(crate) mod callosity;

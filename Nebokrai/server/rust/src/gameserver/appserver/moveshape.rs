@@ -59,6 +59,7 @@ use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairy
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BossBlueFuryTick,
 };
+use crate::gameserver::appserver::skills::bossbluequakestate::BossBlueQuakeState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
@@ -470,6 +471,7 @@ pub(crate) struct CanonicalStateStorage {
     hearten_state: Option<HeartenState>,
     fury_states: Vec<FuryState>,
     boss_blue_fury_state: Option<BossBlueFuryState>,
+    boss_blue_quake_state: Option<BossBlueQuakeState>,
     cure_state: Option<CureState>,
     poison_arrow_state: Option<PoisonArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
@@ -663,6 +665,7 @@ impl CMoveShape {
         self.hearten_state = None;
         self.fury_states.clear();
         self.boss_blue_fury_state = None;
+        self.boss_blue_quake_state = None;
         self.cure_state = None;
         self.poison_arrow_state = None;
         self.spider_poison_state = None;
@@ -811,6 +814,10 @@ impl CMoveShape {
             self.boss_blue_fury_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let boss_blue_quake = usize::from(
+            self.boss_blue_quake_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let cure = usize::from(
             self.cure_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -852,6 +859,7 @@ impl CMoveShape {
             .saturating_add(hearten)
             .saturating_add(fury)
             .saturating_add(boss_blue_fury)
+            .saturating_add(boss_blue_quake)
             .saturating_add(cure)
             .saturating_add(poison_arrow)
             .saturating_add(spider_poison)
@@ -901,6 +909,9 @@ impl CMoveShape {
                 .any(|state| state.skill_id() == state_id)
             || self
                 .boss_blue_fury_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .boss_blue_quake_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .cure_state
@@ -1065,6 +1076,21 @@ impl CMoveShape {
             self.boss_blue_fury_state = None;
         }
         Some((snapshot, tick))
+    }
+
+    pub(crate) fn replace_boss_blue_quake_state(
+        &mut self,
+        state: BossBlueQuakeState,
+    ) -> Option<BossBlueQuakeState> {
+        self.boss_blue_quake_state.replace(state)
+    }
+
+    pub(crate) fn take_expired_boss_blue_quake_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<BossBlueQuakeState> {
+        self.boss_blue_quake_state.filter(|state| state.expired(now_ms))?;
+        self.boss_blue_quake_state.take()
     }
 
     pub(crate) fn replace_mana_shield_state(

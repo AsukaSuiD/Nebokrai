@@ -4223,6 +4223,20 @@ impl CPlayer {
         self.move_shape.take_expired_hearten_state(now_ms)
     }
 
+    pub(crate) fn replace_boss_blue_quake_state(
+        &mut self,
+        state: super::skills::bossbluequakestate::BossBlueQuakeState,
+    ) -> Option<super::skills::bossbluequakestate::BossBlueQuakeState> {
+        self.move_shape.replace_boss_blue_quake_state(state)
+    }
+
+    pub(crate) fn take_expired_boss_blue_quake_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::bossbluequakestate::BossBlueQuakeState> {
+        self.move_shape.take_expired_boss_blue_quake_state(now_ms)
+    }
+
     /// Применяет канонические состояния в исходном порядке общего
     /// `CPlayer::UpdateProperty`. Формулы остаются методами конкретных владельцев состояний;
     /// наружу выходят только визуальные действия, требующие сетевого владельца.

@@ -786,6 +786,9 @@ use crate::gameserver::appserver::skills::fightdefense::{
 };
 use crate::gameserver::appserver::skills::furystate::expire_monster_fury_states;
 use crate::gameserver::appserver::skills::bossbluefurystate::expire_monster_boss_blue_fury_state;
+use crate::gameserver::appserver::skills::bossbluequakestate::{
+    expire_monster_boss_blue_quake_state, expire_player_boss_blue_quake_state,
+};
 use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
@@ -26023,6 +26026,7 @@ impl CGame {
             return self.find_player(player_id).map(|_| ());
         };
         let _ = expire_player_spider_web_state(self, player_id, now_ms);
+        let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let expired_cure = self
             .find_player_mut(player_id)
             .and_then(CPlayer::take_cure_state_for_ai);
@@ -34848,7 +34852,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f5/0x1f6/0x1f7/0x1f9/0x1fa`,
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f5/0x1f6/0x1f7/0x1f8/0x1f9/0x1fa`,
     /// включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
@@ -37756,6 +37760,73 @@ impl CGame {
         Some(result)
     }
 
+    /// Координирует подтверждённый `ForceMove` навыка между каноническим
+    /// владельцем цели, пространством региона, круговой доставкой и AI.
+    #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца цели и атомарный порядок ForceMove")]
+    pub(crate) fn force_move_owned_shape<Context: MoveShapeCommandContext>(
+        &mut self,
+        region: &mut CServerRegion,
+        identity: ShapeIdentity,
+        destination_x: i32,
+        destination_y: i32,
+        duration_ms: u32,
+        context: &mut Context,
+    ) -> Option<Result<bool, MoveShapeCommandBlock>> {
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        if identity.object_type == PLAYER_TYPE {
+            let mut player = self.players.remove(&identity.id)?;
+            if player.server_region_id() != Some(region.id) {
+                self.players.insert(identity.id, player);
+                return None;
+            }
+            let result = {
+                let around = GameServerAroundRuntime::new(
+                    self,
+                    &self.session_factory,
+                    area_width,
+                    area_height,
+                )?;
+                player.force_move(
+                    region,
+                    destination_x,
+                    destination_y,
+                    duration_ms,
+                    area_width,
+                    area_height,
+                    &around,
+                    context,
+                )
+            };
+            self.players.insert(identity.id, player);
+            return Some(result);
+        }
+        if identity.object_type != MONSTER_TYPE {
+            return None;
+        }
+        let figure = region.find_monster_by_id(identity.id).and_then(|monster| {
+            let property = self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            Some(CMonster::figure(property))
+        })?;
+        let around = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            area_width,
+            area_height,
+        )?;
+        region.force_move_owned_monster(
+            identity.id,
+            destination_x,
+            destination_y,
+            duration_ms,
+            figure,
+            area_width,
+            area_height,
+            &around,
+            context,
+        )
+    }
+
     pub(crate) fn move_script_player_step(
         &mut self,
         player_id: i32,
@@ -40254,6 +40325,12 @@ impl CGame {
                         now_ms,
                     );
                     let _ = expire_monster_boss_blue_fury_state(
+                        self,
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
+                    let _ = expire_monster_boss_blue_quake_state(
                         self,
                         owner.base_mut(),
                         monster_id,

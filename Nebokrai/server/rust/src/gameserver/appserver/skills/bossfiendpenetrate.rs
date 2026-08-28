@@ -5,7 +5,7 @@
 //! сохраняет задержку и направление, единственный пакет запуска полёта,
 //! поражение одной клетки за такт до первого `BLOCK_UNFLY` и запрет повторного
 //! поражения одной цели на всём пути. Порядок кандидатов задаёт регион, формула
-//! и два исходных вызова `random` остаются у навыка, а общие защита, изменение
+//! и исходная последовательность `random` остаются у навыка, а общие защита, изменение
 //! цели и последствия смерти проходят через `monsterattack`. Варианты игрока,
 //! координатные перегрузки и `OnChangeRegion` остаются исходным материалом.
 
@@ -404,6 +404,14 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     let maximum = maximum as i32;
     let span = 1_i32.wrapping_sub(minimum).wrapping_add(maximum);
     let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
+    let element_minimum = attacker_property.minimum_element as i32;
+    let element_maximum = attacker_property.maximum_element as i32;
+    let element_span = 1_i32
+        .wrapping_sub(element_minimum)
+        .wrapping_add(element_maximum);
+    let element = element_minimum
+        .wrapping_add(game.skill_random_below(element_span))
+        .max(0);
     // `CMonster::GetCriticalChance` возвращает ноль, но исходный вызов
     // `random(100)` всё равно продвигает общий генератор.
     let _critical_roll = game.skill_random_below(100);
@@ -429,12 +437,12 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             },
             AttackPower {
                 kind: AttackPowerType::Element,
-                hp_damage: 0,
+                hp_damage: element,
                 mp_damage: 0,
             },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: 0,
+                hp_damage: (attacker_property.yao_attack & 0xffff) as i32,
                 mp_damage: 0,
             },
         ],

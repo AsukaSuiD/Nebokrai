@@ -153,7 +153,7 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::monsterworld::MonsterWorld;
 use super::moveshape::{
-    MoveShapeCommandBlock, MoveShapePositionBlock, MoveShapePositionDispatch,
+    MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionBlock, MoveShapePositionDispatch,
     MoveShapePositionFacts, MoveShapeResolver,
 };
 use super::npc::CNpc;
@@ -3133,6 +3133,39 @@ impl CServerRegion {
             destination_y,
             facts,
             around,
+        );
+        self.owned_monsters.restore(taken);
+        Some(result)
+    }
+
+    /// Временно освобождает поколенческую ячейку, чтобы `ForceMove`
+    /// одновременно отправил пакет, изменил пространственное членство и
+    /// поставил исходное ожидание искусственному интеллекту.
+    #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, геометрию и длительность перемещения")]
+    pub(crate) fn force_move_owned_monster<Context: MoveShapeCommandContext>(
+        &mut self,
+        monster_id: i32,
+        destination_x: i32,
+        destination_y: i32,
+        duration_ms: u32,
+        figure: ShapeFigure,
+        area_width: i32,
+        area_height: i32,
+        around: &GameServerAroundRuntime<'_>,
+        context: &mut Context,
+    ) -> Option<Result<bool, MoveShapeCommandBlock>> {
+        let mut taken = self.owned_monsters.take(monster_id)?;
+        let facts = taken
+            .monster_mut()
+            .movement_position_facts(figure, area_width, area_height);
+        let result = taken.monster_mut().move_shape_mut().force_move(
+            Some(self),
+            destination_x,
+            destination_y,
+            duration_ms,
+            facts,
+            around,
+            context,
         );
         self.owned_monsters.restore(taken);
         Some(result)
