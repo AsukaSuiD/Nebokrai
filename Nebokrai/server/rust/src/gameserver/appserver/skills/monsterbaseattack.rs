@@ -99,8 +99,9 @@ use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
 use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
-use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::ai::bossblue::select_boss_blue_attack_skill;
+use crate::gameserver::appserver::ai::bossfiend::select_boss_fiend_attack_skill;
+use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -163,12 +164,20 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
 /// Rust-владелец выбирает навык только когда любой результат броска уже имеет
 /// реального владельца исполнения. Иначе весь ход остаётся внешней виртуальной
 /// ветви, чтобы она не получила второй вызов исходного генератора случайных
-/// чисел после частичной диспетчеризации.
-fn owns_complete_skill_selection(skills: &[MonsterSkill]) -> bool {
+/// чисел после частичной диспетчеризации. Исключённые записи `2` синего босса
+/// и `1/2` демона-босса разрешены: их `odds` участвуют в накоплении, но сами ID
+/// специальные селекторы никогда не возвращают.
+fn owns_complete_skill_selection(skills: &[MonsterSkill], ai_type: u32) -> bool {
     !skills.is_empty()
-        && skills
-            .iter()
-            .all(|skill| is_owned_monster_attack_skill(u32::from(skill.id)))
+        && skills.iter().all(|skill| {
+            is_owned_monster_attack_skill(u32::from(skill.id))
+                || (ai_type == 0x67 && skill.id == BASE_ARCHERY_SKILL_ID)
+                || (ai_type == 0x68
+                    && matches!(
+                        skill.id,
+                        BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
+                    ))
+        })
         && skills
             .iter()
             .fold(0_i32, |sum, skill| sum.wrapping_add(i32::from(skill.odds)))
@@ -260,7 +269,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if CMoveShape::is_died(monster_health) {
         return false;
     }
-    if !owns_complete_skill_selection(&property.skills) {
+    if !owns_complete_skill_selection(&property.skills, property.ai) {
         return false;
     }
     if target.is_none()
@@ -286,22 +295,75 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
         let roll = game.skill_random_below(10_000);
         let selected = if property.ai == 0x67 {
-            region.find_monster_by_id_mut(monster_id).map_or(default_skill_id, |monster| {
-                let has_fury_state = monster.move_shape().boss_blue_fury_state().is_some();
-                select_boss_blue_attack_skill(
-                    monster.boss_blue_ai_mut(),
-                    monster_health,
-                    property.maximum_hp,
-                    has_fury_state,
-                    &property.skills,
-                    roll,
-                    default_skill_id,
-                )
-            })
+            region
+                .find_monster_by_id_mut(monster_id)
+                .map(|monster| {
+                    let has_fury_state = monster.move_shape().boss_blue_fury_state().is_some();
+                    select_boss_blue_attack_skill(
+                        monster.boss_blue_ai_mut(),
+                        monster_health,
+                        property.maximum_hp,
+                        has_fury_state,
+                        &property.skills,
+                        roll,
+                        default_skill_id,
+                    )
+                })
+        } else if property.ai == 0x68 {
+            let below_repeat_threshold =
+                monster_health as f32 / (property.maximum_hp as f32) < 0.08;
+            let persist_modifier = below_repeat_threshold
+                .then(|| {
+                    game.skill_base_properties(BOSS_FIEND_SUMMON_SKILL_ID, 1)
+                        .map(|properties| properties.query_property(10_003))
+                })
+                .flatten();
+            let timer_check_ms = (below_repeat_threshold && persist_modifier.is_some())
+                .then(|| runtime.now_milliseconds());
+            let selection = region
+                .find_monster_by_id(monster_id)
+                .and_then(|monster| monster.boss_fiend_ai())
+                .and_then(|state| {
+                    select_boss_fiend_attack_skill(
+                        state,
+                        monster_health,
+                        property.maximum_hp,
+                        &property.skills,
+                        roll,
+                        timer_check_ms,
+                        persist_modifier,
+                    )
+                });
+            if let Some(selection) = selection {
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster
+                        .move_shape_mut()
+                        .set_current_skill_id(Some(u32::from(selection.skill_id)));
+                }
+                if selection.records_summon {
+                    let recorded_at_ms = runtime.now_milliseconds();
+                    if let Some(state) = region
+                        .find_monster_by_id_mut(monster_id)
+                        .and_then(|monster| monster.boss_fiend_ai_mut())
+                    {
+                        state.record_summon(selection.summon_threshold, recorded_at_ms);
+                    }
+                }
+            }
+            selection.map(|selection| selection.skill_id)
         } else {
-            select_attack_skill(&property.skills, roll, default_skill_id)
+            Some(select_attack_skill(
+                &property.skills,
+                roll,
+                default_skill_id,
+            ))
         };
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let Some(selected) = selected else {
+            return true;
+        };
+        if property.ai != 0x68
+            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+        {
             monster
                 .move_shape_mut()
                 .set_current_skill_id(Some(u32::from(selected)));

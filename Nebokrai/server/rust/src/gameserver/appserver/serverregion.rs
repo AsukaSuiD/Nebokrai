@@ -1178,6 +1178,7 @@ impl CServerRegion {
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
         context.initialize_monster(&mut monster, property);
+        monster.initialize_special_ai(property.ai, now_ms);
         monster
             .move_shape_mut()
             .shape_mut()
@@ -1253,6 +1254,12 @@ impl CServerRegion {
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
         context.initialize_monster(&mut monster, property);
+        let special_ai_started_at_ms = if property.ai == 0x68 {
+            now_ms(context)
+        } else {
+            0
+        };
+        monster.initialize_special_ai(property.ai, special_ai_started_at_ms);
         monster
             .move_shape_mut()
             .shape_mut()

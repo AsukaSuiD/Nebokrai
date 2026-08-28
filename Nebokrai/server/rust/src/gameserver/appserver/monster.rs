@@ -22,6 +22,9 @@
 //! Специализированный ИИ синего босса с ID `0x67` хранит здесь восемь
 //! одноразовых HP-порогов ярости как часть жизненного цикла конкретного
 //! монстра; выбор навыка остаётся в `ai/bossblue.rs`.
+//! ИИ демона-босса с ID `0x68` аналогично хранит восемь порогов призыва и
+//! исходный таймер повторного призыва, инициализируемый вместе с созданием
+//! конкретного монстра; выбор принадлежит `ai/bossfiend.rs`.
 //!
 //! Для обычного монстра со списком навыков `0x2bd`, `0x2d1`, `0x2ef`,
 //! `0x197`, `0x191`, `0x198`, `0x199`, `0x19a`, `0x19b`, `0x19c`, `0x19d`,
@@ -61,6 +64,7 @@
 
 use super::ai::baseai::CBaseAI;
 use super::ai::bossblue::BossBlueAiState;
+use super::ai::bossfiend::BossFiendAiState;
 use super::masterinfo::MasterInfo;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
@@ -131,6 +135,7 @@ pub(crate) struct CMonster {
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
     boss_blue_ai: BossBlueAiState,
+    boss_fiend_ai: Option<BossFiendAiState>,
     base_ai: CBaseAI,
 }
 
@@ -276,6 +281,7 @@ impl CMonster {
             base_attack_owned_tick: false,
             trace_move_delay: None,
             boss_blue_ai: BossBlueAiState::default(),
+            boss_fiend_ai: None,
             base_ai: CBaseAI::default(),
         }
     }
@@ -664,6 +670,18 @@ impl CMonster {
 
     pub(crate) fn boss_blue_ai_mut(&mut self) -> &mut BossBlueAiState {
         &mut self.boss_blue_ai
+    }
+
+    pub(crate) fn initialize_special_ai(&mut self, ai_type: u32, now_ms: u32) {
+        self.boss_fiend_ai = (ai_type == 0x68).then(|| BossFiendAiState::new(now_ms));
+    }
+
+    pub(crate) fn boss_fiend_ai_mut(&mut self) -> Option<&mut BossFiendAiState> {
+        self.boss_fiend_ai.as_mut()
+    }
+
+    pub(crate) const fn boss_fiend_ai(&self) -> Option<&BossFiendAiState> {
+        self.boss_fiend_ai.as_ref()
     }
 
     pub(crate) fn combat_properties(
