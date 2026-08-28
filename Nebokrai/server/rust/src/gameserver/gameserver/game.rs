@@ -802,6 +802,9 @@ use crate::gameserver::appserver::skills::lifeshield::{
 use crate::gameserver::appserver::skills::lifeshieldstate::{
     finish_life_shield_state,
 };
+use crate::gameserver::appserver::skills::petscontrol::{
+    execute_player_pets_control, PETS_CONTROL_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::poisonarrow::{
     POISON_ARROW_SKILL_ID, execute_battle_fairy_poison_arrow,
 };
@@ -36573,7 +36576,7 @@ impl CGame {
         }
     }
 
-    pub(crate) fn attribute_skill_target_tile(
+    pub(crate) fn move_shape_target_tile(
         &self,
         region_id: Option<i32>,
         target: ShapeIdentity,
@@ -36773,6 +36776,13 @@ impl CGame {
                     skill_id == HEARTEN_SKILL_ID && target.object_type == PLAYER_TYPE
                 }
             };
+            let concrete_pets_control = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => {
+                    skill_id == PETS_CONTROL_SKILL_ID
+                }
+            };
             let concrete_mana_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36811,6 +36821,8 @@ impl CGame {
                 execute_player_agility_family(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_hearten {
                 execute_player_hearten(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_pets_control {
+                execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machine_shield {
                 execute_player_machine_shield(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mana_shield {

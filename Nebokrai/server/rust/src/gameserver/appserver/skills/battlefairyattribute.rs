@@ -88,7 +88,7 @@ fn send_cast(
             message.add_long(player.shape().get_direction());
         }
         2 => {
-            let (x, y) = game.attribute_skill_target_tile(player.server_region_id(), target)
+            let (x, y) = game.move_shape_target_tile(player.server_region_id(), target)
                 .unwrap_or_default();
             message.add_byte(2);
             message.add_long(skill_id as i32);
@@ -167,7 +167,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         };
         target
     };
-    if game.attribute_skill_target_tile(Some(region_id), target).is_none() {
+    if game.move_shape_target_tile(Some(region_id), target).is_none() {
         send_cast(game, player_id, target, skill_id, skill_level, 3);
         return terminal(QueuedSkillExecutionState::Rejected);
     }

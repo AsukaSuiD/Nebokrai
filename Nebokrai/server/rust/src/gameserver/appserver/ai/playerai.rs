@@ -9,8 +9,8 @@
 //! указатели внутри ИИ. Канонический `CPlayer` владеет очередями навыков;
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
-//! стрельба, семейство ловкости, парная закалка, воодушевление, машинный и
-//! мана-щит, атака боевой феи и её призываемые громовые и огненные области
+//! стрельба, семейство ловкости, парная закалка, воодушевление, управление
+//! питомцами, машинный и мана-щит, атака боевой феи и её призываемые области
 //! сохраняют незавершённое состояние между проходами ИИ. Хвост
 //! `CPlayerAI::Run` хранит часы
 //! автоматического прироста,
@@ -85,6 +85,8 @@ pub(crate) struct CPlayerAI {
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     hearten_last_used_ms: u32,
+    pets_control: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    pets_control_last_used_ms: u32,
     machine_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     machine_shield_last_used_ms: u32,
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -140,6 +142,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.callosity = None;
         self.hearten = None;
+        self.pets_control = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -214,6 +217,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение воодушевления завершено");
         }
+        if let Some(mut execution) = self.pets_control.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение управления питомцами завершено");
+        }
         if let Some(mut execution) = self.machine_shield.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение машинного щита завершено");
@@ -250,6 +257,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.callosity = None;
         self.hearten = None;
+        self.pets_control = None;
         self.machine_shield = None;
         self.mana_shield = None;
         self.immediate_state = None;
@@ -403,6 +411,33 @@ impl CPlayerAI {
     pub(crate) const fn hearten_last_used_ms(&self) -> u32 { self.hearten_last_used_ms }
     pub(crate) const fn mark_hearten_used(&mut self, now_ms: u32) {
         self.hearten_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn pets_control(
+        &self,
+    ) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.pets_control
+    }
+
+    pub(crate) const fn begin_pets_control(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.pets_control = Some(state);
+    }
+
+    pub(crate) fn pets_control_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.pets_control.as_mut()
+    }
+
+    pub(crate) const fn pets_control_last_used_ms(&self) -> u32 {
+        self.pets_control_last_used_ms
+    }
+
+    pub(crate) const fn mark_pets_control_used(&mut self, now_ms: u32) {
+        self.pets_control_last_used_ms = now_ms;
     }
 
     pub(crate) const fn machine_shield(
