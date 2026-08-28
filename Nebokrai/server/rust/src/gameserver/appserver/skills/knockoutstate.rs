@@ -8,6 +8,8 @@
 //! либо защитном действии и публикует `0xBFE03/0xBFE04`. Координатные
 //! перегрузки и ещё не
 //! подключённая загрузка старой записи сохранены ниже.
+//! Monster-визуал получает явного владельца региона, поэтому сохраняет around-
+//! доставку и тогда, когда AI временно извлёк регион из `CGame`.
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -45,6 +47,23 @@ pub(crate) fn send_knock_out_state_visual(game: &mut CGame, region_id: i32, iden
     message.add_long(state.skill_id() as i32);
     if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+fn send_owned_monster_knock_out_state_visual(
+    game: &CGame,
+    region: &CServerRegion,
+    shape: &crate::gameserver::appserver::shape::CShape,
+    state: KnockOutState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let identity = shape.identity();
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    let _ = game.send_game_shape_around(region, shape, None, &message);
 }
 
 pub(crate) fn replace_player_knock_out_state(
@@ -86,9 +105,7 @@ pub(crate) fn replace_monster_knock_out_state(
     now_ms: u32,
 ) -> bool {
     let installed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let identity = monster.move_shape().shape().identity();
-        let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
-        let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
+        let shape = monster.move_shape().shape().clone();
         let old = monster.move_shape_mut().replace_knock_out_state(state);
         if old.is_some() {
             monster.move_shape_mut().set_fightable(true);
@@ -96,15 +113,15 @@ pub(crate) fn replace_monster_knock_out_state(
         }
         monster.move_shape_mut().set_moveable(false);
         monster.move_shape_mut().set_fightable(false);
-        Some((old, identity, tile_x, tile_y))
+        Some((old, shape))
     });
-    let Some((old, identity, tile_x, tile_y)) = installed else {
+    let Some((old, shape)) = installed else {
         return false;
     };
     if let Some(old) = old {
-        send_knock_out_state_visual(game, region.id, identity, tile_x, tile_y, old, false, now_ms);
+        send_owned_monster_knock_out_state_visual(game, region, &shape, old, false, now_ms);
     }
-    send_knock_out_state_visual(game, region.id, identity, tile_x, tile_y, state, true, now_ms);
+    send_owned_monster_knock_out_state_visual(game, region, &shape, state, true, now_ms);
     true
 }
 
@@ -125,10 +142,10 @@ fn finish_monster_state(game: &mut CGame, region: &mut CServerRegion, monster_id
         let state = if only_expired { monster.move_shape_mut().take_expired_knock_out_state(now_ms)? } else { monster.move_shape_mut().take_knock_out_state()? };
         monster.move_shape_mut().set_fightable(true);
         monster.move_shape_mut().set_moveable(true);
-        Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?))
+        Some((state, monster.move_shape().shape().clone()))
     });
-    let Some((state, identity, tile_x, tile_y)) = finished else { return false };
-    send_knock_out_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+    let Some((state, shape)) = finished else { return false };
+    send_owned_monster_knock_out_state_visual(game, region, &shape, state, false, now_ms);
     true
 }
 

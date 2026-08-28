@@ -156,6 +156,7 @@ pub(crate) mod appserver {
         pub(crate) mod monsterprojectile;
         pub(crate) mod monsterrangeattack;
         pub(crate) mod monstertaming;
+        pub(crate) mod mosou;
         pub(crate) mod monsterthorn;
         pub(crate) mod natural;
         pub(crate) mod nonfun;
