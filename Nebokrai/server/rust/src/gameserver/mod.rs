@@ -213,6 +213,8 @@ pub(crate) mod appserver {
         pub(crate) mod poisonmoth;
         pub(crate) mod bloodrose;
         pub(crate) mod scorpion;
+        pub(crate) mod boalock;
+        pub(crate) mod boalockstate;
         pub(crate) mod promotion;
         pub(crate) mod promotionstate;
         pub(crate) mod pojia;

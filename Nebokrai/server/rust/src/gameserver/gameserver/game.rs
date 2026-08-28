@@ -500,6 +500,7 @@ mod thunderslash;
 mod thunderblow2;
 mod mosou;
 mod rush;
+mod boalock;
 mod roar;
 mod energyholding;
 mod seal;
@@ -798,6 +799,7 @@ use crate::gameserver::appserver::skills::rainarrow::{execute_player_rain_arrow,
 use crate::gameserver::appserver::skills::poisonmoth::{execute_player_poison_moth, is_poison_moth_dispatch};
 use crate::gameserver::appserver::skills::bloodrose::{execute_player_blood_rose, is_blood_rose_dispatch};
 use crate::gameserver::appserver::skills::scorpion::{execute_player_scorpion, is_scorpion_dispatch};
+use crate::gameserver::appserver::skills::boalock::{execute_player_boa_lock, is_boa_lock_dispatch};
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -956,6 +958,9 @@ use crate::gameserver::appserver::skills::knockoutruntime::{execute_player_knock
 use crate::gameserver::appserver::skills::knockoutstate::{
     expire_monster_blind_states, expire_player_blind_states,
     finish_blind_states_on_defense, finish_player_blind_states_on_defense,
+};
+use crate::gameserver::appserver::skills::boalockstate::{
+    expire_monster_boa_lock_state, expire_player_boa_lock_state,
 };
 use crate::gameserver::appserver::skills::snowstorm::{
     execute_player_snow_storm, is_snow_storm_target,
@@ -26358,6 +26363,7 @@ impl CGame {
         let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_rush_2_state(self, player_id, now_ms);
         let _ = expire_player_blind_states(self, player_id, now_ms);
+        let _ = expire_player_boa_lock_state(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
         let _ = self.expire_player_poison_fog(player_id, now_ms, runtime);
@@ -33649,6 +33655,7 @@ impl CGame {
                             || player.player_ai().poison_moth().is_some()
                             || player.player_ai().blood_rose().is_some()
                             || player.player_ai().scorpion().is_some()
+                            || player.player_ai().boa_lock().is_some()
                             || player.player_ai().agility_family().is_some()
                             || player.player_ai().callosity().is_some()
                             || player.player_ai().ju_cut().is_some()
@@ -34321,6 +34328,7 @@ impl CGame {
                 || player.player_ai().poison_moth().is_some()
                 || player.player_ai().blood_rose().is_some()
                 || player.player_ai().scorpion().is_some()
+                || player.player_ai().boa_lock().is_some()
                 || player.player_ai().agility_family().is_some()
                 || player.player_ai().callosity().is_some()
                 || player.player_ai().mosou().is_some()
@@ -36994,6 +37002,7 @@ impl CGame {
             let concrete_poison_moth = is_poison_moth_dispatch(dispatch);
             let concrete_blood_rose = is_blood_rose_dispatch(dispatch);
             let concrete_scorpion = is_scorpion_dispatch(dispatch);
+            let concrete_boa_lock = is_boa_lock_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37117,6 +37126,8 @@ impl CGame {
                 execute_player_blood_rose(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_scorpion {
                 execute_player_scorpion(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_boa_lock {
+                execute_player_boa_lock(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
@@ -41754,6 +41765,12 @@ impl CGame {
                         now_ms,
                     );
                     let _ = expire_monster_blind_states(
+                        self,
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
+                    let _ = expire_monster_boa_lock_state(
                         self,
                         owner.base_mut(),
                         monster_id,

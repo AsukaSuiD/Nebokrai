@@ -71,6 +71,7 @@ use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
+use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
 use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::PillarState;
@@ -525,6 +526,7 @@ pub(crate) struct CanonicalStateStorage {
     god_bless_state_order: Option<u32>,
     roar_state_order: Option<u32>,
     knock_out_state: Option<KnockOutState>,
+    boa_lock_state: Option<BoaLockState>,
     rush_state: Option<RushState>,
     rush_2_state: Option<Rush2State>,
     roar_state: Option<RoarState>,
@@ -787,6 +789,7 @@ impl CMoveShape {
         self.god_bless_state_order = None;
         self.roar_state_order = None;
         self.knock_out_state = None;
+        self.boa_lock_state = None;
         self.rush_state = None;
         self.rush_2_state = None;
         self.roar_state = None;
@@ -840,6 +843,7 @@ impl CMoveShape {
             || self.state_storage.god_bless_state.is_some()
             || self.state_storage.soul_collect_state.is_some()
             || self.state_storage.knock_out_state.is_some()
+            || self.state_storage.boa_lock_state.is_some()
             || self.state_storage.rush_state.is_some()
             || self.state_storage.rush_2_state.is_some()
             || self.state_storage.roar_state.is_some()
@@ -1024,6 +1028,7 @@ impl CMoveShape {
             self.knock_out_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let boa_lock = usize::from(self.boa_lock_state.is_some_and(|state| state.skill_id() as i32 == state_id));
         let rush = usize::from(
             self.rush_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -1082,6 +1087,7 @@ impl CMoveShape {
             .saturating_add(god_bless)
             .saturating_add(soul_collect)
             .saturating_add(knock_out)
+            .saturating_add(boa_lock)
             .saturating_add(rush)
             .saturating_add(pillar)
             .saturating_add(knight_cut)
@@ -1168,6 +1174,7 @@ impl CMoveShape {
             || self
                 .knock_out_state
                 .is_some_and(|state| state.skill_id() == state_id)
+            || self.boa_lock_state.is_some_and(|state| state.skill_id() == state_id)
             || self.rush_state.is_some_and(|state| state.skill_id() == state_id)
             || self.rush_2_state.is_some_and(|state| state.skill_id() == state_id)
             || self.roar_state.is_some_and(|state| state.skill_id() == state_id)
@@ -1755,6 +1762,9 @@ impl CMoveShape {
         self.curable_state_order.insert(state.skill_id());
         self.knock_out_state.replace(state)
     }
+
+    pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> { self.boa_lock_state.replace(state) }
+    pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<BoaLockState> { self.boa_lock_state.filter(|state| state.expired(now_ms))?; self.boa_lock_state.take() }
 
     pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.pillar_state }
 

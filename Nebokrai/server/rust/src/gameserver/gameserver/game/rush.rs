@@ -13,7 +13,7 @@ use crate::gameserver::appserver::skills::rushstate2::{
 };
 
 impl CGame {
-    pub(crate) fn apply_rush_2_contact<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn apply_owned_skill_contact<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target: ShapeIdentity,

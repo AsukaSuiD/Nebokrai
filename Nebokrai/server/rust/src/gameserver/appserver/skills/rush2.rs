@@ -111,7 +111,7 @@ fn apply_targets<Runtime: GameMainLoopRuntime>(
             runtime,
         );
         if !installed { continue }
-        game.apply_rush_2_contact(master, identity, region_id, contact.clone(), runtime);
+        game.apply_owned_skill_contact(master, identity, region_id, contact.clone(), runtime);
     }
 }
 
