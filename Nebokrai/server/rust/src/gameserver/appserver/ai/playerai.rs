@@ -14,7 +14,8 @@
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
 //! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
-//! рыцарский удар, подготовка яростного удара и последующий рывок,
+//! рыцарский удар, подготовка яростного удара, последующий рывок и двойной
+//! направленный удар,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -40,6 +41,7 @@ use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::armybreak::{ARMY_BREAK_SKILL_ID, ArmyBreakExecutionState};
 use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
 use crate::gameserver::appserver::skills::flash::FlashExecutionState;
+use crate::gameserver::appserver::skills::swallow::SwallowExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
@@ -101,6 +103,8 @@ pub(crate) struct CPlayerAI {
     rage_break_last_used_ms: u32,
     flash: Option<FlashExecutionState>,
     flash_last_used_ms: u32,
+    swallow: Option<SwallowExecutionState>,
+    swallow_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -239,6 +243,7 @@ impl CPlayerAI {
         self.army_break = None;
         self.rage_break = None;
         self.flash = None;
+        self.swallow = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -375,6 +380,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.flash.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение рывка сквозь строй завершено");
+        }
+        if let Some(mut execution) = self.swallow.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение двойного направленного удара завершено");
         }
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
@@ -519,6 +528,7 @@ impl CPlayerAI {
         self.army_break = None;
         self.rage_break = None;
         self.flash = None;
+        self.swallow = None;
         self.fire_wall = None;
         self.infernol = None;
         self.seven_shooting_star = None;
@@ -755,6 +765,11 @@ impl CPlayerAI {
     pub(crate) fn flash_mut(&mut self) -> Option<&mut FlashExecutionState> { self.flash.as_mut() }
     pub(crate) const fn flash_last_used_ms(&self) -> u32 { self.flash_last_used_ms }
     pub(crate) const fn mark_flash_used(&mut self, now_ms: u32) { self.flash_last_used_ms = now_ms; }
+    pub(crate) const fn swallow(&self) -> Option<&SwallowExecutionState> { self.swallow.as_ref() }
+    pub(crate) fn begin_swallow(&mut self, state: SwallowExecutionState) { self.swallow = Some(state); }
+    pub(crate) fn swallow_mut(&mut self) -> Option<&mut SwallowExecutionState> { self.swallow.as_mut() }
+    pub(crate) const fn swallow_last_used_ms(&self) -> u32 { self.swallow_last_used_ms }
+    pub(crate) const fn mark_swallow_used(&mut self, now_ms: u32) { self.swallow_last_used_ms = now_ms; }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall

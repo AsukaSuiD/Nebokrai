@@ -119,6 +119,7 @@ pub(crate) mod appserver {
         pub(crate) mod ragebreakstate;
         pub(crate) mod flash;
         pub(crate) mod thunder;
+        pub(crate) mod swallow;
         pub(crate) mod thunderblow;
         pub(crate) mod thunderblow2;
         pub(crate) mod thunderblowphalanx;
