@@ -170,6 +170,20 @@ pub(crate) fn calculate_attack(
     hit_modifier: i32,
     target_damage_factor: u32,
 ) -> Option<(MasterInfo, AttackInformation)> {
+    calculate_attack_with_multiplier(game, player_id, definition, target_level, level, hit_modifier, target_damage_factor, 1.0)
+}
+
+#[allow(clippy::too_many_arguments, reason = "параметры прямо соответствуют подтверждённой формуле удара")]
+pub(crate) fn calculate_attack_with_multiplier(
+    game: &mut CGame,
+    player_id: i32,
+    definition: FrontCellSwordDefinition,
+    target_level: u8,
+    level: i32,
+    hit_modifier: i32,
+    target_damage_factor: u32,
+    damage_multiplier: f64,
+) -> Option<(MasterInfo, AttackInformation)> {
     let player = game.find_player(player_id)?;
     let combat = player.combat_properties();
     let master = master_info(player);
@@ -193,6 +207,7 @@ pub(crate) fn calculate_attack(
         .wrapping_add(game.skill_random_below(width))
         .wrapping_add(combat.dexterity as i32)
         .max(0);
+    let scale = |damage: i32| ((f64::from(damage) * damage_multiplier).round_ties_even()) as i32;
     let mut attack = AttackInformation {
         skill_id: definition.skill_id,
         skill_level: level as u8,
@@ -210,17 +225,17 @@ pub(crate) fn calculate_attack(
         damages: vec![
             AttackPower {
                 kind: AttackPowerType::Physical,
-                hp_damage: physical,
+                hp_damage: scale(physical),
                 mp_damage: 0,
             },
             AttackPower {
                 kind: AttackPowerType::Element,
-                hp_damage: (combat.add_element_attack as i32).max(0),
+                hp_damage: scale((combat.add_element_attack as i32).max(0)),
                 mp_damage: 0,
             },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: i32::from(combat.add_soul_attack),
+                hp_damage: scale(i32::from(combat.add_soul_attack)),
                 mp_damage: 0,
             },
         ],

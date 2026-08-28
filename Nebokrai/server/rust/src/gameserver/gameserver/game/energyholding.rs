@@ -37,4 +37,17 @@ impl CGame {
             }
         }
     }
+
+    pub(crate) fn take_player_energy_holding(&mut self, player_id: i32) -> Option<EnergyHoldingState> {
+        let ended = self.find_player_mut(player_id).and_then(|player| {
+            let region_id = player.server_region_id()?;
+            let identity = player.shape().identity();
+            let x = player.shape().get_tile_x().ok()?;
+            let y = player.shape().get_tile_y().ok()?;
+            Some((region_id, identity, x, y, player.take_energy_holding_state()?))
+        });
+        let (region_id, identity, x, y, state) = ended?;
+        send_energy_holding_state_visual(self, region_id, identity, x, y, state, false);
+        Some(state)
+    }
 }

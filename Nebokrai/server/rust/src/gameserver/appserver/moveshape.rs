@@ -1643,6 +1643,7 @@ impl CMoveShape {
     pub(crate) const fn energy_holding_state(&self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state }
     pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut EnergyHoldingState> { self.state_storage.energy_holding_state.as_mut() }
     pub(crate) fn begin_energy_holding_state(&mut self, state: EnergyHoldingState) { self.state_storage.energy_holding_state = Some(state); }
+    pub(crate) fn take_energy_holding_state(&mut self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state.take() }
     pub(crate) fn reached_property_states(&self) -> Vec<ReachedPropertyState> {
         let current = self.reached_property_state_order;
         let mut states = Vec::with_capacity(3);

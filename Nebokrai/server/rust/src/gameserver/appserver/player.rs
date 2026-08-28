@@ -4513,6 +4513,7 @@ impl CPlayer {
     pub(crate) const fn energy_holding_state(&self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state() }
     pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state_mut() }
     pub(crate) fn begin_energy_holding_state(&mut self, state: super::skills::energyholdingstate::EnergyHoldingState) { self.move_shape.begin_energy_holding_state(state); }
+    pub(crate) fn take_energy_holding_state(&mut self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.take_energy_holding_state() }
 
     pub(crate) const fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
         self.move_shape.soul_collect_state()

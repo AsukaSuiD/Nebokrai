@@ -3,7 +3,8 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/energyholdingstate.cpp`. Число зарядов увеличивается не
 //! выше уровня навыка; каждое успешное увеличение публикует `End → Begin`.
-//! Параметр процента хранится для будущих подтверждённых потребителей заряда.
+//! Параметр процента хранится вместе с зарядом и применяется
+//! `CInverseChopped` при первом расчёте атаки.
 //!
 //! Не достигнуты реальные вызывающие цепочки `Serialize/Unserialize` из БД:
 //! без базового кодека состояний не подтверждена граница первого из трёх
@@ -58,22 +59,7 @@ pub(crate) fn send_energy_holding_state_visual(
     let _ = game.send_shape_position_around(region_id, x, y, &message);
 }
 
-// Сохранены недостигнутые функции исходного владельца: их реальные caller-ы
-// потребления и DB-кодека ещё не материализованы.
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:133
-// RVA: 0x001E1D20
-// ADDRESS: 005e1d20
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Сохранены только недостигнутые функции DB-кодека.
 
 // ============================================================================
 // FUNCTION: CEnergyHoldingState::Serialize
