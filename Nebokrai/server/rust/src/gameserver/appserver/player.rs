@@ -4355,6 +4355,26 @@ impl CPlayer {
         self.move_shape.take_spider_poison_state_for_ai()
     }
 
+    pub(crate) fn replace_spider_web_state(
+        &mut self,
+        state: super::skills::spiderwebstate::SpiderWebState,
+    ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
+        self.move_shape.replace_spider_web_state(state)
+    }
+
+    pub(crate) fn take_expired_spider_web_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
+        self.move_shape.take_expired_spider_web_state(now_ms)
+    }
+
+    pub(crate) fn take_spider_web_state(
+        &mut self,
+    ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
+        self.move_shape.take_spider_web_state()
+    }
+
     pub(crate) fn replace_blood_loss_state(
         &mut self,
         state: super::skills::bloodlossstate::BloodLossState,
@@ -5300,6 +5320,10 @@ impl CPlayer {
 
     pub(crate) const fn set_skill_moveable(&mut self, moveable: bool) {
         self.move_shape.set_moveable(moveable);
+    }
+
+    pub(crate) const fn set_skill_fightable(&mut self, fightable: bool) {
+        self.move_shape.set_fightable(fightable);
     }
 
     pub(crate) fn has_state_by_skill_id(&self, state_id: u32) -> bool {

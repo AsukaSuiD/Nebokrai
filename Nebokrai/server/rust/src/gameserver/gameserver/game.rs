@@ -825,6 +825,10 @@ use crate::gameserver::appserver::skills::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::skills::spiderpoisonstate::{
     SpiderPoisonStateTick, send_spider_poison_state_visual,
 };
+use crate::gameserver::appserver::skills::spiderwebstate::{
+    expire_monster_spider_web_state, expire_player_spider_web_state,
+    finish_player_spider_web_state_on_defense, finish_spider_web_state_on_defense,
+};
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
@@ -25998,6 +26002,7 @@ impl CGame {
         let Some(now_ms) = sampled_at_ms else {
             return self.find_player(player_id).map(|_| ());
         };
+        let _ = expire_player_spider_web_state(self, player_id, now_ms);
         let expired_cure = self
             .find_player_mut(player_id)
             .and_then(CPlayer::take_cure_state_for_ai);
@@ -34779,7 +34784,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x1a1`, включая их полностью достигнутые
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x199/0x1a1`, включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
     /// питомцем дикого монстра либо разрешённого политикой игрока. `false`
@@ -35413,6 +35418,11 @@ impl CGame {
                         .movement_shape_mut()
                         .set_action(if current_health == 0 { 6 } else { 5 });
                 }
+                if current_health != 0 {
+                    let _ = finish_player_spider_web_state_on_defense(
+                        self, target_id, now_ms,
+                    );
+                }
                 if current_health == 0 {
                     let mut died = CMessage::new(0x000b_f60b);
                     died.add_long(PLAYER_TYPE);
@@ -35681,6 +35691,18 @@ impl CGame {
                         blast_attack: attack.blast_attack,
                     });
                 }
+            }
+            if attack.full_miss == 0 && damage != 0 && current_health != 0 {
+                let _ = finish_spider_web_state_on_defense(
+                    self,
+                    owner.base_mut(),
+                    ShapeIdentity {
+                        object_type: MONSTER_TYPE,
+                        id: target_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    now_ms,
+                );
             }
             self.restore_region_owner(owner);
 
@@ -39006,6 +39028,9 @@ impl CGame {
                 .movement_shape_mut()
                 .set_action(if current_health == 0 { 6 } else { 5 });
         }
+        if current_health != 0 {
+            let _ = finish_player_spider_web_state_on_defense(self, target_id, 0);
+        }
         if current_health == 0 {
             let mut died = CMessage::new(0x000b_f60b);
             died.add_long(master.master_type);
@@ -39151,6 +39176,18 @@ impl CGame {
                         blast_attack: attack.blast_attack,
                     });
                 }
+            }
+            if attack.full_miss == 0 && damage != 0 && current_health != 0 {
+                let _ = finish_spider_web_state_on_defense(
+                    self,
+                    owner.base_mut(),
+                    ShapeIdentity {
+                        object_type: MONSTER_TYPE,
+                        id: target_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    now_ms,
+                );
             }
             self.restore_region_owner(owner);
         }
@@ -40066,6 +40103,15 @@ impl CGame {
                 .unwrap_or_default();
             for monster_id in monster_ids {
                 let now_ms = runtime.now_milliseconds();
+                if let Some(mut owner) = self.take_region_owner(region_id) {
+                    let _ = expire_monster_spider_web_state(
+                        self,
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
+                    self.restore_region_owner(owner);
+                }
                 let expired_attribute_states = if let Some(mut owner) = self.take_region_owner(region_id) {
                     let result = owner.base_mut().find_monster_by_id_mut(monster_id).map(|monster| {
                         let tile_x = monster.move_shape().shape().get_tile_x().unwrap_or_default();

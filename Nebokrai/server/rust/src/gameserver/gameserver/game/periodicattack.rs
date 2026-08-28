@@ -225,6 +225,11 @@ impl CGame {
                 .movement_shape_mut()
                 .set_action(if current_health == 0 { 6 } else { 5 });
         }
+        if current_health != 0 {
+            let _ = super::finish_player_spider_web_state_on_defense(
+                self, target_id, 0,
+            );
+        }
         if current_health == 0 {
             let mut died = CMessage::new(0x000b_f60b);
             died.add_long(master.master_type);
@@ -566,6 +571,18 @@ impl CGame {
                         blast_attack: attack.blast_attack,
                     });
                 }
+            }
+            if attack.full_miss == 0 && damage != 0 && current_health != 0 {
+                let _ = super::finish_spider_web_state_on_defense(
+                    self,
+                    owner.base_mut(),
+                    ShapeIdentity {
+                        object_type: MONSTER_TYPE,
+                        id: target_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    now_ms,
+                );
             }
             self.restore_region_owner(owner);
         }

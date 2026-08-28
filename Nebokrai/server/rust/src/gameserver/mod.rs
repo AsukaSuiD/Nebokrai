@@ -131,6 +131,8 @@ pub(crate) mod appserver {
         pub(crate) mod skeletonarchery;
         pub(crate) mod spiderpoison;
         pub(crate) mod spiderpoisonstate;
+        pub(crate) mod spiderweb;
+        pub(crate) mod spiderwebstate;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
         pub(crate) mod shieldstate;
