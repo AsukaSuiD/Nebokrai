@@ -1,40 +1,19 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутая часть ИИ владыки `CLord`.
+//!
+//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
+//! исходный владелец `appserver/ai/lord.cpp` подтверждают один RNG-бросок и
+//! зависимое от доли HP сжатие его шкалы перед упорядоченным выбором навыка.
+//! Реальный путь `monsterbaseattack` назначает результат, а `lordfastattack` и
+//! `lordwiderangingattack` исполняют конкретные стадии и эффекты.
+//!
+//! `WhenBeenHurted` и `OnSearchEnemy` ниже остаются RAW: специальное уклонение
+//! от summon-shape и самостоятельный поиск ближайшей цели ещё не подключены.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp
-
-// ============================================================================
-// FUNCTION: CLord::CLord
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp:14
-// RVA: 0x0020AF30
-// ADDRESS: 0060af30
-// PROTOTYPE: undefined __thiscall CLord(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLord::SelectAttackSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp:201
-// RVA: 0x0020AF60
-// ADDRESS: 0060af60
-// PROTOTYPE: void __thiscall SelectAttackSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CLord::WhenBeenHurted
@@ -66,3 +45,43 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+use crate::setup::monsterlist::MonsterSkill;
+
+const EXCLUDED_BASE_ATTACK_SKILL_ID: u16 = 1;
+const EXCLUDED_ARCHERY_SKILL_ID: u16 = 2;
+
+/// Сохраняет единственный исходный бросок и зависимое от HP сжатие его шкалы:
+/// в диапазоне `[20%, 50%)` применяется `ROUND(roll * 0.6666667)`, ниже 20% —
+/// целочисленное деление на два. Исключённые ID продолжают накапливать `odds`.
+pub(crate) fn select_lord_attack_skill(
+    hit_points: u32,
+    maximum_hit_points: u32,
+    skills: &[MonsterSkill],
+    roll: i32,
+    default_skill_id: u16,
+) -> u16 {
+    let health_rate = hit_points as f32 / maximum_hit_points as f32;
+    let adjusted_roll = if health_rate >= 0.2 {
+        if health_rate < 0.5 {
+            (roll as f32 * 0.666_666_7).round_ties_even() as i32
+        } else {
+            roll
+        }
+    } else {
+        roll / 2
+    };
+
+    let mut cumulative_odds = 0_i32;
+    for skill in skills {
+        cumulative_odds = cumulative_odds.wrapping_add(i32::from(skill.odds));
+        if !matches!(
+            skill.id,
+            EXCLUDED_BASE_ATTACK_SKILL_ID | EXCLUDED_ARCHERY_SKILL_ID
+        ) && adjusted_roll <= cumulative_odds
+        {
+            return skill.id;
+        }
+    }
+    default_skill_id
+}

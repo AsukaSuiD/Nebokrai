@@ -101,6 +101,7 @@ use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunshe
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::bossblue::select_boss_blue_attack_skill;
 use crate::gameserver::appserver::ai::bossfiend::select_boss_fiend_attack_skill;
+use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -165,14 +166,19 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
 /// реального владельца исполнения. Иначе весь ход остаётся внешней виртуальной
 /// ветви, чтобы она не получила второй вызов исходного генератора случайных
 /// чисел после частичной диспетчеризации. Исключённые записи `2` синего босса
-/// и `1/2` демона-босса разрешены: их `odds` участвуют в накоплении, но сами ID
-/// специальные селекторы никогда не возвращают.
+/// и `1/2` демона-босса и владыки разрешены: их `odds` участвуют в накоплении,
+/// но сами ID специальные селекторы не возвращают до запасной ветви.
 fn owns_complete_skill_selection(skills: &[MonsterSkill], ai_type: u32) -> bool {
     !skills.is_empty()
         && skills.iter().all(|skill| {
             is_owned_monster_attack_skill(u32::from(skill.id))
                 || (ai_type == 0x67 && skill.id == BASE_ARCHERY_SKILL_ID)
                 || (ai_type == 0x68
+                    && matches!(
+                        skill.id,
+                        BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
+                    ))
+                || (ai_type == 100
                     && matches!(
                         skill.id,
                         BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
@@ -351,6 +357,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 }
             }
             selection.map(|selection| selection.skill_id)
+        } else if property.ai == 100 {
+            Some(select_lord_attack_skill(
+                monster_health,
+                property.maximum_hp,
+                &property.skills,
+                roll,
+                default_skill_id,
+            ))
         } else {
             Some(select_attack_skill(
                 &property.skills,
