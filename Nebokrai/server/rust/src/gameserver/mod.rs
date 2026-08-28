@@ -143,6 +143,7 @@ pub(crate) mod appserver {
         pub(crate) mod spidermistphalanx;
         pub(crate) mod spiderweb;
         pub(crate) mod spiderwebstate;
+        pub(crate) mod spriteburn;
         pub(crate) mod summoncorpsecandle;
         pub(crate) mod summoncreatureskill;
         pub(crate) mod summonskeleton;
