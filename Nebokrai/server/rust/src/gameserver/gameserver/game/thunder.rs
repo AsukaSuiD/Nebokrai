@@ -66,19 +66,13 @@ impl CGame {
         let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else {
             return Vec::new();
         };
-        let (Ok(center_x), Ok(center_y)) = (
-            phalanx.shape().get_tile_x(),
-            phalanx.shape().get_tile_y(),
-        ) else {
-            return Vec::new();
-        };
         let mut targets = Vec::new();
-        for (offset_x, offset_y) in phalanx.scope_cells() {
+        for (cell_x, cell_y) in phalanx.attack_cells() {
             let mut shapes = Vec::new();
             if region
                 .get_shapes(
-                    center_x.wrapping_add(offset_x),
-                    center_y.wrapping_add(offset_y),
+                    cell_x,
+                    cell_y,
                     self.area_width,
                     self.area_height,
                     self,
@@ -93,7 +87,9 @@ impl CGame {
                     || (shape.identity.object_type == phalanx.master().master_type
                         && shape.identity.id == phalanx.master().master_id)
                     || !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                    || targets.contains(&shape.identity)
+                    || !self.owned_player_skill_target_attackable(
+                        phalanx.master(), shape.identity, region_id,
+                    )
                 {
                     continue;
                 }

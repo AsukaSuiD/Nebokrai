@@ -5,9 +5,9 @@
 //! 7×7, строгие границы срока жизни и частоты, а также формулу элементального
 //! урона. Три исходные таблицы уровней по адресам `0x006A4344/78/AC`
 //! совпадают побайтно.
-//! Обход выполняется по X, затем по Y; повторная цель поражается один раз за
-//! проход. `Initialize` сохраняет исходные повторные пары RNG для каждой цели
-//! каждого окна. Снимок намеренно передаёт только исходный префикс
+//! `Initialize` сохраняет исходные повторные пары RNG для каждой цели каждого
+//! окна; одинаковая клетка может быть выбрана и обработана повторно. Снимок
+//! намеренно передаёт только исходный префикс
 //! `(m_dwLifeTime/m_dwFrequency)*m_dwNumTargets` из массива на 49 ячеек на
 //! окно. Поиск сущностей и применение атаки остаются у исполняющего владельца.
 
@@ -54,6 +54,7 @@ pub(crate) struct CThunderPhalanx {
     _target_count: u32,
     _cch: i32,
     last_attack_ms: u32,
+    attack_count: u32,
     cells: Vec<(i32, i32)>,
 }
 
@@ -91,6 +92,7 @@ impl CThunderPhalanx {
             _target_count: target_count,
             _cch: cch,
             last_attack_ms: 0,
+            attack_count: 0,
             cells: Vec::new(),
         }
     }
@@ -107,18 +109,21 @@ impl CThunderPhalanx {
         }
         if self.frequency_ms.wrapping_add(self.last_attack_ms) < now_ms {
             self.last_attack_ms = now_ms;
+            self.attack_count = self.attack_count.wrapping_add(1);
             return ThunderPhalanxTick::Attack { sampled_at_ms: now_ms };
         }
         ThunderPhalanxTick::Pending
     }
 
-    pub(crate) fn scope_cells(&self) -> impl Iterator<Item = (i32, i32)> {
-        (0..THUNDER_SCOPE_SIDE).flat_map(|x| {
-            (0..THUNDER_SCOPE_SIDE).filter_map(move |y| {
-                let index = (x + THUNDER_SCOPE_SIDE * y) as usize;
-                (THUNDER_SCOPE[index] != 0).then_some((x - 3, y - 3))
-            })
-        })
+    pub(crate) fn attack_cells(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let window = self.attack_count.wrapping_sub(1);
+        let start = window.wrapping_mul(49) as usize;
+        self.cells
+            .get(start..start.saturating_add(49))
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .take_while(|cell| *cell != (0, 0))
     }
 
     pub(crate) fn initialize(
