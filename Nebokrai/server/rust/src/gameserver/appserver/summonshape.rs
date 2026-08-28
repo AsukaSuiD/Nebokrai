@@ -19,6 +19,7 @@ use crate::gameserver::appserver::skills::chaosspherephalanx::CChaosSpherePhalan
 use crate::gameserver::appserver::skills::firewallphalanx::CFireWallPhalanx;
 use crate::gameserver::appserver::skills::thunderphalanx::CThunderPhalanx;
 use crate::gameserver::appserver::skills::thunderblowphalanx::CThunderBlowPhalanx;
+use crate::gameserver::appserver::skills::thunderslashphalanx::CThunderSlashPhalanx;
 use crate::gameserver::appserver::skills::thunder2phalanx::CLeimingPhalanx2;
 use crate::gameserver::appserver::skills::tianhuophalanx::CTianhuoPhalanx;
 use crate::gameserver::appserver::skills::spidermistphalanx::CSpiderMistPhalanx;
@@ -43,6 +44,7 @@ pub(crate) enum SummonedSkillShape {
     FireWall(CFireWallPhalanx),
     Thunder(CThunderPhalanx),
     ThunderBlow(CThunderBlowPhalanx),
+    ThunderSlash(CThunderSlashPhalanx),
     Leiming2(CLeimingPhalanx2),
     Tianhuo(CTianhuoPhalanx),
     SpiderMist(CSpiderMistPhalanx),
@@ -67,6 +69,7 @@ impl SummonedSkillShape {
             Self::FireWall(shape) => shape.shape(),
             Self::Thunder(shape) => shape.shape(),
             Self::ThunderBlow(shape) => shape.shape(),
+            Self::ThunderSlash(shape) => shape.shape(),
             Self::Leiming2(shape) => shape.shape(),
             Self::Tianhuo(shape) => shape.shape(),
             Self::SpiderMist(shape) => shape.shape(),
@@ -91,6 +94,7 @@ impl SummonedSkillShape {
             Self::FireWall(shape) => shape.shape_mut(),
             Self::Thunder(shape) => shape.shape_mut(),
             Self::ThunderBlow(shape) => shape.shape_mut(),
+            Self::ThunderSlash(shape) => shape.shape_mut(),
             Self::Leiming2(shape) => shape.shape_mut(),
             Self::Tianhuo(shape) => shape.shape_mut(),
             Self::SpiderMist(shape) => shape.shape_mut(),
@@ -115,6 +119,7 @@ impl SummonedSkillShape {
             Self::FireWall(shape) => shape.master(),
             Self::Thunder(shape) => shape.master(),
             Self::ThunderBlow(shape) => shape.master(),
+            Self::ThunderSlash(shape) => shape.master(),
             Self::Leiming2(shape) => shape.master(),
             Self::Tianhuo(shape) => shape.master(),
             Self::SpiderMist(shape) => shape.master(),

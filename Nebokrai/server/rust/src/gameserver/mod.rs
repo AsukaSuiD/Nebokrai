@@ -125,6 +125,8 @@ pub(crate) mod appserver {
         pub(crate) mod thunderblow;
         pub(crate) mod thunderblow2;
         pub(crate) mod thunderblowphalanx;
+        pub(crate) mod thunderslash;
+        pub(crate) mod thunderslashphalanx;
         pub(crate) mod thunderphalanx;
         pub(crate) mod thunder2;
         pub(crate) mod thunder2phalanx;

@@ -14,8 +14,8 @@
 //! стена, огненный круг, молния, печать, инь-ян, божественная кара, сбор душ
 //! и зеркало душ,
 //! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
-//! рыцарский удар, подготовка яростного удара, последующий рывок и двойной
-//! направленный удар, периодический удар листвы и фронтальный рубящий удар,
+//! рыцарский удар, подготовка яростного удара, последующий рывок, громовое
+//! рассечение и двойной направленный удар, периодический удар листвы и фронтальный рубящий удар,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -91,6 +91,8 @@ pub(crate) struct CPlayerAI {
     chain_lightning_last_used_ms: u32,
     thunder_blow: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     thunder_blow_last_used_ms: u32,
+    thunder_slash: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    thunder_slash_last_used_ms: u32,
     thunder_blow_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     thunder_blow_2_last_used_ms: u32,
     mosou: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -248,6 +250,7 @@ impl CPlayerAI {
         self.fire_ball = None;
         self.chain_lightning = None;
         self.thunder_blow = None;
+        self.thunder_slash = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -369,6 +372,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.thunder_blow.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового удара завершено");
+        }
+        if let Some(mut execution) = self.thunder_slash.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового рассечения завершено");
         }
         if let Some(mut execution) = self.thunder_blow_2.take() {
             let _ = execution.terminate(termination);
@@ -558,6 +565,7 @@ impl CPlayerAI {
         self.fire_ball = None;
         self.chain_lightning = None;
         self.thunder_blow = None;
+        self.thunder_slash = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -764,6 +772,12 @@ impl CPlayerAI {
     pub(crate) fn thunder_blow_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow.as_mut() }
     pub(crate) const fn thunder_blow_last_used_ms(&self) -> u32 { self.thunder_blow_last_used_ms }
     pub(crate) const fn mark_thunder_blow_used(&mut self, now_ms: u32) { self.thunder_blow_last_used_ms = now_ms; }
+
+    pub(crate) const fn thunder_slash(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_slash }
+    pub(crate) const fn begin_thunder_slash(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.thunder_slash = Some(state); }
+    pub(crate) fn thunder_slash_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_slash.as_mut() }
+    pub(crate) const fn thunder_slash_last_used_ms(&self) -> u32 { self.thunder_slash_last_used_ms }
+    pub(crate) const fn mark_thunder_slash_used(&mut self, now_ms: u32) { self.thunder_slash_last_used_ms = now_ms; }
 
     pub(crate) const fn thunder_blow_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow_2 }
     pub(crate) const fn begin_thunder_blow_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.thunder_blow_2 = Some(state); }

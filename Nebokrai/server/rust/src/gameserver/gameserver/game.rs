@@ -491,6 +491,7 @@ mod godthunder;
 mod chaossphere;
 mod fireball;
 mod thunderblow;
+mod thunderslash;
 mod thunderblow2;
 mod mosou;
 mod seal;
@@ -791,6 +792,12 @@ use crate::gameserver::appserver::skills::thunderblow::{
 };
 use crate::gameserver::appserver::skills::thunderblowphalanx::{
     calculate_owned_thunder_blow_attack, ThunderBlowPhalanxTick,
+};
+use crate::gameserver::appserver::skills::thunderslash::{
+    execute_player_thunder_slash, is_thunder_slash_dispatch,
+};
+use crate::gameserver::appserver::skills::thunderslashphalanx::{
+    calculate_owned_thunder_slash_attack, ThunderSlashPhalanxTick,
 };
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
@@ -33557,6 +33564,7 @@ impl CGame {
                             || player.player_ai().ju_cut().is_some()
                             || player.player_ai().lightning_sword().is_some()
                             || player.player_ai().little_flash().is_some()
+                            || player.player_ai().thunder_slash().is_some()
                             || player.player_ai().knock_out().is_some())
                             && changes_command;
                         if interrupted_delayed_skill {
@@ -34033,6 +34041,7 @@ impl CGame {
                 || player.player_ai().ju_cut().is_some()
                 || player.player_ai().lightning_sword().is_some()
                 || player.player_ai().little_flash().is_some()
+                || player.player_ai().thunder_slash().is_some()
                 || player.player_ai().knock_out().is_some();
             let released = player.player_ai_mut().release_object_target(target);
             if released {
@@ -36610,6 +36619,7 @@ impl CGame {
             let concrete_fire_ball = is_fire_ball_dispatch(dispatch);
             let concrete_chain_lightning = is_chain_lightning_dispatch(dispatch);
             let concrete_thunder_blow = is_thunder_blow_dispatch(dispatch);
+            let concrete_thunder_slash = is_thunder_slash_dispatch(dispatch);
             let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
             let concrete_mosou = is_mosou_dispatch(dispatch);
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
@@ -36753,6 +36763,8 @@ impl CGame {
                 execute_player_chain_lightning(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow {
                 execute_player_thunder_blow(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_thunder_slash {
+                execute_player_thunder_slash(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow_2 {
                 execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mosou {
@@ -39763,6 +39775,9 @@ impl CGame {
             SummonedSkillShape::ThunderBlow(phalanx) => {
                 calculate_owned_thunder_blow_attack(self, phalanx, target_level)
             }
+            SummonedSkillShape::ThunderSlash(phalanx) => {
+                calculate_owned_thunder_slash_attack(self, phalanx)
+            }
             SummonedSkillShape::SnowStorm(phalanx) => {
                 self.calculate_snow_storm_attack(phalanx)
             }
@@ -40233,6 +40248,16 @@ impl CGame {
                     ))),
                     ThunderBlowPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::ThunderSlash(phalanx) => match phalanx.tick(
+                    lifetime_now_ms,
+                    || runtime.now_milliseconds(),
+                ) {
+                    ThunderSlashPhalanxTick::Pending => Some(None),
+                    ThunderSlashPhalanxTick::Scan { sampled_at_ms } => Some(Some((
+                        phalanx.shape().identity(), sampled_at_ms,
+                    ))),
+                    ThunderSlashPhalanxTick::Expired => None,
+                },
                 SummonedSkillShape::SnowStorm(phalanx) => match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
                     SnowStormPhalanxTick::Pending => Some(None),
                     SnowStormPhalanxTick::Attack { sampled_at_ms } => Some(Some((
@@ -40482,6 +40507,20 @@ impl CGame {
                 }
                 self.restore_region_owner(owner);
             }
+            return true;
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::ThunderSlash(thunder_slash),
+        ) = (tick, &phalanx)
+        {
+            let Some(target) = self.thunder_slash_target(region_id, thunder_slash) else { return true };
+            let applied = match target.object_type {
+                PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
+                MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
+                _ => false,
+            };
+            if applied { self.damage_player_weapon(thunder_slash.master().master_id, runtime); }
             return true;
         }
         if let (
