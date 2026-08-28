@@ -108,9 +108,7 @@ use crate::gameserver::appserver::ai::cityguardwithsword::{
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
     FixedArcherTarget, select_fixed_archer_enemy,
 };
-use crate::gameserver::appserver::ai::gladiator::{
-    GladiatorTarget, consider_gladiator_target,
-};
+use crate::gameserver::appserver::ai::gladiator::{GladiatorTarget, select_gladiator_enemy};
 use crate::gameserver::appserver::ai::godsbattlemonster::consider_gods_battle_target;
 use crate::gameserver::appserver::ai::godsbattleguardwithsword::consider_gods_battle_guard_target;
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
@@ -1026,108 +1024,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && matches!(property.ai, 0 | 3)
         && let Some(area_index) = area_index
     {
-        let mut selected = None;
-        for player_id in region.player_ids_around_area(area_index) {
-            let Some(player) = game.find_player(player_id) else {
-                continue;
-            };
-            if player.server_region_id() != Some(region.id) || player.is_dead() {
-                continue;
-            }
-            let Some(candidate) = player.shape_view() else {
-                continue;
-            };
-            let distance = real_distance(
-                monster_view.tile_x,
-                monster_view.tile_y,
-                candidate.tile_x,
-                candidate.tile_y,
-            );
-            selected = consider_gladiator_target(
-                selected,
-                GladiatorTarget {
-                    identity: candidate.identity,
-                    distance,
-                },
-                property.guard_range as i32,
-            );
-        }
-        if property.kind != 5 {
-            for pet_id in region.pet_ids_around_area(area_index) {
-                let Some(candidate) = region
-                    .find_monster_by_id(pet_id)
-                    .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
-                    .and_then(|pet| {
-                        let property = game
-                            .find_monster_property_by_origin_name(pet.base_property_key()?)?;
-                        pet.shape_view(property)
-                    })
-                else {
-                    continue;
-                };
-                let distance = real_distance(
-                    monster_view.tile_x,
-                    monster_view.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                );
-                selected = consider_gladiator_target(
-                    selected,
-                    GladiatorTarget {
-                        identity: candidate.identity,
-                        distance,
-                    },
-                    property.guard_range as i32,
-                );
-            }
-        }
-        for carriage_id in region.carriage_ids_around_area(area_index) {
-            let Some((candidate, target_master)) =
-                region.find_monster_by_id(carriage_id).and_then(|carriage| {
-                    let carriage_property = game
-                        .find_monster_property_by_origin_name(carriage.base_property_key()?)?;
-                    if !carriage.is_carriage(carriage_property)
-                        || CMoveShape::is_died(carriage.hit_points())
-                    {
-                        return None;
-                    }
-                    Some((
-                        carriage.shape_view(carriage_property)?,
-                        carriage.master_info(),
-                    ))
-                })
-            else {
-                continue;
-            };
-            if !game.carriage_attackable_by_monster(
-                &property,
-                tamed,
-                attacker_master,
-                target_master,
-                region.id,
-            ) {
-                continue;
-            }
-            let distance = real_distance(
-                monster_view.tile_x,
-                monster_view.tile_y,
-                candidate.tile_x,
-                candidate.tile_y,
-            );
-            selected = consider_gladiator_target(
-                selected,
-                GladiatorTarget {
-                    identity: candidate.identity,
-                    distance,
-                },
-                property.guard_range as i32,
-            );
-        }
-        if let Some(selected) = selected {
+        if let Some(selected) = select_gladiator_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            &property,
+            tamed,
+            attacker_master,
+        ) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected.identity);
+                monster.set_ai_target(selected);
             }
-            target = Some(selected.identity);
+            target = Some(selected);
         }
     }
     let target = cast.map(|cast| cast.dispatch().target).or(target);
