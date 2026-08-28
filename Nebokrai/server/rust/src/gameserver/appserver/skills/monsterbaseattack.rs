@@ -64,6 +64,7 @@ use super::monsterrangeattack::{
     prepare_owned_monster_range_cast,
 };
 use super::chuckstone::CHUCK_STONE_SKILL_ID;
+use super::bossbluefury::{BOSS_BLUE_FURY_SKILL_ID, execute_owned_boss_blue_fury};
 use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptomaine};
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
@@ -135,6 +136,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | SPRITE_BURN_SKILL_ID
             | MACHINERY_STOMP_SKILL_ID
             | LORD_WIDERANGING_ATTACK_SKILL_ID
+            | BOSS_BLUE_FURY_SKILL_ID
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
@@ -547,6 +549,17 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             now_ms,
             runtime,
             wide_arc_dispatch,
+        );
+    }
+    if skill_id == BOSS_BLUE_FURY_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_boss_blue_fury(
+            game,
+            region,
+            monster_id,
+            skill.level,
+            &skill_properties,
+            now_ms,
         );
     }
     if skill_id == MONSTER_THORN_SKILL_ID {

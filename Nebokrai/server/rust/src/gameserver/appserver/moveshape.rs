@@ -56,6 +56,9 @@ use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
+use crate::gameserver::appserver::skills::bossbluefurystate::{
+    BossBlueFuryState, BossBlueFuryTick,
+};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
@@ -466,6 +469,7 @@ pub(crate) struct CanonicalStateStorage {
     origin_state: Option<OriginState>,
     hearten_state: Option<HeartenState>,
     fury_states: Vec<FuryState>,
+    boss_blue_fury_state: Option<BossBlueFuryState>,
     cure_state: Option<CureState>,
     poison_arrow_state: Option<PoisonArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
@@ -658,6 +662,7 @@ impl CMoveShape {
         self.origin_state = None;
         self.hearten_state = None;
         self.fury_states.clear();
+        self.boss_blue_fury_state = None;
         self.cure_state = None;
         self.poison_arrow_state = None;
         self.spider_poison_state = None;
@@ -691,6 +696,7 @@ impl CMoveShape {
         self.state_storage.agility_state_2.is_some()
             || self.state_storage.hearten_state.is_some()
             || !self.state_storage.fury_states.is_empty()
+            || self.state_storage.boss_blue_fury_state.is_some()
             || self.state_storage.cure_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
             || self.state_storage.spider_poison_state.is_some()
@@ -801,6 +807,10 @@ impl CMoveShape {
             .iter()
             .filter(|state| state.skill_id() as i32 == state_id)
             .count();
+        let boss_blue_fury = usize::from(
+            self.boss_blue_fury_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let cure = usize::from(
             self.cure_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -841,6 +851,7 @@ impl CMoveShape {
             .saturating_add(origin)
             .saturating_add(hearten)
             .saturating_add(fury)
+            .saturating_add(boss_blue_fury)
             .saturating_add(cure)
             .saturating_add(poison_arrow)
             .saturating_add(spider_poison)
@@ -888,6 +899,9 @@ impl CMoveShape {
                 .fury_states
                 .iter()
                 .any(|state| state.skill_id() == state_id)
+            || self
+                .boss_blue_fury_state
+                .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .cure_state
                 .is_some_and(|state| state.skill_id() == state_id)
@@ -1025,6 +1039,32 @@ impl CMoveShape {
             }
         }
         expired
+    }
+
+    pub(crate) fn take_boss_blue_fury_state(&mut self) -> Option<BossBlueFuryState> {
+        self.boss_blue_fury_state.take()
+    }
+
+    pub(crate) fn begin_boss_blue_fury_state(&mut self, state: BossBlueFuryState) {
+        debug_assert!(self.boss_blue_fury_state.is_none());
+        self.boss_blue_fury_state = Some(state);
+    }
+
+    pub(crate) fn boss_blue_fury_state(&self) -> Option<BossBlueFuryState> {
+        self.boss_blue_fury_state
+    }
+
+    pub(crate) fn tick_boss_blue_fury_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<(BossBlueFuryState, BossBlueFuryTick)> {
+        let state = self.boss_blue_fury_state.as_mut()?;
+        let tick = state.tick(now_ms);
+        let snapshot = *state;
+        if tick.expired {
+            self.boss_blue_fury_state = None;
+        }
+        Some((snapshot, tick))
     }
 
     pub(crate) fn replace_mana_shield_state(

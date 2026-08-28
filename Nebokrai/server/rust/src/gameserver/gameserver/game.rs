@@ -785,6 +785,7 @@ use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_player_base_attack,
 };
 use crate::gameserver::appserver::skills::furystate::expire_monster_fury_states;
+use crate::gameserver::appserver::skills::bossbluefurystate::expire_monster_boss_blue_fury_state;
 use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
@@ -34847,7 +34848,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f6`,
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f6/0x1f7`,
     /// включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
@@ -40247,6 +40248,12 @@ impl CGame {
                     );
                     let _ = expire_monster_cure_state(self, owner.base_mut(), monster_id);
                     let _ = expire_monster_fury_states(
+                        self,
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
+                    let _ = expire_monster_boss_blue_fury_state(
                         self,
                         owner.base_mut(),
                         monster_id,
