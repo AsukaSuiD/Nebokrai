@@ -24,8 +24,8 @@ use crate::public::tools::get_line_direction;
 
 pub(crate) const POISON_MOTH_SKILL_ID: u32 = 0xcf;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
-const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
+pub(super) const PLAYER_TYPE: i32 = 400;
+pub(super) const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 const TARGET_MAX_DISTANCE: u32 = 10_006;
 const MISSILE_FLYING_TIME: u32 = 10_008;
@@ -55,7 +55,7 @@ impl PoisonMothExecutionState {
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
 pub(crate) fn is_poison_moth_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: POISON_MOTH_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: POISON_MOTH_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: POISON_MOTH_SKILL_ID, .. }) }
 fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
-fn weapon_is_crossbow(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 4) }
+pub(super) fn weapon_is_crossbow(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 4) }
 
 fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
@@ -71,13 +71,13 @@ fn send_fire(game: &mut CGame, player_id: i32, level: i32, destination: (i32, i3
 fn send_end(game: &mut CGame, player_id: i32, level: i32, end_tile: (i32, i32), target: Option<ShapeIdentity>) {
     let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(3); message.add_long(POISON_MOTH_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); message.add_long(end_tile.0); message.add_long(end_tile.1); message.add_long(target.map_or(0, |value| value.object_type)); message.add_long(target.map_or(0, |value| value.id)); let _ = game.send_player_shape_around(player_id, None, &message);
 }
-fn target_position(game: &CGame, region_id: i32, player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
+pub(super) fn target_position(game: &CGame, region_id: i32, player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
     match dispatch { PlayerSkillDispatch::SelfTarget { .. } => game.find_player(player_id).and_then(CPlayer::shape_view).map(|view| (view.tile_x, view.tile_y)), PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)), PlayerSkillDispatch::Object { target, .. } => game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y)) }
 }
-fn master_info(player: &CPlayer) -> MasterInfo {
+pub(super) fn master_info(player: &CPlayer) -> MasterInfo {
     let permissions = player.pk_permissions(); MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(permissions.player), permitted_to_kill_teammate: i32::from(permissions.teammate), permitted_to_kill_guild_member: i32::from(permissions.guild_member), permitted_to_kill_criminal: i32::from(permissions.criminal) }
 }
-fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u8> {
+pub(super) fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u8> {
     match target.object_type { PLAYER_TYPE => game.find_player(target.id).map(CPlayer::level), MONSTER_TYPE => game.find_region(region_id).and_then(|owner| { let monster = owner.base().find_monster_by_id(target.id)?; game.find_monster_property_by_origin_name(monster.base_property_key()?).map(|property| property.level as u8) }), _ => None }
 }
 fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i32, target_damage_factor: u32, hit_modifier: i32) -> Option<(MasterInfo, AttackInformation)> {
@@ -88,7 +88,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i
     if game.skill_random_below(100) < i32::from(combat.blast_attack) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } }
     Some((master, attack))
 }
-fn cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<ShapeIdentity> {
+pub(super) fn cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<ShapeIdentity> {
     let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() }; let (area_width, area_height) = game.area_dimensions(); let mut shapes = Vec::new(); if region.get_shapes(x, y, area_width, area_height, game, &mut shapes).is_err() { return Vec::new() } shapes.into_iter().map(|shape| shape.identity).collect()
 }
 fn attack_cell<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, level: i32, target_damage_factor: u32, hit_modifier: i32, x: i32, y: i32, runtime: &mut Runtime) -> Option<ShapeIdentity> {

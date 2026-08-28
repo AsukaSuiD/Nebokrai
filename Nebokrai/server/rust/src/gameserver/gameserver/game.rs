@@ -796,6 +796,7 @@ use crate::gameserver::appserver::skills::meteorarrowphalanx::{
 };
 use crate::gameserver::appserver::skills::rainarrow::{execute_player_rain_arrow, is_rain_arrow_dispatch};
 use crate::gameserver::appserver::skills::poisonmoth::{execute_player_poison_moth, is_poison_moth_dispatch};
+use crate::gameserver::appserver::skills::bloodrose::{execute_player_blood_rose, is_blood_rose_dispatch};
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -33645,6 +33646,7 @@ impl CGame {
                             || player.player_ai().meteor_arrow().is_some()
                             || player.player_ai().rain_arrow().is_some()
                             || player.player_ai().poison_moth().is_some()
+                            || player.player_ai().blood_rose().is_some()
                             || player.player_ai().agility_family().is_some()
                             || player.player_ai().callosity().is_some()
                             || player.player_ai().ju_cut().is_some()
@@ -34315,6 +34317,7 @@ impl CGame {
                 || player.player_ai().meteor_arrow().is_some()
                 || player.player_ai().rain_arrow().is_some()
                 || player.player_ai().poison_moth().is_some()
+                || player.player_ai().blood_rose().is_some()
                 || player.player_ai().agility_family().is_some()
                 || player.player_ai().callosity().is_some()
                 || player.player_ai().mosou().is_some()
@@ -36986,6 +36989,7 @@ impl CGame {
             let concrete_meteor_arrow = is_meteor_arrow_dispatch(dispatch);
             let concrete_rain_arrow = is_rain_arrow_dispatch(dispatch);
             let concrete_poison_moth = is_poison_moth_dispatch(dispatch);
+            let concrete_blood_rose = is_blood_rose_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37105,6 +37109,8 @@ impl CGame {
                 execute_player_rain_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_poison_moth {
                 execute_player_poison_moth(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_blood_rose {
+                execute_player_blood_rose(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
@@ -38721,12 +38727,12 @@ impl CGame {
         Some(result)
     }
 
-    /// Связка сценарной функции `3010` с исполнением удерживает целевого игрока
-    /// и его конкретный регион одним изменяемым проходом, чтобы
-    /// `CMoveShape::ForceMove` одновременно опубликовал сообщение окружающим,
+    /// Удерживает целевого игрока и его конкретный регион одним изменяемым
+    /// проходом, чтобы `CMoveShape::ForceMove` одновременно опубликовал
+    /// сообщение окружающим,
     /// переставил пространственную принадлежность и поставил событие ожидания
-    /// искусственному интеллекту на вычисленную сценарием длительность.
-    pub(crate) fn force_move_script_player<Context: MoveShapeCommandContext>(
+    /// искусственному интеллекту на вычисленную владельцем длительность.
+    pub(crate) fn force_move_player<Context: MoveShapeCommandContext>(
         &mut self,
         player_id: i32,
         destination_x: i32,

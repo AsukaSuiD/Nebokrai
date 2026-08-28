@@ -6499,7 +6499,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .find_player_by_name(target_name)
                     .map(CPlayer::player_id)
             {
-                let _ = game.force_move_script_player(target_id, x, y, duration_ms as u32, runtime);
+                let _ = game.force_move_player(target_id, x, y, duration_ms as u32, runtime);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
