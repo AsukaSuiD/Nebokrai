@@ -56,6 +56,7 @@ use crate::gameserver::appserver::skills::agilitystate::{
 };
 use crate::gameserver::appserver::skills::callositystate::CallosityState;
 use crate::gameserver::appserver::skills::curestate::CureState;
+use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
@@ -510,6 +511,7 @@ pub(crate) struct CanonicalStateStorage {
     boss_blue_fury_state: Option<BossBlueFuryState>,
     boss_blue_quake_state: Option<BossBlueQuakeState>,
     cure_state: Option<CureState>,
+    daub_poison_state: Option<DaubPoisonState>,
     seal_state: Option<SealState>,
     curable_state_order: IndexSet<u32>,
     poison_arrow_state: Option<PoisonArrowState>,
@@ -834,6 +836,7 @@ impl CMoveShape {
             || self.state_storage.rage_break_state.is_some()
             || self.state_storage.boss_blue_fury_state.is_some()
             || self.state_storage.cure_state.is_some()
+            || self.state_storage.daub_poison_state.is_some()
             || self.state_storage.seal_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
             || self.state_storage.poison_fog_state.is_some()
@@ -1000,6 +1003,10 @@ impl CMoveShape {
             self.cure_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let daub_poison = usize::from(
+            self.daub_poison_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let seal = usize::from(
             self.seal_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -1077,6 +1084,7 @@ impl CMoveShape {
             .saturating_add(boss_blue_fury)
             .saturating_add(boss_blue_quake)
             .saturating_add(cure)
+            .saturating_add(daub_poison)
             .saturating_add(seal)
             .saturating_add(poison_arrow)
             .saturating_add(poison_fog)
@@ -1151,6 +1159,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .cure_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .daub_poison_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .seal_state
@@ -1591,6 +1602,22 @@ impl CMoveShape {
 
     pub(crate) fn take_cure_state_for_ai(&mut self) -> Option<CureState> {
         self.cure_state.take()
+    }
+
+    pub(crate) fn replace_daub_poison_state(
+        &mut self,
+        state: DaubPoisonState,
+    ) -> Option<DaubPoisonState> {
+        self.daub_poison_state.replace(state)
+    }
+
+    pub(crate) fn take_expired_daub_poison_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<DaubPoisonState> {
+        self.daub_poison_state
+            .filter(|state| state.expired(now_ms))?;
+        self.daub_poison_state.take()
     }
 
     pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {

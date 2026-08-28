@@ -4457,6 +4457,20 @@ impl CPlayer {
         self.move_shape.take_cure_state_for_ai()
     }
 
+    pub(crate) fn replace_daub_poison_state(
+        &mut self,
+        state: super::skills::daubpoisonstate::DaubPoisonState,
+    ) -> Option<super::skills::daubpoisonstate::DaubPoisonState> {
+        self.move_shape.replace_daub_poison_state(state)
+    }
+
+    pub(crate) fn take_expired_daub_poison_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::daubpoisonstate::DaubPoisonState> {
+        self.move_shape.take_expired_daub_poison_state(now_ms)
+    }
+
     pub(crate) fn curable_state_ids(&self) -> Vec<u32> {
         self.move_shape.curable_state_ids()
     }

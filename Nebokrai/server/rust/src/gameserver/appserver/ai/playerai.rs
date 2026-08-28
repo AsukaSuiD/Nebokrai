@@ -122,6 +122,8 @@ pub(crate) struct CPlayerAI {
     explosive_arrow_last_used_ms: [u32; 3],
     strike: Option<StrikeExecutionState>,
     strike_last_used_ms: u32,
+    daub_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    daub_poison_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -316,6 +318,7 @@ impl CPlayerAI {
         self.falling_star = None;
         self.explosive_arrow = None;
         self.strike = None;
+        self.daub_poison = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -477,6 +480,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.strike.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение оглушающего снаряда завершено");
+        }
+        if let Some(mut execution) = self.daub_poison.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение смазки оружия ядом завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -729,6 +736,7 @@ impl CPlayerAI {
         self.falling_star = None;
         self.explosive_arrow = None;
         self.strike = None;
+        self.daub_poison = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -908,6 +916,12 @@ impl CPlayerAI {
     pub(crate) fn strike_mut(&mut self) -> Option<&mut StrikeExecutionState> { self.strike.as_mut() }
     pub(crate) const fn strike_last_used_ms(&self) -> u32 { self.strike_last_used_ms }
     pub(crate) const fn mark_strike_used(&mut self, now_ms: u32) { self.strike_last_used_ms = now_ms; }
+
+    pub(crate) const fn daub_poison(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.daub_poison }
+    pub(crate) const fn begin_daub_poison(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.daub_poison = Some(state); }
+    pub(crate) fn daub_poison_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.daub_poison.as_mut() }
+    pub(crate) const fn daub_poison_last_used_ms(&self) -> u32 { self.daub_poison_last_used_ms }
+    pub(crate) const fn mark_daub_poison_used(&mut self, now_ms: u32) { self.daub_poison_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);

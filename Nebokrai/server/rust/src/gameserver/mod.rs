@@ -88,6 +88,8 @@ pub(crate) mod appserver {
         pub(crate) mod chainlightning;
         pub(crate) mod cure;
         pub(crate) mod curestate;
+        pub(crate) mod daubpoison;
+        pub(crate) mod daubpoisonstate;
         pub(crate) mod corpsecandleblasting;
         pub(crate) mod corpseptomaine;
         pub(crate) mod fatalblow;

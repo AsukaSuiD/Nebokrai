@@ -1,135 +1,170 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Самонакладываемая смазка оружия ядом `CDaubPoison` (`0xDF`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/daubpoison.cpp`. Все перегрузки `Begin` подтверждённо
+//! игнорируют запрошенную цель и выбирают игрока. Сохранены две проверки MP,
+//! условная блокировка движения только при ненулевом расходе, задержка,
+//! cooldown, пакеты `0xBFE01` и порядок замены состояния `end → begin`.
+//! `CGame` предоставляет player owner, свойства, обновление состояния и
+//! фактическую доставку; lifecycle навыка остаётся здесь.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.h
+use super::baseattack::time_reached;
+use super::daubpoisonstate::{DaubPoisonState, DAUB_POISON_STATE_ID, replace_player_daub_poison_state};
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CDaubPoison::CDaubPoison
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:18
-// RVA: 0x00165E80
-// ADDRESS: 00565e80
-// PROTOTYPE: undefined __thiscall CDaubPoison(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const DAUB_POISON_SKILL_ID: u32 = DAUB_POISON_STATE_ID;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const PLAYER_TYPE: i32 = 400;
+const USER_MP_LOSE: u32 = 2;
+const DELAY_TIME: u32 = 10_001;
+const STATE_PERSIST_TIME: u32 = 10_002;
+const REUSE_DELAY_TIME: u32 = 10_005;
+const CAN_BE_BREAKED: u32 = 10_006;
 
-// ============================================================================
-// FUNCTION: CDaubPoison::~CDaubPoison
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:26
-// RVA: 0x00165EF0
-// ADDRESS: 00565ef0
-// PROTOTYPE: void __thiscall ~CDaubPoison(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
 
-// ============================================================================
-// FUNCTION: CDaubPoison::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:122
-// RVA: 0x00165F10
-// ADDRESS: 00565f10
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const fn is_daub_poison_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == DAUB_POISON_SKILL_ID,
+    }
+}
 
-// ============================================================================
-// FUNCTION: CDaubPoison::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:138
-// RVA: 0x00165FE0
-// ADDRESS: 00565fe0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn finish(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
 
-// ============================================================================
-// FUNCTION: CDaubPoison::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:105
-// RVA: 0x001660D0
-// ADDRESS: 005660d0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
+    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
+    match code {
+        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
+        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
+        _ => {}
+    }
+}
 
-// ============================================================================
-// FUNCTION: CDaubPoisonEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:283
-// RVA: 0x00166190
-// ADDRESS: 00566190
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn send_cast(game: &mut CGame, player_id: i32, level: i32, apply: bool) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let x = player.shape().get_tile_x().unwrap_or_default();
+    let y = player.shape().get_tile_y().unwrap_or_default();
+    let direction = player.shape().get_direction();
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(if apply { 2 } else { 1 });
+    message.add_long(DAUB_POISON_SKILL_ID as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    if apply {
+        message.add_long(PLAYER_TYPE);
+        message.add_long(player_id);
+        message.add_long(x);
+        message.add_long(y);
+    } else {
+        message.add_long(direction);
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
-// ============================================================================
-// FUNCTION: CDaubPoison::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:38
-// RVA: 0x001664B0
-// ADDRESS: 005664b0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_daub_poison_dispatch(dispatch) {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let Some((level, initial_mana)) = game.find_player(player_id).map(|player| {
+        (player.learned_skill_level(DAUB_POISON_SKILL_ID), player.mana())
+    }) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level) else {
+        finish(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(USER_MP_LOSE);
+    let delay = properties.query_property(DELAY_TIME);
+    let keep_time = properties.query_property(STATE_PERSIST_TIME);
+    let reuse = properties.query_property(REUSE_DELAY_TIME);
+    let _breakable = properties.query_property(CAN_BE_BREAKED);
 
-// ============================================================================
-// FUNCTION: CDaubPoison::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoison.cpp:168
-// RVA: 0x00166690
-// ADDRESS: 00566690
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if player_ai.daub_poison().is_none() {
+        let now_ms = runtime.now_milliseconds();
+        if player_ai.daub_poison_last_used_ms() != 0
+            && !time_reached(now_ms, player_ai.daub_poison_last_used_ms(), reuse)
+        {
+            send_failure(game, player_id, 0x0d, mp_loss);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_failure(game, player_id, 7, mp_loss);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            if mp_loss != 0 { player.set_skill_moveable(false); }
+            player.set_current_skill_id(Some(DAUB_POISON_SKILL_ID));
+        }
+        player_ai.begin_daub_poison(SkillExecutionKernel::begin(dispatch, now_ms));
+    } else if player_ai
+        .daub_poison()
+        .is_none_or(|execution| execution.dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
 
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+    if game.find_player(player_id).is_none_or(CPlayer::is_dead) {
+        send_failure(game, player_id, 2, mp_loss);
+        player_ai.mark_daub_poison_used(runtime.now_milliseconds());
+        finish(game, player_id);
+        return terminal(QueuedSkillExecutionState::Completed);
+    }
+    if player_ai.daub_poison().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+        let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_failure(game, player_id, 7, mp_loss);
+            finish(game, player_id);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(mana.wrapping_sub(mp_loss));
+        }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        send_cast(game, player_id, level, false);
+        if let Some(execution) = player_ai.daub_poison_mut() {
+            let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let started = player_ai
+        .daub_poison()
+        .map(SkillExecutionKernel::started_at_ms)
+        .expect("выполнение смазки оружия создано или восстановлено");
+    if !time_reached(runtime.now_milliseconds(), started, delay) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    send_cast(game, player_id, level, true);
+    let now_ms = runtime.now_milliseconds();
+    let installed = replace_player_daub_poison_state(
+        game,
+        player_id,
+        DaubPoisonState::new(now_ms, keep_time),
+        now_ms,
+    );
+    if let Some(execution) = player_ai.daub_poison_mut() {
+        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    player_ai.mark_daub_poison_used(now_ms);
+    finish(game, player_id);
+    terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
+}

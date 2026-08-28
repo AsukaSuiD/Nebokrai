@@ -805,6 +805,8 @@ use crate::gameserver::appserver::skills::explosivearrow::{
     execute_player_explosive_arrow, explosive_arrow_variant,
 };
 use crate::gameserver::appserver::skills::strike::{execute_player_strike, is_strike_dispatch};
+use crate::gameserver::appserver::skills::daubpoison::{execute_player_daub_poison, is_daub_poison_dispatch};
+use crate::gameserver::appserver::skills::daubpoisonstate::expire_player_daub_poison_state;
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
@@ -26371,6 +26373,7 @@ impl CGame {
         let _ = expire_player_boa_lock_state(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
+        let _ = expire_player_daub_poison_state(self, player_id, now_ms);
         let _ = self.expire_player_poison_fog(player_id, now_ms, runtime);
         let rage_break_context = self.find_player(player_id).and_then(|player| {
             Some((
@@ -37017,6 +37020,7 @@ impl CGame {
             let concrete_falling_star = is_falling_star_dispatch(dispatch);
             let concrete_explosive_arrow = explosive_arrow_variant(dispatch).is_some();
             let concrete_strike = is_strike_dispatch(dispatch);
+            let concrete_daub_poison = is_daub_poison_dispatch(dispatch);
             let concrete_callosity = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -37148,6 +37152,8 @@ impl CGame {
                 execute_player_explosive_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_strike {
                 execute_player_strike(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_daub_poison {
+                execute_player_daub_poison(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_base_magic {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {

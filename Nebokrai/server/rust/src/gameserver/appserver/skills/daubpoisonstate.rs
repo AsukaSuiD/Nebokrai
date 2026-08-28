@@ -1,111 +1,89 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое состояние смазки оружия ядом `CDaubPoisonState` (`0xDF`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/daubpoisonstate.cpp`. Состояние принадлежит только
+//! игроку, хранит строгий wrapping-срок и публикует исходные пакеты начала и
+//! завершения. Проверки стрел читают этот единственный типизированный
+//! экземпляр через `GetStateBySkillID`. Общая загрузка списка `CState` пока не
+//! достигнута и остаётся границей будущего владельца фабрики состояний.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CDaubPoisonState::CDaubPoisonState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp:15
-// RVA: 0x001F17B0
-// ADDRESS: 005f17b0
-// PROTOTYPE: undefined __thiscall CDaubPoisonState(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const DAUB_POISON_STATE_ID: u32 = 0xdf;
+const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
-// ============================================================================
-// FUNCTION: CDaubPoisonState::CDaubPoisonState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp:24
-// RVA: 0x001F1820
-// ADDRESS: 005f1820
-// PROTOTYPE: undefined __thiscall CDaubPoisonState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DaubPoisonState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+}
 
-// ============================================================================
-// FUNCTION: CDaubPoisonState::~CDaubPoisonState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp:33
-// RVA: 0x001F1890
-// ADDRESS: 005f1890
-// PROTOTYPE: void __thiscall ~CDaubPoisonState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl DaubPoisonState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
+        Self { started_at_ms, keep_time_ms }
+    }
 
-// ============================================================================
-// FUNCTION: CDaubPoisonState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp:52
-// RVA: 0x001F18A0
-// ADDRESS: 005f18a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn skill_id(self) -> u32 { DAUB_POISON_STATE_ID }
 
-// ============================================================================
-// FUNCTION: CDaubPoisonState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp:70
-// RVA: 0x001F1960
-// ADDRESS: 005f1960
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    /// Исходный `GameAiTick::Passed`: равенство с границей ещё активно.
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+    }
 
-// ============================================================================
-// FUNCTION: CDaubPoisonState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp:37
-// RVA: 0x001F1A50
-// ADDRESS: 005f1a50
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
+        self.keep_time_ms
+            .saturating_sub(now_ms.wrapping_sub(self.started_at_ms)) as i32
+    }
+}
 
-// ============================================================================
-// FUNCTION: CDaubPoisonStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\daubpoisonstate.cpp:142
-// RVA: 0x001F1B00
-// ADDRESS: 005f1b00
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn send_daub_poison_state_visual(
+    game: &mut CGame,
+    player_id: i32,
+    state: DaubPoisonState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let Some(player) = game.find_player(player_id) else { return };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(0);
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
+pub(crate) fn replace_player_daub_poison_state(
+    game: &mut CGame,
+    player_id: i32,
+    state: DaubPoisonState,
+    now_ms: u32,
+) -> bool {
+    let previous = game
+        .find_player_mut(player_id)
+        .map(|player| player.replace_daub_poison_state(state));
+    let Some(previous) = previous else { return false };
+    if let Some(previous) = previous {
+        send_daub_poison_state_visual(game, player_id, previous, false, now_ms);
+    }
+    send_daub_poison_state_visual(game, player_id, state, true, now_ms);
+    true
+}
 
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn expire_player_daub_poison_state(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+) -> bool {
+    let state = game
+        .find_player_mut(player_id)
+        .and_then(|player| player.take_expired_daub_poison_state(now_ms));
+    let Some(state) = state else { return false };
+    send_daub_poison_state_visual(game, player_id, state, false, now_ms);
+    true
+}
