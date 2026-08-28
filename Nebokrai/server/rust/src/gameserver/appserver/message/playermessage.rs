@@ -124,16 +124,6 @@ pub(crate) enum PlayerItemRuntimeEffect {
     SkillWire {
         skill_id: u32,
     },
-    CheckReuseSkillItem {
-        goods_id: CGuid,
-        skill_id: u32,
-    },
-    PrepareReuseSkillItem {
-        slot: u8,
-        goods_id: CGuid,
-        skill_id: u32,
-        skill_level: i32,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -216,6 +206,22 @@ fn send_item_skill_wire(
     message.base_mut().add_short(wire.value_74 as i16);
     message.base_mut().add_short(wire.value_78 as i16);
     message.send_to_player(game.net_server(), player_id)
+}
+
+fn item_skill_wire(game: &CGame, skill_id: u32, skill_level: i32) -> Option<PlayerItemSkillWire> {
+    const USER_MP_LOSE: u32 = 2;
+    const TARGET_MIN_DISTANCE: u32 = 5_002;
+    const TARGET_MAX_DISTANCE: u32 = 5_003;
+    const REUSE_DELAY: u32 = 10_005;
+    let properties = game.skill_base_properties(skill_id, skill_level)?;
+    let minimum = properties.query_property(TARGET_MIN_DISTANCE);
+    let maximum = properties.query_property(TARGET_MAX_DISTANCE);
+    Some(PlayerItemSkillWire {
+        value_84: properties.query_property(REUSE_DELAY),
+        value_70: if minimum as i32 > 0 { minimum as u16 } else { 1 },
+        value_74: if maximum as i32 > 0 { maximum as u16 } else { 1 },
+        value_78: properties.query_property(USER_MP_LOSE) as u16,
+    })
 }
 
 fn publish_packet_item_consumption(
@@ -1000,6 +1006,8 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                         }
                         0x85 => {
                             consume = false;
+                            const GAP_TRIGGER_SKILL: i32 = 133;
+                            const GAP_REUSE_TIME: i32 = 134;
                             let skill_id =
                                 goods.addon_property_value(game.goods_factory(), GAP_SKILL_ID, 1)
                                     as u32;
@@ -1008,12 +1016,18 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 GAP_SKILL_LEVEL,
                                 1,
                             );
-                            let reusable = runtime.apply_player_item_runtime_effect(
-                                game,
-                                player_id,
-                                PlayerItemRuntimeEffect::CheckReuseSkillItem { goods_id, skill_id },
-                            );
-                            if reusable.applied {
+                            let reuse_time = goods
+                                .addon_property_value(game.goods_factory(), GAP_REUSE_TIME, 1)
+                                .max(0) as u32;
+                            let last_used = game
+                                .find_player(player_id)
+                                .map_or(0, |player| player.last_skill_item_use_ms(base_index));
+                            let reusable = goods.addon_property_value(
+                                game.goods_factory(), GAP_TRIGGER_SKILL, 1,
+                            ) != 0
+                                && (last_used == 0
+                                    || facts.tick_ms.wrapping_sub(last_used) > reuse_time);
+                            if reusable {
                                 let skill_factory = game.skill_factory().clone();
                                 let replaced = game
                                     .find_player_mut(player_id)
@@ -1025,30 +1039,18 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                         .expect("reuse-item player сохранён для позиции")
                                         .set_item_skill_position(skill_id, i32::from(slot));
                                 }
-                                let result = replaced.then(|| {
-                                    runtime.apply_player_item_runtime_effect(
+                                if replaced
+                                    && let Some(wire) = item_skill_wire(game, skill_id, skill_level)
+                                {
+                                    let _ = send_item_skill_wire(
                                         game,
                                         player_id,
-                                        PlayerItemRuntimeEffect::PrepareReuseSkillItem {
-                                            slot,
-                                            goods_id,
-                                            skill_id,
-                                            skill_level,
-                                        },
-                                    )
-                                });
-                                if let Some(result) = result {
-                                    if let Some(wire) = result.skill_wire {
-                                        let _ = send_item_skill_wire(
-                                            game,
-                                            player_id,
-                                            0x000b_fe07,
-                                            Some(0x55),
-                                            skill_id,
-                                            skill_level,
-                                            wire,
-                                        );
-                                    }
+                                        0x000b_fe07,
+                                        Some(0x55),
+                                        skill_id,
+                                        skill_level,
+                                        wire,
+                                    );
                                 }
                             } else {
                                 let _ = send_item_notice(
