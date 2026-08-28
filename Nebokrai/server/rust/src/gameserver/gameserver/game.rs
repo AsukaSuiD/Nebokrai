@@ -485,6 +485,7 @@
 mod bloodloss;
 mod fatalblow;
 mod firewall;
+mod godpunishment;
 mod chaossphere;
 mod seal;
 mod thunder;
@@ -866,6 +867,8 @@ use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_ta
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
 use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_yin_yang_target};
 use crate::gameserver::appserver::skills::yinyangphalanx::YinYangPhalanxTick;
+use crate::gameserver::appserver::skills::godpunishment::{execute_player_god_punishment, is_god_punishment_target};
+use crate::gameserver::appserver::skills::godpunishmentphalanx::GodPunishmentPhalanxTick;
 use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
 use crate::gameserver::appserver::skills::cure::{execute_player_cure, is_cure_target};
 use crate::gameserver::appserver::skills::nonfun::{
@@ -36492,6 +36495,7 @@ impl CGame {
             let concrete_snow_storm = is_snow_storm_target(dispatch);
             let concrete_weak = is_weak_target(dispatch);
             let concrete_yin_yang = is_yin_yang_target(dispatch);
+            let concrete_god_punishment = is_god_punishment_target(dispatch);
             let concrete_god_bless = is_god_bless_skill(dispatch);
             let concrete_cure = is_cure_target(dispatch);
             let concrete_self_shield = match dispatch {
@@ -36565,6 +36569,8 @@ impl CGame {
                 execute_player_weak(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_yin_yang {
                 execute_player_yin_yang(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_god_punishment {
+                execute_player_god_punishment(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_god_bless {
                 execute_player_god_bless(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_cure {
@@ -39507,6 +39513,7 @@ impl CGame {
             SummonedSkillShape::YinYang(phalanx) => {
                 self.calculate_yin_yang_attack(phalanx, target_level)
             }
+            SummonedSkillShape::GodPunishment(phalanx) => self.calculate_god_punishment_attack(phalanx, target_level),
         }
     }
 
@@ -39990,6 +39997,7 @@ impl CGame {
                     YinYangPhalanxTick::Pending => Some(None),
                     YinYangPhalanxTick::AttackAndExpire { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))),
                 },
+                SummonedSkillShape::GodPunishment(phalanx) => match phalanx.tick(lifetime_now_ms) { GodPunishmentPhalanxTick::Scan { sampled_at_ms } => Some(Some((phalanx.shape().identity(), sampled_at_ms))), GodPunishmentPhalanxTick::Expired => None },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
@@ -40228,6 +40236,14 @@ impl CGame {
             if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
                 let _ = self.send_shape_exit_around(region, phalanx.shape());
             }
+            return true;
+        }
+        if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodPunishment(god)) = (tick, &phalanx) {
+            let mut applied = false;
+            for target in self.god_punishment_targets(region_id, god) {
+                applied |= match target.object_type { PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime), MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime), _ => false };
+            }
+            if applied { if let Some(mut owner) = self.take_region_owner(region_id) { if let Some(SummonedSkillShape::GodPunishment(god)) = owner.base_mut().find_skill_phalanx_mut(phalanx_id) { god.finish(); } self.restore_region_owner(owner); } }
             return true;
         }
         match tick {

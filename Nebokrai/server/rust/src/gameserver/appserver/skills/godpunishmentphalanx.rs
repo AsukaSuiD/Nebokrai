@@ -1,110 +1,31 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Одноклеточная область `CGodPunishmentPhalanx` (`0x13A`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/godpunishmentphalanx.cpp`. До строгого истечения срока
+//! область просматривает одну клетку и после применения помечается на удаление.
+//! Текущие боевые свойства владельца читаются при атаке; формула сохраняет два
+//! вызова legacy RNG. Не достигнут только DB/wire decoder восстановленной формы.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp
+use super::godpunishment::GOD_PUNISHMENT_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
+use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CGodPunishmentPhalanx::ReplaceAffectRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp:92
-// RVA: 0x001F54A0
-// ADDRESS: 005f54a0
-// PROTOTYPE: void __thiscall ReplaceAffectRegion(long param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodPunishmentPhalanx::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp:178
-// RVA: 0x001F54D0
-// ADDRESS: 005f54d0
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodPunishmentPhalanx::CGodPunishmentPhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp:19
-// RVA: 0x001FDD80
-// ADDRESS: 005fdd80
-// PROTOTYPE: undefined __thiscall CGodPunishmentPhalanx(tagMasterInfo * param_1, ulong param_2, long param_3, long param_4, long param_5, long param_6)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodPunishmentPhalanx::~CGodPunishmentPhalanx
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp:29
-// RVA: 0x001FDDE0
-// ADDRESS: 005fdde0
-// PROTOTYPE: void __thiscall ~CGodPunishmentPhalanx(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodPunishmentPhalanx::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp:123
-// RVA: 0x001FDE10
-// ADDRESS: 005fde10
-// PROTOTYPE: void __thiscall CalculateAttackPower(tagAttackInformation * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodPunishmentPhalanx::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp:100
-// RVA: 0x001FE010
-// ADDRESS: 005fe010
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGodPunishmentPhalanx::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\godpunishmentphalanx.cpp:35
-// RVA: 0x001FE110
-// ADDRESS: 005fe110
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) enum GodPunishmentPhalanxTick { Scan { sampled_at_ms: u32 }, Expired }
+#[derive(Clone, Debug, Eq, PartialEq)] pub(crate) struct CGodPunishmentPhalanx { shape: CShape, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32 }
+impl CGodPunishmentPhalanx {
+    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
+    pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32) -> Self { let mut shape = CShape::with_constructor_defaults(); shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID }); Self { shape, master, started_at_ms, lifetime_ms, skill_level, minimum_attack, maximum_attack, element_modifier } }
+    pub(crate) const fn shape(&self) -> &CShape { &self.shape } pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape } pub(crate) const fn master(&self) -> MasterInfo { self.master }
+    pub(crate) fn finish(&mut self) { self.shape.set_change_state(SHAPE_CHANGE_DELETE); }
+    pub(crate) fn tick(&mut self, now: u32) -> GodPunishmentPhalanxTick { if self.started_at_ms.wrapping_add(self.lifetime_ms) < now { self.finish(); GodPunishmentPhalanxTick::Expired } else { GodPunishmentPhalanxTick::Scan { sampled_at_ms: now } } }
+    pub(crate) fn encode_client_snapshot(&self, mut now: impl FnMut() -> u32) -> Option<Vec<u8>> { let first = now(); let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first { 0 } else { self.lifetime_ms.wrapping_sub(now()).wrapping_add(self.started_at_ms) }; let mut payload = Vec::new(); { let mut writer = LegacyWriter::new(&mut payload); writer.write_i32(GOD_PUNISHMENT_SKILL_ID as i32); writer.write_i32(self.skill_level); writer.write_i32(self.shape.get_tile_x().ok()?); writer.write_i32(self.shape.get_tile_y().ok()?); writer.write_u32(remained); } self.shape.encode_to_byte_array(&mut payload, true).then_some(payload) }
+    pub(crate) fn calculate_attack(&self, target_factor: f32, combat: PlayerCombatProperties, occupation: u8, level: u8, critical_rate: f32, random: &mut dyn FnMut(i32) -> i32) -> (AttackInformation, PlayerCombatProperties, u8, u8) { let width = self.maximum_attack.wrapping_sub(self.minimum_attack).wrapping_abs().wrapping_add(1); let scaled = self.element_modifier.wrapping_mul(combat.element_modify).wrapping_div(100); let damage = self.minimum_attack.wrapping_add(random(width)).wrapping_add(combat.add_element_attack as i32).wrapping_add(scaled).max(0); let mut attack = AttackInformation { skill_id: GOD_PUNISHMENT_SKILL_ID, skill_level: self.skill_level as u8, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 100, damage_factor: target_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }] }; if random(100) < i32::from(combat.cch) { attack.critical = true; for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32; } } (attack, combat, occupation, level) }
+}
 
 // ============================================================================
 // FUNCTION: CGodPunishmentPhalanx::DecordFromByteArray
@@ -118,9 +39,3 @@
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
-//
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer

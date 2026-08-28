@@ -11,7 +11,7 @@
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
 //! питомцами, усиление, периодическое лечение, огненная стрела, огненная
-//! стена, огненный круг, молния, печать, инь-ян,
+//! стена, огненный круг, молния, печать, инь-ян, божественная кара,
 //! сфера хаоса и семь падающих звёзд,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
@@ -85,6 +85,8 @@ pub(crate) struct CPlayerAI {
     seal_last_used_ms: u32,
     yin_yang: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     yin_yang_last_used_ms: u32,
+    god_punishment: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    god_punishment_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
@@ -194,6 +196,7 @@ impl CPlayerAI {
         self.lightning = None;
         self.seal = None;
         self.yin_yang = None;
+        self.god_punishment = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -306,6 +309,7 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение инь-ян завершено");
         }
+        if let Some(mut execution) = self.god_punishment.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественной кары завершено"); }
         if let Some(mut execution) = self.callosity.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
@@ -409,6 +413,7 @@ impl CPlayerAI {
         self.lightning = None;
         self.seal = None;
         self.yin_yang = None;
+        self.god_punishment = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -700,6 +705,11 @@ impl CPlayerAI {
     pub(crate) const fn mark_yin_yang_used(&mut self, now_ms: u32) {
         self.yin_yang_last_used_ms = now_ms;
     }
+    pub(crate) const fn god_punishment(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_punishment }
+    pub(crate) const fn begin_god_punishment(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.god_punishment = Some(state); }
+    pub(crate) fn god_punishment_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_punishment.as_mut() }
+    pub(crate) const fn god_punishment_last_used_ms(&self) -> u32 { self.god_punishment_last_used_ms }
+    pub(crate) const fn mark_god_punishment_used(&mut self, now: u32) { self.god_punishment_last_used_ms = now; }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {
         self.callosity

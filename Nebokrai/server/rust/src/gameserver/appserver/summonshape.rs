@@ -23,6 +23,7 @@ use crate::gameserver::appserver::skills::spidermistphalanx::CSpiderMistPhalanx;
 use crate::gameserver::appserver::skills::snowstormphalanx::CSnowStormPhalanx;
 use crate::gameserver::appserver::skills::weakphalanx::CWeakPhalanx;
 use crate::gameserver::appserver::skills::yinyangphalanx::CYinYangPhalanx;
+use crate::gameserver::appserver::skills::godpunishmentphalanx::CGodPunishmentPhalanx;
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
@@ -42,6 +43,7 @@ pub(crate) enum SummonedSkillShape {
     SnowStorm(CSnowStormPhalanx),
     Weak(CWeakPhalanx),
     YinYang(CYinYangPhalanx),
+    GodPunishment(CGodPunishmentPhalanx),
 }
 
 impl SummonedSkillShape {
@@ -61,6 +63,7 @@ impl SummonedSkillShape {
             Self::SnowStorm(shape) => shape.shape(),
             Self::Weak(shape) => shape.shape(),
             Self::YinYang(shape) => shape.shape(),
+            Self::GodPunishment(shape) => shape.shape(),
         }
     }
 
@@ -80,6 +83,7 @@ impl SummonedSkillShape {
             Self::SnowStorm(shape) => shape.shape_mut(),
             Self::Weak(shape) => shape.shape_mut(),
             Self::YinYang(shape) => shape.shape_mut(),
+            Self::GodPunishment(shape) => shape.shape_mut(),
         }
     }
 
@@ -99,6 +103,7 @@ impl SummonedSkillShape {
             Self::SnowStorm(shape) => shape.master(),
             Self::Weak(shape) => shape.master(),
             Self::YinYang(shape) => shape.master(),
+            Self::GodPunishment(shape) => shape.master(),
         }
     }
 }
