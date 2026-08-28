@@ -4383,12 +4383,12 @@ impl CPlayer {
             properties = state.apply_to_player(properties);
         }
         let (mut properties, script_visuals) = self.apply_script_move_state_properties(properties);
-        if self.move_shape.weak_precedes_god_bless() {
-            if let Some(state) = self.move_shape.weak_state() { properties = state.apply_to_player(properties); }
-            if let Some(state) = self.move_shape.god_bless_state() { properties = state.apply_to_player(properties); }
-        } else {
-            if let Some(state) = self.move_shape.god_bless_state() { properties = state.apply_to_player(properties); }
-            if let Some(state) = self.move_shape.weak_state() { properties = state.apply_to_player(properties); }
+        for state in self.move_shape.reached_property_states() {
+            properties = match state {
+                super::moveshape::ReachedPropertyState::Weak(state) => state.apply_to_player(properties),
+                super::moveshape::ReachedPropertyState::GodBless(state) => state.apply_to_player(properties),
+                super::moveshape::ReachedPropertyState::Roar(state) => state.apply_to_player(properties),
+            };
         }
         PlayerStatePropertyPass {
             properties,
@@ -4508,6 +4508,8 @@ impl CPlayer {
 
     pub(crate) fn replace_god_bless_state(&mut self, state: super::skills::godblessstate::GodBlessState) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.replace_god_bless_state(state) }
     pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_expired_god_bless_state(now_ms) }
+    pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
+    pub(crate) fn take_expired_roar_state(&mut self, now_ms: u32) -> Option<super::skills::roarstate::RoarState> { self.move_shape.take_expired_roar_state(now_ms) }
 
     pub(crate) const fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
         self.move_shape.soul_collect_state()

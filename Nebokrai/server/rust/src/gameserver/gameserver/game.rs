@@ -495,6 +495,7 @@ mod thunderslash;
 mod thunderblow2;
 mod mosou;
 mod rush;
+mod roar;
 mod seal;
 mod thunder;
 mod snowstorm;
@@ -810,6 +811,7 @@ use crate::gameserver::appserver::skills::rush2::{execute_player_rush_2, is_rush
 use crate::gameserver::appserver::skills::rushstate2::{
     expire_monster_rush_2_state, expire_player_rush_2_state,
 };
+use crate::gameserver::appserver::skills::roar::{execute_player_roar, is_roar_dispatch};
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
 };
@@ -26342,6 +26344,7 @@ impl CGame {
         }
         let weak_ended = self.finish_player_weak_outside(player_id, runtime);
         let god_bless_ended = self.finish_player_god_bless(player_id, now_ms, runtime);
+        let roar_ended = self.finish_player_roar(player_id, now_ms, runtime);
         let expired_cure = self
             .find_player_mut(player_id)
             .and_then(CPlayer::take_cure_state_for_ai);
@@ -26462,6 +26465,7 @@ impl CGame {
             ride_ended,
             weak_ended,
             god_bless_ended,
+            roar_ended,
             agility_state_2_ended,
             hearten_ended = expired_hearten.is_some(),
             cure_ended = expired_cure.is_some(),
@@ -33819,6 +33823,47 @@ impl CGame {
         context: &mut Context,
     ) -> Option<()> {
         let region_id = region_id?;
+        let victim = self.find_player(victim_id)?;
+        let security_x = victim.shape().get_tile_x().ok()?;
+        let security_y = victim.shape().get_tile_y().ok()?;
+        self.player_on_first_skill_at(
+            attacker_id,
+            victim_id,
+            region_id,
+            security_x,
+            security_y,
+            context,
+        )
+    }
+
+    pub(crate) fn player_on_first_skill_at_position<Context: GameClockContext>(
+        &mut self,
+        attacker_id: i32,
+        victim_id: i32,
+        region_id: i32,
+        security_x: i32,
+        security_y: i32,
+        context: &mut Context,
+    ) -> Option<()> {
+        self.player_on_first_skill_at(
+            attacker_id,
+            victim_id,
+            region_id,
+            security_x,
+            security_y,
+            context,
+        )
+    }
+
+    fn player_on_first_skill_at<Context: GameClockContext>(
+        &mut self,
+        attacker_id: i32,
+        victim_id: i32,
+        region_id: i32,
+        security_x: i32,
+        security_y: i32,
+        context: &mut Context,
+    ) -> Option<()> {
         let attacker = self.find_player(attacker_id)?;
         let victim = self.find_player(victim_id)?;
         if attacker.server_region_id() != Some(region_id)
@@ -33829,7 +33874,7 @@ impl CGame {
         let victim_x = victim.shape().get_tile_x().ok()?;
         let victim_y = victim.shape().get_tile_y().ok()?;
         let owner = self.find_region(region_id)?;
-        let security = owner.get_security(victim_x, victim_y).ok()?;
+        let security = owner.get_security(security_x, security_y).ok()?;
         let gods_battle_region = owner.is_gods_battle();
         let attacker_faction = attacker.faction_id();
         let victim_faction = victim.faction_id();
@@ -36798,6 +36843,7 @@ impl CGame {
             let concrete_pillar = is_pillar_dispatch(dispatch);
             let concrete_rush = is_rush_dispatch(dispatch);
             let concrete_rush_2 = is_rush_2_dispatch(dispatch);
+            let concrete_roar = is_roar_dispatch(dispatch);
             let concrete_thunder_blow_2 = is_thunder_blow_2_dispatch(dispatch);
             let concrete_mosou = is_mosou_dispatch(dispatch);
             let concrete_ghost_cut = is_ghost_cut_dispatch(dispatch);
@@ -36949,6 +36995,8 @@ impl CGame {
                 execute_player_rush(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_rush_2 {
                 execute_player_rush_2(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_roar {
+                execute_player_roar(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_thunder_blow_2 {
                 execute_player_thunder_blow_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_mosou {
@@ -41496,6 +41544,7 @@ impl CGame {
                 }
                 let _ = self.finish_monster_weak_outside(region_id, monster_id);
                 let _ = self.finish_monster_god_bless(region_id, monster_id, now_ms);
+                let _ = self.finish_monster_roar(region_id, monster_id, now_ms);
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let _ = expire_monster_rush_state(
                         self,

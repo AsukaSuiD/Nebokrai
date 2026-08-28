@@ -65,6 +65,7 @@ use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::rushstate::RushState;
 use crate::gameserver::appserver::skills::rushstate2::Rush2State;
+use crate::gameserver::appserver::skills::roarstate::RoarState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
 use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
@@ -515,9 +516,11 @@ pub(crate) struct CanonicalStateStorage {
     reached_property_state_order: u32,
     weak_state_order: Option<u32>,
     god_bless_state_order: Option<u32>,
+    roar_state_order: Option<u32>,
     knock_out_state: Option<KnockOutState>,
     rush_state: Option<RushState>,
     rush_2_state: Option<Rush2State>,
+    roar_state: Option<RoarState>,
     pillar_state: Option<PillarState>,
     knight_cut_state: Option<KnightCutState>,
     blind_state_order: IndexSet<u32>,
@@ -549,6 +552,13 @@ impl DerefMut for CMoveShape {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state_storage
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReachedPropertyState {
+    Weak(WeakState),
+    GodBless(GodBlessState),
+    Roar(RoarState),
 }
 
 impl Default for CMoveShape {
@@ -741,9 +751,11 @@ impl CMoveShape {
         self.reached_property_state_order = 0;
         self.weak_state_order = None;
         self.god_bless_state_order = None;
+        self.roar_state_order = None;
         self.knock_out_state = None;
         self.rush_state = None;
         self.rush_2_state = None;
+        self.roar_state = None;
         self.pillar_state = None;
         self.knight_cut_state = None;
         self.blind_state_order.clear();
@@ -793,6 +805,7 @@ impl CMoveShape {
             || self.state_storage.knock_out_state.is_some()
             || self.state_storage.rush_state.is_some()
             || self.state_storage.rush_2_state.is_some()
+            || self.state_storage.roar_state.is_some()
             || self.state_storage.pillar_state.is_some()
             || self.state_storage.knight_cut_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
@@ -1108,6 +1121,7 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self.rush_state.is_some_and(|state| state.skill_id() == state_id)
             || self.rush_2_state.is_some_and(|state| state.skill_id() == state_id)
+            || self.roar_state.is_some_and(|state| state.skill_id() == state_id)
             || self.pillar_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .knight_cut_state
@@ -1610,19 +1624,39 @@ impl CMoveShape {
         self.god_bless_state_order = Some(self.reached_property_state_order);
         self.god_bless_state.replace(state)
     }
+    pub(crate) const fn roar_state(&self) -> Option<RoarState> { self.state_storage.roar_state }
+    pub(crate) fn replace_roar_state(&mut self, state: RoarState) -> Option<RoarState> {
+        self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
+        self.roar_state_order = Some(self.reached_property_state_order);
+        self.roar_state.replace(state)
+    }
+    pub(crate) fn take_expired_roar_state(&mut self, now_ms: u32) -> Option<RoarState> {
+        let state = self.roar_state.filter(|state| state.expired(now_ms))?;
+        self.roar_state = None;
+        self.roar_state_order = None;
+        Some(state)
+    }
+    pub(crate) fn reached_property_states(&self) -> Vec<ReachedPropertyState> {
+        let current = self.reached_property_state_order;
+        let mut states = Vec::with_capacity(3);
+        if let (Some(order), Some(state)) = (self.weak_state_order, self.weak_state) {
+            states.push((current.wrapping_sub(order), ReachedPropertyState::Weak(state)));
+        }
+        if let (Some(order), Some(state)) = (self.god_bless_state_order, self.god_bless_state) {
+            states.push((current.wrapping_sub(order), ReachedPropertyState::GodBless(state)));
+        }
+        if let (Some(order), Some(state)) = (self.roar_state_order, self.roar_state) {
+            states.push((current.wrapping_sub(order), ReachedPropertyState::Roar(state)));
+        }
+        states.sort_by(|left, right| right.0.cmp(&left.0));
+        states.into_iter().map(|(_, state)| state).collect()
+    }
     pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<GodBlessState> {
         let state = self.god_bless_state.filter(|state| state.expired(now_ms))?;
         self.god_bless_state = None;
         self.god_bless_state_order = None;
         Some(state)
     }
-    pub(crate) const fn weak_precedes_god_bless(&self) -> bool {
-        match (self.state_storage.weak_state_order, self.state_storage.god_bless_state_order) {
-            (Some(weak), Some(bless)) => bless.wrapping_sub(weak) < 0x8000_0000,
-            _ => false,
-        }
-    }
-
     pub(crate) const fn soul_collect_state(&self) -> Option<SoulCollectState> {
         self.state_storage.soul_collect_state
     }

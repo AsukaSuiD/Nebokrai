@@ -15,7 +15,8 @@
 //! и зеркало душ,
 //! сфера хаоса, семь падающих звёзд, семейства бегущего и армейского ударов,
 //! рыцарский удар, подготовка яростного удара, последующий рывок, громовое
-//! рассечение, прямой рывок и двойной направленный удар, периодический удар листвы и фронтальный рубящий удар,
+//! рассечение, прямой рывок, боевой клич и двойной направленный удар,
+//! периодический удар листвы и фронтальный рубящий удар,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -99,6 +100,8 @@ pub(crate) struct CPlayerAI {
     rush_last_used_ms: u32,
     rush_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     rush_2_last_used_ms: u32,
+    roar: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    roar_last_used_ms: u32,
     thunder_blow_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     thunder_blow_2_last_used_ms: u32,
     mosou: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -260,6 +263,7 @@ impl CPlayerAI {
         self.pillar = None;
         self.rush = None;
         self.rush_2 = None;
+        self.roar = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -397,6 +401,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.rush_2.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго прямого рывка завершено");
+        }
+        if let Some(mut execution) = self.roar.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение боевого клича завершено");
         }
         if let Some(mut execution) = self.thunder_blow_2.take() {
             let _ = execution.terminate(termination);
@@ -590,6 +598,7 @@ impl CPlayerAI {
         self.pillar = None;
         self.rush = None;
         self.rush_2 = None;
+        self.roar = None;
         self.thunder_blow_2 = None;
         self.mosou = None;
         self.ghost_cut = None;
@@ -820,6 +829,12 @@ impl CPlayerAI {
     pub(crate) fn rush_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rush_2.as_mut() }
     pub(crate) const fn rush_2_last_used_ms(&self) -> u32 { self.rush_2_last_used_ms }
     pub(crate) const fn mark_rush_2_used(&mut self, now_ms: u32) { self.rush_2_last_used_ms = now_ms; }
+
+    pub(crate) const fn roar(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.roar }
+    pub(crate) const fn begin_roar(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.roar = Some(state); }
+    pub(crate) fn roar_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.roar.as_mut() }
+    pub(crate) const fn roar_last_used_ms(&self) -> u32 { self.roar_last_used_ms }
+    pub(crate) const fn mark_roar_used(&mut self, now_ms: u32) { self.roar_last_used_ms = now_ms; }
 
     pub(crate) const fn thunder_blow_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow_2 }
     pub(crate) const fn begin_thunder_blow_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.thunder_blow_2 = Some(state); }
