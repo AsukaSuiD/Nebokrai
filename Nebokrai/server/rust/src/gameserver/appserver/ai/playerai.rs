@@ -22,6 +22,7 @@
 //! энергии, обратный рубящий
 //! и двойной направленный удары,
 //! периодический удар листвы и фронтальный рубящий удар,
+//! быстрая атака владыки,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -51,6 +52,7 @@ use crate::gameserver::appserver::skills::swallow::SwallowExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
+use crate::gameserver::appserver::skills::lordfastattack::LordFastAttackExecutionState;
 use crate::gameserver::appserver::skills::seal::SealExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransferKind;
@@ -221,6 +223,8 @@ pub(crate) struct CPlayerAI {
     sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     wide_arc_attack_last_used_ms: [u32; 2],
+    lord_fast_attack: Option<LordFastAttackExecutionState>,
+    lord_fast_attack_last_used_ms: u32,
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -397,6 +401,7 @@ impl CPlayerAI {
         self.path_projectile = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
+        self.lord_fast_attack = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -691,6 +696,10 @@ impl CPlayerAI {
             let _ = kernel.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение широкой дуговой атаки завершено");
         }
+        if let Some(mut execution) = self.lord_fast_attack.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение быстрой атаки владыки завершено");
+        }
         if let Some(mut execution) = self.chaos_sphere.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение сферы хаоса завершено");
@@ -866,6 +875,7 @@ impl CPlayerAI {
         self.path_projectile = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
+        self.lord_fast_attack = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -1495,6 +1505,26 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_wide_arc_attack_used(&mut self, skill_id: u32, now_ms: u32) {
         self.wide_arc_attack_last_used_ms[Self::wide_arc_attack_index(skill_id)] = now_ms;
+    }
+
+    pub(crate) const fn lord_fast_attack(&self) -> Option<&LordFastAttackExecutionState> {
+        self.lord_fast_attack.as_ref()
+    }
+
+    pub(crate) const fn begin_lord_fast_attack(&mut self, state: LordFastAttackExecutionState) {
+        self.lord_fast_attack = Some(state);
+    }
+
+    pub(crate) fn lord_fast_attack_mut(&mut self) -> Option<&mut LordFastAttackExecutionState> {
+        self.lord_fast_attack.as_mut()
+    }
+
+    pub(crate) const fn lord_fast_attack_last_used_ms(&self) -> u32 {
+        self.lord_fast_attack_last_used_ms
+    }
+
+    pub(crate) const fn mark_lord_fast_attack_used(&mut self, now_ms: u32) {
+        self.lord_fast_attack_last_used_ms = now_ms;
     }
 
     pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {
