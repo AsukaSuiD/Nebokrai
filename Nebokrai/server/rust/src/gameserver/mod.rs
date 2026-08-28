@@ -123,6 +123,7 @@ pub(crate) mod appserver {
         pub(crate) mod superhealstate2;
         pub(crate) mod huoxieshu;
         pub(crate) mod immediatestate;
+        pub(crate) mod infernol;
         pub(crate) mod kernel;
         pub(crate) mod lifeshield;
         pub(crate) mod lifeshieldstate;

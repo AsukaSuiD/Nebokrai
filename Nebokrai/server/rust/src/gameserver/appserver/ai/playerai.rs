@@ -10,7 +10,8 @@
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
-//! питомцами, усиление, периодическое лечение, огненная стрела, огненная стена, молния,
+//! питомцами, усиление, периодическое лечение, огненная стрела, огненная
+//! стена, огненный круг, молния,
 //! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -68,6 +69,8 @@ pub(crate) struct CPlayerAI {
     fire_bolt_last_used_ms: u32,
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fire_wall_last_used_ms: u32,
+    infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    infernol_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
     lightning_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
@@ -173,6 +176,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.fire_bolt = None;
         self.fire_wall = None;
+        self.infernol = None;
         self.lightning = None;
         self.callosity = None;
         self.hearten = None;
@@ -261,6 +265,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.fire_wall.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненной стены завершено");
+        }
+        if let Some(mut execution) = self.infernol.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение огненного круга завершено");
         }
         if let Some(mut execution) = self.lightning.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -363,6 +371,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.fire_bolt = None;
         self.fire_wall = None;
+        self.infernol = None;
         self.lightning = None;
         self.callosity = None;
         self.hearten = None;
@@ -526,6 +535,31 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_fire_wall_used(&mut self, now_ms: u32) {
         self.fire_wall_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn infernol(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.infernol
+    }
+
+    pub(crate) const fn begin_infernol(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.infernol = Some(state);
+    }
+
+    pub(crate) fn infernol_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.infernol.as_mut()
+    }
+
+    pub(crate) const fn infernol_last_used_ms(&self) -> u32 {
+        self.infernol_last_used_ms
+    }
+
+    pub(crate) const fn mark_infernol_used(&mut self, now_ms: u32) {
+        self.infernol_last_used_ms = now_ms;
     }
 
     pub(crate) const fn lightning(&self) -> Option<LightningExecutionState> {

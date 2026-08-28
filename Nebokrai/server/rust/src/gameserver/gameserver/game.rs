@@ -776,6 +776,9 @@ use crate::gameserver::appserver::skills::firewall::{
 use crate::gameserver::appserver::skills::firewallphalanx::{
     calculate_owned_fire_wall_attack, FireWallPhalanxTick,
 };
+use crate::gameserver::appserver::skills::infernol::{
+    execute_player_infernol, is_infernol_dispatch,
+};
 use crate::gameserver::appserver::skills::lightning::{
     execute_player_lightning, is_lightning_target,
 };
@@ -36396,6 +36399,7 @@ impl CGame {
             };
             let concrete_fire_bolt = is_fire_bolt_target(dispatch);
             let concrete_fire_wall = is_fire_wall_target(dispatch);
+            let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
             let concrete_archery = match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
@@ -36510,6 +36514,8 @@ impl CGame {
                 execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_wall {
                 execute_player_fire_wall(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_infernol {
+                execute_player_infernol(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {
                 execute_player_lightning(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
