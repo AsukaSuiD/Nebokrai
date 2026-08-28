@@ -63,6 +63,7 @@ use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::energybolt::PathProjectileProgress;
+use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
 use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::monsterprojectile::MonsterProjectileProgress;
@@ -115,6 +116,7 @@ pub(crate) struct CMonster {
     fast_attack_progress: Option<MonsterFastAttackProgress>,
     monster_projectile_progress: Option<MonsterProjectileProgress>,
     path_projectile_progress: Option<PathProjectileProgress>,
+    boss_fiend_penetrate_progress: Option<BossFiendPenetrateProgress>,
     little_star_progress: Option<LittleStarProgress>,
     spider_web_progress: Option<SpiderWebProgress>,
     spider_mist_progress: Option<SpiderMistProgress>,
@@ -256,6 +258,7 @@ impl CMonster {
             fast_attack_progress: None,
             monster_projectile_progress: None,
             path_projectile_progress: None,
+            boss_fiend_penetrate_progress: None,
             little_star_progress: None,
             spider_web_progress: None,
             spider_mist_progress: None,
@@ -850,6 +853,17 @@ impl CMonster {
         self.path_projectile_progress = Some(progress);
     }
 
+    pub(crate) fn boss_fiend_penetrate_progress(&self) -> Option<&BossFiendPenetrateProgress> {
+        self.boss_fiend_penetrate_progress.as_ref()
+    }
+
+    pub(crate) fn set_boss_fiend_penetrate_progress(
+        &mut self,
+        progress: BossFiendPenetrateProgress,
+    ) {
+        self.boss_fiend_penetrate_progress = Some(progress);
+    }
+
     pub(crate) fn little_star_progress(&self) -> Option<&LittleStarProgress> {
         self.little_star_progress.as_ref()
     }
@@ -898,6 +912,7 @@ impl CMonster {
         self.fast_attack_progress = None;
         self.monster_projectile_progress = None;
         self.path_projectile_progress = None;
+        self.boss_fiend_penetrate_progress = None;
         self.little_star_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
@@ -932,6 +947,7 @@ impl CMonster {
         self.fast_attack_progress = None;
         self.monster_projectile_progress = None;
         self.path_projectile_progress = None;
+        self.boss_fiend_penetrate_progress = None;
         self.little_star_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
