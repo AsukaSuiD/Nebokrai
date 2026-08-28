@@ -69,6 +69,7 @@ use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptoma
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
+use super::lordfastattack::LORD_FAST_ATTACK_SKILL_ID;
 use super::lordwiderangingattack::{
     LORD_WIDERANGING_ATTACK_SKILL_ID, prepare_owned_lord_wideranging_attack,
 };
@@ -119,6 +120,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
         skill_id,
         MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_FAST_ATTACK_SKILL_ID
+            | LORD_FAST_ATTACK_SKILL_ID
             | MONSTER_RANGE_ATTACK_SKILL_ID
             | MONSTER_THORN_SKILL_ID
             | SKELETON_ARCHERY_SKILL_ID
@@ -302,7 +304,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             runtime.now_milliseconds(),
         );
     }
-    let fast_attack = skill_id == MONSTER_FAST_ATTACK_SKILL_ID;
+    let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
     if target.is_none()
         && cast.is_none()
         && !tamed
@@ -819,7 +821,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let dispatch = cast.dispatch();
-        let (hit_count, finish_cast) = if dispatch.skill_id == MONSTER_FAST_ATTACK_SKILL_ID {
+        let (hit_count, finish_cast) = if matches!(
+            dispatch.skill_id,
+            MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID
+        ) {
             let first_time = skill_properties.query_property(SKILL_USAGE_FIRST_TIME);
             let second_time = skill_properties.query_property(SKILL_USAGE_SECOND_TIME);
             let Some(mut progress) = region
@@ -830,6 +835,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             };
             if !progress.visual_started() {
                 let fire = fast_attack_fire_message(
+                    dispatch.skill_id,
                     dispatch.skill_level,
                     monster_id,
                     target_x,
@@ -973,7 +979,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 attack,
             );
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                if dispatch.skill_id == MONSTER_FAST_ATTACK_SKILL_ID {
+                if matches!(
+                    dispatch.skill_id,
+                    MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID
+                ) {
                     let _ = monster
                         .advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
                     if finish_cast && hit_index + 1 == hit_count {

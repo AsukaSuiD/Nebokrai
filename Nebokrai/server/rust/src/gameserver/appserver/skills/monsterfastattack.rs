@@ -1,11 +1,13 @@
-//! Двухударная быстрая атака (`CMonsterFastAttack`, ID `0x2d1`).
+//! Двухударная быстрая атака (`CMonsterFastAttack`, ID `0x2d1`) и совпадающий
+//! путь `CLordFastAttack` (`0x1f5`).
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/monsterfastattack.cpp`. Достигнутый вызов монстра хранит
 //! визуальную фазу, первый удар и сроки `delay → first_time → second_time` в
 //! этом модуле; общий проход ближней атаки сохраняет выбор цели, RNG, защиту, урон и
 //! последствия смерти. Значения свойств `15001/15002` подтверждены прямыми
-//! аргументами `QueryProperty` в RVA `0x00113810`.
+//! аргументами `QueryProperty` в RVA `0x00113810`; отдельный ID владыки
+//! передаётся этому же узкому семейному механизму без изменения формул.
 //!
 //! Ниже сохранены RAW только для недостигнутых координатных `Begin` и
 //! ветвей с источником-игроком в `CheckCastCondition`, `CalculateAttackPower`,
@@ -112,6 +114,7 @@ pub(crate) const SKILL_USAGE_FIRST_TIME: u32 = 15_001;
 pub(crate) const SKILL_USAGE_SECOND_TIME: u32 = 15_002;
 
 pub(crate) fn fast_attack_fire_message(
+    skill_id: u32,
     skill_level: u16,
     monster_id: i32,
     target_x: i32,
@@ -119,7 +122,7 @@ pub(crate) fn fast_attack_fire_message(
 ) -> CMessage {
     let mut message = CMessage::new(0x000b_fe01);
     message.add_byte(2);
-    message.add_long(MONSTER_FAST_ATTACK_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(skill_level as i16);
     message.add_long(600);
     message.add_long(monster_id);

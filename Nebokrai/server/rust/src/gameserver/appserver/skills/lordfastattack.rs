@@ -1,6 +1,10 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Быстрая атака владыки `CLordFastAttack` (`0x1f5`) для пути монстра.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/lordfastattack.cpp`. Достигнутый путь совпадает с
+//! `CMonsterFastAttack`: начало, задержка, два удара и их RNG-последовательность
+//! проходят общий узкий семейный механизм с собственным ID. Варианты игрока и
+//! координатные перегрузки остаются в исходном материале ниже.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -11,7 +15,8 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Завершение пути монстра выполняет `finish_base_attack_cast`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:163
@@ -25,7 +30,8 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::CLordFastAttack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Идентификатор достигнутого пути задаёт `LORD_FAST_ATTACK_SKILL_ID`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:18
@@ -39,7 +45,8 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::~CLordFastAttack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Завершение пути монстра выполняет `finish_base_attack_cast`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:28
@@ -81,7 +88,8 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Объектный путь монстра проходит общий механизм в `monsterbaseattack`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:105
@@ -95,7 +103,8 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttackEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Действия 0/1 пути монстра формирует общий механизм быстрой атаки.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:381
@@ -109,7 +118,9 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Перезарядка, дальность и блокировка движения пути монстра выполняются
+// общим механизмом ближней атаки.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:37
@@ -123,7 +134,8 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Формула монстра и точная последовательность RNG выполняются общим механизмом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:313
@@ -137,7 +149,8 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Удары монстра проходят общий упорядоченный владелец применения.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:289
@@ -151,7 +164,9 @@
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// Задержка, первый и второй удары пути монстра выполняются общим механизмом;
+// ветвь игрока остаётся ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:179
@@ -177,3 +192,5 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+pub(crate) const LORD_FAST_ATTACK_SKILL_ID: u32 = 0x1f5;
