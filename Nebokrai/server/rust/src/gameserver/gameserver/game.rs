@@ -485,6 +485,7 @@
 mod bloodloss;
 mod fatalblow;
 mod thunder;
+mod snowstorm;
 mod leiming2;
 mod tianhuo;
 mod spidermist;
@@ -822,6 +823,12 @@ use crate::gameserver::appserver::skills::knockoutruntime::{execute_player_knock
 use crate::gameserver::appserver::skills::knockoutstate::{
     expire_monster_blind_states, expire_player_blind_states,
     finish_blind_states_on_defense, finish_player_blind_states_on_defense,
+};
+use crate::gameserver::appserver::skills::snowstorm::{
+    execute_player_snow_storm, is_snow_storm_target,
+};
+use crate::gameserver::appserver::skills::snowstormphalanx::{
+    CSnowStormPhalanx, SnowStormPhalanxTick,
 };
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
@@ -36377,6 +36384,7 @@ impl CGame {
                     target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
                 }
             );
+            let concrete_snow_storm = is_snow_storm_target(dispatch);
             let concrete_self_shield = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36428,6 +36436,8 @@ impl CGame {
                 execute_player_monster_taming(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_knock_out {
                 execute_player_knock_out(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_snow_storm {
+                execute_player_snow_storm(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_self_shield {
                 execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
@@ -39347,6 +39357,9 @@ impl CGame {
             SummonedSkillShape::Thunder(phalanx) => {
                 self.calculate_thunder_attack(phalanx, target_level)
             }
+            SummonedSkillShape::SnowStorm(phalanx) => {
+                self.calculate_snow_storm_attack(phalanx)
+            }
             SummonedSkillShape::Leiming2(phalanx) => self.calculate_leiming2_attack(phalanx),
             SummonedSkillShape::Tianhuo(phalanx) => self.calculate_tianhuo_attack(phalanx),
             SummonedSkillShape::SpiderMist(_) => None,
@@ -39744,6 +39757,14 @@ impl CGame {
                     ))),
                     ThunderPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::SnowStorm(phalanx) => match phalanx.tick(lifetime_now_ms, || runtime.now_milliseconds()) {
+                    SnowStormPhalanxTick::Pending => Some(None),
+                    SnowStormPhalanxTick::Attack { sampled_at_ms } => Some(Some((
+                        phalanx.shape().identity(),
+                        sampled_at_ms,
+                    ))),
+                    SnowStormPhalanxTick::Expired => None,
+                },
                 SummonedSkillShape::Leiming2(phalanx) => match phalanx.tick(lifetime_now_ms) {
                     Leiming2PhalanxTick::Pending => Some(None),
                     Leiming2PhalanxTick::AttackAndExpire { sampled_at_ms } => Some(Some((
@@ -39810,6 +39831,31 @@ impl CGame {
         ) = (tick, &phalanx)
         {
             for target in self.thunder_targets(region_id, thunder) {
+                match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        runtime,
+                    ),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        sampled_at_ms,
+                        runtime,
+                    ),
+                    _ => false,
+                };
+            }
+            return true;
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::SnowStorm(snow_storm),
+        ) = (tick, &phalanx)
+        {
+            for target in self.snow_storm_targets(region_id, snow_storm) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
                         &phalanx,
