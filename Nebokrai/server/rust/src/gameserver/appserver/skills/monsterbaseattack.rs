@@ -99,6 +99,7 @@ use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
 use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
+use crate::gameserver::appserver::ai::archer::{ArcherTarget, consider_archer_target};
 use crate::gameserver::appserver::ai::bossblue::select_boss_blue_attack_skill;
 use crate::gameserver::appserver::ai::bossfiend::select_boss_fiend_attack_skill;
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
@@ -284,7 +285,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 5)
+        && matches!(property.ai, 0 | 3 | 4 | 5)
         && let Some(area_index) = area_index
         && region.player_ids_around_area(area_index).is_empty()
     {
@@ -411,6 +412,62 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         );
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 4
+        && let Some(area_index) = area_index
+    {
+        let mut selected = None;
+        for player_id in region.player_ids_around_area(area_index) {
+            let Some(player) = game.find_player(player_id) else {
+                continue;
+            };
+            if player.server_region_id() != Some(region.id) || player.is_dead() {
+                continue;
+            }
+            let Some(candidate) = player.shape_view() else {
+                continue;
+            };
+            selected = consider_archer_target(
+                selected,
+                ArcherTarget {
+                    identity: candidate.identity,
+                    distance: monster_view.distance(candidate),
+                    hit_points: player.health(),
+                },
+                property.guard_range as i32,
+            );
+        }
+        for pet_id in region.pet_ids_around_area(area_index) {
+            let Some((candidate, hit_points)) = region
+                .find_monster_by_id(pet_id)
+                .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+                .and_then(|pet| {
+                    let property =
+                        game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                    Some((pet.shape_view(property)?, pet.hit_points()))
+                })
+            else {
+                continue;
+            };
+            selected = consider_archer_target(
+                selected,
+                ArcherTarget {
+                    identity: candidate.identity,
+                    distance: monster_view.distance(candidate),
+                    hit_points,
+                },
+                property.guard_range as i32,
+            );
+        }
+        if let Some(selected) = selected {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected.identity);
+            }
+            target = Some(selected.identity);
+        }
+    }
     if target.is_none()
         && cast.is_none()
         && !tamed

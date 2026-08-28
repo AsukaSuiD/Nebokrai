@@ -1,72 +1,25 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутый ИИ обычного лучника `CArcher`.
+//!
+//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
+//! исходный владелец `appserver/ai/archer.cpp` подтверждают выбор живой цели с
+//! минимальным текущим HP внутри дальности охраны. Реальный путь сохраняет
+//! девять соседних областей, порядок игроков перед питомцами, первое совпадение
+//! при равных HP и точную `CShape::Distance`. Общие `Run`, `OnSchedule` и
+//! реакция на полученный урон принадлежат уже действующему циклу монстра.
+//!
+//! `OnMoving` ниже остаётся RAW в части точного момента постановки события
+//! `ASA_SEARCH_ENEMY`; достигнутый цикл выполняет поиск после утраты цели.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\archer.cpp
-
-// ============================================================================
-// FUNCTION: CArcher::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\archer.cpp:26
-// RVA: 0x0020AF50
-// ADDRESS: 0060af50
-// PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CArcher::Run
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\archer.cpp:21
-// RVA: 0x0020E250
-// ADDRESS: 0060e250
-// PROTOTYPE: AI_EXEC_STATE __thiscall Run(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CArcher::CArcher
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\archer.cpp:13
-// RVA: 0x0020FE80
-// ADDRESS: 0060fe80
-// PROTOTYPE: undefined __thiscall CArcher(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CArcher::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\archer.cpp:31
-// RVA: 0x0020FEA0
-// ADDRESS: 0060fea0
-// PROTOTYPE: void __thiscall WhenBeenHurted(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CArcher::OnMoving
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: общий цикл повторяет поиск для живого лучника без цели;
+// точная граница постановки события после движения остаётся ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\archer.cpp:41
@@ -78,19 +31,30 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CArcher::OnSearchEnemy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\archer.cpp:58
-// RVA: 0x0020FF10
-// ADDRESS: 0060ff10
-// PROTOTYPE: int __thiscall OnSearchEnemy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 // COMPONENT_VARIANT_END: GameServer
+
+use crate::gameserver::appserver::shape::ShapeIdentity;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ArcherTarget {
+    pub(crate) identity: ShapeIdentity,
+    pub(crate) distance: i32,
+    pub(crate) hit_points: u32,
+}
+
+/// `CArcher::OnSearchEnemy` сохраняет первого кандидата при равных HP и меняет
+/// его только на следующую живую цель с меньшим текущим HP внутри дальности
+/// охраны. Порядок игроков перед питомцами остаётся наблюдаемой частью выбора.
+pub(crate) fn consider_archer_target(
+    selected: Option<ArcherTarget>,
+    candidate: ArcherTarget,
+    guard_range: i32,
+) -> Option<ArcherTarget> {
+    if candidate.distance > guard_range {
+        return selected;
+    }
+    match selected {
+        Some(current) if current.hit_points <= candidate.hit_points => Some(current),
+        _ => Some(candidate),
+    }
+}
