@@ -884,6 +884,7 @@ use crate::gameserver::appserver::skills::snowstormphalanx::{
 use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
 use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_yin_yang_target};
+use crate::gameserver::appserver::skills::yinyang2::{execute_player_yin_yang_2, is_yin_yang_2_target};
 use crate::gameserver::appserver::skills::yinyangphalanx::YinYangPhalanxTick;
 use crate::gameserver::appserver::skills::godpunishment::{execute_player_god_punishment, is_god_punishment_target};
 use crate::gameserver::appserver::skills::godthunder::{execute_player_god_thunder, is_god_thunder_dispatch};
@@ -36522,6 +36523,7 @@ impl CGame {
             let concrete_snow_storm = is_snow_storm_target(dispatch);
             let concrete_weak = is_weak_target(dispatch);
             let concrete_yin_yang = is_yin_yang_target(dispatch);
+            let concrete_yin_yang_2 = is_yin_yang_2_target(dispatch);
             let concrete_god_punishment = is_god_punishment_target(dispatch);
             let concrete_god_thunder = is_god_thunder_dispatch(dispatch);
             let concrete_god_thunder_2 = is_god_thunder_2_dispatch(dispatch);
@@ -36606,6 +36608,8 @@ impl CGame {
                 execute_player_weak(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_yin_yang {
                 execute_player_yin_yang(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_yin_yang_2 {
+                execute_player_yin_yang_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_god_punishment {
                 execute_player_god_punishment(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_god_thunder {

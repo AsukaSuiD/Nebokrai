@@ -93,6 +93,8 @@ pub(crate) struct CPlayerAI {
     seal_last_used_ms: u32,
     yin_yang: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     yin_yang_last_used_ms: u32,
+    yin_yang_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    yin_yang_2_last_used_ms: u32,
     god_punishment: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     god_punishment_last_used_ms: u32,
     god_thunder: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -215,6 +217,7 @@ impl CPlayerAI {
         self.lightning = None;
         self.seal = None;
         self.yin_yang = None;
+        self.yin_yang_2 = None;
         self.god_punishment = None;
         self.god_thunder = None;
         self.god_thunder_2 = None;
@@ -344,6 +347,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение инь-ян завершено");
         }
+        if let Some(mut execution) = self.yin_yang_2.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго инь-ян завершено");
+        }
         if let Some(mut execution) = self.god_punishment.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественной кары завершено"); }
         if let Some(mut execution) = self.god_thunder.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественного грома завершено"); }
         if let Some(mut execution) = self.god_thunder_2.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго божественного грома завершено"); }
@@ -455,6 +462,7 @@ impl CPlayerAI {
         self.lightning = None;
         self.seal = None;
         self.yin_yang = None;
+        self.yin_yang_2 = None;
         self.god_punishment = None;
         self.god_thunder = None;
         self.god_thunder_2 = None;
@@ -793,6 +801,11 @@ impl CPlayerAI {
     pub(crate) const fn mark_yin_yang_used(&mut self, now_ms: u32) {
         self.yin_yang_last_used_ms = now_ms;
     }
+    pub(crate) const fn yin_yang_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.yin_yang_2 }
+    pub(crate) const fn begin_yin_yang_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.yin_yang_2 = Some(state); }
+    pub(crate) fn yin_yang_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.yin_yang_2.as_mut() }
+    pub(crate) const fn yin_yang_2_last_used_ms(&self) -> u32 { self.yin_yang_2_last_used_ms }
+    pub(crate) const fn mark_yin_yang_2_used(&mut self, now_ms: u32) { self.yin_yang_2_last_used_ms = now_ms; }
     pub(crate) const fn god_punishment(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_punishment }
     pub(crate) const fn begin_god_punishment(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.god_punishment = Some(state); }
     pub(crate) fn god_punishment_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_punishment.as_mut() }

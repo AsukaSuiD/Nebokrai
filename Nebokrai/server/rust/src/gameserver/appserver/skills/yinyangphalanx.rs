@@ -1,14 +1,14 @@
 //! Однократная область инь-ян `CYinYangPhalanx` (`0x139`).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/yinyangphalanx.cpp`. Маски уровней равны 1×1, кресту
-//! 3×3 и полному квадрату 3×3. Новая область вырезает пересечение только из
+//! `appserver/skills/yinyangphalanx.cpp`. Три маски по адресам
+//! `0x006A554C/0x006A5558/0x006A5564` равны полному квадрату 3×3. Второй
+//! вариант использует собственную маску 1×1. Новая область вырезает пересечение только из
 //! ранее созданных областей. После строгого истечения lifetime активные клетки
 //! обходятся X→Y, цели обрабатываются один раз в порядке первого появления,
 //! затем область удаляется. Формула сохраняет два вызова legacy RNG: диапазон
 //! урона и критический удар.
 
-use super::yinyang::YIN_YANG_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
@@ -21,6 +21,7 @@ pub(crate) enum YinYangPhalanxTick { Pending, AttackAndExpire { sampled_at_ms: u
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CYinYangPhalanx {
+    skill_id: u32,
     shape: CShape,
     master: MasterInfo,
     started_at_ms: u32,
@@ -37,32 +38,33 @@ pub(crate) struct CYinYangPhalanx {
 
 impl CYinYangPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
-    pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32, critical_chance: i32) -> Self {
-        let (length, height, scope): (i32, i32, &[bool]) = Self::level_scope(skill_level);
+    pub(crate) fn new_for_skill(skill_id: u32, id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32, critical_chance: i32) -> Self {
+        let (length, height, scope): (i32, i32, &[bool]) = Self::level_scope(skill_id);
         let mut shape = CShape::with_constructor_defaults();
         shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID });
-        Self { shape, master, started_at_ms, lifetime_ms, skill_level, minimum_attack, maximum_attack, element_modifier, critical_chance, length, height, scope: scope.to_vec() }
+        Self { skill_id, shape, master, started_at_ms, lifetime_ms, skill_level, minimum_attack, maximum_attack, element_modifier, critical_chance, length, height, scope: scope.to_vec() }
     }
 
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
     pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
+    pub(crate) const fn skill_id(&self) -> u32 { self.skill_id }
 
-    fn level_scope(level: i32) -> (i32, i32, &'static [bool]) {
-        match level {
-            2 => (3, 3, &[false, true, false, true, true, true, false, true, false]),
-            3 => (3, 3, &[true; 9]),
-            _ => (1, 1, &[true]),
+    fn level_scope(skill_id: u32) -> (i32, i32, &'static [bool]) {
+        if skill_id == super::yinyang2::YIN_YANG_2_SKILL_ID {
+            super::yinyangphalanx2::YIN_YANG_2_SCOPE
+        } else {
+            (3, 3, &[true; 9])
         }
     }
 
-    pub(crate) fn replace_affect_region(&mut self, level: i32, tile_x: i32, tile_y: i32) {
+    pub(crate) fn replace_affect_region(&mut self, _level: i32, tile_x: i32, tile_y: i32) {
         let Ok(current_x) = self.shape.get_tile_x() else { return };
         let Ok(current_y) = self.shape.get_tile_y() else { return };
         let current_left = current_x.wrapping_sub(self.length >> 1);
         let current_top = current_y.wrapping_sub(self.height >> 1);
-        let (new_length, new_height, new_scope) = Self::level_scope(level);
+        let (new_length, new_height, new_scope) = Self::level_scope(self.skill_id);
         let new_left = tile_x.wrapping_sub(new_length >> 1);
         let new_top = tile_y.wrapping_sub(new_height >> 1);
         for x in 0..self.length {
@@ -109,7 +111,7 @@ impl CYinYangPhalanx {
     pub(crate) fn calculate_attack(&self, damage_factor: f32, combat: PlayerCombatProperties, occupation: u8, attacker_level: u8, critical_rate: f32, random_below: &mut dyn FnMut(i32) -> i32) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
         let width = self.maximum_attack.wrapping_sub(self.minimum_attack).wrapping_abs().wrapping_add(1);
         let damage = self.minimum_attack.wrapping_add(random_below(width)).wrapping_add(self.element_modifier).max(0);
-        let mut attack = AttackInformation { skill_id: YIN_YANG_SKILL_ID, skill_level: self.skill_level as u8, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 100, damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }] };
+        let mut attack = AttackInformation { skill_id: self.skill_id, skill_level: self.skill_level as u8, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 100, damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }] };
         if random_below(100) < self.critical_chance {
             attack.critical = true;
             for power in &mut attack.damages {

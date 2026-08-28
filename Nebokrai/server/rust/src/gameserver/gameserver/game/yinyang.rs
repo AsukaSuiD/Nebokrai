@@ -46,6 +46,9 @@ impl CGame {
                     || (identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
                     || !matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
                     || targets.contains(&identity)
+                    || !self.owned_player_skill_target_attackable(
+                        phalanx.master(), identity, region_id,
+                    )
                 { continue; }
                 targets.push(identity);
             }
