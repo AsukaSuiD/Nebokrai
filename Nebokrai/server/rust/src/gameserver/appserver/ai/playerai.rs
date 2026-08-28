@@ -58,6 +58,7 @@ use crate::gameserver::appserver::skills::heartlessarrow::HeartlessArrowExecutio
 use crate::gameserver::appserver::skills::lightingarrow::LightingArrowExecutionState;
 use crate::gameserver::appserver::skills::meteorarrowmass::MeteorArrowMassExecutionState;
 use crate::gameserver::appserver::skills::meteorarrow::MeteorArrowExecutionState;
+use crate::gameserver::appserver::skills::rainarrow::RainArrowExecutionState;
 use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
@@ -94,6 +95,8 @@ pub(crate) struct CPlayerAI {
     meteor_arrow_mass_last_used_ms: u32,
     meteor_arrow: Option<MeteorArrowExecutionState>,
     meteor_arrow_last_used_ms: u32,
+    rain_arrow: Option<RainArrowExecutionState>,
+    rain_arrow_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
@@ -280,6 +283,7 @@ impl CPlayerAI {
         self.lighting_arrow = None;
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
+        self.rain_arrow = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -409,6 +413,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.meteor_arrow.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение метеорной стрелы завершено");
+        }
+        if let Some(mut execution) = self.rain_arrow.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение дождя стрел завершено");
         }
         if let Some(mut execution) = self.agility_family.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -653,6 +661,7 @@ impl CPlayerAI {
         self.lighting_arrow = None;
         self.meteor_arrow_mass = None;
         self.meteor_arrow = None;
+        self.rain_arrow = None;
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
@@ -792,6 +801,11 @@ impl CPlayerAI {
     pub(crate) fn meteor_arrow_mut(&mut self) -> Option<&mut MeteorArrowExecutionState> { self.meteor_arrow.as_mut() }
     pub(crate) const fn meteor_arrow_last_used_ms(&self) -> u32 { self.meteor_arrow_last_used_ms }
     pub(crate) const fn mark_meteor_arrow_used(&mut self, now_ms: u32) { self.meteor_arrow_last_used_ms = now_ms; }
+    pub(crate) fn rain_arrow(&self) -> Option<RainArrowExecutionState> { self.rain_arrow.clone() }
+    pub(crate) fn begin_rain_arrow(&mut self, state: RainArrowExecutionState) { self.rain_arrow = Some(state); }
+    pub(crate) fn rain_arrow_mut(&mut self) -> Option<&mut RainArrowExecutionState> { self.rain_arrow.as_mut() }
+    pub(crate) const fn rain_arrow_last_used_ms(&self) -> u32 { self.rain_arrow_last_used_ms }
+    pub(crate) const fn mark_rain_arrow_used(&mut self, now_ms: u32) { self.rain_arrow_last_used_ms = now_ms; }
 
     pub(crate) const fn begin_base_attack(&mut self, state: BaseAttackExecutionState) {
         self.base_attack = Some(state);

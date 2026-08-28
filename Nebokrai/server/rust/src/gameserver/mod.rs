@@ -158,6 +158,8 @@ pub(crate) mod appserver {
         pub(crate) mod meteorarrowmass;
         pub(crate) mod meteorarrowphalanx;
         pub(crate) mod meteorarrowstate;
+        pub(crate) mod rainarrow;
+        pub(crate) mod rainarrowphalanx;
         pub(crate) mod heal;
         pub(crate) mod heal2;
         pub(crate) mod healstate;
