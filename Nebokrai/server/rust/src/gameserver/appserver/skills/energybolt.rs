@@ -1,237 +1,48 @@
-//! Узкий механизм семейства пошаговых `CEnergyBolt/CZombieClaw/CSnakeBolt` и
-//! конкретный владелец энергетического снаряда для достигнутого пути монстра.
+//! Владелец общего пошагового снаряда и конкретной семантики энергетического снаряда.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb` подтверждает принудительный
-//! путь длиной `SKILL_USAGE_TARGET_MAX_DISTANT`, один шаг за единицу времени
-//! полёта, живое перечитывание блока клетки и обход области сначала по X,
-//! затем по Y. Первый
-//! успешный удар либо `BLOCK_UNFLY` посылает промежуточное завершение; на
-//! следующем такте исходный владелец посылает его повторно и завершает навык.
-//! Формула и единственный RNG-вызов на каждую реально атакованную цель остаются
-//! здесь, а `CGame` только применяет общую защиту, последствия смерти и сеть.
-//! MP игрока, `CSoulCollectState` и координатные перегрузки ниже остаются в
-//! исходном материале.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.h
-
-// ============================================================================
-// FUNCTION: CEnergyBoltEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:777
-// RVA: 0x0013B450
-// ADDRESS: 0053b450
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::~CEnergyBolt
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:50
-// RVA: 0x0013B990
-// ADDRESS: 0053b990
-// PROTOTYPE: void __thiscall ~CEnergyBolt(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:200
-// RVA: 0x0013BA50
-// ADDRESS: 0053ba50
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:232
-// RVA: 0x0013BBF0
-// ADDRESS: 0053bbf0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:263
-// RVA: 0x0013BDA0
-// ADDRESS: 0053bda0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::End
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:294
-// RVA: 0x0013BF50
-// ADDRESS: 0053bf50
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::CEnergyBolt
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:33
-// RVA: 0x0013BFE0
-// ADDRESS: 0053bfe0
-// PROTOTYPE: undefined __thiscall CEnergyBolt(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:119
-// RVA: 0x0013C090
-// ADDRESS: 0053c090
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::CalculateAttackPower
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:705
-// RVA: 0x0013C2A0
-// ADDRESS: 0053c2a0
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:659
-// RVA: 0x0013C480
-// ADDRESS: 0053c480
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:577
-// RVA: 0x0013C600
-// ADDRESS: 0053c600
-// PROTOTYPE: int __thiscall Attack(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyBolt::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energybolt.cpp:315
-// RVA: 0x0013C930
-// ADDRESS: 0053c930
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+//! Точная пара `gameserver.exe + GameServer.pdb` и исходный владелец
+//! `GameServer/appserver/skills/energybolt.cpp` подтверждают общий жизненный цикл
+//! игрока и монстра: повторную проверку и расход MP игрока, задержку до выстрела,
+//! принудительный путь длиной `SKILL_USAGE_TARGET_MAX_DISTANCE`, один шаг за
+//! единицу времени полёта, живое перечитывание блока клетки и обход области
+//! сначала по X, затем по Y. Первый успешный удар либо `BLOCK_UNFLY` посылает
+//! промежуточное завершение; на следующем такте владелец посылает его повторно.
+//! Для игрока первая допустимая цель потребляет `CSoulCollectState`, а формула
+//! сохраняет единственный вызов RNG, добавку стихии и коэффициент оружия. Для
+//! монстра недостигнутые добавки игрока не выдумываются. `CGame` только разрешает
+//! владельцев, применяет защиту и смерть и доставляет уже построенные пакеты.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
+use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
+use super::soulcollectstate::send_soul_collect_state_visual;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
 
+const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
+const EFFECT_MESSAGE: i32 = 0x000b_fe01;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const BLOCK_UNFLY: u8 = 2;
 const BLOCK_SHAPE: u8 = 3;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
@@ -263,6 +74,10 @@ impl PathProjectileSpec {
             initial_position,
         }
     }
+
+    const fn uses_weapon_factor(self) -> bool {
+        self.skill_id != super::zombieclaw::ZOMBIE_CLAW_SKILL_ID
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -276,6 +91,41 @@ pub(crate) struct PathProjectileProgress {
     visual_target: Option<ShapeIdentity>,
     missile_flying_time_ms: u32,
     fired: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerPathProjectileExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    progress: PathProjectileProgress,
+}
+
+impl PlayerPathProjectileExecutionState {
+    fn begin(
+        dispatch: PlayerSkillDispatch,
+        now_ms: u32,
+        destination: (i32, i32),
+    ) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, now_ms),
+            progress: PathProjectileProgress::new(destination.0, destination.1),
+        }
+    }
+
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+
+    pub(crate) const fn skill_id(&self) -> u32 {
+        match self.kernel.dispatch() {
+            PlayerSkillDispatch::SelfTarget { skill_id, .. }
+            | PlayerSkillDispatch::Point { skill_id, .. }
+            | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+        }
+    }
 }
 
 impl PathProjectileProgress {
@@ -336,6 +186,438 @@ impl PathProjectileProgress {
     fn finish_after_collision(&mut self) {
         self.current_position = self.path.len().wrapping_add(1);
     }
+}
+
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
+
+pub(crate) const fn is_player_path_projectile_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    let skill_id = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+    };
+    matches!(
+        skill_id,
+        ENERGY_BOLT_SKILL_ID
+            | super::zombieclaw::ZOMBIE_CLAW_SKILL_ID
+            | super::snakebolt::SNAKE_BOLT_SKILL_ID
+    )
+}
+fn player_destination(
+    game: &CGame,
+    region_id: i32,
+    dispatch: PlayerSkillDispatch,
+) -> Option<(i32, i32)> {
+    match dispatch {
+        PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)),
+        PlayerSkillDispatch::Object { target, .. } => game
+            .base_magic_target_view(region_id, target)
+            .map(|view| (view.tile_x, view.tile_y)),
+        PlayerSkillDispatch::SelfTarget { .. } => None,
+    }
+}
+
+fn player_object_target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
+    match dispatch {
+        PlayerSkillDispatch::Object { target, .. } => Some(target),
+        _ => None,
+    }
+}
+
+fn send_player_projectile_failure(game: &CGame, player_id: i32, action: u8) {
+    game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, action);
+}
+
+fn send_player_projectile_start(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    level: i32,
+) {
+    let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(1);
+    message.add_long(skill_id as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(direction);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_player_projectile_fire(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    level: i32,
+    target: Option<ShapeIdentity>,
+    progress: &PathProjectileProgress,
+) {
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(2);
+    message.add_long(skill_id as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(target.map_or(0, |identity| identity.object_type));
+    message.add_long(target.map_or(0, |identity| identity.id));
+    message.add_long(progress.end_x);
+    message.add_long(progress.end_y);
+    message.add_ulong(progress.missile_flying_time_ms);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_player_projectile_end(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    level: i32,
+    progress: &PathProjectileProgress,
+) {
+    let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(3);
+    message.add_long(skill_id as i32);
+    message.add_short(level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(direction);
+    message.add_long(progress.end_x);
+    message.add_long(progress.end_y);
+    message.add_long(progress.visual_target.map_or(0, |identity| identity.object_type));
+    message.add_long(progress.visual_target.map_or(0, |identity| identity.id));
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn finish_player_projectile(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+}
+
+#[allow(clippy::too_many_arguments, reason = "параметры сохраняют формулу конкретного projectile-owner-а")]
+fn calculate_player_projectile_attack(
+    game: &mut CGame,
+    player_id: i32,
+    region_id: i32,
+    target: ShapeIdentity,
+    spec: PathProjectileSpec,
+    level: i32,
+    minimum: i32,
+    maximum: i32,
+    element_modifier: u32,
+    hit_modifier: i32,
+    souls: i32,
+) -> Option<(MasterInfo, AttackInformation)> {
+    let (combat, master, weapon_level) = {
+        let player = game.find_player(player_id)?;
+        (
+            player.combat_properties(),
+            master_info(player),
+            player.weapon_damage_level(game.goods_factory()),
+        )
+    };
+    let damage_factor = if spec.uses_weapon_factor() {
+        let target_level = target_level(game, region_id, target)?;
+        let (divisor, floor) = game.globe_setup().weapon_damage_factors();
+        let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
+        (if divisor == 0.0 { 1.0 } else { delta as f32 / divisor }).min(1.0).max(floor)
+    } else {
+        1.0
+    };
+    let span = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
+    let random_damage = game.skill_random_below(span);
+    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32) as i32;
+    let base_damage = (combat.add_element_attack as i32)
+        .wrapping_add(minimum)
+        .wrapping_add(random_damage)
+        .wrapping_add(element_bonus);
+    let damage = (base_damage as f32 * (1.0 + 0.7 * souls as f32)) as i32;
+    Some((master, AttackInformation {
+        skill_id: spec.skill_id,
+        skill_level: level as u8,
+        attacker_type: PLAYER_TYPE,
+        attacker_id: player_id,
+        attacker_team_id: master.master_team_id,
+        attacker_faction_id: master.master_guild_id,
+        attacker_union_id: master.master_union_id,
+        hit_modifier,
+        damage_factor,
+        damage_modifier: 0,
+        critical: false,
+        blast_attack: false,
+        full_miss: 0,
+        damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage.max(0), mp_damage: 0 }],
+    }))
+}
+
+#[allow(clippy::too_many_arguments, reason = "граница сохраняет порядок scope, целей и потребления душ")]
+fn attack_player_projectile_scope<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    region_id: i32,
+    spec: PathProjectileSpec,
+    level: i32,
+    center_x: i32,
+    center_y: i32,
+    minimum: i32,
+    maximum: i32,
+    element_modifier: u32,
+    hit_modifier: i32,
+    progress: &mut PathProjectileProgress,
+    runtime: &mut Runtime,
+) -> bool {
+    let wide_scope = if spec.wide_scope_from_third { level > 2 } else { level == i32::from(spec.wide_scope_level) };
+    let radius = if wide_scope { 1 } else { 0 };
+    let mut attacked = Vec::new();
+    let mut did_attack = false;
+    for offset_x in -radius..=radius {
+        for offset_y in -radius..=radius {
+            let cell_x = center_x.wrapping_add(offset_x);
+            let cell_y = center_y.wrapping_add(offset_y);
+            for view in cell_views(game, region_id, cell_x, cell_y) {
+                let target = view.identity;
+                if (target.object_type == PLAYER_TYPE && target.id == player_id)
+                    || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                    || attacked.contains(&target)
+                {
+                    continue;
+                }
+                if cell_x == center_x && cell_y != 0 && progress.visual_target.is_none() {
+                    progress.visual_target = Some(target);
+                }
+                let Some(owner) = game.find_player(player_id).map(master_info) else { return did_attack };
+                if !game.owned_player_skill_target_attackable(owner, target, region_id) { continue }
+                let soul = game.find_player_mut(player_id).and_then(CPlayer::take_soul_collect_state);
+                let souls = soul.map_or(0, |state| state.souls());
+                if let Some(state) = soul {
+                    let Some((tile_x, tile_y)) = game.find_player(player_id).and_then(|player| {
+                        Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+                    }) else { return did_attack };
+                    send_soul_collect_state_visual(
+                        game,
+                        region_id,
+                        ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: Default::default() },
+                        tile_x,
+                        tile_y,
+                        state,
+                        false,
+                    );
+                }
+                let Some((master, attack)) = calculate_player_projectile_attack(
+                    game, player_id, region_id, target, spec, level, minimum, maximum,
+                    element_modifier, hit_modifier, souls,
+                ) else { continue };
+                match target.object_type {
+                    PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
+                    MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+                    _ => unreachable!(),
+                }
+                attacked.push(target);
+                did_attack = true;
+            }
+        }
+    }
+    did_attack
+}
+
+pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    spec: PathProjectileSpec,
+    ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_player_path_projectile_dispatch(dispatch) || spec.skill_id != match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+    } {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((
+        player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?,
+        player.learned_skill_level(spec.skill_id), player.mana(),
+    ))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(spec.skill_id, level) else {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let missile_unit = properties.query_property(SKILL_USAGE_MISSILE_FLYING_TIME);
+    let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+    let maximum = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+    let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER);
+    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+
+    if ai.path_projectile().is_none() {
+        let now_ms = runtime.now_milliseconds();
+        let self_target = player_object_target(dispatch)
+            .is_some_and(|target| target.object_type == PLAYER_TYPE && target.id == player_id);
+        if self_target {
+            send_player_projectile_failure(game, player_id, 10);
+            game.send_skill_system_info(player_id, b"GS0286");
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if ai.path_projectile_last_used_ms(spec.skill_id) != 0
+            && !time_reached(now_ms, ai.path_projectile_last_used_ms(spec.skill_id), reuse)
+        {
+            send_player_projectile_failure(game, player_id, 0x0d);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(destination) = player_destination(game, region_id, dispatch) else {
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let initial_path = game.base_magic_path(
+            region_id, source_x, source_y, destination.0, destination.1, None,
+        );
+        if maximum_distance != 0 && initial_path.len() > maximum_distance as usize {
+            send_player_projectile_failure(game, player_id, 0x0b);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if (mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_player_projectile_failure(game, player_id, 7);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(spec.skill_id));
+        }
+        ai.begin_path_projectile(PlayerPathProjectileExecutionState::begin(
+            dispatch, now_ms, destination,
+        ));
+    } else if ai.path_projectile().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if ai.path_projectile().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_player_projectile_failure(game, player_id, 7);
+            finish_player_projectile(game, player_id);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let destination = ai.path_projectile()
+            .map(|state| state.progress.destination())
+            .expect("projectile execution хранит координаты назначения");
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(current_mana.wrapping_sub(mp_loss));
+            player.movement_shape_mut().set_direction(get_line_direction(
+                source_x, source_y, destination.0, destination.1,
+            ));
+        }
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        send_player_projectile_start(game, player_id, spec.skill_id, level);
+        if let Some(state) = ai.path_projectile_mut() {
+            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+
+    let started = ai.path_projectile()
+        .map(|state| state.kernel().started_at_ms())
+        .unwrap_or_default();
+    if ai.path_projectile().is_some_and(|state| !state.progress.fired()) {
+        if !time_reached(runtime.now_milliseconds(), started, delay) {
+            return player_terminal(QueuedSkillExecutionState::Pending);
+        }
+        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
+        let destination = ai.path_projectile()
+            .map(|state| state.progress.destination())
+            .expect("projectile execution хранит координаты назначения");
+        let forced_length = (maximum_distance != 0).then_some(maximum_distance);
+        let path = game.base_magic_path(
+            region_id, source_x, source_y, destination.0, destination.1, forced_length,
+        );
+        if maximum_distance != 0 && path.len() > maximum_distance.wrapping_add(1) as usize {
+            send_player_projectile_failure(game, player_id, 0x0b);
+            finish_player_projectile(game, player_id);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let target = player_object_target(dispatch);
+        if let Some(state) = ai.path_projectile_mut() {
+            state.progress.fire(path, missile_unit, spec.initial_position);
+            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+        }
+        let progress = ai.path_projectile().map(|state| state.progress.clone())
+            .expect("projectile progress создан перед wire-эффектом");
+        send_player_projectile_fire(game, player_id, spec.skill_id, level, target, &progress);
+    }
+
+    let mut progress = ai.path_projectile().map(|state| state.progress.clone())
+        .expect("projectile execution сохраняется до завершения");
+    let due = delay.wrapping_add(missile_unit.wrapping_mul(progress.current_position as u32));
+    if !time_reached(runtime.now_milliseconds(), started, due) {
+        return player_terminal(QueuedSkillExecutionState::Pending);
+    }
+    if progress.current_position >= progress.path.len() {
+        send_player_projectile_end(game, player_id, spec.skill_id, level, &progress);
+        if let Some(state) = ai.path_projectile_mut() {
+            if state.kernel().stage() == SkillStage::Calculate {
+                let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+            }
+            let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        let ended_at = runtime.now_milliseconds();
+        ai.mark_path_projectile_used(spec.skill_id, ended_at);
+        finish_player_projectile(game, player_id);
+        return player_terminal(QueuedSkillExecutionState::Completed);
+    }
+
+    let Some((cell_x, cell_y)) = progress.current_cell() else {
+        return player_terminal(QueuedSkillExecutionState::Pending);
+    };
+    progress.end_x = cell_x;
+    progress.end_y = cell_y;
+    match game.find_region(region_id).map_or(BLOCK_UNFLY, |owner| owner.base().skill_cell_block(cell_x, cell_y)) {
+        BLOCK_SHAPE => {
+            if attack_player_projectile_scope(
+                game, player_id, region_id, spec, level, cell_x, cell_y, minimum, maximum,
+                element_modifier, hit_modifier, &mut progress, runtime,
+            ) {
+                send_player_projectile_end(game, player_id, spec.skill_id, level, &progress);
+                progress.finish_after_collision();
+                if let Some(state) = ai.path_projectile_mut() { state.progress = progress; }
+                return player_terminal(QueuedSkillExecutionState::Pending);
+            }
+        }
+        BLOCK_UNFLY => {
+            send_player_projectile_end(game, player_id, spec.skill_id, level, &progress);
+            progress.current_position = progress.path.len();
+        }
+        _ => {}
+    }
+    progress.advance();
+    if let Some(state) = ai.path_projectile_mut() {
+        state.progress = progress;
+        if state.kernel().stage() == SkillStage::Calculate {
+            let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+        }
+    }
+    player_terminal(QueuedSkillExecutionState::Pending)
+}
+
+pub(crate) fn execute_player_energy_bolt<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    execute_player_path_projectile(
+        game,
+        player_id,
+        dispatch,
+        PathProjectileSpec::new(ENERGY_BOLT_SKILL_ID, 1, false, 1),
+        ai,
+        runtime,
+    )
 }
 
 fn send_start(

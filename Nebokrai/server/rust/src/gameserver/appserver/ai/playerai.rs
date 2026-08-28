@@ -83,6 +83,7 @@ use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
 use crate::gameserver::appserver::skills::knightcut::KnightCutExecutionState;
 use crate::gameserver::appserver::skills::littleflash::LittleFlashExecutionState;
 use crate::gameserver::appserver::skills::littlestar::PlayerLittleStarExecutionState;
+use crate::gameserver::appserver::skills::energybolt::PlayerPathProjectileExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
@@ -213,6 +214,8 @@ pub(crate) struct CPlayerAI {
     seven_shooting_star_last_used_ms: u32,
     little_star: Option<PlayerLittleStarExecutionState>,
     little_star_last_used_ms: u32,
+    path_projectile: Option<PlayerPathProjectileExecutionState>,
+    path_projectile_last_used_ms: [u32; 3],
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -386,6 +389,7 @@ impl CPlayerAI {
         self.infernol = None;
         self.seven_shooting_star = None;
         self.little_star = None;
+        self.path_projectile = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -668,6 +672,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение малой звезды завершено");
         }
+        if let Some(mut execution) = self.path_projectile.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение пошагового снаряда завершено");
+        }
         if let Some(mut execution) = self.chaos_sphere.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение сферы хаоса завершено");
@@ -840,6 +848,7 @@ impl CPlayerAI {
         self.infernol = None;
         self.seven_shooting_star = None;
         self.little_star = None;
+        self.path_projectile = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -1390,6 +1399,35 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_little_star_used(&mut self, now_ms: u32) {
         self.little_star_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn path_projectile(&self) -> Option<&PlayerPathProjectileExecutionState> {
+        self.path_projectile.as_ref()
+    }
+
+    pub(crate) fn begin_path_projectile(&mut self, state: PlayerPathProjectileExecutionState) {
+        self.path_projectile = Some(state);
+    }
+
+    pub(crate) fn path_projectile_mut(&mut self) -> Option<&mut PlayerPathProjectileExecutionState> {
+        self.path_projectile.as_mut()
+    }
+
+    const fn path_projectile_index(skill_id: u32) -> usize {
+        match skill_id {
+            0x1a0 => 0,
+            0x1a2 => 1,
+            0x1a5 => 2,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) const fn path_projectile_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.path_projectile_last_used_ms[Self::path_projectile_index(skill_id)]
+    }
+
+    pub(crate) fn mark_path_projectile_used(&mut self, skill_id: u32, now_ms: u32) {
+        self.path_projectile_last_used_ms[Self::path_projectile_index(skill_id)] = now_ms;
     }
 
     pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {

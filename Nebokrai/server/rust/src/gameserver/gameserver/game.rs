@@ -884,6 +884,15 @@ use crate::gameserver::appserver::skills::sevenshootingstar::{
 use crate::gameserver::appserver::skills::littlestar::{
     execute_player_little_star, is_player_little_star_dispatch,
 };
+use crate::gameserver::appserver::skills::energybolt::{
+    ENERGY_BOLT_SKILL_ID, execute_player_energy_bolt, is_player_path_projectile_dispatch,
+};
+use crate::gameserver::appserver::skills::snakebolt::{
+    SNAKE_BOLT_SKILL_ID, execute_player_snake_bolt,
+};
+use crate::gameserver::appserver::skills::zombieclaw::{
+    ZOMBIE_CLAW_SKILL_ID, execute_player_zombie_claw,
+};
 use crate::gameserver::appserver::skills::chaossphere::{
     execute_player_chaos_sphere, is_chaos_sphere_dispatch,
 };
@@ -33720,6 +33729,7 @@ impl CGame {
                             || player.player_ai().lightning_sword().is_some()
                             || player.player_ai().little_flash().is_some()
                             || player.player_ai().little_star().is_some()
+                            || player.player_ai().path_projectile().is_some()
                             || player.player_ai().thunder_slash().is_some()
                             || player.player_ai().pillar().is_some()
                             || player.player_ai().rush().is_some()
@@ -34416,6 +34426,7 @@ impl CGame {
                 || player.player_ai().lightning_sword().is_some()
                 || player.player_ai().little_flash().is_some()
                 || player.player_ai().little_star().is_some()
+                || player.player_ai().path_projectile().is_some()
                 || player.player_ai().thunder_slash().is_some()
                 || player.player_ai().pillar().is_some()
                 || player.player_ai().rush().is_some()
@@ -37087,6 +37098,12 @@ impl CGame {
             let concrete_infernol = is_infernol_dispatch(dispatch);
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
             let concrete_little_star = is_player_little_star_dispatch(dispatch);
+            let concrete_path_projectile = is_player_path_projectile_dispatch(dispatch);
+            let path_projectile_skill_id = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. }
+                | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+            };
             let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
             let concrete_seal = is_seal_target(dispatch);
@@ -37327,6 +37344,12 @@ impl CGame {
                 execute_player_seven_shooting_star(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_little_star {
                 execute_player_little_star(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_path_projectile && path_projectile_skill_id == ENERGY_BOLT_SKILL_ID {
+                execute_player_energy_bolt(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_path_projectile && path_projectile_skill_id == ZOMBIE_CLAW_SKILL_ID {
+                execute_player_zombie_claw(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_path_projectile && path_projectile_skill_id == SNAKE_BOLT_SKILL_ID {
+                execute_player_snake_bolt(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_chaos_sphere {
                 execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {
