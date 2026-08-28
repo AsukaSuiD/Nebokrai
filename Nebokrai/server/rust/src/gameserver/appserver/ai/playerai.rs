@@ -79,6 +79,8 @@ pub(crate) struct CPlayerAI {
     leiming2_last_used_ms: u32,
     tianhuo: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     tianhuo_last_used_ms: u32,
+    battle_fairy_attribute: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    battle_fairy_attribute_last_used_ms: [u32; 8],
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -161,6 +163,7 @@ impl CPlayerAI {
         self.thunder = None;
         self.leiming2 = None;
         self.tianhuo = None;
+        self.battle_fairy_attribute = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -256,6 +259,7 @@ impl CPlayerAI {
         self.thunder = None;
         self.leiming2 = None;
         self.tianhuo = None;
+        self.battle_fairy_attribute = None;
         true
     }
 
@@ -528,6 +532,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение небесного огня завершено");
         }
+        if let Some(mut execution) = self.battle_fairy_attribute.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение атрибутного навыка боевого духа завершено");
+        }
         true
     }
 
@@ -535,6 +543,41 @@ impl CPlayerAI {
         &self,
     ) -> Option<BattleFairyBaseMagicExecutionState> {
         self.battle_fairy_base_magic
+    }
+
+    pub(crate) const fn battle_fairy_attribute(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.battle_fairy_attribute
+    }
+
+    pub(crate) const fn begin_battle_fairy_attribute(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.battle_fairy_attribute = Some(state);
+    }
+
+    pub(crate) fn battle_fairy_attribute_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.battle_fairy_attribute.as_mut()
+    }
+
+    const fn battle_fairy_attribute_index(skill_id: u32) -> usize {
+        match skill_id {
+            0x212..=0x219 => (skill_id - 0x212) as usize,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) const fn battle_fairy_attribute_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.battle_fairy_attribute_last_used_ms[Self::battle_fairy_attribute_index(skill_id)]
+    }
+
+    pub(crate) fn mark_battle_fairy_attribute_used(&mut self, skill_id: u32, now_ms: u32) {
+        let index = Self::battle_fairy_attribute_index(skill_id);
+        self.battle_fairy_attribute_last_used_ms[index] = now_ms;
     }
 
     pub(crate) const fn begin_battle_fairy_base_magic(

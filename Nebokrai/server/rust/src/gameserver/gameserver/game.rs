@@ -773,6 +773,11 @@ use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::{
     calculate_battle_fairy_base_magic_attack, BattleFairyPhalanxTick,
     CBattleFairyBaseMagicPhalanx,
 };
+use crate::gameserver::appserver::skills::battlefairyattribute::{
+    definition as battle_fairy_attribute_definition, execute_battle_fairy_attribute,
+    send_state_visual as send_battle_fairy_attribute_state_visual,
+};
+use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::callosity::{
     execute_player_callosity, CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID,
 };
@@ -5024,6 +5029,12 @@ impl CGame {
         let Some((properties, callosity_visual)) = self
             .find_player(player_id)
             .map(|player| player.apply_callosity_state_properties(properties))
+        else {
+            return false;
+        };
+        let Some(properties) = self
+            .find_player(player_id)
+            .map(|player| player.apply_battle_fairy_attribute_states(properties))
         else {
             return false;
         };
@@ -26031,6 +26042,27 @@ impl CGame {
             send_hearten_state_visual(self, player_id, state, false, now_ms);
             let _ = self.publish_player_states(player_id);
         }
+        let expired_attribute_states = self
+            .find_player_mut(player_id)
+            .map(|player| player.take_expired_battle_fairy_attribute_states(now_ms))
+            .unwrap_or_default();
+        if !expired_attribute_states.is_empty()
+            && let Some((region_id, tile_x, tile_y)) = self.find_player(player_id).and_then(|player| {
+                Some((
+                    player.server_region_id()?,
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                ))
+            })
+        {
+            let target = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
+            for state in expired_attribute_states.iter().copied() {
+                send_battle_fairy_attribute_state_visual(
+                    self, region_id, target, tile_x, tile_y, state, false,
+                );
+            }
+            let _ = self.update_player_properties(player_id, runtime);
+        }
         let war_soul_mana = self
             .find_player(player_id)
             .and_then(|player| player.war_soul_mana(&self.goods_factory));
@@ -26078,6 +26110,7 @@ impl CGame {
             cure_ended = expired_cure.is_some(),
             periodic_attacks_updated,
             defense_shields_ended = expired_defense_shields.len(),
+            battle_fairy_attribute_states_ended = expired_attribute_states.len(),
             "обновлены временные состояния игрока"
         );
         Some(())
@@ -35075,12 +35108,19 @@ impl CGame {
             fire.add_long(target_y);
             let _ = self.send_game_shape_around(region, &monster_shape, None, &fire);
 
+            let ordinary_attack = region
+                .find_monster_by_id(monster_id)
+                .map(|monster| {
+                    monster.battle_fairy_attack_bounds(
+                        property.minimum_attack,
+                        property.maximum_attack,
+                    )
+                })
+                .unwrap_or((property.minimum_attack, property.maximum_attack));
             let physical_minimum = pet_attack_properties
-                .map_or(property.minimum_attack, |pet| pet.minimum_attack)
-                as i32;
+                .map_or(ordinary_attack.0, |pet| pet.minimum_attack) as i32;
             let physical_maximum = pet_attack_properties
-                .map_or(property.maximum_attack, |pet| pet.maximum_attack)
-                as i32;
+                .map_or(ordinary_attack.1, |pet| pet.maximum_attack) as i32;
             let physical_span = physical_maximum
                 .wrapping_sub(physical_minimum)
                 .max(0)
@@ -36533,6 +36573,63 @@ impl CGame {
         }
     }
 
+    pub(crate) fn attribute_skill_target_tile(
+        &self,
+        region_id: Option<i32>,
+        target: ShapeIdentity,
+    ) -> Option<(i32, i32)> {
+        match target.object_type {
+            PLAYER_TYPE => {
+                let player = self.find_player(target.id)?;
+                if region_id.is_some_and(|region_id| player.server_region_id() != Some(region_id)) {
+                    return None;
+                }
+                Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+            }
+            MONSTER_TYPE => {
+                let region_id = region_id?;
+                let monster = self.find_region(region_id)?.base().find_monster_by_id(target.id)?;
+                Some((
+                    monster.move_shape().shape().get_tile_x().ok()?,
+                    monster.move_shape().shape().get_tile_y().ok()?,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn replace_battle_fairy_attribute_state(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        state: BattleFairyAttributeState,
+    ) -> Option<(Option<BattleFairyAttributeState>, i32, i32)> {
+        match target.object_type {
+            PLAYER_TYPE => {
+                let player = self.find_player_mut(target.id)?;
+                if player.server_region_id() != Some(region_id) {
+                    return None;
+                }
+                let tile_x = player.shape().get_tile_x().ok()?;
+                let tile_y = player.shape().get_tile_y().ok()?;
+                let previous = player.replace_battle_fairy_attribute_state(state);
+                Some((previous, tile_x, tile_y))
+            }
+            MONSTER_TYPE => {
+                let mut owner = self.take_region_owner(region_id)?;
+                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
+                    let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
+                    let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
+                    let previous = monster.move_shape_mut().replace_battle_fairy_attribute_state(state);
+                    Some((previous, tile_x, tile_y))
+                });
+                self.restore_region_owner(owner);
+                result
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn periodic_state_target_name(
         &self,
         region_id: i32,
@@ -36753,6 +36850,13 @@ impl CGame {
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
         if let Some(dispatch) = player_ai.next_battle_fairy_skill() {
+            let attribute_skill = match dispatch {
+                BattleFairySkillDispatch::SelfTarget { skill_id, .. }
+                | BattleFairySkillDispatch::Point { skill_id, .. }
+                | BattleFairySkillDispatch::Object { skill_id, .. } => {
+                    battle_fairy_attribute_definition(skill_id).is_some()
+                }
+            };
             let concrete_life_shield = matches!(
                 dispatch,
                 BattleFairySkillDispatch::SelfTarget {
@@ -36768,7 +36872,9 @@ impl CGame {
                         ..
                     }
             );
-            let outcome = if concrete_life_shield {
+            let outcome = if attribute_skill {
+                execute_battle_fairy_attribute(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_life_shield {
                 execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
@@ -40793,6 +40899,29 @@ impl CGame {
                 })
                 .unwrap_or_default();
             for monster_id in monster_ids {
+                let now_ms = runtime.now_milliseconds();
+                let expired_attribute_states = if let Some(mut owner) = self.take_region_owner(region_id) {
+                    let result = owner.base_mut().find_monster_by_id_mut(monster_id).map(|monster| {
+                        let tile_x = monster.move_shape().shape().get_tile_x().unwrap_or_default();
+                        let tile_y = monster.move_shape().shape().get_tile_y().unwrap_or_default();
+                        let states = monster
+                            .move_shape_mut()
+                            .take_expired_battle_fairy_attribute_states(now_ms);
+                        (states, tile_x, tile_y)
+                    });
+                    self.restore_region_owner(owner);
+                    result
+                } else {
+                    None
+                };
+                if let Some((states, tile_x, tile_y)) = expired_attribute_states {
+                    let target = ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID };
+                    for state in states {
+                        send_battle_fairy_attribute_state_visual(
+                            self, region_id, target, tile_x, tile_y, state, false,
+                        );
+                    }
+                }
                 let periodic_state_ids = self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))

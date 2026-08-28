@@ -67,6 +67,8 @@ pub(crate) mod appserver {
         pub(crate) mod basemagicphalanx;
         pub(crate) mod battlefairybasemagic;
         pub(crate) mod battlefairybasemagicphalanx;
+        pub(crate) mod battlefairyattribute;
+        pub(crate) mod battlefairyattributestate;
         pub(crate) mod battlefairytransfer;
         pub(crate) mod bloodloss;
         pub(crate) mod bloodlossstate;
@@ -105,6 +107,14 @@ pub(crate) mod appserver {
         pub(crate) mod originstate;
         pub(crate) mod poisonarrow;
         pub(crate) mod poisonarrowstate;
+        pub(crate) mod pojia;
+        pub(crate) mod pojiastate;
+        pub(crate) mod pobing;
+        pub(crate) mod pobingstate;
+        pub(crate) mod pomo;
+        pub(crate) mod pomostate;
+        pub(crate) mod pofa;
+        pub(crate) mod pofastate;
         pub(crate) mod naturalstate;
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;
@@ -116,6 +126,14 @@ pub(crate) mod appserver {
         pub(crate) mod taiji;
         pub(crate) mod taijistate;
         pub(crate) mod wangsheng;
+        pub(crate) mod yujia;
+        pub(crate) mod yujiastate;
+        pub(crate) mod yubing;
+        pub(crate) mod yubingstate;
+        pub(crate) mod yumo;
+        pub(crate) mod yumostate;
+        pub(crate) mod yufa;
+        pub(crate) mod yufastate;
     }
     pub(crate) mod states {
         pub(crate) mod attackpower;

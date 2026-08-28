@@ -582,13 +582,36 @@ impl CMonster {
             let adjusted = scaled(value, index);
             if adjusted == 0 { value } else { adjusted }
         };
+        let (minimum_attack, maximum_attack) = self.battle_fairy_attack_bounds(
+            scaled_attack(property.minimum_attack, 1),
+            scaled_attack(property.maximum_attack, 0),
+        );
         PetAttackProperties {
-            minimum_attack: scaled_attack(property.minimum_attack, 1),
-            maximum_attack: scaled_attack(property.maximum_attack, 0),
+            minimum_attack,
+            maximum_attack,
             attack_interval: scaled(property.attack_speed, 7),
             stop_frame: scaled(property.stop_frame, 9),
             speed_bits: ((self.move_shape.shape().get_speed() * factor(8)).max(0.0)).to_bits(),
         }
+    }
+
+    pub(crate) fn battle_fairy_attack_bounds(
+        &self,
+        mut minimum: u32,
+        mut maximum: u32,
+    ) -> (u32, u32) {
+        for state in self.move_shape.battle_fairy_attribute_states() {
+            minimum = state.apply_to_monster_attack(minimum);
+            maximum = state.apply_to_monster_attack(maximum);
+        }
+        (minimum, maximum)
+    }
+
+    pub(crate) fn battle_fairy_element_modify(&self, mut value: i32) -> i32 {
+        for state in self.move_shape.battle_fairy_attribute_states() {
+            value = state.apply_to_monster_element(value);
+        }
+        value
     }
 
     /// Exact protection-owner tail of `CMonster::OnBeenHurted`. Nation

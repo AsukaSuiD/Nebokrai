@@ -52,6 +52,7 @@ use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
+use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
@@ -464,6 +465,7 @@ pub(crate) struct CanonicalStateStorage {
     cure_state: Option<CureState>,
     poison_arrow_state: Option<PoisonArrowState>,
     blood_loss_state: Option<BloodLossState>,
+    battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
     ex_states: LegacyStateCodec,
@@ -652,6 +654,7 @@ impl CMoveShape {
         self.cure_state = None;
         self.poison_arrow_state = None;
         self.blood_loss_state = None;
+        self.battle_fairy_attribute_states.clear();
         self.periodic_attack_order.clear();
         self.defense_shields.clear();
         self.change_body_states.clear();
@@ -681,6 +684,7 @@ impl CMoveShape {
             || self.state_storage.cure_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
+            || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
             || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
@@ -792,6 +796,11 @@ impl CMoveShape {
             self.blood_loss_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let battle_fairy_attributes = self
+            .battle_fairy_attribute_states
+            .iter()
+            .filter(|state| state.skill_id() as i32 == state_id)
+            .count();
         let shields = self
             .defense_shields
             .iter()
@@ -809,6 +818,7 @@ impl CMoveShape {
             .saturating_add(cure)
             .saturating_add(poison_arrow)
             .saturating_add(blood_loss)
+            .saturating_add(battle_fairy_attributes)
             .saturating_add(shields)
             .saturating_add(change_body)
             .saturating_add(extended)
@@ -855,6 +865,10 @@ impl CMoveShape {
             || self
                 .blood_loss_state
                 .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .battle_fairy_attribute_states
+                .iter()
+                .any(|state| state.skill_id() == state_id)
             || self
                 .defense_shields
                 .iter()
@@ -1066,6 +1080,39 @@ impl CMoveShape {
     ) -> Option<BloodLossState> {
         self.periodic_attack_order.insert(state.skill_id());
         self.blood_loss_state.replace(state)
+    }
+
+    pub(crate) fn battle_fairy_attribute_states(&self) -> &[BattleFairyAttributeState] {
+        &self.battle_fairy_attribute_states
+    }
+
+    pub(crate) fn replace_battle_fairy_attribute_state(
+        &mut self,
+        state: BattleFairyAttributeState,
+    ) -> Option<BattleFairyAttributeState> {
+        let previous = self
+            .battle_fairy_attribute_states
+            .iter()
+            .position(|candidate| candidate.skill_id() == state.skill_id())
+            .map(|position| self.battle_fairy_attribute_states.remove(position));
+        self.battle_fairy_attribute_states.push(state);
+        previous
+    }
+
+    pub(crate) fn take_expired_battle_fairy_attribute_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<BattleFairyAttributeState> {
+        let mut expired = Vec::new();
+        let mut position = 0;
+        while position < self.battle_fairy_attribute_states.len() {
+            if self.battle_fairy_attribute_states[position].expired(now_ms) {
+                expired.push(self.battle_fairy_attribute_states.remove(position));
+            } else {
+                position += 1;
+            }
+        }
+        expired
     }
 
     pub(crate) fn take_blood_loss_state_for_ai(&mut self) -> Option<BloodLossState> {

@@ -4393,6 +4393,30 @@ impl CPlayer {
         self.move_shape.replace_blood_loss_state(state)
     }
 
+    pub(crate) fn replace_battle_fairy_attribute_state(
+        &mut self,
+        state: super::skills::battlefairyattributestate::BattleFairyAttributeState,
+    ) -> Option<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
+        self.move_shape.replace_battle_fairy_attribute_state(state)
+    }
+
+    pub(crate) fn take_expired_battle_fairy_attribute_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
+        self.move_shape.take_expired_battle_fairy_attribute_states(now_ms)
+    }
+
+    pub(crate) fn apply_battle_fairy_attribute_states(
+        &self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        for state in self.move_shape.battle_fairy_attribute_states() {
+            properties = state.apply_to_player(properties);
+        }
+        properties
+    }
+
     pub(crate) fn take_blood_loss_state_for_ai(
         &mut self,
     ) -> Option<super::skills::bloodlossstate::BloodLossState> {
