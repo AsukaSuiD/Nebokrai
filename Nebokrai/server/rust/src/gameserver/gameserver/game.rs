@@ -744,13 +744,8 @@ use crate::gameserver::appserver::skills::baseattack::{
 use crate::gameserver::appserver::skills::agility::{
     execute_player_agility_family, AGILITY_2_SKILL_ID, AGILITY_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
-use crate::gameserver::appserver::skills::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
-use crate::gameserver::appserver::skills::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
-use crate::gameserver::appserver::skills::origin::ORIGIN_SKILL_ID;
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
-use crate::gameserver::appserver::skills::taiji::TAIJI_SKILL_ID;
 use crate::gameserver::appserver::skills::wangsheng::{
     execute_battle_fairy_wangsheng, WANGSHENG_SKILL_ID,
 };
@@ -804,7 +799,9 @@ use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visua
 use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::immediatestate::execute_player_immediate_state;
+use crate::gameserver::appserver::skills::immediatestate::{
+    execute_player_immediate_state, is_immediate_state_skill,
+};
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
@@ -36069,14 +36066,9 @@ impl CGame {
             let concrete_immediate_state = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => matches!(
-                    skill_id,
-                    TAIJI_SKILL_ID
-                        | ENLARGE_MAX_HP_SKILL_ID
-                        | ENLARGE_MAX_MP_SKILL_ID
-                        | ENLARGE_FULL_MISS_SKILL_ID
-                        | ORIGIN_SKILL_ID
-                ),
+                | PlayerSkillDispatch::Object { skill_id, .. } => {
+                    is_immediate_state_skill(skill_id)
+                }
             };
             let outcome = if concrete_base_attack {
                 self.execute_player_base_attack(player_id, dispatch, player_ai, runtime)

@@ -22,7 +22,8 @@ pub(crate) const SKILL_USAGE_ELEMENT_MODIFY_GAIN: u32 = 115;
 
 // ============================================================================
 // FUNCTION: COrigin::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: `execute_player_immediate_state`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\origin.cpp:99

@@ -64,7 +64,8 @@ impl TaiJiState {
 
 // ============================================================================
 // FUNCTION: CTaiJiState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `TaiJiState::apply_to_player`; monster-ветвь остаётся RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taijistate.cpp:37

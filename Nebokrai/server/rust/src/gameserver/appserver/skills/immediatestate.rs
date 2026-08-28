@@ -31,6 +31,17 @@ enum ImmediateStateKind {
     Origin,
 }
 
+pub(crate) const fn is_immediate_state_skill(skill_id: u32) -> bool {
+    matches!(
+        skill_id,
+        TAIJI_SKILL_ID
+            | ENLARGE_MAX_HP_SKILL_ID
+            | ENLARGE_MAX_MP_SKILL_ID
+            | ENLARGE_FULL_MISS_SKILL_ID
+            | ORIGIN_SKILL_ID
+    )
+}
+
 pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -47,14 +58,7 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         PlayerSkillDispatch::SelfTarget { skill_id, .. }
         | PlayerSkillDispatch::Point { skill_id, .. }
         | PlayerSkillDispatch::Object { skill_id, .. }
-            if matches!(
-                skill_id,
-                TAIJI_SKILL_ID
-                    | ENLARGE_MAX_HP_SKILL_ID
-                    | ENLARGE_MAX_MP_SKILL_ID
-                    | ENLARGE_FULL_MISS_SKILL_ID
-                    | ORIGIN_SKILL_ID
-            ) => skill_id,
+            if is_immediate_state_skill(skill_id) => skill_id,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
     if game.find_player(player_id).is_none() {
