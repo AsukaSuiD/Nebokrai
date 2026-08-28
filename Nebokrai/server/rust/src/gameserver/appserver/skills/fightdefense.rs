@@ -6,9 +6,10 @@
 //! удары, уклонение и коэффициент PvP. Для монстров сохраняются отдельные
 //! ограничения попадания, защита и сопротивления без коэффициента PvP.
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
-//! или порядок обращений к RNG. Канонический мана-щит вызывается в исходной
-//! точке `PreDefense`, до обычной защиты; прочие ещё не восстановленные щиты
-//! не подменяются этой реализацией.
+//! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
+//! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
+//! добавления состояний; прочие ещё не восстановленные состояния не
+//! подменяются этой реализацией.
 
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -16,7 +17,7 @@ use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPowerType};
 use crate::setup::globesetup::GlobeSetupSnapshot;
 
-fn truncate_original(value: f64) -> i32 {
+pub(super) fn truncate_original(value: f64) -> i32 {
     if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
         i32::MIN
     } else {
@@ -31,6 +32,23 @@ fn avoid_damage(damage: i32, avoid: u16) -> i32 {
     } else {
         damage
     }
+}
+
+fn apply_monster_promotion(
+    skill_id: u32,
+    factor: Option<u16>,
+    kind: AttackPowerType,
+    damage: i32,
+) -> i32 {
+    if (530..=545).contains(&skill_id) && skill_id != 544 {
+        return damage;
+    }
+    if kind != AttackPowerType::Element {
+        return damage;
+    }
+    factor.map_or(damage, |factor| {
+        truncate_original(f64::from(factor) * f64::from(damage) * 0.001)
+    })
 }
 
 pub(crate) fn defend_monster_base_attack(
@@ -61,6 +79,12 @@ pub(crate) fn defend_monster_base_attack(
     }
 
     for power in &mut attack.damages {
+        power.hp_damage = apply_monster_promotion(
+            attack.skill_id,
+            target.promotion_magic_attack_factor,
+            power.kind,
+            power.hp_damage,
+        );
         match power.kind {
             AttackPowerType::Physical => {
                 let defense = target.defense as i32;
@@ -181,11 +205,10 @@ pub(crate) fn defend_player_base_attack(
 
     for power in &mut attack.damages {
         for state in defense_shields.iter_mut() {
-            state.absorb_damage(
+            state.apply_pre_defense(
                 attack.skill_id,
                 attack.damage_factor,
-                target_mana,
-                target_war_soul_mana,
+                Some((target_mana, target_war_soul_mana)),
                 power,
             );
         }
@@ -295,11 +318,10 @@ pub(crate) fn defend_player_from_monster_base_attack(
 
     for power in &mut attack.damages {
         for state in defense_shields.iter_mut() {
-            state.absorb_damage(
+            state.apply_pre_defense(
                 attack.skill_id,
                 attack.damage_factor,
-                target_mana,
-                target_war_soul_mana,
+                Some((target_mana, target_war_soul_mana)),
                 power,
             );
         }
@@ -350,6 +372,12 @@ pub(crate) fn defend_monster_from_monster_base_attack(
     }
 
     for power in &mut attack.damages {
+        power.hp_damage = apply_monster_promotion(
+            attack.skill_id,
+            target.promotion_magic_attack_factor,
+            power.kind,
+            power.hp_damage,
+        );
         match power.kind {
             AttackPowerType::Physical => {
                 power.hp_damage = power.hp_damage.wrapping_sub(target.defense as i32 / 2);

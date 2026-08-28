@@ -840,6 +840,9 @@ use crate::gameserver::appserver::skills::poisonarrow::{
 use crate::gameserver::appserver::skills::poisonarrowstate::{
     PoisonArrowState, PoisonArrowStateTick, send_poison_arrow_state_visual,
 };
+use crate::gameserver::appserver::skills::promotion::{
+    PROMOTION_SKILL_ID, execute_player_promotion,
+};
 use crate::gameserver::appserver::skills::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::skills::spiderpoisonstate::{
     SpiderPoisonStateTick, send_spider_poison_state_visual,
@@ -26114,6 +26117,9 @@ impl CGame {
                     ordinary_shield_ended = true;
                     send_mana_shield_state_visual(self, player_id, state, false, now_ms);
                 }
+                DefenseShieldState::Promotion(_) => {
+                    ordinary_shield_ended = true;
+                }
             }
         }
         if ordinary_shield_ended {
@@ -36169,6 +36175,16 @@ impl CGame {
                     skill_id == HEARTEN_SKILL_ID && target.object_type == PLAYER_TYPE
                 }
             };
+            let concrete_promotion = match dispatch {
+                PlayerSkillDispatch::SelfTarget { skill_id, .. } => {
+                    skill_id == PROMOTION_SKILL_ID
+                }
+                PlayerSkillDispatch::Object { skill_id, target } => {
+                    skill_id == PROMOTION_SKILL_ID
+                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                }
+                PlayerSkillDispatch::Point { .. } => false,
+            };
             let concrete_pets_control = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -36224,6 +36240,8 @@ impl CGame {
                 execute_player_agility_family(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_hearten {
                 execute_player_hearten(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_promotion {
+                execute_player_promotion(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_pets_control {
                 execute_player_pets_control(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_monster_taming {
@@ -40364,6 +40382,18 @@ impl CGame {
                         monster_id,
                         now_ms,
                     );
+                    let promotion_ended = owner
+                        .base_mut()
+                        .find_monster_by_id_mut(monster_id)
+                        .and_then(|monster| {
+                            monster
+                                .move_shape_mut()
+                                .take_expired_promotion_state(now_ms)
+                        })
+                        .is_some();
+                    if promotion_ended {
+                        tracing::trace!(region_id, monster_id, "состояние усиления монстра завершено");
+                    }
                     self.restore_region_owner(owner);
                 }
                 let expired_attribute_states = if let Some(mut owner) = self.take_region_owner(region_id) {

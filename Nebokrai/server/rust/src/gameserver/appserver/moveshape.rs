@@ -52,6 +52,7 @@ use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
+use crate::gameserver::appserver::skills::promotionstate::PromotionState;
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
@@ -1133,6 +1134,7 @@ impl CMoveShape {
                 DefenseShieldState::Life(_) => None,
                 DefenseShieldState::Mana(previous) => Some(previous),
                 DefenseShieldState::Machine(_) => None,
+                DefenseShieldState::Promotion(_) => None,
             });
         self.defense_shields.push(DefenseShieldState::Mana(state));
         previous
@@ -1151,6 +1153,7 @@ impl CMoveShape {
                 DefenseShieldState::Life(_) => None,
                 DefenseShieldState::Machine(previous) => Some(previous),
                 DefenseShieldState::Mana(_) => None,
+                DefenseShieldState::Promotion(_) => None,
             });
         self.defense_shields
             .push(DefenseShieldState::Machine(state));
@@ -1168,10 +1171,55 @@ impl CMoveShape {
             .map(|position| self.defense_shields.remove(position))
             .and_then(|candidate| match candidate {
                 DefenseShieldState::Life(previous) => Some(previous),
-                DefenseShieldState::Machine(_) | DefenseShieldState::Mana(_) => None,
+                DefenseShieldState::Machine(_)
+                | DefenseShieldState::Mana(_)
+                | DefenseShieldState::Promotion(_) => None,
             });
         self.defense_shields.push(DefenseShieldState::Life(state));
         previous
+    }
+
+    /// Повторное наложение `Promotion` завершает прежнее состояние и не
+    /// создаёт новое. Это подтверждённая особенность исходного `AI`.
+    pub(crate) fn begin_promotion_state(&mut self, state: PromotionState) -> bool {
+        if let Some(position) = self
+            .defense_shields
+            .iter()
+            .position(|candidate| candidate.skill_id() == state.skill_id())
+        {
+            self.defense_shields.remove(position);
+            return false;
+        }
+        self.defense_shields
+            .push(DefenseShieldState::Promotion(state));
+        true
+    }
+
+    pub(crate) fn promotion_magic_attack_factor(&self) -> Option<u16> {
+        self.defense_shields.iter().find_map(|state| match state {
+            DefenseShieldState::Promotion(state) => Some(state.magic_attack_factor()),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
+        self.defense_shields.iter().find_map(|state| match state {
+            DefenseShieldState::Promotion(state) => Some(state.heal_recover_factor()),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn take_expired_promotion_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<PromotionState> {
+        let position = self.defense_shields.iter().position(|state| {
+            matches!(state, DefenseShieldState::Promotion(promotion) if promotion.expired(now_ms))
+        })?;
+        match self.defense_shields.remove(position) {
+            DefenseShieldState::Promotion(state) => Some(state),
+            _ => unreachable!("позиция состояния Promotion проверена"),
+        }
     }
 
     pub(crate) fn take_expired_defense_shields(

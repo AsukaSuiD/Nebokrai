@@ -134,6 +134,8 @@ pub(crate) mod appserver {
         pub(crate) mod petscontrol;
         pub(crate) mod poisonarrow;
         pub(crate) mod poisonarrowstate;
+        pub(crate) mod promotion;
+        pub(crate) mod promotionstate;
         pub(crate) mod pojia;
         pub(crate) mod pojiastate;
         pub(crate) mod pobing;

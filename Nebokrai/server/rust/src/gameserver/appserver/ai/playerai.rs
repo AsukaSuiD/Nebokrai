@@ -10,7 +10,7 @@
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
-//! питомцами, машинный и мана-щит, атака боевой феи и её призываемые области
+//! питомцами, усиление, машинный и мана-щит, атака боевой феи и её призываемые области
 //! и приручение монстров сохраняют незавершённое состояние между проходами ИИ.
 //! Хвост
 //! `CPlayerAI::Run` хранит часы
@@ -86,6 +86,8 @@ pub(crate) struct CPlayerAI {
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     hearten_last_used_ms: u32,
+    promotion: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    promotion_last_used_ms: u32,
     pets_control: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     pets_control_last_used_ms: u32,
     monster_taming: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -149,6 +151,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.callosity = None;
         self.hearten = None;
+        self.promotion = None;
         self.pets_control = None;
         self.monster_taming = None;
         self.machine_shield = None;
@@ -228,6 +231,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение воодушевления завершено");
         }
+        if let Some(mut execution) = self.promotion.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение усиления завершено");
+        }
         if let Some(mut execution) = self.pets_control.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение управления питомцами завершено");
@@ -284,6 +291,7 @@ impl CPlayerAI {
         self.base_magic = None;
         self.callosity = None;
         self.hearten = None;
+        self.promotion = None;
         self.pets_control = None;
         self.monster_taming = None;
         self.machine_shield = None;
@@ -442,6 +450,31 @@ impl CPlayerAI {
     pub(crate) const fn hearten_last_used_ms(&self) -> u32 { self.hearten_last_used_ms }
     pub(crate) const fn mark_hearten_used(&mut self, now_ms: u32) {
         self.hearten_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn promotion(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.promotion
+    }
+
+    pub(crate) const fn begin_promotion(
+        &mut self,
+        state: SkillExecutionKernel<PlayerSkillDispatch>,
+    ) {
+        self.promotion = Some(state);
+    }
+
+    pub(crate) fn promotion_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.promotion.as_mut()
+    }
+
+    pub(crate) const fn promotion_last_used_ms(&self) -> u32 {
+        self.promotion_last_used_ms
+    }
+
+    pub(crate) const fn mark_promotion_used(&mut self, now_ms: u32) {
+        self.promotion_last_used_ms = now_ms;
     }
 
     pub(crate) const fn pets_control(

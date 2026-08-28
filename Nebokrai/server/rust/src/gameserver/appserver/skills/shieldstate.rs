@@ -7,6 +7,7 @@
 use super::lifeshieldstate::LifeShieldState;
 use super::machineshieldstate::MachineShieldState;
 use super::manashieldstate::ManaShieldState;
+use super::promotionstate::PromotionState;
 use crate::gameserver::appserver::states::attackpower::AttackPower;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +15,7 @@ pub(crate) enum DefenseShieldState {
     Life(LifeShieldState),
     Machine(MachineShieldState),
     Mana(ManaShieldState),
+    Promotion(PromotionState),
 }
 
 impl DefenseShieldState {
@@ -22,25 +24,46 @@ impl DefenseShieldState {
             Self::Life(state) => state.skill_id(),
             Self::Machine(state) => state.skill_id(),
             Self::Mana(state) => state.skill_id(),
+            Self::Promotion(state) => state.skill_id(),
         }
     }
 
-    pub(crate) fn absorb_damage(
+    pub(crate) fn apply_pre_defense(
         &mut self,
         skill_id: u32,
         damage_factor: f32,
-        player_mana: u32,
-        war_soul_mana: Option<i32>,
+        player_resources: Option<(u32, Option<i32>)>,
         power: &mut AttackPower,
     ) {
         if (530..=545).contains(&skill_id) && skill_id != 544 {
             return;
         }
         match self {
-            Self::Life(state) => state.absorb_damage(damage_factor, war_soul_mana, power),
-            Self::Machine(state) => state.absorb_damage(damage_factor, player_mana, power),
+            Self::Life(state) => {
+                if let Some((_, war_soul_mana)) = player_resources {
+                    state.absorb_damage(damage_factor, war_soul_mana, power);
+                }
+            }
+            Self::Machine(state) => {
+                if let Some((player_mana, _)) = player_resources {
+                    state.absorb_damage(damage_factor, player_mana, power);
+                }
+            }
             Self::Mana(state) => {
-                state.absorb_damage(damage_factor, player_mana, power);
+                if let Some((player_mana, _)) = player_resources {
+                    state.absorb_damage(damage_factor, player_mana, power);
+                }
+            }
+            Self::Promotion(state) => {
+                if power.kind
+                    == crate::gameserver::appserver::states::attackpower::AttackPowerType::Element
+                {
+                    power.hp_damage = super::fightdefense::truncate_original(
+                        f64::from(state.magic_attack_factor())
+                            * f64::from(power.hp_damage)
+                            * 0.001,
+                    );
+                }
             }
         }
     }
@@ -56,6 +79,7 @@ impl DefenseShieldState {
             Self::Life(state) => state.expired(now_ms, player_mana, dead, war_soul_mana),
             Self::Machine(state) => state.expired(now_ms, player_mana, dead),
             Self::Mana(state) => state.expired(now_ms, player_mana, dead),
+            Self::Promotion(state) => state.expired(now_ms),
         }
     }
 }

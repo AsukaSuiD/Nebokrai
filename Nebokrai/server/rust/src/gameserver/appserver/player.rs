@@ -4223,6 +4223,17 @@ impl CPlayer {
         self.move_shape.replace_hearten_state(state)
     }
 
+    pub(crate) fn begin_promotion_state(
+        &mut self,
+        state: super::skills::promotionstate::PromotionState,
+    ) -> bool {
+        self.move_shape.begin_promotion_state(state)
+    }
+
+    pub(crate) fn promotion_heal_recover_factor(&self) -> Option<u16> {
+        self.move_shape.promotion_heal_recover_factor()
+    }
+
     pub(crate) fn take_expired_hearten_state(
         &mut self,
         now_ms: u32,

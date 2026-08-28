@@ -137,6 +137,7 @@ pub(crate) struct MonsterCombatProperties {
     pub(crate) soul_resistance: u16,
     pub(crate) attack_avoid: u16,
     pub(crate) element_avoid: u16,
+    pub(crate) promotion_magic_attack_factor: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -665,6 +666,7 @@ impl CMonster {
             soul_resistance: property.soul_resistant as u16,
             attack_avoid: property.attack_avoid,
             element_avoid: property.element_avoid,
+            promotion_magic_attack_factor: self.move_shape.promotion_magic_attack_factor(),
         }
     }
 
