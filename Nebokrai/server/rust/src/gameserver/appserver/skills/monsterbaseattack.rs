@@ -67,6 +67,7 @@ use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::skeletonarchery::{
     SKELETON_ARCHERY_SKILL_ID, SkeletonArcheryDispatch, prepare_owned_skeleton_archery,
 };
+use crate::gameserver::appserver::ai::monsterai::select_attack_skill;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -81,10 +82,71 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
+use crate::setup::monsterlist::MonsterSkill;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
 pub(crate) const MONSTER_BASE_ATTACK_SKILL_ID: u32 = 0x2bd;
+
+const BASE_ATTACK_SKILL_ID: u16 = 1;
+const BASE_ARCHERY_SKILL_ID: u16 = 2;
+const BASE_MAGIC_SKILL_ID: u16 = 3;
+const SKILL_TYPE_ATTACK: u32 = 0;
+const SKILL_TYPE_SUMMON: u32 = 3;
+
+fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
+    matches!(
+        skill_id,
+        MONSTER_BASE_ATTACK_SKILL_ID
+            | MONSTER_FAST_ATTACK_SKILL_ID
+            | MONSTER_RANGE_ATTACK_SKILL_ID
+            | MONSTER_THORN_SKILL_ID
+            | SKELETON_ARCHERY_SKILL_ID
+    )
+}
+
+/// Rust-владелец выбирает навык только когда любой результат броска уже имеет
+/// реального владельца исполнения. Иначе весь ход остаётся внешней виртуальной
+/// ветви, чтобы она не получила второй вызов исходного генератора случайных
+/// чисел после частичной диспетчеризации.
+fn owns_complete_skill_selection(skills: &[MonsterSkill]) -> bool {
+    !skills.is_empty()
+        && skills
+            .iter()
+            .all(|skill| is_owned_monster_attack_skill(u32::from(skill.id)))
+        && skills
+            .iter()
+            .fold(0_i32, |sum, skill| sum.wrapping_add(i32::from(skill.odds)))
+            >= 9_999
+}
+
+fn installed_monster_skill(skills: &[MonsterSkill], skill_id: u16) -> Option<MonsterSkill> {
+    skills
+        .iter()
+        .copied()
+        .filter(|skill| skill.id == skill_id)
+        .max_by_key(|skill| skill.level)
+}
+
+fn default_monster_attack_skill_id(game: &CGame, skills: &[MonsterSkill]) -> u16 {
+    if skills.iter().any(|skill| {
+        skill.id == BASE_ARCHERY_SKILL_ID
+            && game
+                .skill_base_properties(u32::from(skill.id), i32::from(skill.level))
+                .is_some_and(|properties| properties.skill_type() == SKILL_TYPE_ATTACK)
+    }) {
+        BASE_ARCHERY_SKILL_ID
+    } else if skills.iter().any(|skill| {
+        skill.id == BASE_MAGIC_SKILL_ID
+            && game
+                .skill_base_properties(u32::from(skill.id), i32::from(skill.level))
+                .is_some_and(|properties| properties.skill_type() == SKILL_TYPE_SUMMON)
+    }) {
+        BASE_MAGIC_SKILL_ID
+    } else {
+        BASE_ATTACK_SKILL_ID
+    }
+}
 
 pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -139,29 +201,57 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     if !tamed && property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
-        // Carriage has its own derived AI and never runs generic monster
-        // base-attack/search scheduling.
+        // Повозкой управляет отдельный производный ИИ; общий поиск цели и
+        // расписание атаки обычного монстра для неё не выполняются.
         return false;
     }
     if CMoveShape::is_died(monster_health) {
         return false;
     }
-    let [skill] = property.skills.as_slice() else {
+    if !owns_complete_skill_selection(&property.skills) {
+        return false;
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && matches!(property.ai, 0 | 3)
+        && let Some(area_index) = area_index
+        && region.player_ids_around_area(area_index).is_empty()
+    {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.hibernate_ai(runtime.now_milliseconds());
+            return true;
+        }
+    }
+    let selected_skill_id = if let Some(cast) = cast {
+        cast.dispatch().skill_id as u16
+    } else if let Some(skill_id) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().current_skill_id())
+    {
+        skill_id as u16
+    } else {
+        let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
+        let selected = select_attack_skill(
+            &property.skills,
+            game.skill_random_below(10_000),
+            default_skill_id,
+        );
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster
+                .move_shape_mut()
+                .set_current_skill_id(Some(u32::from(selected)));
+        }
+        selected
+    };
+    let Some(skill) = installed_monster_skill(&property.skills, selected_skill_id) else {
         return false;
     };
     let skill_id = u32::from(skill.id);
-    if !matches!(
-        skill_id,
-        MONSTER_BASE_ATTACK_SKILL_ID
-            | MONSTER_FAST_ATTACK_SKILL_ID
-            | MONSTER_RANGE_ATTACK_SKILL_ID
-            | MONSTER_THORN_SKILL_ID
-            | SKELETON_ARCHERY_SKILL_ID
-    ) {
+    if !is_owned_monster_attack_skill(skill_id) {
         return false;
     }
     let fast_attack = skill_id == MONSTER_FAST_ATTACK_SKILL_ID;
-    let skill = *skill;
     if target.is_none()
         && cast.is_none()
         && !tamed
@@ -259,18 +349,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 monster.set_ai_target(selected);
             }
             target = Some(selected);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && matches!(property.ai, 0 | 3)
-        && let Some(area_index) = area_index
-        && region.player_ids_around_area(area_index).is_empty()
-    {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.hibernate_ai(runtime.now_milliseconds());
-            return true;
         }
     }
     let target = cast.map(|cast| cast.dispatch().target).or(target);

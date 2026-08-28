@@ -18,9 +18,9 @@
 //! завершающие действия удаления из региона. `Defense` и `Died` идут через
 //! каноническую очередь `passive_actions` владельца `CBaseAI`; достигнутый
 //! `Defense` обрабатывается до активного хода монстра без отдельной
-//! диагностической передачи. Для обычного монстра с единственным навыком
-//! `0x2bd`, `0x2d1`, `0x2ef`, `0x197` либо `0x1a1` тот же владелец хранит цель,
-//! выполнение и задержку
+//! диагностической передачи. Для обычного монстра, чей список состоит из
+//! навыков `0x2bd`, `0x2d1`, `0x2ef`, `0x197` и `0x1a1`, тот же владелец
+//! хранит цель, выбранный по исходным `odds` текущий навык, выполнение и задержку
 //! повторного применения; быстрая атака дополнительно хранит визуальную фазу
 //! и первый из двух ударов. Поиск игроков и питомцев, преследование ИИ `0/3`
 //! и задержка обходного шага остаются здесь; урон и смерть питомца сохраняют
@@ -30,7 +30,7 @@
 //! и срок одичания, а
 //! `CGame` завершает поиск целей активного режима относительно хозяина,
 //! возврат питомца, уведомления и исчезновение. Случайное перемещение без цели,
-//! специальные сторожевые AI и выбор между несколькими навыками этим не
+//! специальные сторожевые AI и списки с ещё не достигнутыми навыками этим не
 //! подменяются. Для достигнутого обычного
 //! пути бездействия `CBaseAI` хранит время начала и интервал сна; `CGame`
 //! восстанавливает HP и рассылает `OnChangeStates` до возврата ID в список
@@ -662,8 +662,8 @@ impl CMonster {
         value
     }
 
-    /// Exact protection-owner tail of `CMonster::OnBeenHurted`. Nation
-    /// notification remains at `CGame`, before this mutation as in the EXE.
+    /// Точная завершающая часть владельца защиты `CMonster::OnBeenHurted`.
+    /// Уведомление Nation остаётся в `CGame` перед этой мутацией, как в EXE.
     pub(crate) fn register_attacking_player(
         &mut self,
         attacker_player_id: i32,
@@ -791,6 +791,7 @@ impl CMonster {
         let mut execution = self.base_attack_cast.take()?;
         self.fast_attack_progress = None;
         self.skeleton_archery_progress = None;
+        self.move_shape.set_current_skill_id(None);
         let _ = execution.terminate(SkillTermination::Completed);
         self.last_base_attack_ms = now_ms;
         Some(execution)
@@ -819,6 +820,7 @@ impl CMonster {
         self.fast_attack_progress = None;
         self.skeleton_archery_progress = None;
         if let Some(mut execution) = self.base_attack_cast.take() {
+            self.move_shape.set_current_skill_id(None);
             let _ = execution.terminate(SkillTermination::Cancelled);
         }
     }

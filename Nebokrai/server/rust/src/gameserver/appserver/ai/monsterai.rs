@@ -1,6 +1,33 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! ИИ обычного монстра GameServer.
+//!
+//! Точная `CMonsterAI::SelectAttackSkill` из `gameserver.exe/.pdb` делает один
+//! вызов `random(10000)`, проходит список навыков в исходном порядке и выбирает
+//! первый ID, для которого бросок не больше накопленной суммы `odds`. Если
+//! сумма не покрыла бросок, назначается стандартная атака владельца.
+//! Выбранный ID хранится каноническим `CMoveShape::current_skill_id`; конкретный
+//! владелец навыка разрешает уровень и исполняет стадии. Остальной корпус ниже
+//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально) до достижения соответствующих AI-ветвей.
+
+use crate::setup::monsterlist::MonsterSkill;
+
+/// Сохраняет точный порядок и границу сравнения `SelectAttackSkill`.
+/// `roll` получает вызывающая сторона из исходного генератора случайных чисел,
+/// а стандартный навык вычисляет владелец формы по категориям установленных
+/// навыков.
+pub(crate) fn select_attack_skill(
+    skills: &[MonsterSkill],
+    roll: i32,
+    default_skill_id: u16,
+) -> u16 {
+    let mut cumulative_odds = 0_i32;
+    for skill in skills {
+        cumulative_odds = cumulative_odds.wrapping_add(i32::from(skill.odds));
+        if roll <= cumulative_odds {
+            return skill.id;
+        }
+    }
+    default_skill_id
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -119,7 +146,11 @@
 //
 // ============================================================================
 // FUNCTION: CMonsterAI::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `CMonster::hibernate_ai` и
+// `execute_owned_monster_base_attack` сохраняют проверку соседних игроков,
+// спящий переход и назначение текущего навыка до поиска противника для
+// полностью достигнутых списков. Случайное блуждание и очередь ожидания RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:34
@@ -172,7 +203,10 @@
 //
 // ============================================================================
 // FUNCTION: CMonsterAI::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `execute_owned_monster_base_attack` сохраняет проверку цели,
+// выбор текущего навыка, преследование, интервал атаки и запуск пяти
+// достигнутых владельцев. Общий событийный автомат и прочие навыки RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:102
@@ -183,21 +217,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CMonsterAI::SelectAttackSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:183
-// RVA: 0x001DD0B0
-// ADDRESS: 005dd0b0
-// PROTOTYPE: void __thiscall SelectAttackSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 
 // COMPONENT_VARIANT_END: GameServer

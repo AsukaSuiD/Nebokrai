@@ -3,6 +3,7 @@
 pub(crate) mod appserver {
     pub(crate) mod ai {
         pub(crate) mod baseai;
+        pub(crate) mod monsterai;
         pub(crate) mod playerai;
     }
     pub(crate) mod area;
