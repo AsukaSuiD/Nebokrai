@@ -39,7 +39,7 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_EM_MODIFIER: u32 = 20_015;
 const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 
-fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
         state,
         first_contact: false,
@@ -47,7 +47,7 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     }
 }
 
-fn dispatch_position(
+pub(super) fn dispatch_position(
     game: &CGame,
     region_id: i32,
     player_id: i32,
@@ -65,9 +65,10 @@ fn dispatch_position(
     }
 }
 
-fn send_cast(
+pub(super) fn send_thunder_family_cast(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     skill_level: i32,
     action: u8,
     target_position: Option<(i32, i32)>,
@@ -75,7 +76,7 @@ fn send_cast(
     let Some(player) = game.find_player(player_id) else { return };
     let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
     message.add_byte(action);
-    message.add_long(THUNDER_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.base_mut().add_short(skill_level as i16);
     message.add_long(VISUAL_OBJECT_TYPE);
     message.add_long(player_id);
@@ -91,9 +92,10 @@ fn send_cast(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn reject(
+pub(super) fn reject_thunder_family(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     skill_level: i32,
     action: u8,
     string_id: &[u8],
@@ -102,11 +104,11 @@ fn reject(
     if !string_id.is_empty() {
         game.send_skill_system_info(player_id, string_id);
     }
-    send_cast(game, player_id, skill_level, 3, None);
+    send_thunder_family_cast(game, player_id, skill_id, skill_level, 3, None);
     terminal(QueuedSkillExecutionState::Rejected)
 }
 
-fn master_info(player: &CPlayer) -> MasterInfo {
+pub(super) fn master_info(player: &CPlayer) -> MasterInfo {
     let permissions = player.pk_permissions();
     MasterInfo {
         master_type: PLAYER_TYPE,
@@ -144,7 +146,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(THUNDER_SKILL_ID, skill_level) else {
-        return reject(game, player_id, skill_level, 2, b"");
+        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
     };
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -164,11 +166,11 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
                 || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C)
             {
                 game.send_skill_system_info(player_id, b"ZHGS0046");
-                return reject(game, player_id, skill_level, 2, b"");
+                return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
             }
             if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B) {
                 game.send_skill_system_info(player_id, b"ZHGS0047");
-                return reject(game, player_id, skill_level, 2, b"");
+                return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
             }
         }
         let started_at_ms = runtime.now_milliseconds();
@@ -176,12 +178,12 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         if player_ai.thunder_last_used_ms() != 0
             && !time_reached(cooldown_now_ms, player_ai.thunder_last_used_ms(), cooldown_ms)
         {
-            return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
+            return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) =
             dispatch_position(game, region_id, player_id, dispatch)
         else {
-            return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+            return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
         };
         let Some(source) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -195,19 +197,19 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            return reject(game, player_id, skill_level, 0x0b, b"ZHGS0049");
+            return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 0x0b, b"ZHGS0049");
         }
         if path.iter().any(|cell| cell.2 == 2) {
             game.send_battle_fairy_skill_failure(player_id, 0x0f);
             game.send_skill_system_info(player_id, b"ZHGS0051");
-            send_cast(game, player_id, skill_level, 3, None);
+            send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(war_soul_mana) = game
             .find_player(player_id)
             .and_then(|player| player.war_soul_mana(game.goods_factory()))
         else {
-            return reject(game, player_id, skill_level, 2, b"");
+            return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
         };
         if mp_loss != 0 && i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
             game.send_battle_fairy_skill_failure(player_id, 7);
@@ -216,7 +218,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
                 b"ZHGS0052",
                 (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
             );
-            send_cast(game, player_id, skill_level, 3, None);
+            send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         player_ai.begin_thunder(SkillExecutionKernel::begin(dispatch, started_at_ms));
@@ -228,7 +230,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         if let BattleFairySkillDispatch::Object { target, .. } = dispatch
             && game.periodic_state_target_dead(region_id, target)
         {
-            return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+            return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
         }
         if mp_loss != 0 {
             let goods_factory = game.goods_factory().clone();
@@ -243,12 +245,12 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
                     b"ZHGS0052",
                     (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
                 );
-                send_cast(game, player_id, skill_level, 3, None);
+                send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
                 return terminal(QueuedSkillExecutionState::Rejected);
             };
             send_goods_update(game, &update);
         }
-        send_cast(game, player_id, skill_level, 1, None);
+        send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 1, None);
         if let Some(execution) = player_ai.thunder_mut() {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
@@ -264,12 +266,12 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     let Some((target_x, target_y, target)) =
         dispatch_position(game, region_id, player_id, dispatch)
     else {
-        return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
     };
     if target.is_some_and(|target| game.periodic_state_target_dead(region_id, target)) {
-        return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 10, b"ZHGS0050");
     }
-    send_cast(game, player_id, skill_level, 2, Some((target_x, target_y)));
+    send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 2, Some((target_x, target_y)));
     let Some(player) = game.find_player(player_id) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -280,7 +282,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
             1,
         )
     }) else {
-        return reject(game, player_id, skill_level, 2, b"");
+        return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
     };
     let scaled_sprite = (f64::from(sprite) * 0.0001).round_ties_even() as i32;
     let element_modifier = ((em_modifier as f32) * 0.01 * (scaled_sprite as f32))
@@ -323,7 +325,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     if summoned {
         player_ai.mark_thunder_used(runtime.now_milliseconds());
     }
-    send_cast(game, player_id, skill_level, 3, None);
+    send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
     } else {

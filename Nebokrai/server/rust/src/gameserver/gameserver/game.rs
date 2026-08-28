@@ -485,6 +485,7 @@
 mod bloodloss;
 mod fatalblow;
 mod thunder;
+mod leiming2;
 mod periodicattack;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -818,6 +819,12 @@ use crate::gameserver::appserver::skills::thunder::{
 };
 use crate::gameserver::appserver::skills::thunderphalanx::{
     CThunderPhalanx, ThunderPhalanxTick,
+};
+use crate::gameserver::appserver::skills::thunder2::{
+    LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY, execute_battle_fairy_leiming2,
+};
+use crate::gameserver::appserver::skills::thunder2phalanx::{
+    CLeimingPhalanx2, Leiming2PhalanxTick,
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
@@ -36771,6 +36778,20 @@ impl CGame {
             } else if matches!(
                 dispatch,
                 BattleFairySkillDispatch::SelfTarget {
+                    skill_id: LEIMING2_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Point {
+                    skill_id: LEIMING2_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Object {
+                    skill_id: LEIMING2_SKILL_ID,
+                    ..
+                }
+            ) {
+                execute_battle_fairy_leiming2(self, player_id, dispatch, player_ai, runtime)
+            } else if matches!(
+                dispatch,
+                BattleFairySkillDispatch::SelfTarget {
                     skill_id: THUNDER_SKILL_ID,
                     ..
                 } | BattleFairySkillDispatch::Point {
@@ -39614,6 +39635,7 @@ impl CGame {
             SummonedSkillShape::Thunder(phalanx) => {
                 self.calculate_thunder_attack(phalanx, target_level)
             }
+            SummonedSkillShape::Leiming2(phalanx) => self.calculate_leiming2_attack(phalanx),
         }
     }
 
@@ -39991,6 +40013,13 @@ impl CGame {
                     ))),
                     ThunderPhalanxTick::Expired => None,
                 },
+                SummonedSkillShape::Leiming2(phalanx) => match phalanx.tick(lifetime_now_ms) {
+                    Leiming2PhalanxTick::Pending => Some(None),
+                    Leiming2PhalanxTick::AttackAndExpire { sampled_at_ms } => Some(Some((
+                        phalanx.shape().identity(),
+                        sampled_at_ms,
+                    ))),
+                },
             });
         let phalanx = owner.base().find_skill_phalanx(phalanx_id).cloned();
         self.restore_region_owner(owner);
@@ -40033,6 +40062,34 @@ impl CGame {
                     ),
                     _ => {}
                 }
+            }
+            return true;
+        }
+        if let (
+            Some(Some((_, sampled_at_ms))),
+            SummonedSkillShape::Leiming2(leiming2),
+        ) = (tick, &phalanx)
+        {
+            for target in self.leiming2_targets(region_id, leiming2) {
+                match target.object_type {
+                    PLAYER_TYPE => self.apply_summoned_skill_to_player(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        runtime,
+                    ),
+                    MONSTER_TYPE => self.apply_summoned_skill_to_monster(
+                        &phalanx,
+                        target.id,
+                        region_id,
+                        sampled_at_ms,
+                        runtime,
+                    ),
+                    _ => {}
+                }
+            }
+            if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
+                let _ = self.send_shape_exit_around(region, phalanx.shape());
             }
             return true;
         }

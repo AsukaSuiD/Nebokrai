@@ -75,6 +75,8 @@ pub(crate) struct CPlayerAI {
     fatal_blow_last_used_ms: u32,
     thunder: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     thunder_last_used_ms: u32,
+    leiming2: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
+    leiming2_last_used_ms: u32,
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -155,6 +157,7 @@ impl CPlayerAI {
         self.blood_loss = None;
         self.fatal_blow = None;
         self.thunder = None;
+        self.leiming2 = None;
         self.battle_fairy_skills.push_back(dispatch);
         replaced
     }
@@ -248,6 +251,7 @@ impl CPlayerAI {
         self.blood_loss = None;
         self.fatal_blow = None;
         self.thunder = None;
+        self.leiming2 = None;
         true
     }
 
@@ -512,6 +516,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение грома завершено");
         }
+        if let Some(mut execution) = self.leiming2.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение отложенного грома завершено");
+        }
         true
     }
 
@@ -743,6 +751,33 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_thunder_used(&mut self, now_ms: u32) {
         self.thunder_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn leiming2(
+        &self,
+    ) -> Option<SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.leiming2
+    }
+
+    pub(crate) const fn begin_leiming2(
+        &mut self,
+        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+    ) {
+        self.leiming2 = Some(state);
+    }
+
+    pub(crate) fn leiming2_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<BattleFairySkillDispatch>> {
+        self.leiming2.as_mut()
+    }
+
+    pub(crate) const fn leiming2_last_used_ms(&self) -> u32 {
+        self.leiming2_last_used_ms
+    }
+
+    pub(crate) const fn mark_leiming2_used(&mut self, now_ms: u32) {
+        self.leiming2_last_used_ms = now_ms;
     }
 
     #[allow(clippy::too_many_arguments)]

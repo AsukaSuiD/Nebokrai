@@ -77,6 +77,8 @@ pub(crate) mod appserver {
         pub(crate) mod fatalblowphalanx;
         pub(crate) mod thunder;
         pub(crate) mod thunderphalanx;
+        pub(crate) mod thunder2;
+        pub(crate) mod thunder2phalanx;
         pub(crate) mod enlargemaxhp;
         pub(crate) mod enlargemaxhpstate;
         pub(crate) mod enlargemaxmp;

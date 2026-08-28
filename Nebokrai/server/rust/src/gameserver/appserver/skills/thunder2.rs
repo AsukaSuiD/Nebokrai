@@ -1,129 +1,284 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Отложенный гром боевого духа `CLeiming2` (`0x21B`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/thunder2.cpp`. Владелец сохраняет проверки цели и пути,
+//! задержку повторного использования, расход MP, ожидание, стадии
+//! `SkillExecutionKernel`, визуальные
+//! пакеты и построение однократной области `CLeimingPhalanx2`. Общие только
+//! для пары громовых навыков построители пакета выполнения и отказа находятся
+//! в `thunder.rs`; формула и жизненный цикл области остаются здесь и в
+//! `thunder2phalanx.rs`. `CGame` разрешает владельцев, регистрирует область,
+//! применяет атаку к целям и выполняет фактическую доставку.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp
+use super::baseattack::time_reached;
+use super::basemagic::{
+    SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
+    SKILL_USAGE_MIN_ATTACK,
+};
+use super::battlefairytransfer::send_goods_update;
+use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::thunder::{
+    dispatch_position, master_info, reject_thunder_family, send_thunder_family_cast, terminal,
+};
+use super::thunder2phalanx::CLeimingPhalanx2;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
+use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
+};
 
-// ============================================================================
-// FUNCTION: CLeiming2::CLeiming2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp:18
-// RVA: 0x0011F910
-// ADDRESS: 0051f910
-// PROTOTYPE: undefined __thiscall CLeiming2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const LEIMING2_SKILL_ID: u32 = 0x21b;
+pub(crate) const LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY: u32 = 20_003;
+const DENIED_STATE_A: u32 = 0x192;
+const DENIED_STATE_B: u32 = 0xd2;
+const DENIED_STATE_C: u32 = 0x67;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
+const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
+const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+const SKILL_USAGE_EM_MODIFIER: u32 = 20_015;
+const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 
-// ============================================================================
-// FUNCTION: CLeiming2::~CLeiming2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp:26
-// RVA: 0x0011F980
-// ADDRESS: 0051f980
-// PROTOTYPE: void __thiscall ~CLeiming2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+fn reject(
+    game: &mut CGame,
+    player_id: i32,
+    skill_level: i32,
+    action: u8,
+    string_id: &[u8],
+) -> QueuedSkillExecutionOutcome {
+    reject_thunder_family(
+        game,
+        player_id,
+        LEIMING2_SKILL_ID,
+        skill_level,
+        action,
+        string_id,
+    )
+}
 
-// ============================================================================
-// FUNCTION: CLeiming2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp:173
-// RVA: 0x0011F9C0
-// ADDRESS: 0051f9c0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: BattleFairySkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let (skill_level, skill_id) = match dispatch {
+        BattleFairySkillDispatch::SelfTarget { skill_id, skill_level, .. }
+        | BattleFairySkillDispatch::Point { skill_id, skill_level, .. }
+        | BattleFairySkillDispatch::Object { skill_id, skill_level, .. } => (skill_level, skill_id),
+    };
+    if skill_id != LEIMING2_SKILL_ID {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let Some(player) = game.find_player(player_id) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(region_id) = player.server_region_id() else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(properties) = game.skill_base_properties(LEIMING2_SKILL_ID, skill_level) else {
+        return reject(game, player_id, skill_level, 2, b"");
+    };
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let lifetime_ms = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME);
+    let minimum_attack = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
+    let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
+    let em_modifier = properties.query_property(SKILL_USAGE_EM_MODIFIER);
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-// ============================================================================
-// FUNCTION: CLeiming2Effect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp:458
-// RVA: 0x0011FA80
-// ADDRESS: 0051fa80
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if player_ai.leiming2().is_none() {
+        if let BattleFairySkillDispatch::Object { target, .. } = dispatch {
+            if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_A)
+                || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C)
+            {
+                game.send_skill_system_info(player_id, b"ZHGS0046");
+                return reject(game, player_id, skill_level, 2, b"");
+            }
+            if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B) {
+                game.send_skill_system_info(player_id, b"ZHGS0047");
+                return reject(game, player_id, skill_level, 2, b"");
+            }
+        }
+        let started_at_ms = runtime.now_milliseconds();
+        let cooldown_now_ms = runtime.now_milliseconds();
+        if player_ai.leiming2_last_used_ms() != 0
+            && !time_reached(cooldown_now_ms, player_ai.leiming2_last_used_ms(), cooldown_ms)
+        {
+            return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
+        }
+        let Some((target_x, target_y, _)) =
+            dispatch_position(game, region_id, player_id, dispatch)
+        else {
+            return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+        };
+        let Some(source) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let path = game.base_magic_path(
+            region_id,
+            source.tile_x,
+            source.tile_y,
+            target_x,
+            target_y,
+            None,
+        );
+        if maximum_distance != 0 && path.len() > maximum_distance as usize {
+            return reject(game, player_id, skill_level, 0x0b, b"ZHGS0049");
+        }
+        if path.iter().any(|cell| cell.2 == 2) {
+            game.send_battle_fairy_skill_failure(player_id, 0x0f);
+            game.send_skill_system_info(player_id, b"ZHGS0051");
+            send_thunder_family_cast(
+                game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
+            );
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(war_soul_mana) = game
+            .find_player(player_id)
+            .and_then(|player| player.war_soul_mana(game.goods_factory()))
+        else {
+            return reject(game, player_id, skill_level, 2, b"");
+        };
+        if mp_loss != 0 && i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
+            game.send_battle_fairy_skill_failure(player_id, 7);
+            game.send_skill_system_info_with_unsigned(
+                player_id,
+                b"ZHGS0052",
+                (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+            );
+            send_thunder_family_cast(
+                game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
+            );
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        player_ai.begin_leiming2(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai
+        .leiming2()
+        .is_none_or(|execution| execution.dispatch() != dispatch)
+    {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
 
-// ============================================================================
-// FUNCTION: CLeiming2::CheckCastCondition
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp:33
-// RVA: 0x0011FF90
-// ADDRESS: 0051ff90
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    if player_ai
+        .leiming2()
+        .is_some_and(|execution| execution.stage() == SkillStage::Begin)
+    {
+        if let BattleFairySkillDispatch::Object { target, .. } = dispatch
+            && game.periodic_state_target_dead(region_id, target)
+        {
+            return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+        }
+        if mp_loss != 0 {
+            let goods_factory = game.goods_factory().clone();
+            let da_kong_key = game.globe_setup().da_kong_key();
+            let update = game.find_player_mut(player_id).and_then(|player| {
+                player.spend_war_soul_mana(mp_loss, &goods_factory, da_kong_key)
+            });
+            let Some(update) = update else {
+                game.send_battle_fairy_skill_failure(player_id, 7);
+                game.send_skill_system_info_with_unsigned(
+                    player_id,
+                    b"ZHGS0052",
+                    (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+                );
+                send_thunder_family_cast(
+                    game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
+                );
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            send_goods_update(game, &update);
+        }
+        send_thunder_family_cast(
+            game, player_id, LEIMING2_SKILL_ID, skill_level, 1, None,
+        );
+        if let Some(execution) = player_ai.leiming2_mut() {
+            let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
 
-// ============================================================================
-// FUNCTION: CLeiming2::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp:233
-// RVA: 0x001205A0
-// ADDRESS: 005205a0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLeiming2::Summon
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\thunder2.cpp:382
-// RVA: 0x00120990
-// ADDRESS: 00520990
-// PROTOTYPE: int __thiscall Summon(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+    let started_at_ms = player_ai
+        .leiming2()
+        .map(SkillExecutionKernel::started_at_ms)
+        .expect("выполнение отложенного грома создано или восстановлено");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return terminal(QueuedSkillExecutionState::Pending);
+    }
+    let Some((target_x, target_y, target)) =
+        dispatch_position(game, region_id, player_id, dispatch)
+    else {
+        return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+    };
+    if target.is_some_and(|target| game.periodic_state_target_dead(region_id, target)) {
+        return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+    }
+    send_thunder_family_cast(
+        game,
+        player_id,
+        LEIMING2_SKILL_ID,
+        skill_level,
+        2,
+        Some((target_x, target_y)),
+    );
+    let Some(player) = game.find_player(player_id) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(sprite) = player
+        .war_soul_goods(game.goods_factory())
+        .map(|goods| goods.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1))
+    else {
+        return reject(game, player_id, skill_level, 2, b"");
+    };
+    let scaled_sprite = (f64::from(sprite) * 0.0001).round_ties_even() as i32;
+    let element_modifier = player.combat_properties().element_modify.wrapping_add(
+        ((em_modifier as f32) * 0.01 * (scaled_sprite as f32)).round_ties_even() as i32,
+    );
+    let master = master_info(player);
+    let cch = i32::from(player.combat_properties().cch);
+    let summon_id = game.allocate_summon_shape_id();
+    let summon_started_at_ms = runtime.now_milliseconds();
+    let mut phalanx = CLeimingPhalanx2::new(
+        summon_id,
+        master,
+        summon_started_at_ms,
+        lifetime_ms,
+        skill_level,
+        minimum_attack,
+        maximum_attack,
+        element_modifier,
+        cch,
+    );
+    phalanx.shape_mut().set_region_id(region_id);
+    let summoned = game
+        .add_leiming2_phalanx(
+            region_id,
+            phalanx,
+            target_x,
+            target_y,
+            summon_started_at_ms,
+            runtime,
+        )
+        .is_some_and(|result| result.is_ok());
+    if summoned {
+        let _ = game.send_leiming2_phalanx_entry(region_id, summon_id, runtime);
+    }
+    if let Some(execution) = player_ai.leiming2_mut() {
+        let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    if summoned {
+        player_ai.mark_leiming2_used(runtime.now_milliseconds());
+    }
+    send_thunder_family_cast(
+        game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
+    );
+    terminal(if summoned {
+        QueuedSkillExecutionState::Completed
+    } else {
+        QueuedSkillExecutionState::Rejected
+    })
+}
