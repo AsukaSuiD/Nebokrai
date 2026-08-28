@@ -91,6 +91,7 @@ pub(crate) mod appserver {
         pub(crate) mod fatalblowphalanx;
         pub(crate) mod firebolt;
         pub(crate) mod fireboltphalanx;
+        pub(crate) mod lightning;
         pub(crate) mod fury;
         pub(crate) mod furystate;
         pub(crate) mod gibe;

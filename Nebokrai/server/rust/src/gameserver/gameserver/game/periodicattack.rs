@@ -1,7 +1,7 @@
-//! Общая координация заимствований для периодических атак состояний.
+//! Общая координация заимствований для уже рассчитанных атак навыков.
 //!
-//! Конкретные формулы, периодический шаг и визуальное wire-представление
-//! принадлежат модулям навыка и состояния. Этот дочерний исполняющий модуль
+//! Конкретные формулы, периодический шаг состояний и визуальное сетевое
+//! представление принадлежат модулям навыка и состояния. Этот дочерний модуль
 //! временно извлекает игрока, монстра и регион, проводит обычный
 //! `OnBeenAttacked` через общую защиту и
 //! выполняет обработку смерти и сетевые побочные эффекты, требующие нескольких
@@ -10,7 +10,7 @@
 use super::*;
 
 impl CGame {
-    fn player_on_periodic_state_attack<Runtime: GameMainLoopRuntime>(
+    fn player_on_owned_skill_attack<Runtime: GameMainLoopRuntime>(
         &mut self,
         attacker_id: i32,
         victim_id: i32,
@@ -83,12 +83,12 @@ impl CGame {
             ?disposition,
             ?murderer_delivery,
             ?world_log_delivery,
-            "обработан удар периодического состояния по игроку"
+            "обработан удар рассчитанного навыка по игроку"
         );
         Some(())
     }
 
-    fn periodic_state_player_attackable(
+    fn owned_skill_player_attackable(
         &self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         victim_id: i32,
@@ -153,7 +153,48 @@ impl CGame {
         master.permitted_to_kill_criminal != 0 || !victim_badman
     }
 
-    pub(crate) fn apply_periodic_state_attack_to_player<Runtime: GameMainLoopRuntime>(
+    /// Разрешает прямую атаку уже рассчитанного навыка до её применения.
+    /// Проверка остаётся у `CGame`, потому что одновременно читает игрока,
+    /// монстра, регион и принадлежность; конкретный навык передаёт только
+    /// идентичность цели и снимок прав владельца.
+    pub(crate) fn owned_player_skill_target_attackable(
+        &self,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        target: ShapeIdentity,
+        region_id: i32,
+    ) -> bool {
+        if target.object_type == PLAYER_TYPE {
+            return self.owned_skill_player_attackable(master, target.id, region_id);
+        }
+        if target.object_type != MONSTER_TYPE {
+            return false;
+        }
+        let Some((property, health, god, tamed, carriage, target_master)) = self
+            .find_region(region_id)
+            .and_then(|owner| {
+                let monster = owner.base().find_monster_by_id(target.id)?;
+                let property = self
+                    .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                Some((
+                    property,
+                    monster.hit_points(),
+                    monster.move_shape().is_god(),
+                    monster.is_tamed(),
+                    monster.is_carriage(property),
+                    monster.master_info(),
+                ))
+            })
+        else {
+            return false;
+        };
+        health != 0
+            && !god
+            && self.guard_monster_attackable(master.master_id, region_id, property)
+            && (!(tamed || carriage)
+                || self.owned_skill_monster_attackable(master, target_master))
+    }
+
+    pub(crate) fn apply_owned_skill_attack_to_player<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -161,7 +202,7 @@ impl CGame {
         mut attack: AttackInformation,
         runtime: &mut Runtime,
     ) {
-        if !self.periodic_state_player_attackable(master, target_id, region_id) {
+        if !self.owned_skill_player_attackable(master, target_id, region_id) {
             return;
         }
         let Some((attacker_properties, attacker_occupation, target_properties, target_health, target_mana, target_war_soul_mana)) =
@@ -179,7 +220,7 @@ impl CGame {
         else {
             return;
         };
-        let _ = self.player_on_periodic_state_attack(
+        let _ = self.player_on_owned_skill_attack(
             master.master_id,
             target_id,
             region_id,
@@ -297,7 +338,7 @@ impl CGame {
                 if let Some(player) = self.find_player_mut(player_id) {
                     let _ = player.replace_poison_arrow_state(state);
                 }
-                self.apply_periodic_state_attack_to_player(
+                self.apply_owned_skill_attack_to_player(
                     master,
                     player_id,
                     region_id,
@@ -399,7 +440,7 @@ impl CGame {
                 if master.master_type == MONSTER_TYPE {
                     self.apply_monster_periodic_state_attack(master, identity, region_id, attack, runtime);
                 } else {
-                    self.apply_periodic_state_attack_to_player(master, player_id, region_id, attack, runtime);
+                    self.apply_owned_skill_attack_to_player(master, player_id, region_id, attack, runtime);
                 }
             }
             SpiderPoisonStateTick::Ended => {
@@ -411,7 +452,7 @@ impl CGame {
         true
     }
 
-    fn periodic_state_owned_monster_attackable(
+    fn owned_skill_monster_attackable(
         &self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         owner: crate::gameserver::appserver::masterinfo::MasterInfo,
@@ -454,7 +495,7 @@ impl CGame {
             || owner.master_id == master.master_id
     }
 
-    pub(crate) fn apply_periodic_state_attack_to_monster<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn apply_owned_skill_attack_to_monster<Runtime: GameMainLoopRuntime>(
         &mut self,
         master: crate::gameserver::appserver::masterinfo::MasterInfo,
         target_id: i32,
@@ -495,7 +536,7 @@ impl CGame {
             || god
             || !self.guard_monster_attackable(master.master_id, region_id, &property)
             || ((tamed || carriage)
-                && !self.periodic_state_owned_monster_attackable(master, target_master))
+                && !self.owned_skill_monster_attackable(master, target_master))
         {
             return;
         }
@@ -726,7 +767,7 @@ impl CGame {
                     }
                     self.restore_region_owner(owner);
                 }
-                self.apply_periodic_state_attack_to_monster(
+                self.apply_owned_skill_attack_to_monster(
                     master,
                     monster_id,
                     region_id,
@@ -794,7 +835,7 @@ impl CGame {
                 if master.master_type == MONSTER_TYPE {
                     self.apply_monster_periodic_state_attack(master, identity, region_id, attack, runtime);
                 } else {
-                    self.apply_periodic_state_attack_to_monster(master, monster_id, region_id, attack, runtime);
+                    self.apply_owned_skill_attack_to_monster(master, monster_id, region_id, attack, runtime);
                 }
             }
             SpiderPoisonStateTick::Ended => {

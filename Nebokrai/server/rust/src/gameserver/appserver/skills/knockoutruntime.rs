@@ -191,8 +191,8 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     if chance <= game.skill_random_below(100) { return result(QueuedSkillExecutionState::Completed); }
     if let Some((master, attack)) = attack(game, player_id, target.level) {
         match target.identity.object_type {
-            PLAYER_TYPE => game.apply_periodic_state_attack_to_player(master, target.identity.id, region_id, attack, runtime),
-            MONSTER_TYPE => game.apply_periodic_state_attack_to_monster(master, target.identity.id, region_id, attack, runtime), _ => {}
+            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.identity.id, region_id, attack, runtime),
+            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.identity.id, region_id, attack, runtime), _ => {}
         }
     }
     if !target.cured {

@@ -10,7 +10,8 @@
 //! `CMoveShape::AI` передаёт первый элемент конкретному исполнителю и удаляет
 //! его только после завершения либо отказа. Базовая атака, базовая магия,
 //! стрельба, семейство ловкости, парная закалка, воодушевление, управление
-//! питомцами, усиление, периодическое лечение, огненная стрела, машинный и мана-щит,
+//! питомцами, усиление, периодическое лечение, огненная стрела, молния,
+//! машинный и мана-щит,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
 //! и приручение монстров сохраняют незавершённое состояние между проходами ИИ.
@@ -34,6 +35,7 @@ use crate::gameserver::appserver::skills::agility::{
 use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
+use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
 use crate::gameserver::appserver::skills::battlefairybasemagic::BattleFairyBaseMagicExecutionState;
 use crate::gameserver::appserver::skills::battlefairytransfer::BattleFairyTransferKind;
 use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
@@ -64,6 +66,8 @@ pub(crate) struct CPlayerAI {
     base_magic_last_used_ms: u32,
     fire_bolt: Option<BaseMagicExecutionState>,
     fire_bolt_last_used_ms: u32,
+    lightning: Option<LightningExecutionState>,
+    lightning_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
@@ -166,6 +170,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
+        self.lightning = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -249,6 +254,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.fire_bolt.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной стрелы завершено");
+        }
+        if let Some(mut execution) = self.lightning.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение молнии завершено");
         }
         if let Some(mut execution) = self.callosity.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -346,6 +355,7 @@ impl CPlayerAI {
         self.agility_family = None;
         self.base_magic = None;
         self.fire_bolt = None;
+        self.lightning = None;
         self.callosity = None;
         self.hearten = None;
         self.promotion = None;
@@ -483,6 +493,26 @@ impl CPlayerAI {
 
     pub(crate) const fn mark_fire_bolt_used(&mut self, now_ms: u32) {
         self.fire_bolt_last_used_ms = now_ms;
+    }
+
+    pub(crate) const fn lightning(&self) -> Option<LightningExecutionState> {
+        self.lightning
+    }
+
+    pub(crate) const fn begin_lightning(&mut self, state: LightningExecutionState) {
+        self.lightning = Some(state);
+    }
+
+    pub(crate) fn lightning_mut(&mut self) -> Option<&mut LightningExecutionState> {
+        self.lightning.as_mut()
+    }
+
+    pub(crate) const fn lightning_last_used_ms(&self) -> u32 {
+        self.lightning_last_used_ms
+    }
+
+    pub(crate) const fn mark_lightning_used(&mut self, now_ms: u32) {
+        self.lightning_last_used_ms = now_ms;
     }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {

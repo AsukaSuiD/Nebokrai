@@ -769,6 +769,9 @@ use crate::gameserver::appserver::skills::firebolt::{execute_player_fire_bolt, i
 use crate::gameserver::appserver::skills::fireboltphalanx::{
     calculate_owned_fire_bolt_attack, FireBoltPhalanxTick,
 };
+use crate::gameserver::appserver::skills::lightning::{
+    execute_player_lightning, is_lightning_target,
+};
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     execute_battle_fairy_base_magic, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
 };
@@ -36385,6 +36388,7 @@ impl CGame {
                 _ => false,
             };
             let concrete_fire_bolt = is_fire_bolt_target(dispatch);
+            let concrete_lightning = is_lightning_target(dispatch);
             let concrete_archery = match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == ARCHERY_SKILL_ID
@@ -36496,6 +36500,8 @@ impl CGame {
                 execute_player_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_fire_bolt {
                 execute_player_fire_bolt(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_lightning {
+                execute_player_lightning(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_callosity {
                 execute_player_callosity(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_agility_family {

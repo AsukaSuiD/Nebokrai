@@ -59,7 +59,7 @@ impl CGame {
                 if let Some(player) = self.find_player_mut(player_id) {
                     let _ = player.replace_blood_loss_state(state);
                 }
-                self.apply_periodic_state_attack_to_player(
+                self.apply_owned_skill_attack_to_player(
                     master,
                     player_id,
                     region_id,
@@ -145,7 +145,7 @@ impl CGame {
                     }
                     self.restore_region_owner(owner);
                 }
-                self.apply_periodic_state_attack_to_monster(
+                self.apply_owned_skill_attack_to_monster(
                     master,
                     monster_id,
                     region_id,
