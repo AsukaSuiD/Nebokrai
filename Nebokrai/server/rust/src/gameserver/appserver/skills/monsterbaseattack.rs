@@ -123,7 +123,7 @@ use crate::gameserver::appserver::ai::smartgladiator::{
 use crate::gameserver::appserver::ai::stupidarcher::{
     StupidArcherSearch, search_stupid_archer_enemy,
 };
-use crate::gameserver::appserver::ai::warattackmonster::consider_country_war_target;
+use crate::gameserver::appserver::ai::warattackmonster::select_country_war_enemy;
 use crate::gameserver::appserver::ai::vilcouguardwithsword::select_village_country_guard_enemy;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -674,67 +674,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && matches!(property.ai, 17 | 18)
         && let Some(area_index) = area_index
     {
-        let own_camp = property.ai as i32 - 17;
-        let mut selected = None;
-        for player_id in region.player_ids_around_area(area_index) {
-            let Some(player) = game.find_player(player_id) else {
-                continue;
-            };
-            if player.server_region_id() != Some(region.id) || player.is_dead() {
-                continue;
-            }
-            let Some(candidate) = player.shape_view() else {
-                continue;
-            };
-            selected = consider_country_war_target(
-                selected,
-                GladiatorTarget {
-                    identity: candidate.identity,
-                    distance: real_distance(
-                        monster_view.tile_x,
-                        monster_view.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ),
-                },
-                property.guard_range as i32,
-                own_camp,
-                game.country_war_sys().get_war_camp(i32::from(player.country())),
-            );
-        }
-        for pet_id in region.pet_ids_around_area(area_index) {
-            let Some((candidate, country)) = region
-                .find_monster_by_id(pet_id)
-                .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
-                .and_then(|pet| {
-                    let pet_property =
-                        game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
-                    Some((pet.shape_view(pet_property)?, pet.master_info().master_country_id))
-                })
-            else {
-                continue;
-            };
-            selected = consider_country_war_target(
-                selected,
-                GladiatorTarget {
-                    identity: candidate.identity,
-                    distance: real_distance(
-                        monster_view.tile_x,
-                        monster_view.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ),
-                },
-                property.guard_range as i32,
-                own_camp,
-                game.country_war_sys().get_war_camp(country),
-            );
-        }
-        if let Some(selected) = selected {
+        if let Some(selected) = select_country_war_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            property.ai,
+            property.guard_range as i32,
+        ) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected.identity);
+                monster.set_ai_target(selected);
             }
-            target = Some(selected.identity);
+            target = Some(selected);
         }
     }
     if target.is_none()
