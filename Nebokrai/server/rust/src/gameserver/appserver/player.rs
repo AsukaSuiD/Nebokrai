@@ -331,6 +331,7 @@ use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
 };
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
+use super::states::automaticrestore::AutomaticRestoreMutation;
 use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
@@ -11758,6 +11759,73 @@ impl CPlayer {
         self.base_properties.mana
     }
 
+    /// Пересоздаёт точные четыре состояния `CPlayer::RestoreHpMp` из уже
+    /// пересчитанных актуальных свойств. Завершение внешнего
+    /// `CParticularState` выполняет вызывающий владелец исполнения до этой
+    /// атомарной замены.
+    pub(crate) fn restore_automatic_hp_mp_states(&mut self) {
+        self.move_shape
+            .restore_automatic_hp_mp_states(self.combat_properties);
+    }
+
+    pub(crate) const fn automatic_restore_state_count(&self) -> usize {
+        self.move_shape.automatic_restore_state_count()
+    }
+
+    pub(crate) fn automatic_restore_needs_clock(&self, index: usize) -> bool {
+        self.move_shape
+            .automatic_restore_state(index)
+            .is_some_and(|state| {
+                state.should_check(
+                    self.is_dead(),
+                    self.shape().get_state(),
+                    self.health(),
+                    self.maximum_health(),
+                    self.mana(),
+                    self.maximum_mana(),
+                )
+            })
+    }
+
+    pub(crate) fn automatic_restore_due(&self, index: usize, checked_at_ms: u32) -> bool {
+        self.move_shape
+            .automatic_restore_state(index)
+            .is_some_and(|state| state.due(checked_at_ms))
+    }
+
+    /// Фиксирует второе чтение часов даже при нулевом объёме. `true` означает,
+    /// что исходный виртуальный `OnChangeStates` обязан быть вызван немедленно.
+    pub(crate) fn apply_automatic_restore(
+        &mut self,
+        index: usize,
+        recorded_at_ms: u32,
+    ) -> bool {
+        let properties = self.combat_properties;
+        let health = self.health();
+        let maximum_health = self.maximum_health();
+        let mana = self.mana();
+        let maximum_mana = self.maximum_mana();
+        let mutation = self
+            .move_shape
+            .automatic_restore_state_mut(index)
+            .and_then(|state| {
+                state.apply(
+                    recorded_at_ms,
+                    properties,
+                    health,
+                    maximum_health,
+                    mana,
+                    maximum_mana,
+                )
+            });
+        match mutation {
+            Some(AutomaticRestoreMutation::Health(value)) => self.set_health(value),
+            Some(AutomaticRestoreMutation::Mana(value)) => self.set_mana(value),
+            None => return false,
+        }
+        true
+    }
+
     pub(crate) const fn rp(&self) -> u16 {
         self.base_properties.rp
     }
@@ -14769,19 +14837,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::RestoreHpMp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:12717
-// RVA: 0x000455D0
-// ADDRESS: 004455d0
-// PROTOTYPE: void __thiscall RestoreHpMp(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPlayer::AutoAddAuctionGoods

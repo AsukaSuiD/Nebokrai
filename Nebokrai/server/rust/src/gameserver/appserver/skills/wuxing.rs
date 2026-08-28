@@ -145,7 +145,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         let _ = player.replace_wuxing_state(WuXingState::new(skill_id, kind, parameters));
     }
     if game.update_player_properties(player_id, runtime).is_some() {
-        runtime.restore_player_hp_mp_states(game, player_id);
+        let _ = game.restore_player_hp_mp_states(player_id, runtime);
     }
     if let Some(execution) = player_ai.immediate_state_mut() {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);

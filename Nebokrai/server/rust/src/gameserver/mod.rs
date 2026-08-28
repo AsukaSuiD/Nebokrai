@@ -205,6 +205,7 @@ pub(crate) mod appserver {
         pub(crate) mod zombieclaw;
     }
     pub(crate) mod states {
+        pub(crate) mod automaticrestore;
         pub(crate) mod attackpower;
     }
     pub(crate) mod message {

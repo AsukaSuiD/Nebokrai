@@ -69,6 +69,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::BossBlueQuakeState
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
+use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -488,6 +489,7 @@ pub(crate) struct CanonicalStateStorage {
     blood_loss_state: Option<BloodLossState>,
     swordship_states: Vec<SwordshipState>,
     wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
+    automatic_restore_states: Vec<AutomaticRestoreState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
@@ -685,6 +687,8 @@ impl CMoveShape {
         self.knock_out_state = None;
         self.blind_state_order.clear();
         self.blood_loss_state = None;
+        self.wuxing_states.clear();
+        self.automatic_restore_states.clear();
         self.battle_fairy_attribute_states.clear();
         self.periodic_attack_order.clear();
         self.defense_shields.clear();
@@ -727,6 +731,28 @@ impl CMoveShape {
             || !self.state_storage.extended_states.is_empty()
             || !self.state_storage.undead_states.is_empty()
             || self.state_storage.ride_state.is_some()
+    }
+
+    pub(crate) fn restore_automatic_hp_mp_states(
+        &mut self,
+        properties: super::player::PlayerCombatProperties,
+    ) {
+        self.automatic_restore_states = AutomaticRestoreState::restored(properties).into();
+    }
+
+    pub(crate) fn automatic_restore_state(&self, index: usize) -> Option<AutomaticRestoreState> {
+        self.automatic_restore_states.get(index).copied()
+    }
+
+    pub(crate) fn automatic_restore_state_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut AutomaticRestoreState> {
+        self.automatic_restore_states.get_mut(index)
+    }
+
+    pub(crate) const fn automatic_restore_state_count(&self) -> usize {
+        self.state_storage.automatic_restore_states.len()
     }
 
     /// Точный фабричный диапазон `CMoveShape::AddState`: остальные ID не

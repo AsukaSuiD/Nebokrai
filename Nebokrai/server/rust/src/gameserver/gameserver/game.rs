@@ -3657,10 +3657,11 @@ pub(crate) trait GameMainLoopRuntime:
     + ServerRegionAreaTransitionContext
 {
     fn exit_requested(&self) -> bool;
-    /// Пересоздаёт четыре automatic HP/MP state после изменения их частоты
-    /// и объёма. Конкретные классы ещё не материализованы, поэтому skill-owner
-    /// обязан вызвать эту runtime-границу сразу после property commit.
-    fn restore_player_hp_mp_states(&mut self, game: &mut CGame, player_id: i32);
+    /// Завершает только пока не материализованный владелец состояния предмета
+    /// `CParticularState` с ID `0x186a5` перед `CPlayer::RestoreHpMp`.
+    /// Четырьмя автоматическими состояниями HP/MP владеет
+    /// `CanonicalStateStorage`.
+    fn end_player_particular_states_for_restore(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет только ещё не материализованные state-классы из
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
@@ -26327,6 +26328,43 @@ impl CGame {
         Some(())
     }
 
+    /// Исполняет четыре автоматических состояния после остальных достигнутых
+    /// состояний и до ещё внешнего хвоста `CMoveShape::UpdateAbnormality`. У
+    /// каждого подходящего состояния часы читаются ровно дважды: для строгой
+    /// проверки срока и затем для сохранения нового момента срабатывания.
+    fn update_player_automatic_restore_states<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) {
+        let state_count = self
+            .find_player(player_id)
+            .map(CPlayer::automatic_restore_state_count)
+            .unwrap_or(0);
+        for index in 0..state_count {
+            let needs_clock = self
+                .find_player(player_id)
+                .is_some_and(|player| player.automatic_restore_needs_clock(index));
+            if !needs_clock {
+                continue;
+            }
+            let checked_at_ms = runtime.now_milliseconds();
+            let due = self
+                .find_player(player_id)
+                .is_some_and(|player| player.automatic_restore_due(index, checked_at_ms));
+            if !due {
+                continue;
+            }
+            let recorded_at_ms = runtime.now_milliseconds();
+            let changed = self
+                .find_player_mut(player_id)
+                .is_some_and(|player| player.apply_automatic_restore(index, recorded_at_ms));
+            if changed {
+                let _ = self.publish_player_states(player_id);
+            }
+        }
+    }
+
     pub(crate) fn change_body_after_region_transition<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,
@@ -31556,6 +31594,19 @@ impl CGame {
         let tao_zhuang_ran =
             self.globe_setup.tao_zhuang_modify_enabled() && self.done_player_tao_zhuang(player_id);
         Some((property_delivery, tao_zhuang_ran))
+    }
+
+    /// Точная граница владельцев `CPlayer::RestoreHpMp`: внешнее состояние
+    /// предмета завершается до атомарной замены четырёх канонических
+    /// автоматических состояний.
+    pub(crate) fn restore_player_hp_mp_states<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<()> {
+        runtime.end_player_particular_states_for_restore(self, player_id);
+        self.find_player_mut(player_id)?.restore_automatic_hp_mp_states();
+        Some(())
     }
 
     fn deliver_battle_fairy_summon_effects(&mut self, report: &mut BattleFairySummonReport) {
@@ -40461,6 +40512,7 @@ impl CGame {
                         if self.update_player_abnormality(player_id, runtime).is_some() {
                             player_abnormalities = player_abnormalities.wrapping_add(1);
                         }
+                        self.update_player_automatic_restore_states(player_id, runtime);
                         runtime.player_move_shape_unmaterialized_state_ai(self, player_id);
                         if self.find_player(player_id).is_some() {
                             if let Some(fight_state) = self.update_player_current_state(
