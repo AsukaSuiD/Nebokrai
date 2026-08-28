@@ -4386,6 +4386,19 @@ impl CPlayer {
         self.move_shape.take_poison_arrow_state_for_ai()
     }
 
+    pub(crate) fn replace_spider_poison_state(
+        &mut self,
+        state: super::skills::spiderpoisonstate::SpiderPoisonState,
+    ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
+        self.move_shape.replace_spider_poison_state(state)
+    }
+
+    pub(crate) fn take_spider_poison_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
+        self.move_shape.take_spider_poison_state_for_ai()
+    }
+
     pub(crate) fn replace_blood_loss_state(
         &mut self,
         state: super::skills::bloodlossstate::BloodLossState,

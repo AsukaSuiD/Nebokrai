@@ -67,13 +67,12 @@ use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
 use super::skeletonarchery::{
     SKELETON_ARCHERY_SKILL_ID, SkeletonArcheryDispatch, prepare_owned_skeleton_archery,
 };
-use crate::gameserver::appserver::ai::monsterai::select_attack_skill;
+use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
+use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{
-    CShape, ShapeAreaCoordinates, ShapeIdentity,
-};
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -102,6 +101,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | MONSTER_RANGE_ATTACK_SKILL_ID
             | MONSTER_THORN_SKILL_ID
             | SKELETON_ARCHERY_SKILL_ID
+            | SPIDER_POISON_SKILL_ID
     )
 }
 
@@ -168,8 +168,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         tamed,
         attacker_master,
         pet_attack_properties,
-        moveable,
-        trace_move_delay,
         area_index,
         pet_action,
     )) = region.find_monster_by_id(monster_id).and_then(|monster| {
@@ -191,8 +189,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster.is_tamed(),
             monster.master_info(),
             pet_attack_properties,
-            monster.move_shape().is_moveable(),
-            monster.trace_move_delay(),
             monster.move_shape().shape().area_index(),
             monster.pet_action(),
         ))
@@ -378,6 +374,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if skill_id == MONSTER_THORN_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_monster_thorn(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+            runtime,
+            deaths,
+        );
+    }
+    if skill_id == SPIDER_POISON_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_spider_poison(
             game,
             region,
             monster_id,
@@ -772,109 +782,16 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    let distance = real_distance(monster_x, monster_y, target_x, target_y);
-    let path_blocked = region
-        .straight_skill_path(monster_x, monster_y, target_x, target_y, None)
-        .iter()
-        .any(|cell| cell.2 == 2);
-    if (maximum_distance != 0 && distance > maximum_distance as i32) || path_blocked {
-        if tamed && pet_action == 2 {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
-            }
-            return true;
-        }
-        let chase_range = if tamed {
-            game.globe_setup().maximum_pet_tracing_distance()
-        } else {
-            property.chase_range
-        };
-        if distance > chase_range as i32 {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
-            }
-            return true;
-        }
-        if !moveable {
-            return true;
-        }
-        if trace_move_delay
-            .is_some_and(|delay| !time_reached(now_ms, delay.started_at_ms, delay.delay_ms))
-        {
-            return true;
-        }
-
-        const SLIP_ORDER: [[usize; 8]; 8] = [
-            [0, 7, 1, 6, 2, 5, 3, 4],
-            [1, 0, 2, 7, 3, 6, 4, 5],
-            [2, 1, 3, 0, 4, 7, 5, 6],
-            [3, 2, 4, 1, 5, 0, 6, 7],
-            [4, 3, 5, 2, 6, 1, 7, 0],
-            [5, 4, 6, 3, 7, 2, 0, 1],
-            [6, 5, 7, 4, 0, 3, 1, 2],
-            [7, 6, 0, 5, 1, 4, 2, 3],
-        ];
-        let desired_direction = get_line_direction(monster_x, monster_y, target_x, target_y);
-        let origin = ShapeAreaCoordinates {
-            x: monster_x,
-            y: monster_y,
-        };
-        let figure = CMonster::figure(&property);
-        let figure_index = usize::from(figure.get(0).min(2));
-        let destination =
-            SLIP_ORDER[desired_direction as usize]
-                .into_iter()
-                .find_map(|direction| {
-                    let destination =
-                        CShape::get_direction_position(direction as i32, origin).ok()?;
-                    let cells = game.move_check_cells().get(figure_index, direction)?;
-                    let clear = cells.iter().all(|cell| {
-                        region
-                            .region
-                            .get_block(
-                                origin.x.wrapping_add(cell.x),
-                                origin.y.wrapping_add(cell.y),
-                            )
-                            .is_ok_and(|block| block == 0)
-                    });
-                    clear.then_some((direction, destination))
-                });
-        let Some((direction, destination)) = destination else {
-            return true;
-        };
-        let moved = game.move_owned_monster_for_skill(
-            region,
-            monster_id,
-            destination.x,
-            destination.y,
-            figure,
-        );
-        if moved {
-            let distance_units = if direction % 2 == 0 {
-                1_000_000.0
-            } else {
-                1_414_000.0
-            };
-            let speed = pet_attack_properties.map_or(monster_shape.get_speed(), |pet| {
-                f32::from_bits(pet.speed_bits)
-            });
-            let delay_ms = if speed > 0.0 {
-                let stop_frame =
-                    pet_attack_properties.map_or(property.stop_frame, |pet| pet.stop_frame);
-                (distance_units * 0.68 / speed + stop_frame as f32)
-                    .round()
-                    .max(0.0) as u32
-            } else {
-                0
-            };
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.begin_trace_move_delay(now_ms, delay_ms);
-            }
-        }
+    if !approach_attack_range(
+        game,
+        region,
+        monster_id,
+        target_x,
+        target_y,
+        maximum_distance,
+        now_ms,
+    ) {
         return true;
-    }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.clear_trace_move_delay();
     }
     let attack_interval =
         pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval);

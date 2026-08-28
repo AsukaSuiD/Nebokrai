@@ -824,6 +824,10 @@ use crate::gameserver::appserver::skills::poisonarrow::{
 use crate::gameserver::appserver::skills::poisonarrowstate::{
     PoisonArrowState, PoisonArrowStateTick, send_poison_arrow_state_visual,
 };
+use crate::gameserver::appserver::skills::spiderpoison::SPIDER_POISON_SKILL_ID;
+use crate::gameserver::appserver::skills::spiderpoisonstate::{
+    SpiderPoisonStateTick, send_spider_poison_state_visual,
+};
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
@@ -26064,6 +26068,9 @@ impl CGame {
                 POISON_ARROW_SKILL_ID => {
                     self.update_player_poison_arrow_state(player_id, runtime)
                 }
+                SPIDER_POISON_SKILL_ID => {
+                    self.update_player_spider_poison_state(player_id, runtime)
+                }
                 BLOOD_LOSS_SKILL_ID => self.update_player_blood_loss_state(player_id, runtime),
                 _ => false,
             };
@@ -34826,7 +34833,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x1a1`, включая их полностью достигнутые
+    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x1a1`, включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
     /// питомцем дикого монстра либо разрешённого политикой игрока. `false`
@@ -40310,6 +40317,13 @@ impl CGame {
                     match state_id {
                         POISON_ARROW_SKILL_ID => {
                             let _ = self.update_monster_poison_arrow_state(
+                                region_id,
+                                monster_id,
+                                runtime,
+                            );
+                        }
+                        SPIDER_POISON_SKILL_ID => {
+                            let _ = self.update_monster_spider_poison_state(
                                 region_id,
                                 monster_id,
                                 runtime,

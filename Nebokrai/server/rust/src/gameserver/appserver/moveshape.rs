@@ -51,6 +51,7 @@ use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
+use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
@@ -464,6 +465,7 @@ pub(crate) struct CanonicalStateStorage {
     hearten_state: Option<HeartenState>,
     cure_state: Option<CureState>,
     poison_arrow_state: Option<PoisonArrowState>,
+    spider_poison_state: Option<SpiderPoisonState>,
     blood_loss_state: Option<BloodLossState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     periodic_attack_order: IndexSet<u32>,
@@ -653,6 +655,7 @@ impl CMoveShape {
         self.hearten_state = None;
         self.cure_state = None;
         self.poison_arrow_state = None;
+        self.spider_poison_state = None;
         self.blood_loss_state = None;
         self.battle_fairy_attribute_states.clear();
         self.periodic_attack_order.clear();
@@ -683,6 +686,7 @@ impl CMoveShape {
             || self.state_storage.hearten_state.is_some()
             || self.state_storage.cure_state.is_some()
             || self.state_storage.poison_arrow_state.is_some()
+            || self.state_storage.spider_poison_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
@@ -792,6 +796,10 @@ impl CMoveShape {
             self.poison_arrow_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let spider_poison = usize::from(
+            self.spider_poison_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let blood_loss = usize::from(
             self.blood_loss_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -817,6 +825,7 @@ impl CMoveShape {
             .saturating_add(hearten)
             .saturating_add(cure)
             .saturating_add(poison_arrow)
+            .saturating_add(spider_poison)
             .saturating_add(blood_loss)
             .saturating_add(battle_fairy_attributes)
             .saturating_add(shields)
@@ -861,6 +870,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .poison_arrow_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .spider_poison_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .blood_loss_state
@@ -1072,6 +1084,18 @@ impl CMoveShape {
 
     pub(crate) fn take_poison_arrow_state_for_ai(&mut self) -> Option<PoisonArrowState> {
         self.poison_arrow_state.take()
+    }
+
+    pub(crate) fn replace_spider_poison_state(
+        &mut self,
+        state: SpiderPoisonState,
+    ) -> Option<SpiderPoisonState> {
+        self.periodic_attack_order.insert(state.skill_id());
+        self.spider_poison_state.replace(state)
+    }
+
+    pub(crate) fn take_spider_poison_state_for_ai(&mut self) -> Option<SpiderPoisonState> {
+        self.spider_poison_state.take()
     }
 
     pub(crate) fn replace_blood_loss_state(

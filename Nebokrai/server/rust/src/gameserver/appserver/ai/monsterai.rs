@@ -5,9 +5,16 @@
 //! первый ID, для которого бросок не больше накопленной суммы `odds`. Если
 //! сумма не покрыла бросок, назначается стандартная атака владельца.
 //! Выбранный ID хранится каноническим `CMoveShape::current_skill_id`; конкретный
-//! владелец навыка разрешает уровень и исполняет стадии. Остальной корпус ниже
-//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально) до достижения соответствующих AI-ветвей.
+//! владелец навыка разрешает уровень и исполняет стадии. Общий достигнутый шаг
+//! преследования сохраняет slip-порядок, задержку движения и ограничения
+//! питомца без дополнительного RNG. Остальные AI-ветви ниже остаются RAW.
 
+use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates};
+use crate::gameserver::appserver::skills::baseattack::{real_distance, time_reached};
+use crate::gameserver::gameserver::game::CGame;
+use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
 
 /// Сохраняет точный порядок и границу сравнения `SelectAttackSkill`.
@@ -27,6 +34,151 @@ pub(crate) fn select_attack_skill(
         }
     }
     default_skill_id
+}
+
+/// Выполняет общий шаг `CMonsterAI::Tracing` перед запуском выбранного навыка.
+/// Наблюдаемый порядок движения задаёт существующий индекс региона; функция не
+/// выбирает навык и не потребляет RNG.
+pub(crate) fn approach_attack_range(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_x: i32,
+    target_y: i32,
+    maximum_distance: u32,
+    now_ms: u32,
+) -> bool {
+    let Some((
+        property,
+        monster_x,
+        monster_y,
+        tamed,
+        pet_action,
+        moveable,
+        trace_move_delay,
+        speed,
+        stop_frame,
+    )) = region.find_monster_by_id(monster_id).and_then(|monster| {
+        let property = game
+            .find_monster_property_by_origin_name(monster.base_property_key()?)?
+            .clone();
+        let pet = monster
+            .is_tamed()
+            .then(|| monster.pet_attack_properties(&property));
+        Some((
+            property.clone(),
+            monster.move_shape().shape().get_tile_x().ok()?,
+            monster.move_shape().shape().get_tile_y().ok()?,
+            monster.is_tamed(),
+            monster.pet_action(),
+            monster.move_shape().is_moveable(),
+            monster.trace_move_delay(),
+            pet.map_or(monster.move_shape().shape().get_speed(), |pet| {
+                f32::from_bits(pet.speed_bits)
+            }),
+            pet.map_or(property.stop_frame, |pet| pet.stop_frame),
+        ))
+    }) else {
+        return false;
+    };
+
+    let distance = real_distance(monster_x, monster_y, target_x, target_y);
+    let path_blocked = region
+        .straight_skill_path(monster_x, monster_y, target_x, target_y, None)
+        .iter()
+        .any(|cell| cell.2 == 2);
+    if (maximum_distance == 0 || distance <= maximum_distance as i32) && !path_blocked {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_trace_move_delay();
+        }
+        return true;
+    }
+    if tamed && pet_action == 2 {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_ai_target();
+        }
+        return false;
+    }
+    let chase_range = if tamed {
+        game.globe_setup().maximum_pet_tracing_distance()
+    } else {
+        property.chase_range
+    };
+    if distance > chase_range as i32 {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_ai_target();
+        }
+        return false;
+    }
+    if !moveable
+        || trace_move_delay
+            .is_some_and(|delay| !time_reached(now_ms, delay.started_at_ms, delay.delay_ms))
+    {
+        return false;
+    }
+
+    const SLIP_ORDER: [[usize; 8]; 8] = [
+        [0, 7, 1, 6, 2, 5, 3, 4],
+        [1, 0, 2, 7, 3, 6, 4, 5],
+        [2, 1, 3, 0, 4, 7, 5, 6],
+        [3, 2, 4, 1, 5, 0, 6, 7],
+        [4, 3, 5, 2, 6, 1, 7, 0],
+        [5, 4, 6, 3, 7, 2, 0, 1],
+        [6, 5, 7, 4, 0, 3, 1, 2],
+        [7, 6, 0, 5, 1, 4, 2, 3],
+    ];
+    let desired_direction = get_line_direction(monster_x, monster_y, target_x, target_y);
+    let origin = ShapeAreaCoordinates {
+        x: monster_x,
+        y: monster_y,
+    };
+    let figure = CMonster::figure(&property);
+    let figure_index = usize::from(figure.get(0).min(2));
+    let destination = SLIP_ORDER[desired_direction as usize]
+        .into_iter()
+        .find_map(|direction| {
+            let destination = CShape::get_direction_position(direction as i32, origin).ok()?;
+            let cells = game.move_check_cells().get(figure_index, direction)?;
+            cells
+                .iter()
+                .all(|cell| {
+                    region
+                        .region
+                        .get_block(
+                            origin.x.wrapping_add(cell.x),
+                            origin.y.wrapping_add(cell.y),
+                        )
+                        .is_ok_and(|block| block == 0)
+                })
+                .then_some((direction, destination))
+        });
+    let Some((direction, destination)) = destination else {
+        return false;
+    };
+    if game.move_owned_monster_for_skill(
+        region,
+        monster_id,
+        destination.x,
+        destination.y,
+        figure,
+    ) {
+        let distance_units = if direction % 2 == 0 {
+            1_000_000.0
+        } else {
+            1_414_000.0
+        };
+        let delay_ms = if speed > 0.0 {
+            (distance_units * 0.68 / speed + stop_frame as f32)
+                .round()
+                .max(0.0) as u32
+        } else {
+            0
+        };
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.begin_trace_move_delay(now_ms, delay_ms);
+        }
+    }
+    false
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -205,7 +357,7 @@ pub(crate) fn select_attack_skill(
 // FUNCTION: CMonsterAI::OnSchedule
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `execute_owned_monster_base_attack` сохраняет проверку цели,
-// выбор текущего навыка, преследование, интервал атаки и запуск пяти
+// выбор текущего навыка, преследование, интервал атаки и запуск шести
 // достигнутых владельцев. Общий событийный автомат и прочие навыки RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
