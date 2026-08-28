@@ -156,14 +156,12 @@
 use super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
 use super::basemagic::{SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK};
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{
-    ShapeIdentity, ShapeResolver, ShapeView,
-};
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::skills::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit,
-    defend_owned_monster_attack, owned_monster_attackable,
+    defend_owned_monster_attack, monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
 };
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -186,27 +184,6 @@ const RANGE_SCOPE: [u8; 49] = [
     0, 1, 1, 1, 1, 1, 0,
     0, 0, 1, 1, 1, 0, 0,
 ];
-
-struct RangeShapeResolver<'a> {
-    game: &'a CGame,
-    region: &'a CServerRegion,
-}
-
-impl ShapeResolver for RangeShapeResolver<'_> {
-    fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView> {
-        match identity.object_type {
-            PLAYER_TYPE => self.game.find_player(identity.id)?.shape_view(),
-            MONSTER_TYPE => {
-                let monster = self.region.find_monster_by_id(identity.id)?;
-                let property = self
-                    .game
-                    .find_monster_property_by_origin_name(monster.base_property_key()?)?;
-                monster.shape_view(property)
-            }
-            _ => None,
-        }
-    }
-}
 
 pub(crate) fn range_attack_fire_message(
     skill_level: u16,
@@ -245,33 +222,7 @@ pub(crate) fn range_attack_cell_candidates(
     tile_x: i32,
     tile_y: i32,
 ) -> Vec<ShapeIdentity> {
-    let (area_width, area_height) = game.area_dimensions();
-    let resolver = RangeShapeResolver { game, region };
-    let mut targets = Vec::new();
-    let mut shapes = Vec::new();
-    if region
-        .get_shapes(
-            tile_x,
-            tile_y,
-            area_width,
-            area_height,
-            &resolver,
-            &mut shapes,
-        )
-        .is_err()
-    {
-        return targets;
-    }
-    for shape in shapes {
-        if !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE) {
-            continue;
-        }
-        if shape.identity.object_type == MONSTER_TYPE && shape.identity.id == monster_id {
-            continue;
-        }
-        targets.push(shape.identity);
-    }
-    targets
+    monster_attack_cell_candidates(game, region, monster_id, tile_x, tile_y)
 }
 
 pub(crate) fn calculate_monster_range_attack(

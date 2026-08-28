@@ -14,7 +14,9 @@ use crate::gameserver::appserver::monster::{MonsterCombatProperties, MonsterKill
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{CPlayer, PlayerCombatProperties};
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::shape::{
+    CShape, ShapeIdentity, ShapeResolver, ShapeView,
+};
 use crate::gameserver::appserver::states::attackpower::AttackInformation;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, PlayerKillingBlow};
 use crate::nets::netserver::message::CMessage;
@@ -23,6 +25,61 @@ use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
+
+struct MonsterAttackShapeResolver<'a> {
+    game: &'a CGame,
+    region: &'a CServerRegion,
+}
+
+impl ShapeResolver for MonsterAttackShapeResolver<'_> {
+    fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView> {
+        match identity.object_type {
+            PLAYER_TYPE => self.game.find_player(identity.id)?.shape_view(),
+            MONSTER_TYPE => {
+                let monster = self.region.find_monster_by_id(identity.id)?;
+                let property = self
+                    .game
+                    .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                monster.shape_view(property)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Возвращает живой упорядоченный снимок одной клетки для конкретного удара.
+pub(crate) fn monster_attack_cell_candidates(
+    game: &CGame,
+    region: &CServerRegion,
+    source_monster_id: i32,
+    tile_x: i32,
+    tile_y: i32,
+) -> Vec<ShapeIdentity> {
+    let (area_width, area_height) = game.area_dimensions();
+    let resolver = MonsterAttackShapeResolver { game, region };
+    let mut shapes = Vec::new();
+    if region
+        .get_shapes(
+            tile_x,
+            tile_y,
+            area_width,
+            area_height,
+            &resolver,
+            &mut shapes,
+        )
+        .is_err()
+    {
+        return Vec::new();
+    }
+    shapes
+        .into_iter()
+        .map(|shape| shape.identity)
+        .filter(|identity| {
+            matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                && !(identity.object_type == MONSTER_TYPE && identity.id == source_monster_id)
+        })
+        .collect()
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MonsterVictimDeath {

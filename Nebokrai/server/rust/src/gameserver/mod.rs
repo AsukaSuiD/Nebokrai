@@ -126,6 +126,7 @@ pub(crate) mod appserver {
         pub(crate) mod rapture;
         pub(crate) mod rapturestate;
         pub(crate) mod realmappellation;
+        pub(crate) mod skeletonarchery;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
         pub(crate) mod shieldstate;

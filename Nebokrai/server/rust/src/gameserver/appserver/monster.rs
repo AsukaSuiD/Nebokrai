@@ -19,7 +19,7 @@
 //! каноническую очередь `passive_actions` владельца `CBaseAI`; достигнутый
 //! `Defense` обрабатывается до активного хода монстра без отдельной
 //! диагностической передачи. Для обычного монстра с единственным навыком
-//! `0x2bd`, `0x2d1`, `0x2ef` либо `0x197` тот же владелец хранит цель,
+//! `0x2bd`, `0x2d1`, `0x2ef`, `0x197` либо `0x1a1` тот же владелец хранит цель,
 //! выполнение и задержку
 //! повторного применения; быстрая атака дополнительно хранит визуальную фазу
 //! и первый из двух ударов. Поиск игроков и питомцев, преследование ИИ `0/3`
@@ -51,6 +51,7 @@ use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
+use super::skills::skeletonarchery::SkeletonArcheryProgress;
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -94,6 +95,7 @@ pub(crate) struct CMonster {
     ai_target: Option<ShapeIdentity>,
     base_attack_cast: Option<MonsterBaseAttackCast>,
     fast_attack_progress: Option<MonsterFastAttackProgress>,
+    skeleton_archery_progress: Option<SkeletonArcheryProgress>,
     last_base_attack_ms: u32,
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
@@ -227,6 +229,7 @@ impl CMonster {
             ai_target: None,
             base_attack_cast: None,
             fast_attack_progress: None,
+            skeleton_archery_progress: None,
             last_base_attack_ms: 0,
             base_attack_owned_tick: false,
             trace_move_delay: None,
@@ -770,9 +773,24 @@ impl CMonster {
         self.fast_attack_progress.as_mut()
     }
 
+    pub(crate) fn begin_skeleton_archery_progress(&mut self) {
+        self.skeleton_archery_progress = Some(SkeletonArcheryProgress::default());
+    }
+
+    pub(crate) const fn skeleton_archery_progress(&self) -> Option<SkeletonArcheryProgress> {
+        self.skeleton_archery_progress
+    }
+
+    pub(crate) fn skeleton_archery_progress_mut(
+        &mut self,
+    ) -> Option<&mut SkeletonArcheryProgress> {
+        self.skeleton_archery_progress.as_mut()
+    }
+
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
         self.fast_attack_progress = None;
+        self.skeleton_archery_progress = None;
         let _ = execution.terminate(SkillTermination::Completed);
         self.last_base_attack_ms = now_ms;
         Some(execution)
@@ -799,6 +817,7 @@ impl CMonster {
 
     fn cancel_base_attack_cast(&mut self) {
         self.fast_attack_progress = None;
+        self.skeleton_archery_progress = None;
         if let Some(mut execution) = self.base_attack_cast.take() {
             let _ = execution.terminate(SkillTermination::Cancelled);
         }
