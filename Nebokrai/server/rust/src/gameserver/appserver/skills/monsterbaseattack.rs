@@ -105,6 +105,9 @@ use crate::gameserver::appserver::ai::bossfiend::select_boss_fiend_attack_skill;
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
     FixedArcherTarget, consider_fixed_archer_target,
 };
+use crate::gameserver::appserver::ai::gladiator::{
+    GladiatorTarget, consider_gladiator_target,
+};
 use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, one_step_move_delay_ms, select_attack_skill,
@@ -663,7 +666,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && let Some(area_index) = area_index
     {
         let mut selected = None;
-        let mut selected_distance = i32::MAX;
         for player_id in region.player_ids_around_area(area_index) {
             let Some(player) = game.find_player(player_id) else {
                 continue;
@@ -680,10 +682,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 candidate.tile_x,
                 candidate.tile_y,
             );
-            if distance <= 10 && distance <= selected_distance {
-                selected = Some(candidate.identity);
-                selected_distance = distance;
-            }
+            selected = consider_gladiator_target(
+                selected,
+                GladiatorTarget {
+                    identity: candidate.identity,
+                    distance,
+                },
+                property.guard_range as i32,
+            );
         }
         if property.kind != 5 {
             for pet_id in region.pet_ids_around_area(area_index) {
@@ -704,10 +710,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     candidate.tile_x,
                     candidate.tile_y,
                 );
-                if distance <= 10 && distance <= selected_distance {
-                    selected = Some(candidate.identity);
-                    selected_distance = distance;
-                }
+                selected = consider_gladiator_target(
+                    selected,
+                    GladiatorTarget {
+                        identity: candidate.identity,
+                        distance,
+                    },
+                    property.guard_range as i32,
+                );
             }
         }
         for carriage_id in region.carriage_ids_around_area(area_index) {
@@ -743,16 +753,20 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 candidate.tile_x,
                 candidate.tile_y,
             );
-            if distance <= 10 && distance <= selected_distance {
-                selected = Some(candidate.identity);
-                selected_distance = distance;
-            }
+            selected = consider_gladiator_target(
+                selected,
+                GladiatorTarget {
+                    identity: candidate.identity,
+                    distance,
+                },
+                property.guard_range as i32,
+            );
         }
         if let Some(selected) = selected {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
+                monster.set_ai_target(selected.identity);
             }
-            target = Some(selected);
+            target = Some(selected.identity);
         }
     }
     let target = cast.map(|cast| cast.dispatch().target).or(target);

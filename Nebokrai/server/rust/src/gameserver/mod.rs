@@ -7,11 +7,13 @@ pub(crate) mod appserver {
         pub(crate) mod bossblue;
         pub(crate) mod bossfiend;
         pub(crate) mod fixedpositionarcher;
+        pub(crate) mod gladiator;
         pub(crate) mod lord;
         pub(crate) mod monsterai;
         pub(crate) mod playerai;
         pub(crate) mod puninesscreature;
         pub(crate) mod stupidarcher;
+        pub(crate) mod stupidgladiator;
     }
     pub(crate) mod area;
     pub(crate) mod baseobject;
