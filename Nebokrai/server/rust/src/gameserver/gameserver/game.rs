@@ -899,6 +899,9 @@ use crate::gameserver::appserver::skills::spriteburn::{
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_player_machinery_stomp, is_machinery_stomp_dispatch,
 };
+use crate::gameserver::appserver::skills::lordwiderangingattack::{
+    execute_player_lord_wideranging_attack, is_lord_wideranging_attack_dispatch,
+};
 use crate::gameserver::appserver::skills::chaossphere::{
     execute_player_chaos_sphere, is_chaos_sphere_dispatch,
 };
@@ -33755,7 +33758,7 @@ impl CGame {
                             || player.player_ai().little_star().is_some()
                             || player.player_ai().path_projectile().is_some()
                             || player.player_ai().sprite_burn().is_some()
-                            || player.player_ai().machinery_stomp().is_some()
+                            || player.player_ai().wide_arc_attack().is_some()
                             || player.player_ai().thunder_slash().is_some()
                             || player.player_ai().pillar().is_some()
                             || player.player_ai().rush().is_some()
@@ -34454,7 +34457,7 @@ impl CGame {
                 || player.player_ai().little_star().is_some()
                 || player.player_ai().path_projectile().is_some()
                 || player.player_ai().sprite_burn().is_some()
-                || player.player_ai().machinery_stomp().is_some()
+                || player.player_ai().wide_arc_attack().is_some()
                 || player.player_ai().thunder_slash().is_some()
                 || player.player_ai().pillar().is_some()
                 || player.player_ai().rush().is_some()
@@ -37134,6 +37137,7 @@ impl CGame {
             };
             let concrete_sprite_burn = is_sprite_burn_dispatch(dispatch);
             let concrete_machinery_stomp = is_machinery_stomp_dispatch(dispatch);
+            let concrete_lord_wideranging_attack = is_lord_wideranging_attack_dispatch(dispatch);
             let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
             let concrete_seal = is_seal_target(dispatch);
@@ -37384,6 +37388,8 @@ impl CGame {
                 execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machinery_stomp {
                 execute_player_machinery_stomp(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_lord_wideranging_attack {
+                execute_player_lord_wideranging_attack(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_chaos_sphere {
                 execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {

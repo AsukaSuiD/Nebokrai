@@ -219,8 +219,8 @@ pub(crate) struct CPlayerAI {
     path_projectile_last_used_ms: [u32; 3],
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
-    machinery_stomp: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    machinery_stomp_last_used_ms: u32,
+    wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    wide_arc_attack_last_used_ms: [u32; 2],
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -396,7 +396,7 @@ impl CPlayerAI {
         self.little_star = None;
         self.path_projectile = None;
         self.sprite_burn = None;
-        self.machinery_stomp = None;
+        self.wide_arc_attack = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -687,9 +687,9 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
         }
-        if let Some(mut kernel) = self.machinery_stomp.take() {
+        if let Some(mut kernel) = self.wide_arc_attack.take() {
             let _ = kernel.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение механического топота завершено");
+            tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение широкой дуговой атаки завершено");
         }
         if let Some(mut execution) = self.chaos_sphere.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -865,7 +865,7 @@ impl CPlayerAI {
         self.little_star = None;
         self.path_projectile = None;
         self.sprite_burn = None;
-        self.machinery_stomp = None;
+        self.wide_arc_attack = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -1467,24 +1467,34 @@ impl CPlayerAI {
         self.sprite_burn_last_used_ms = now_ms;
     }
 
-    pub(crate) const fn machinery_stomp(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.machinery_stomp.as_ref()
+    pub(crate) const fn wide_arc_attack(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.wide_arc_attack.as_ref()
     }
 
-    pub(crate) const fn begin_machinery_stomp(&mut self, dispatch: PlayerSkillDispatch, now_ms: u32) {
-        self.machinery_stomp = Some(SkillExecutionKernel::begin(dispatch, now_ms));
+    pub(crate) const fn begin_wide_arc_attack(&mut self, dispatch: PlayerSkillDispatch, now_ms: u32) {
+        self.wide_arc_attack = Some(SkillExecutionKernel::begin(dispatch, now_ms));
     }
 
-    pub(crate) fn machinery_stomp_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.machinery_stomp.as_mut()
+    pub(crate) fn wide_arc_attack_mut(
+        &mut self,
+    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.wide_arc_attack.as_mut()
     }
 
-    pub(crate) const fn machinery_stomp_last_used_ms(&self) -> u32 {
-        self.machinery_stomp_last_used_ms
+    const fn wide_arc_attack_index(skill_id: u32) -> usize {
+        match skill_id {
+            0x1a7 => 0,
+            0x1f6 => 1,
+            _ => unreachable!(),
+        }
     }
 
-    pub(crate) const fn mark_machinery_stomp_used(&mut self, now_ms: u32) {
-        self.machinery_stomp_last_used_ms = now_ms;
+    pub(crate) const fn wide_arc_attack_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.wide_arc_attack_last_used_ms[Self::wide_arc_attack_index(skill_id)]
+    }
+
+    pub(crate) const fn mark_wide_arc_attack_used(&mut self, skill_id: u32, now_ms: u32) {
+        self.wide_arc_attack_last_used_ms[Self::wide_arc_attack_index(skill_id)] = now_ms;
     }
 
     pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {

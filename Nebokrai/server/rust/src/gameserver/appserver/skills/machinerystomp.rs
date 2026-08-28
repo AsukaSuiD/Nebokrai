@@ -95,11 +95,11 @@ fn send_player_failure(game: &CGame, player_id: i32, action: u8) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, action);
 }
 
-fn send_player_start(game: &mut CGame, player_id: i32, level: i32) {
+fn send_player_start(game: &mut CGame, player_id: i32, skill_id: u32, level: i32) {
     let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return };
     let mut message = CMessage::new(EFFECT_MESSAGE);
     message.add_byte(1);
-    message.add_long(MACHINERY_STOMP_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(level as i16);
     message.add_long(PLAYER_TYPE);
     message.add_long(player_id);
@@ -110,13 +110,14 @@ fn send_player_start(game: &mut CGame, player_id: i32, level: i32) {
 fn send_player_fire(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     level: i32,
     target_x: i32,
     target_y: i32,
 ) {
     let mut message = CMessage::new(EFFECT_MESSAGE);
     message.add_byte(2);
-    message.add_long(MACHINERY_STOMP_SKILL_ID as i32);
+    message.add_long(skill_id as i32);
     message.add_short(level as i16);
     message.add_long(PLAYER_TYPE);
     message.add_long(player_id);
@@ -137,6 +138,7 @@ fn finish_player(game: &mut CGame, player_id: i32) {
 fn calculate_player_attack(
     game: &mut CGame,
     player_id: i32,
+    skill_id: u32,
     level: i32,
     hit_modifier: i32,
     damage_factor: f32,
@@ -148,7 +150,7 @@ fn calculate_player_attack(
     let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
     let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
     let mut attack = AttackInformation {
-        skill_id: MACHINERY_STOMP_SKILL_ID,
+        skill_id,
         skill_level: level as u8,
         attacker_type: PLAYER_TYPE,
         attacker_id: player_id,
@@ -181,6 +183,7 @@ fn attack_player_cell<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     region_id: i32,
+    skill_id: u32,
     tile_x: i32,
     tile_y: i32,
     level: i32,
@@ -200,7 +203,7 @@ fn attack_player_cell<Runtime: GameMainLoopRuntime>(
             continue;
         }
         let Some((master, attack)) = calculate_player_attack(
-            game, player_id, level, hit_modifier, damage_factor,
+            game, player_id, skill_id, level, hit_modifier, damage_factor,
         ) else { continue };
         match target.object_type {
             PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
@@ -211,27 +214,29 @@ fn attack_player_cell<Runtime: GameMainLoopRuntime>(
     }
 }
 
-pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
+pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     dispatch: PlayerSkillDispatch,
+    skill_id: u32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let target = match dispatch {
-        PlayerSkillDispatch::Object { skill_id: MACHINERY_STOMP_SKILL_ID, target }
-            if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
+        PlayerSkillDispatch::Object { skill_id: dispatch_skill_id, target }
+            if dispatch_skill_id == skill_id
+                && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
         _ => return player_terminal(QueuedSkillExecutionState::Rejected),
     };
     let Some((region_id, level, source_view)) = game.find_player(player_id).and_then(|player| {
         Some((
             player.server_region_id()?,
-            player.learned_skill_level(MACHINERY_STOMP_SKILL_ID),
+            player.learned_skill_level(skill_id),
             player.shape_view()?,
         ))
     }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
-    let active = player_ai.machinery_stomp().is_some();
-    let Some(properties) = game.skill_base_properties(MACHINERY_STOMP_SKILL_ID, level) else {
+    let active = player_ai.wide_arc_attack().is_some();
+    let Some(properties) = game.skill_base_properties(skill_id, level) else {
         send_player_failure(game, player_id, if active { 0x0d } else { 2 });
         if active {
             finish_player(game, player_id);
@@ -245,14 +250,14 @@ pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
     let damage_factor = properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.machinery_stomp().is_none() {
+    if player_ai.wide_arc_attack().is_none() {
         let now_ms = runtime.now_milliseconds();
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_player_failure(game, player_id, 2);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         };
-        if player_ai.machinery_stomp_last_used_ms() != 0
-            && !time_reached(now_ms, player_ai.machinery_stomp_last_used_ms(), reuse_delay_ms)
+        if player_ai.wide_arc_attack_last_used_ms(skill_id) != 0
+            && !time_reached(now_ms, player_ai.wide_arc_attack_last_used_ms(skill_id), reuse_delay_ms)
         {
             send_player_failure(game, player_id, 0x0d);
             send_player_failure(game, player_id, 2);
@@ -274,10 +279,10 @@ pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
         }
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
-            player.set_current_skill_id(Some(MACHINERY_STOMP_SKILL_ID));
+            player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_machinery_stomp(dispatch, now_ms);
-    } else if player_ai.machinery_stomp().is_none_or(|kernel| kernel.dispatch() != dispatch) {
+        player_ai.begin_wide_arc_attack(dispatch, now_ms);
+    } else if player_ai.wide_arc_attack().is_none_or(|kernel| kernel.dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -291,7 +296,7 @@ pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
         finish_player(game, player_id);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.machinery_stomp().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
+    if player_ai.wide_arc_attack().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
         let Some(source) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
             finish_player(game, player_id);
             return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -301,14 +306,14 @@ pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
                 source.tile_x, source.tile_y, target_view.tile_x, target_view.tile_y,
             ));
         }
-        send_player_start(game, player_id, level);
-        if let Some(kernel) = player_ai.machinery_stomp_mut() {
+        send_player_start(game, player_id, skill_id, level);
+        if let Some(kernel) = player_ai.wide_arc_attack_mut() {
             let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
-    let started_at_ms = player_ai.machinery_stomp()
+    let started_at_ms = player_ai.wide_arc_attack()
         .map(|kernel| kernel.started_at_ms())
-        .expect("выполнение механического топота хранит время начала");
+        .expect("выполнение широкой дуговой атаки хранит время начала");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return player_terminal(QueuedSkillExecutionState::Pending);
     }
@@ -316,14 +321,14 @@ pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
         finish_player(game, player_id);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
-    send_player_fire(game, player_id, level, target_view.tile_x, target_view.tile_y);
-    if let Some(kernel) = player_ai.machinery_stomp_mut() {
+    send_player_fire(game, player_id, skill_id, level, target_view.tile_x, target_view.tile_y);
+    if let Some(kernel) = player_ai.wide_arc_attack_mut() {
         let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate);
     }
     for offset_x in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
         for offset_y in -SCOPE_HALF_SIDE..=SCOPE_HALF_SIDE {
             attack_player_cell(
-                game, player_id, region_id,
+                game, player_id, region_id, skill_id,
                 source_view.tile_x.wrapping_add(offset_x),
                 source_view.tile_y.wrapping_add(offset_y),
                 level, hit_modifier, damage_factor, runtime,
@@ -334,17 +339,34 @@ pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
         source_view.tile_x, source_view.tile_y, target_view.tile_x, target_view.tile_y,
     ) {
         attack_player_cell(
-            game, player_id, region_id, tile_x, tile_y,
+            game, player_id, region_id, skill_id, tile_x, tile_y,
             level, hit_modifier, damage_factor, runtime,
         );
     }
-    if let Some(kernel) = player_ai.machinery_stomp_mut() {
+    if let Some(kernel) = player_ai.wide_arc_attack_mut() {
         let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_machinery_stomp_used(runtime.now_milliseconds());
+    player_ai.mark_wide_arc_attack_used(skill_id, runtime.now_milliseconds());
     finish_player(game, player_id);
     player_terminal(QueuedSkillExecutionState::Completed)
+}
+
+pub(crate) fn execute_player_machinery_stomp<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    execute_player_wide_arc_attack(
+        game,
+        player_id,
+        dispatch,
+        MACHINERY_STOMP_SKILL_ID,
+        player_ai,
+        runtime,
+    )
 }
 
 fn send_start(
