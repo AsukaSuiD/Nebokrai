@@ -15,6 +15,10 @@
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
     FixedArcherTarget, consider_fixed_archer_target,
 };
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::gameserver::game::CGame;
 
 /// Применяет фракционный фильтр охраны перед подтверждённым выбором цели.
 pub(crate) fn consider_gods_battle_guard_target(
@@ -36,4 +40,47 @@ pub(crate) fn consider_gods_battle_guard_target(
             minimum_skill_distance,
         )
     }
+}
+
+/// Выполняет достигнутый player-поиск AI23 с фракционным исключением и
+/// правилом преступника своей фракции.
+pub(crate) fn select_gods_battle_guard_enemy(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+    minimum_skill_distance: i32,
+    owner_faction: u32,
+) -> Option<ShapeIdentity> {
+    let mut selected = None;
+    for player_id in region.player_ids_around_area(area_index) {
+        let Some(player) = game.find_player(player_id) else {
+            continue;
+        };
+        if player.server_region_id() != Some(region.id) || player.is_dead() {
+            continue;
+        }
+        let Some(candidate) = player.shape_view() else {
+            continue;
+        };
+        selected = consider_gods_battle_guard_target(
+            selected,
+            FixedArcherTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            minimum_skill_distance,
+            owner_faction,
+            player.gods_battle_faction() as u32,
+            player.is_badman(game.globe_setup().pk_count_per_kill()),
+        );
+    }
+    selected.map(|selected| selected.identity)
 }

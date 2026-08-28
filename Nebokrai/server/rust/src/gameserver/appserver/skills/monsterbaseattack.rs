@@ -105,12 +105,10 @@ use crate::gameserver::appserver::ai::bossfiend::select_boss_fiend_attack_skill;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
-use crate::gameserver::appserver::ai::fixedpositionarcher::{
-    FixedArcherTarget, select_fixed_archer_enemy,
-};
+use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
 use crate::gameserver::appserver::ai::gladiator::{GladiatorTarget, select_gladiator_enemy};
 use crate::gameserver::appserver::ai::godsbattlemonster::select_gods_battle_enemy;
-use crate::gameserver::appserver::ai::godsbattleguardwithsword::consider_gods_battle_guard_target;
+use crate::gameserver::appserver::ai::godsbattleguardwithsword::select_gods_battle_guard_enemy;
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::guardcountry::select_country_guard_target;
 use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
@@ -717,40 +715,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let minimum_skill_distance = game
             .skill_base_properties(skill_id, i32::from(skill.level))
             .map_or(0, |properties| properties.query_property(5_004) as i32);
-        let mut selected = None;
-        for player_id in region.player_ids_around_area(area_index) {
-            let Some(player) = game.find_player(player_id) else {
-                continue;
-            };
-            if player.server_region_id() != Some(region.id) || player.is_dead() {
-                continue;
-            }
-            let Some(candidate) = player.shape_view() else {
-                continue;
-            };
-            selected = consider_gods_battle_guard_target(
-                selected,
-                FixedArcherTarget {
-                    identity: candidate.identity,
-                    distance: real_distance(
-                        monster_view.tile_x,
-                        monster_view.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ),
-                },
-                property.guard_range as i32,
-                minimum_skill_distance,
-                property.race,
-                player.gods_battle_faction() as u32,
-                player.is_badman(game.globe_setup().pk_count_per_kill()),
-            );
-        }
-        if let Some(selected) = selected {
+        if let Some(selected) = select_gods_battle_guard_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            property.guard_range as i32,
+            minimum_skill_distance,
+            property.race,
+        ) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected.identity);
+                monster.set_ai_target(selected);
             }
-            target = Some(selected.identity);
+            target = Some(selected);
         }
     }
     if target.is_none()
