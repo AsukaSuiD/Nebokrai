@@ -487,6 +487,7 @@ pub(crate) struct CanonicalStateStorage {
     blind_state_order: IndexSet<u32>,
     blood_loss_state: Option<BloodLossState>,
     swordship_states: Vec<SwordshipState>,
+    wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
@@ -1025,6 +1026,27 @@ impl CMoveShape {
         }
         self.swordship_states.push(state);
         None
+    }
+
+    /// Замена сохраняет прежнюю позицию среди пяти стихийных состояний;
+    /// новый skill ID добавляется в хвост, как в исходном `m_vStates`.
+    pub(crate) fn replace_wuxing_state(
+        &mut self,
+        state: super::skills::wuxingstate::WuXingState,
+    ) -> Option<super::skills::wuxingstate::WuXingState> {
+        if let Some(slot) = self
+            .wuxing_states
+            .iter_mut()
+            .find(|current| current.skill_id() == state.skill_id())
+        {
+            return Some(std::mem::replace(slot, state));
+        }
+        self.wuxing_states.push(state);
+        None
+    }
+
+    pub(crate) fn wuxing_states(&self) -> &[super::skills::wuxingstate::WuXingState] {
+        &self.wuxing_states
     }
 
     pub(crate) const fn taiji_state(&self) -> Option<TaiJiState> {

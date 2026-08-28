@@ -3657,6 +3657,10 @@ pub(crate) trait GameMainLoopRuntime:
     + ServerRegionAreaTransitionContext
 {
     fn exit_requested(&self) -> bool;
+    /// Пересоздаёт четыре automatic HP/MP state после изменения их частоты
+    /// и объёма. Конкретные классы ещё не материализованы, поэтому skill-owner
+    /// обязан вызвать эту runtime-границу сразу после property commit.
+    fn restore_player_hp_mp_states(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет только ещё не материализованные state-классы из
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
@@ -5029,9 +5033,10 @@ impl CGame {
         player_id: i32,
         properties: PlayerCombatProperties,
     ) -> bool {
+        let coefficients = self.globe_setup.player_property_coefficients();
         let Some(pass) = self
             .find_player_mut(player_id)
-            .map(|player| player.apply_materialized_state_properties(properties))
+            .map(|player| player.apply_materialized_state_properties(properties, coefficients))
         else {
             return false;
         };

@@ -16,6 +16,7 @@ use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::origin::{ORIGIN_SKILL_ID, SKILL_USAGE_ELEMENT_MODIFY_GAIN};
 use super::originstate::OriginState;
 use super::taiji::{SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN, TAIJI_SKILL_ID};
+use super::wuxing::{execute_player_wuxing, is_wuxing_skill};
 use super::taijistate::TaiJiState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -39,7 +40,7 @@ pub(crate) const fn is_immediate_state_skill(skill_id: u32) -> bool {
             | ENLARGE_MAX_MP_SKILL_ID
             | ENLARGE_FULL_MISS_SKILL_ID
             | ORIGIN_SKILL_ID
-    )
+    ) || is_wuxing_skill(skill_id)
 }
 
 pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
@@ -49,6 +50,14 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
+    let dispatch_skill_id = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+    };
+    if is_wuxing_skill(dispatch_skill_id) {
+        return execute_player_wuxing(game, player_id, dispatch, player_ai, runtime);
+    }
     let terminal = |state| QueuedSkillExecutionOutcome {
         state,
         first_contact: false,

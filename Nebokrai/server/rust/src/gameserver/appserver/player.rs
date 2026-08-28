@@ -1391,6 +1391,14 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) element_blast_defense_scale_bits: u32,
     pub(crate) full_miss_scale_bits: u32,
     pub(crate) critical_rate_bits: u32,
+    pub(crate) resume_hp_peace: i32,
+    pub(crate) resume_mp_peace: i32,
+    pub(crate) resume_hp_fight: i32,
+    pub(crate) resume_mp_fight: i32,
+    pub(crate) restored_hp_peace: i32,
+    pub(crate) restored_mp_peace: i32,
+    pub(crate) restored_hp_fight: i32,
+    pub(crate) restored_mp_fight: i32,
 }
 
 pub(crate) struct PlayerStatePropertyPass {
@@ -3063,6 +3071,14 @@ impl CPlayer {
             element_blast_defense_scale_bits: read_player_wire_u32(wire, 0x64),
             full_miss_scale_bits: read_player_wire_u32(wire, 0x68),
             critical_rate_bits: read_player_wire_u32(wire, 0x6c),
+            resume_hp_peace: read_player_wire_u32(wire, 0x70) as i32,
+            resume_mp_peace: read_player_wire_u32(wire, 0x74) as i32,
+            resume_hp_fight: read_player_wire_u32(wire, 0x78) as i32,
+            resume_mp_fight: read_player_wire_u32(wire, 0x7c) as i32,
+            restored_hp_peace: read_player_wire_u32(wire, 0x80) as i32,
+            restored_mp_peace: read_player_wire_u32(wire, 0x84) as i32,
+            restored_hp_fight: read_player_wire_u32(wire, 0x88) as i32,
+            restored_mp_fight: read_player_wire_u32(wire, 0x8c) as i32,
         };
     }
 
@@ -4140,6 +4156,13 @@ impl CPlayer {
         self.move_shape.replace_swordship_state(state)
     }
 
+    pub(crate) fn replace_wuxing_state(
+        &mut self,
+        state: super::skills::wuxingstate::WuXingState,
+    ) -> Option<super::skills::wuxingstate::WuXingState> {
+        self.move_shape.replace_wuxing_state(state)
+    }
+
     pub(crate) fn agility_state(
         &self,
         skill_id: u32,
@@ -4281,6 +4304,7 @@ impl CPlayer {
     pub(crate) fn apply_materialized_state_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
+        coefficients: GlobePlayerPropertyCoefficients,
     ) -> PlayerStatePropertyPass {
         if let Some(state) = self.move_shape.persistent_agility_family_state() {
             properties = state.apply_to_player(properties);
@@ -4313,6 +4337,10 @@ impl CPlayer {
         }
         for state in self.move_shape.swordship_states() {
             properties = state.apply_to_player(properties);
+        }
+        let occupation = usize::from(self.base_properties.occupation).min(2);
+        for state in self.move_shape.wuxing_states() {
+            properties = state.apply_to_player(properties, coefficients, occupation);
         }
         for state in self.move_shape.battle_fairy_attribute_states() {
             properties = state.apply_to_player(properties);
@@ -5909,6 +5937,14 @@ impl CPlayer {
             0x6c,
             properties.critical_rate_bits,
         );
+        write_u32(&mut self.combat_property_wire, 0x70, properties.resume_hp_peace as u32);
+        write_u32(&mut self.combat_property_wire, 0x74, properties.resume_mp_peace as u32);
+        write_u32(&mut self.combat_property_wire, 0x78, properties.resume_hp_fight as u32);
+        write_u32(&mut self.combat_property_wire, 0x7c, properties.resume_mp_fight as u32);
+        write_u32(&mut self.combat_property_wire, 0x80, properties.restored_hp_peace as u32);
+        write_u32(&mut self.combat_property_wire, 0x84, properties.restored_mp_peace as u32);
+        write_u32(&mut self.combat_property_wire, 0x88, properties.restored_hp_fight as u32);
+        write_u32(&mut self.combat_property_wire, 0x8c, properties.restored_mp_fight as u32);
     }
 
     /// `MountAllEquip -> SetCurFlash`: пересобирает 17 flash-ячеек после

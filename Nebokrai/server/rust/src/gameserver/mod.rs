@@ -186,6 +186,13 @@ pub(crate) mod appserver {
         pub(crate) mod taiji;
         pub(crate) mod taijistate;
         pub(crate) mod wangsheng;
+        pub(crate) mod wuxing;
+        pub(crate) mod wuxingearth;
+        pub(crate) mod wuxingfire;
+        pub(crate) mod wuxingmetal;
+        pub(crate) mod wuxingstate;
+        pub(crate) mod wuxingwater;
+        pub(crate) mod wuxingwood;
         pub(crate) mod yujia;
         pub(crate) mod yujiastate;
         pub(crate) mod yubing;
