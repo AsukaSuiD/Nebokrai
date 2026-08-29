@@ -1027,6 +1027,11 @@ impl CMonster {
         self.pet_behavior.target_cleared(self.tamed);
     }
 
+    pub(crate) fn lose_ai_target_and_search(&mut self, now_ms: u32) {
+        self.clear_ai_target();
+        self.base_ai.begin_active_search_enemy(now_ms);
+    }
+
     pub(crate) fn cancel_base_attack_cast(&mut self) {
         self.fast_attack_progress = None;
         self.monster_projectile_progress = None;

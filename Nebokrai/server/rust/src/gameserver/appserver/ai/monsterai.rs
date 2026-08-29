@@ -513,9 +513,9 @@ pub(crate) fn approach_attack_range(
 // FUNCTION: CMonsterAI::OnSchedule
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `execute_owned_monster_base_attack` сохраняет проверку цели,
-// выбор текущего навыка, проверку допустимости цели, преследование, отдельные
-// интервалы ИИ и навыка и запуск достигнутых владельцев. Общий событийный
-// автомат и прочие навыки RAW.
+// выбор текущего навыка, проверку допустимости цели, `OnLoseTarget` с отдельным
+// `SearchEnemy`, преследование, интервалы ИИ и навыка и запуск достигнутых
+// владельцев. Недостигнутые виртуальные владельцы и прочие навыки остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:102

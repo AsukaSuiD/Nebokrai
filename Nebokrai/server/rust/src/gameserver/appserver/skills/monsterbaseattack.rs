@@ -193,6 +193,15 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
     )
 }
 
+const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
+    tamed
+        || matches!(
+            ai_type,
+            0 | 1 | 2 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 13 | 14 | 17 | 18 | 20 | 21 | 24
+                | 100 | 0x65 | 0x67 | 0x68
+        )
+}
+
 /// Rust-владелец выбирает навык только когда любой результат броска уже имеет
 /// реального владельца исполнения. Иначе весь ход остаётся внешней виртуальной
 /// ветви, чтобы она не получила второй вызов исходного генератора случайных
@@ -940,7 +949,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             resolve_owned_monster_attack_target(game, region, target)
         else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                if has_owned_search_enemy(property.ai, tamed) {
+                    monster.lose_ai_target_and_search(runtime.now_milliseconds());
+                } else {
+                    monster.clear_ai_target();
+                }
             }
             return true;
         };
@@ -969,7 +982,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 );
             }
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
+                if has_owned_search_enemy(property.ai, tamed) {
+                    monster.lose_ai_target_and_search(runtime.now_milliseconds());
+                } else {
+                    monster.clear_ai_target();
+                }
             }
             return true;
         }
