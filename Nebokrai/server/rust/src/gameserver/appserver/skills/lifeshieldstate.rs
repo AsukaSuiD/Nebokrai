@@ -2,7 +2,8 @@
 //!
 //! Состояние хранит уровень навыка для обязательного последующего
 //! `CCureState`, проверяет наличие и MP боевого духа, но рассчитанный
-//! `lMPDamage` применяет к MP игрока обычный владелец атаки.
+//! `lMPDamage` применяет к MP игрока обычный владелец атаки. DB-запись
+//! сохраняет уровень, остаток срока, прочность и два WORD-фактора.
 
 use super::curestate::{send_cure_state_visual, CureState};
 use super::lifeshield::{
@@ -11,9 +12,12 @@ use super::lifeshield::{
 use super::manashieldstate::{
     MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::attackpower::AttackPower;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+
+pub(crate) const LIFE_SHIELD_STATE_BYTES: usize = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LifeShieldState {
@@ -84,6 +88,52 @@ impl LifeShieldState {
         } else {
             deadline.wrapping_sub(now_ms) as i32
         }
+    }
+
+    pub(crate) fn decode(
+        payload: &[u8],
+        offset: usize,
+        now_ms: u32,
+    ) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != LIFE_SHIELD_SKILL_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        let skill_level = reader.read_i32()?;
+        Ok(Self::new(
+            now_ms,
+            reader.read_u32()?,
+            reader.read_i32()?,
+            reader.read_u16()?,
+            reader.read_u16()?,
+            skill_level,
+        ))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; LIFE_SHIELD_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(LIFE_SHIELD_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(LIFE_SHIELD_SKILL_ID);
+        writer.write_i32(self.skill_level);
+        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_i32(self.life);
+        writer.write_u16(self.hp_factor);
+        writer.write_u16(self.mp_factor);
+        bytes
+            .try_into()
+            .expect("размер состояния щита жизни фиксирован")
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; LIFE_SHIELD_STATE_BYTES] {
+        self.encoded(self.started_at_ms)
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) fn absorb_damage(
@@ -187,7 +237,7 @@ pub(crate) fn finish_life_shield_state(
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сохранены только не подключённые конструктор по умолчанию и сериализация.
+// Сохранён только не подключённый конструктор по умолчанию.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -204,36 +254,6 @@ pub(crate) fn finish_life_shield_state(
 // RVA: 0x001E2A50
 // ADDRESS: 005e2a50
 // PROTOTYPE: undefined __thiscall CLifeShieldState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: CLifeShieldState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshieldstate.cpp:211
-// RVA: 0x001E2C60
-// ADDRESS: 005e2c60
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: CLifeShieldState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lifeshieldstate.cpp:226
-// RVA: 0x001E2E30
-// ADDRESS: 005e2e30
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

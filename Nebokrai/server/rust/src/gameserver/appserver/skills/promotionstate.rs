@@ -5,15 +5,18 @@
 //! ветви `CFightDefense::PreDefense`: для стихийной части удара множитель
 //! применяется в точном месте исходного `m_vStates`. Второй коэффициент
 //! принадлежит лечению. Начальный пакет состояния имеет исходный формат
-//! `0xBFE03`; отдельного пакета завершения этот владелец не создаёт.
+//! `0xBFE03`; отдельного пакета завершения этот владелец не создаёт. DB-запись
+//! сохраняет остаток срока и оба WORD-коэффициента.
 
 use super::promotion::PROMOTION_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const PROMOTION_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+pub(crate) const PROMOTION_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PromotionState {
@@ -62,6 +65,47 @@ impl PromotionState {
             deadline.wrapping_sub(now_ms) as i32
         }
     }
+
+    pub(crate) fn decode(
+        payload: &[u8],
+        offset: usize,
+        now_ms: u32,
+    ) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != PROMOTION_SKILL_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        Ok(Self::new(
+            now_ms,
+            reader.read_u32()?,
+            reader.read_u16()?,
+            reader.read_u16()?,
+        ))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; PROMOTION_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(PROMOTION_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(PROMOTION_SKILL_ID);
+        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_u16(self.magic_attack_factor);
+        writer.write_u16(self.heal_recover_factor);
+        bytes
+            .try_into()
+            .expect("размер состояния усиления фиксирован")
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; PROMOTION_STATE_BYTES] {
+        self.encoded(self.started_at_ms)
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
+    }
 }
 
 pub(crate) fn send_promotion_state_begin(
@@ -104,31 +148,3 @@ pub(crate) fn expire_monster_promotion_state(
     }
     ended
 }
-
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
-// Не подключённые загрузка и сохранение общего списка `CState` остаются у
-// будущего владельца фабрики состояний; текущая цепочка выполнения их не вызывает.
-
-// ============================================================================
-// FUNCTION: CPromotionState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\promotionstate.cpp:125
-// RVA: 0x001F2E90
-// ADDRESS: 005f2e90
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-
-// ============================================================================
-// FUNCTION: CPromotionState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\promotionstate.cpp:137
-// RVA: 0x001F2FB0
-// ADDRESS: 005f2fb0
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1,long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.

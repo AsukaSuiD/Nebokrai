@@ -75,12 +75,17 @@ use crate::gameserver::appserver::skills::rushstate::RushState;
 use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::RoarState;
 use crate::gameserver::appserver::skills::energyholdingstate::EnergyHoldingState;
-use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
+use crate::gameserver::appserver::skills::lifeshieldstate::{
+    LifeShieldState, LIFE_SHIELD_STATE_BYTES,
+};
 use crate::gameserver::appserver::skills::machineshieldstate::{
     MachineShieldState, MACHINE_SHIELD_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::manashieldstate::{
     ManaShieldState, MANA_SHIELD_STATE_BYTES,
+};
+use crate::gameserver::appserver::skills::promotionstate::{
+    PromotionState, PROMOTION_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
@@ -94,7 +99,6 @@ use crate::gameserver::appserver::skills::pillarstate::PillarState;
 use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
-use crate::gameserver::appserver::skills::promotionstate::PromotionState;
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::skills::sealstate::SealState;
@@ -726,7 +730,20 @@ impl CMoveShape {
                         &state.encoded(now_ms),
                     );
                 }
-                DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {}
+                DefenseShieldState::Life(state) => {
+                    update_known_state_record(
+                        &mut payload,
+                        state.skill_id(),
+                        &state.encoded(now_ms),
+                    );
+                }
+                DefenseShieldState::Promotion(state) => {
+                    update_known_state_record(
+                        &mut payload,
+                        state.skill_id(),
+                        &state.encoded(now_ms),
+                    );
+                }
             }
         }
         payload
@@ -815,11 +832,14 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID))
             .and_then(|offset| EnlargeFullMissState::decode(&states, offset).ok());
-        self.defense_shields.retain(|state| {
-            !matches!(state, DefenseShieldState::Mana(_) | DefenseShieldState::Machine(_))
-        });
+        self.defense_shields.clear();
         self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
             match read_u32(&states, offset) {
+                Some(super::skills::lifeshield::LIFE_SHIELD_SKILL_ID) => {
+                    LifeShieldState::decode(&states, offset, 0)
+                        .ok()
+                        .map(DefenseShieldState::Life)
+                }
                 Some(super::skills::manashield::MANA_SHIELD_SKILL_ID) => {
                     ManaShieldState::decode(&states, offset, 0)
                         .ok()
@@ -829,6 +849,11 @@ impl CMoveShape {
                     MachineShieldState::decode(&states, offset, 0)
                         .ok()
                         .map(DefenseShieldState::Machine)
+                }
+                Some(super::skills::promotion::PROMOTION_SKILL_ID) => {
+                    PromotionState::decode(&states, offset, 0)
+                        .ok()
+                        .map(DefenseShieldState::Promotion)
                 }
                 _ => None,
             }
@@ -1777,6 +1802,8 @@ impl CMoveShape {
                 | DefenseShieldState::Mana(_)
                 | DefenseShieldState::Promotion(_) => None,
             });
+        self.remove_serialized_state_record(state.skill_id(), LIFE_SHIELD_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.defense_shields.push(DefenseShieldState::Life(state));
         previous
     }
@@ -1790,8 +1817,10 @@ impl CMoveShape {
             .position(|candidate| candidate.skill_id() == state.skill_id())
         {
             self.defense_shields.remove(position);
+            self.remove_serialized_state_record(state.skill_id(), PROMOTION_STATE_BYTES);
             return false;
         }
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.defense_shields
             .push(DefenseShieldState::Promotion(state));
         true
@@ -1819,7 +1848,10 @@ impl CMoveShape {
             matches!(state, DefenseShieldState::Promotion(promotion) if promotion.expired(now_ms))
         })?;
         match self.defense_shields.remove(position) {
-            DefenseShieldState::Promotion(state) => Some(state),
+            DefenseShieldState::Promotion(state) => {
+                self.remove_serialized_state_record(state.skill_id(), PROMOTION_STATE_BYTES);
+                Some(state)
+            }
             _ => unreachable!("позиция состояния Promotion проверена"),
         }
     }
@@ -1854,7 +1886,18 @@ impl CMoveShape {
                             MACHINE_SHIELD_STATE_BYTES,
                         );
                     }
-                    DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {}
+                    DefenseShieldState::Life(state) => {
+                        self.remove_serialized_state_record(
+                            state.skill_id(),
+                            LIFE_SHIELD_STATE_BYTES,
+                        );
+                    }
+                    DefenseShieldState::Promotion(state) => {
+                        self.remove_serialized_state_record(
+                            state.skill_id(),
+                            PROMOTION_STATE_BYTES,
+                        );
+                    }
                 }
                 expired.push(state);
             } else {
@@ -1879,7 +1922,14 @@ impl CMoveShape {
                     state.activate_loaded(now_ms);
                     loaded.push(DefenseShieldState::Machine(*state));
                 }
-                DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {}
+                DefenseShieldState::Life(state) => {
+                    state.activate_loaded(now_ms);
+                    loaded.push(DefenseShieldState::Life(*state));
+                }
+                DefenseShieldState::Promotion(state) => {
+                    state.activate_loaded(now_ms);
+                    loaded.push(DefenseShieldState::Promotion(*state));
+                }
             }
         }
         loaded
@@ -3644,6 +3694,8 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
             super::skills::machineshield::MACHINE_SHIELD_SKILL_ID => MACHINE_SHIELD_STATE_BYTES,
             super::skills::manashield::MANA_SHIELD_SKILL_ID => MANA_SHIELD_STATE_BYTES,
+            super::skills::lifeshield::LIFE_SHIELD_SKILL_ID => LIFE_SHIELD_STATE_BYTES,
+            super::skills::promotion::PROMOTION_SKILL_ID => PROMOTION_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

@@ -28912,8 +28912,34 @@ impl CGame {
                         login_tick_ms,
                     );
                 }
-                DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {
-                    unreachable!("из DB активируются только сохранённые щиты")
+                DefenseShieldState::Life(state) => {
+                    crate::gameserver::appserver::skills::lifeshieldstate::send_life_shield_state_visual(
+                        self,
+                        expected_player_id,
+                        state,
+                        true,
+                        login_tick_ms,
+                    );
+                }
+                DefenseShieldState::Promotion(state) => {
+                    let target_position = self.find_player(expected_player_id).and_then(|player| {
+                        Some((
+                            player.shape().identity(),
+                            player.shape().get_tile_x().ok()?,
+                            player.shape().get_tile_y().ok()?,
+                        ))
+                    });
+                    if let Some((target, tile_x, tile_y)) = target_position {
+                        crate::gameserver::appserver::skills::promotionstate::send_promotion_state_begin(
+                            self,
+                            region_id,
+                            target,
+                            tile_x,
+                            tile_y,
+                            state,
+                            login_tick_ms,
+                        );
+                    }
                 }
             }
         }
