@@ -4160,7 +4160,7 @@ pub(crate) trait GameMainLoopRuntime:
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет оставшийся префикс `CBaseAI::Run` виртуального
     /// `CPlayerAI::Run` после `UpdateCurrentState`, достигнутых FIFO-очередей
-    /// навыков, движения и точки перехода.
+    /// навыков, движения, ожидания и точки перехода.
     /// Выбранный навык боевого духа и его восстановление принадлежат
     /// каноническому `CPlayerAI`; хвосты auto-exp/CheckLevel/energy идут сразу
     /// после.
@@ -44473,16 +44473,32 @@ impl CGame {
                             if moving_started {
                                 let _ = self.on_player_stand_on_switch_point(player_id, runtime);
                             }
+                            let active_stand_handled = if !active_move_handled
+                                && player_ai.active_stand_pending()
+                            {
+                                let standing_started = player_ai.active_stand_unhandled();
+                                let _ =
+                                    player_ai.advance_active_stand(runtime.now_milliseconds());
+                                if standing_started {
+                                    let _ =
+                                        self.on_player_stand_on_switch_point(player_id, runtime);
+                                }
+                                true
+                            } else {
+                                false
+                            };
+                            let active_action_handled =
+                                active_move_handled || active_stand_handled;
                             let (executed_skills, executed_player_skills) = self
                                 .execute_queued_player_skills(
                                     player_id,
                                     &mut player_ai,
-                                    !active_move_handled,
+                                    !active_action_handled,
                                     can_schedule_skill,
                                     runtime,
                                 );
                             player_skill_executions += executed_skills;
-                            let destination_handled = active_move_handled
+                            let destination_handled = active_action_handled
                                 || (executed_player_skills == 0
                                     && self.find_player(player_id).is_some()
                                     && self.run_player_ai_destination(

@@ -174,6 +174,18 @@ impl CBaseAI {
         })
     }
 
+    pub(crate) fn active_stand_pending(&self) -> bool {
+        self.active_actions
+            .front()
+            .is_some_and(|event| event.action == AiShapeAction::Stand)
+    }
+
+    pub(crate) fn active_stand_unhandled(&self) -> bool {
+        self.active_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::Stand && event.handling == 0
+        })
+    }
+
     /// Сообщает, что следующий FIFO-элемент должен продолжить текущий
     /// `CSkill::AI` через подтверждённый `OnFighting`.
     pub(crate) fn active_attack_pending(&self) -> bool {

@@ -406,6 +406,18 @@ impl CPlayerAI {
         self.base_ai.active_move_unhandled()
     }
 
+    pub(crate) fn advance_active_stand(&mut self, now_ms: u32) -> bool {
+        self.base_ai.advance_active_stand(now_ms)
+    }
+
+    pub(crate) fn active_stand_pending(&self) -> bool {
+        self.base_ai.active_stand_pending()
+    }
+
+    pub(crate) fn active_stand_unhandled(&self) -> bool {
+        self.base_ai.active_stand_unhandled()
+    }
+
     pub(crate) fn has_queued_player_skill(&self) -> bool {
         !self.player_skills.is_empty()
     }
@@ -2732,17 +2744,15 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnStanding
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// MATERIALIZED: первый проход `ASA_STAND` вызывает владельца точки перехода,
+// затем общий FIFO сохраняет исходную задержку до следующего расписания.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:685
 // RVA: 0x00108ED0
 // ADDRESS: 00508ed0
 // PROTOTYPE: int __thiscall OnStanding(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 
 // ============================================================================
