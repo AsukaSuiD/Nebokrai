@@ -1124,8 +1124,13 @@ use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
 use crate::gameserver::appserver::skills::weakstate::{
     finish_monster_weak_outside, finish_player_weak_outside,
 };
-use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_yin_yang_target};
-use crate::gameserver::appserver::skills::yinyang2::{execute_player_yin_yang_2, is_yin_yang_2_target};
+use crate::gameserver::appserver::skills::yinyang::{
+    cancel_player_yin_yang_family, execute_player_yin_yang, is_yin_yang_target,
+    YIN_YANG_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::yinyang2::{
+    execute_player_yin_yang_2, is_yin_yang_2_target, YIN_YANG_2_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::yinyangphalanx::{
     calculate_owned_yin_yang_attack, yin_yang_targets, YinYangPhalanxTick,
 };
@@ -37465,6 +37470,8 @@ impl CGame {
                 | CHAOS_SPHERE_SKILL_ID
                 | LIGHTNING_SKILL_ID
                 | SEAL_SKILL_ID
+                | YIN_YANG_SKILL_ID
+                | YIN_YANG_2_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37529,6 +37536,8 @@ impl CGame {
             CHAOS_SPHERE_SKILL_ID => player_ai.chaos_sphere().is_some(),
             LIGHTNING_SKILL_ID => player_ai.lightning().is_some(),
             SEAL_SKILL_ID => player_ai.seal().is_some(),
+            YIN_YANG_SKILL_ID => player_ai.yin_yang().is_some(),
+            YIN_YANG_2_SKILL_ID => player_ai.yin_yang_2().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37645,6 +37654,20 @@ impl CGame {
                 cancel_player_lightning(self, player_id, &mut player_ai, runtime)
             }
             SEAL_SKILL_ID => cancel_player_seal(self, player_id, &mut player_ai, runtime),
+            YIN_YANG_SKILL_ID => cancel_player_yin_yang_family(
+                self,
+                player_id,
+                &mut player_ai,
+                false,
+                runtime,
+            ),
+            YIN_YANG_2_SKILL_ID => cancel_player_yin_yang_family(
+                self,
+                player_id,
+                &mut player_ai,
+                true,
+                runtime,
+            ),
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
