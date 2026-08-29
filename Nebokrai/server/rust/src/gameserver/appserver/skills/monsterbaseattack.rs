@@ -426,6 +426,18 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             );
             return true;
         }
+        8 | 9 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            select_guard_with_bow_target(
+                game,
+                region,
+                monster_id,
+                &property,
+                minimum_skill_distance,
+            )
+        }
         10 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
@@ -609,7 +621,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 6 | 17 | 18 | 21 | 24 | 100 | 0x65)
+        && matches!(property.ai, 0 | 3 | 4 | 6 | 8 | 9 | 17 | 18 | 21 | 24 | 100 | 0x65)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
@@ -774,23 +786,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster_view,
             area_index,
             property.guard_range as i32,
-            minimum_skill_distance,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
-        }
-    }
-    if target.is_none() && cast.is_none() && !tamed && matches!(property.ai, 8 | 9) {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        if let Some(selected) = select_guard_with_bow_target(
-            game,
-            region,
-            monster_id,
-            &property,
             minimum_skill_distance,
         ) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
