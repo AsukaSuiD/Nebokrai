@@ -442,12 +442,3 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     finish_movement(game, player_id);
     terminal(QueuedSkillExecutionState::Completed)
 }
-
-// ============================================================================
-// FUNCTION: CHeal::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\heal.cpp:170
-// RVA: 0x00180A80
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.

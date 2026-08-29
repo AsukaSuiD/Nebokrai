@@ -1010,7 +1010,7 @@ use crate::gameserver::appserver::skills::hearten::{
 use crate::gameserver::appserver::skills::gibe::{execute_player_gibe, GIBE_SKILL_ID};
 use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
 use crate::gameserver::appserver::skills::heal::{execute_player_heal, is_heal_skill};
-use crate::gameserver::appserver::skills::healstate::send_heal_state_visual;
+use crate::gameserver::appserver::skills::healstate::update_stored_heal_states;
 use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
@@ -26368,155 +26368,6 @@ impl CGame {
         ended
     }
 
-    fn take_stored_heal_states(
-        &mut self,
-        region_id: i32,
-        storage: ShapeIdentity,
-    ) -> Option<Vec<crate::gameserver::appserver::skills::healstate::HealState>> {
-        match storage.object_type {
-            PLAYER_TYPE => self
-                .find_player_mut(storage.id)
-                .filter(|player| player.server_region_id() == Some(region_id))
-                .map(CPlayer::take_heal_states),
-            MONSTER_TYPE => {
-                let mut owner = self.take_region_owner(region_id)?;
-                let states = owner
-                    .base_mut()
-                    .find_monster_by_id_mut(storage.id)
-                    .map(|monster| monster.move_shape_mut().take_heal_states());
-                self.restore_region_owner(owner);
-                states
-            }
-            _ => None,
-        }
-    }
-
-    fn restore_stored_heal_states(
-        &mut self,
-        region_id: i32,
-        storage: ShapeIdentity,
-        states: Vec<crate::gameserver::appserver::skills::healstate::HealState>,
-    ) {
-        match storage.object_type {
-            PLAYER_TYPE => {
-                if let Some(player) = self
-                    .find_player_mut(storage.id)
-                    .filter(|player| player.server_region_id() == Some(region_id))
-                {
-                    player.restore_heal_states(states);
-                }
-            }
-            MONSTER_TYPE => {
-                if let Some(mut owner) = self.take_region_owner(region_id) {
-                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(storage.id) {
-                        monster.move_shape_mut().restore_heal_states(states);
-                    }
-                    self.restore_region_owner(owner);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn advance_heal_effect(
-        &mut self,
-        region_id: i32,
-        state: &mut crate::gameserver::appserver::skills::healstate::HealState,
-        now_ms: u32,
-    ) -> Option<(bool, i32, i32)> {
-        let target = state.effect_target();
-        match target.object_type {
-            PLAYER_TYPE => {
-                let player = self
-                    .find_player_mut(target.id)
-                    .filter(|player| player.server_region_id() == Some(region_id))?;
-                let tile_x = player.shape().get_tile_x().ok()?;
-                let tile_y = player.shape().get_tile_y().ok()?;
-                let pass = state.advance(
-                    now_ms,
-                    player.health(),
-                    player.maximum_health(),
-                    player.is_dead(),
-                    player.promotion_heal_recover_factor(),
-                );
-                player.set_health(pass.health);
-                if pass.changed {
-                    let _ = self.publish_player_states(target.id);
-                }
-                Some((pass.ended, tile_x, tile_y))
-            }
-            MONSTER_TYPE => {
-                let property = self
-                    .find_region(region_id)
-                    .and_then(|owner| owner.base().find_monster_by_id(target.id))
-                    .and_then(CMonster::base_property_key)
-                    .and_then(|key| self.find_monster_property_by_origin_name(key))
-                    .cloned()?;
-                let mut owner = self.take_region_owner(region_id)?;
-                let result = owner
-                    .base_mut()
-                    .find_monster_by_id_mut(target.id)
-                    .and_then(|monster| {
-                        let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
-                        let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
-                        let maximum_health = if monster.is_tamed() {
-                            monster.pet_maximum_hp(&property)
-                        } else {
-                            property.maximum_hp
-                        };
-                        let health = monster.hit_points();
-                        let promotion = monster.move_shape().promotion_heal_recover_factor();
-                        let pass = state.advance(
-                            now_ms,
-                            health,
-                            maximum_health,
-                            health == 0,
-                            promotion,
-                        );
-                        monster.set_hit_points(pass.health);
-                        Some((pass, tile_x, tile_y))
-                    });
-                self.restore_region_owner(owner);
-                let (pass, tile_x, tile_y) = result?;
-                if pass.changed {
-                    let mut states = CMessage::new(0x000b_fe02);
-                    states.add_long(MONSTER_TYPE);
-                    states.add_long(target.id);
-                    states.add_ulong(pass.health);
-                    states.add_long(0);
-                    states.add_long(0);
-                    states.add_long(0);
-                    let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &states);
-                }
-                Some((pass.ended, tile_x, tile_y))
-            }
-            _ => None,
-        }
-    }
-
-    fn update_stored_heal_states(
-        &mut self,
-        region_id: i32,
-        storage: ShapeIdentity,
-        now_ms: u32,
-    ) {
-        let Some(states) = self.take_stored_heal_states(region_id, storage) else {
-            return;
-        };
-        let mut active = Vec::with_capacity(states.len());
-        for mut state in states {
-            let target = state.effect_target();
-            match self.advance_heal_effect(region_id, &mut state, now_ms) {
-                Some((true, tile_x, tile_y)) => send_heal_state_visual(
-                    self, region_id, target, tile_x, tile_y, state, false, now_ms,
-                ),
-                Some((false, _, _)) => active.push(state),
-                None => {}
-            }
-        }
-        self.restore_stored_heal_states(region_id, storage, active);
-    }
-
     /// Материализованная часть `CMoveShape::UpdateAbnormality` для player:
     /// завершение состояний, периодический расход предметов, визуальные эффекты
     /// и эффекты свойств, а также проверка ездового снаряжения выполняются из
@@ -26596,7 +26447,8 @@ impl CGame {
             periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
         }
         if let Some(region_id) = self.find_player(player_id).and_then(CPlayer::server_region_id) {
-            self.update_stored_heal_states(
+            update_stored_heal_states(
+                self,
                 region_id,
                 ShapeIdentity {
                     object_type: PLAYER_TYPE,
@@ -42514,7 +42366,8 @@ impl CGame {
                         _ => {}
                     }
                 }
-                self.update_stored_heal_states(
+                update_stored_heal_states(
+                    self,
                     region_id,
                     ShapeIdentity {
                         object_type: MONSTER_TYPE,
