@@ -853,7 +853,10 @@ use crate::gameserver::appserver::skills::boalock::{
     cancel_player_boa_lock, complete_player_boa_lock, execute_player_boa_lock,
     is_boa_lock_dispatch, BOA_LOCK_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::fallingstar::{execute_player_falling_star, is_falling_star_dispatch};
+use crate::gameserver::appserver::skills::fallingstar::{
+    cancel_player_falling_star, complete_player_falling_star, execute_player_falling_star,
+    is_falling_star_dispatch, FALLING_STAR_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::explosivearrow::{
     cancel_player_explosive_arrow, complete_player_explosive_arrow,
     execute_player_explosive_arrow, explosive_arrow_variant, EXPLOSIVE_ARROW_SKILL_ID,
@@ -868,7 +871,10 @@ use crate::gameserver::appserver::skills::yakshaslash::{
     cancel_player_yaksha_slash, complete_player_yaksha_slash, execute_player_yaksha_slash,
     is_yaksha_slash_dispatch, YAKSHA_SLASH_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::daubpoison::{execute_player_daub_poison, is_daub_poison_dispatch};
+use crate::gameserver::appserver::skills::daubpoison::{
+    cancel_player_daub_poison, complete_player_daub_poison, execute_player_daub_poison,
+    is_daub_poison_dispatch, DAUB_POISON_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::daubpoisonstate::expire_player_daub_poison_state;
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
 use crate::gameserver::appserver::skills::archeryphalanx::{
@@ -37567,11 +37573,13 @@ impl CGame {
                 | BLOOD_ROSE_SKILL_ID
                 | SCORPION_SKILL_ID
                 | BOA_LOCK_SKILL_ID
+                | FALLING_STAR_SKILL_ID
                 | EXPLOSIVE_ARROW_SKILL_ID
                 | EXPLOSIVE_ARROW_2_SKILL_ID
                 | EXPLOSIVE_ARROW_3_SKILL_ID
                 | STRIKE_SKILL_ID
                 | YAKSHA_SLASH_SKILL_ID
+                | DAUB_POISON_SKILL_ID
                 | IGNITION_SKILL_ID
                 | KEROSENE_SKILL_ID
                 | BLIND_SKILL_ID
@@ -37659,11 +37667,13 @@ impl CGame {
             BLOOD_ROSE_SKILL_ID => player_ai.blood_rose().is_some(),
             SCORPION_SKILL_ID => player_ai.scorpion().is_some(),
             BOA_LOCK_SKILL_ID => player_ai.boa_lock().is_some(),
+            FALLING_STAR_SKILL_ID => player_ai.falling_star().is_some(),
             EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => {
                 player_ai.explosive_arrow().is_some()
             }
             STRIKE_SKILL_ID => player_ai.strike().is_some(),
             YAKSHA_SLASH_SKILL_ID => player_ai.yaksha_slash().is_some(),
+            DAUB_POISON_SKILL_ID => player_ai.daub_poison().is_some(),
             IGNITION_SKILL_ID => player_ai.ignition().is_some(),
             KEROSENE_SKILL_ID => player_ai.kerosene().is_some(),
             BLIND_SKILL_ID => player_ai.blind().is_some(),
@@ -37753,6 +37763,12 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
+                FALLING_STAR_SKILL_ID => Some(complete_player_falling_star(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
                 EXPLOSIVE_ARROW_SKILL_ID
                 | EXPLOSIVE_ARROW_2_SKILL_ID
                 | EXPLOSIVE_ARROW_3_SKILL_ID => Some(complete_player_explosive_arrow(
@@ -37768,6 +37784,12 @@ impl CGame {
                     runtime,
                 )),
                 YAKSHA_SLASH_SKILL_ID => Some(complete_player_yaksha_slash(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                DAUB_POISON_SKILL_ID => Some(complete_player_daub_poison(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38039,6 +38061,9 @@ impl CGame {
             BOA_LOCK_SKILL_ID => {
                 cancel_player_boa_lock(self, player_id, &mut player_ai, runtime)
             }
+            FALLING_STAR_SKILL_ID => {
+                cancel_player_falling_star(self, player_id, &mut player_ai, runtime)
+            }
             EXPLOSIVE_ARROW_SKILL_ID
             | EXPLOSIVE_ARROW_2_SKILL_ID
             | EXPLOSIVE_ARROW_3_SKILL_ID => {
@@ -38049,6 +38074,9 @@ impl CGame {
             }
             YAKSHA_SLASH_SKILL_ID => {
                 cancel_player_yaksha_slash(self, player_id, &mut player_ai, runtime)
+            }
+            DAUB_POISON_SKILL_ID => {
+                cancel_player_daub_poison(self, player_id, &mut player_ai, runtime)
             }
             IGNITION_SKILL_ID => {
                 cancel_player_ignition(self, player_id, &mut player_ai, runtime)

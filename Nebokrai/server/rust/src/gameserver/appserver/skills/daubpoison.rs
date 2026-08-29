@@ -7,12 +7,16 @@
 //! cooldown, пакеты `0xBFE01` и порядок замены состояния `end → begin`.
 //! `CGame` предоставляет player owner, свойства, обновление состояния и
 //! фактическую доставку; lifecycle навыка остаётся здесь.
+//! Достигнутый apply-path фиксирует cooldown даже при смерти владельца или
+//! неудачной установке состояния; раннее прерывание этого не делает.
 
 use super::baseattack::time_reached;
 use super::daubpoisonstate::{DaubPoisonState, DAUB_POISON_STATE_ID, replace_player_daub_poison_state};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
@@ -37,11 +41,29 @@ pub(crate) const fn is_daub_poison_dispatch(dispatch: PlayerSkillDispatch) -> bo
     }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_daub_poison<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    restore_player_movement(game, player_id);
+    finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_daub_poison_used(now_ms));
+}
+
+fn abort_player_daub_poison(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+
+pub(crate) fn complete_player_daub_poison<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = ai.daub_poison().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_daub_poison(game, player_id, ai, runtime);
+    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_daub_poison<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = ai.daub_poison().map(SkillExecutionKernel::dispatch) else { return false };
+    abort_player_daub_poison(game, player_id);
+    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
@@ -89,7 +111,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
         (player.learned_skill_level(DAUB_POISON_SKILL_ID), player.mana())
     }) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(DAUB_POISON_SKILL_ID, level) else {
-        finish(game, player_id);
+        if player_ai.daub_poison().is_some() { abort_player_daub_poison(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -124,15 +146,14 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
 
     if game.find_player(player_id).is_none_or(CPlayer::is_dead) {
         send_failure(game, player_id, 2, mp_loss);
-        player_ai.mark_daub_poison_used(runtime.now_milliseconds());
-        finish(game, player_id);
+        finish_player_daub_poison(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Completed);
     }
     if player_ai.daub_poison().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss);
-            finish(game, player_id);
+            abort_player_daub_poison(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -164,7 +185,6 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_daub_poison_used(now_ms);
-    finish(game, player_id);
+    finish_player_daub_poison(game, player_id, player_ai, runtime);
     terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }

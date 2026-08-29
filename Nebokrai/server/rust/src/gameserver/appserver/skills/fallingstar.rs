@@ -9,6 +9,8 @@
 //! изымается, публикуется пакет выстрела и создаётся область с сетевым ID `0xCD`.
 //! Формулы, два вызова RNG на стрелу и пакеты принадлежат владельцам навыка;
 //! `CGame` только связывает player, region и доставку.
+//! `End(true)` фиксирует cooldown после создания области; `End(false)` только
+//! прекращает незавершённый cast и не возвращает уже списанные MP или стрелы.
 
 use super::baseattack::{time_reached, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{
@@ -16,12 +18,13 @@ use super::basemagic::{
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fallingstarphalanx::create_falling_star_phalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::meteorarrow::{master_info, target_snapshot, weapon_is_valid};
 use super::meteorarrowmass::send_meteor_arrow_state_remove;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -75,11 +78,29 @@ fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    restore_player_movement(game, player_id);
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_falling_star_used(now_ms));
+}
+
+fn abort_player_falling_star(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+
+pub(crate) fn complete_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = ai.falling_star().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_falling_star(game, player_id, ai, runtime);
+    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = ai.falling_star().map(|state| state.kernel().dispatch()) else { return false };
+    abort_player_falling_star(game, player_id);
+    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn send_failure(game: &CGame, player_id: i32, action: u8, mp_loss: u32) {
@@ -170,7 +191,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
         return outcome(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(FALLING_STAR_SKILL_ID, level) else {
-        finish(game, player_id);
+        if ai.falling_star().is_some() { abort_player_falling_star(game, player_id); }
         return outcome(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -254,7 +275,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             Some((x, y, false)) => destination = (x, y),
             _ => {
                 send_failure(game, player_id, 10, mp_loss);
-                finish(game, player_id);
+                abort_player_falling_star(game, player_id);
                 return outcome(QueuedSkillExecutionState::Rejected);
             }
         }
@@ -263,7 +284,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss);
-            finish(game, player_id);
+            abort_player_falling_star(game, player_id);
             return outcome(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -275,7 +296,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             .is_none_or(|player| !weapon_is_valid(game, player))
         {
             send_failure(game, player_id, 0x0e, mp_loss);
-            finish(game, player_id);
+            abort_player_falling_star(game, player_id);
             return outcome(QueuedSkillExecutionState::Rejected);
         }
         if game.find_player(player_id).is_none_or(|player| {
@@ -284,7 +305,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
                 .is_none_or(|state| state.arrows() == 0)
         }) {
             send_failure(game, player_id, 4, mp_loss);
-            finish(game, player_id);
+            abort_player_falling_star(game, player_id);
             return outcome(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -316,7 +337,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
         .map_or(0, |state| state.arrows().max(0) as u32);
     if arrows == 0 {
         send_failure(game, player_id, 4, mp_loss);
-        finish(game, player_id);
+        abort_player_falling_star(game, player_id);
         return outcome(QueuedSkillExecutionState::Rejected);
     }
     send_meteor_arrow_state_remove(game, player_id);
@@ -364,7 +385,6 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    ai.mark_falling_star_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_falling_star(game, player_id, ai, runtime);
     outcome(QueuedSkillExecutionState::Completed)
 }
