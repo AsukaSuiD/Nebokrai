@@ -482,7 +482,6 @@
 //! будущего процесса GameServer. Межвладельческие действия налоговых сессий
 //! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
 
-mod kerosene;
 mod fatalblow;
 mod firewall;
 mod poisonfog;
@@ -1108,6 +1107,9 @@ use crate::gameserver::appserver::skills::leafcutstate3::{
     update_monster_leaf_cut_3_state, update_player_leaf_cut_3_state,
 };
 use crate::gameserver::appserver::skills::kerosene::{execute_player_kerosene, is_kerosene_dispatch};
+use crate::gameserver::appserver::skills::kerosenestate::{
+    update_monster_kerosene_state, update_player_kerosene_state,
+};
 use crate::gameserver::appserver::skills::ignition::{execute_player_ignition, is_ignition_dispatch};
 use crate::gameserver::appserver::skills::blind::{execute_player_blind, is_blind_dispatch};
 use crate::gameserver::appserver::skills::fatalblow::{
@@ -26451,7 +26453,7 @@ impl CGame {
                 }
                 LEAF_CUT_2_STATE_ID => update_player_leaf_cut_2_state(self, player_id, runtime),
                 LEAF_CUT_3_STATE_ID => update_player_leaf_cut_3_state(self, player_id, runtime),
-                crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => self.update_player_kerosene_state(player_id, runtime),
+                crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => update_player_kerosene_state(self, player_id, runtime),
                 _ => false,
             };
             periodic_attacks_updated = periodic_attacks_updated.wrapping_add(usize::from(updated));
@@ -42307,7 +42309,7 @@ impl CGame {
                             let _ = update_monster_leaf_cut_3_state(self, region_id, monster_id, runtime);
                         }
                         crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => {
-                            let _ = self.update_monster_kerosene_state(region_id, monster_id, runtime);
+                            let _ = update_monster_kerosene_state(self, region_id, monster_id, runtime);
                         }
                         _ => {}
                     }
