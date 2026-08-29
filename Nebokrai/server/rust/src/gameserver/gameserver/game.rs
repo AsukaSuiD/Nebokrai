@@ -1025,7 +1025,9 @@ use crate::gameserver::appserver::skills::curestate::{
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_monster_base_attack, defend_player_base_attack,
 };
-use crate::gameserver::appserver::skills::fury::{execute_player_fury, is_fury_dispatch};
+use crate::gameserver::appserver::skills::fury::{
+    cancel_player_fury, execute_player_fury, is_fury_dispatch, FURY_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::furystate::{
     expire_monster_fury_states, expire_player_fury_states,
 };
@@ -37436,6 +37438,7 @@ impl CGame {
                 | ARMY_BREAK_SKILL_ID
                 | ARMY_BREAK_2_SKILL_ID
                 | RAGE_BREAK_SKILL_ID
+                | FURY_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37473,6 +37476,7 @@ impl CGame {
             KNIGHT_CUT_SKILL_ID => player_ai.knight_cut().is_some(),
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => player_ai.army_break().is_some(),
             RAGE_BREAK_SKILL_ID => player_ai.rage_break().is_some(),
+            FURY_SKILL_ID => player_ai.fury().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37546,6 +37550,7 @@ impl CGame {
             RAGE_BREAK_SKILL_ID => {
                 cancel_player_rage_break(self, player_id, &mut player_ai, runtime)
             }
+            FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, runtime),
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)

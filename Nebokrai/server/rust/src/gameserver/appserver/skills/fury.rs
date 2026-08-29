@@ -7,11 +7,13 @@
 //! пакетами. `CGame` предоставляет владельцев, доставку и общий пересчёт
 //! свойств. Особая ветвь игрока снимает `CRageBreakState` и завершается без
 //! создания `CFuryState`; обычная ветвь сохраняет накопление состояний.
+//! Игровая ветвь игрока завершается общим `CSummonSkill::End(1)`; монстровый
+//! lifecycle остаётся отдельным и не использует этот хвост.
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_at};
 use super::furystate::{FuryState, send_fury_state_visual};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoisonstate::send_spider_poison_state_visual;
@@ -24,6 +26,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
@@ -293,11 +296,15 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     }
 }
 
-fn finish_player_fury(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
+fn finish_player_fury<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_fury_used(now_ms); });
+}
+
+pub(crate) fn cancel_player_fury<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.fury().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_fury(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn send_player_failure(game: &CGame, player_id: i32, action: u8, rp_loss: u32) {
@@ -344,7 +351,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     };
     let Some(properties) = game.skill_base_properties(FURY_SKILL_ID, level) else {
         if player_ai.fury().is_some() {
-            finish_player_fury(game, player_id);
+            finish_player_fury(game, player_id, player_ai, runtime);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -381,7 +388,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
 
     if game.find_player(player_id).is_none_or(CPlayer::is_dead) {
         send_player_cast(game, player_id, level, false);
-        finish_player_fury(game, player_id);
+        finish_player_fury(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -392,7 +399,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
         if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
             send_player_failure(game, player_id, 8, rp_loss);
-            finish_player_fury(game, player_id);
+            finish_player_fury(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -429,7 +436,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
             ))
         })
     else {
-        finish_player_fury(game, player_id);
+        finish_player_fury(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
 
@@ -444,8 +451,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         if let Some(execution) = player_ai.fury_mut() {
             let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
         }
-        player_ai.mark_fury_used(now_ms);
-        finish_player_fury(game, player_id);
+        finish_player_fury(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Completed);
     }
 
@@ -479,7 +485,6 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
     if let Some(execution) = player_ai.fury_mut() {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_fury_used(now_ms);
-    finish_player_fury(game, player_id);
+    finish_player_fury(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
