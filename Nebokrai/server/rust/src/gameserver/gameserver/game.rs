@@ -849,13 +849,13 @@ use crate::gameserver::appserver::skills::thunderblow::{
     execute_player_thunder_blow, is_thunder_blow_dispatch,
 };
 use crate::gameserver::appserver::skills::thunderblowphalanx::{
-    calculate_owned_thunder_blow_attack, ThunderBlowPhalanxTick,
+    calculate_owned_thunder_blow_attack, thunder_blow_targets, ThunderBlowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunderslash::{
     execute_player_thunder_slash, is_thunder_slash_dispatch,
 };
 use crate::gameserver::appserver::skills::thunderslashphalanx::{
-    calculate_owned_thunder_slash_attack, ThunderSlashPhalanxTick,
+    calculate_owned_thunder_slash_attack, thunder_slash_target, ThunderSlashPhalanxTick,
 };
 use crate::gameserver::appserver::skills::pillar::{execute_player_pillar, is_pillar_dispatch};
 use crate::gameserver::appserver::skills::pillarstate::expire_player_pillar_state;
@@ -41375,7 +41375,7 @@ impl CGame {
             SummonedSkillShape::ThunderBlow(thunder_blow),
         ) = (tick, &phalanx)
         {
-            let targets = self.thunder_blow_targets(region_id, thunder_blow);
+            let targets = thunder_blow_targets(self, region_id, thunder_blow);
             for target in &targets {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
@@ -41404,7 +41404,7 @@ impl CGame {
             SummonedSkillShape::ThunderSlash(thunder_slash),
         ) = (tick, &phalanx)
         {
-            let Some(target) = self.thunder_slash_target(region_id, thunder_slash) else { return true };
+            let Some(target) = thunder_slash_target(self, region_id, thunder_slash) else { return true };
             let applied = match target.object_type {
                 PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
                 MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),

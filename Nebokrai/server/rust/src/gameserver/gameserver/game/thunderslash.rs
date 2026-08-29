@@ -1,8 +1,8 @@
 //! Межвладельческая координация громового рассечения.
 //!
 //! Конкретный cast, формула и lifecycle формы принадлежат skill-owner-ам.
-//! Здесь остаются регистрация формы, точный одиночный `GetShape`, публикация
-//! снимка и применение атаки к независимому владельцу цели.
+//! Здесь остаются регистрация формы, публикация снимка и применение атаки к
+//! независимому владельцу цели.
 
 use super::*;
 use crate::gameserver::appserver::skills::thunderslashphalanx::CThunderSlashPhalanx;
@@ -33,14 +33,4 @@ impl CGame {
         let _ = self.send_shape_position_around(region_id, x, y, &message); Some(())
     }
 
-    pub(super) fn thunder_slash_target(
-        &self, region_id: i32, phalanx: &CThunderSlashPhalanx,
-    ) -> Option<ShapeIdentity> {
-        let region = self.find_region(region_id)?.base(); let (x, y) = phalanx.tile();
-        let first = region.get_shape(x, y, self.area_width, self.area_height, self).ok()??;
-        matches!(first.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-            .then_some(first.identity)
-            .filter(|target| self.find_player(phalanx.master().master_id).is_none()
-                || self.owned_player_skill_target_attackable(phalanx.master(), *target, region_id))
-    }
 }

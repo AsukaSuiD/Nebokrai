@@ -28,6 +28,17 @@ pub(crate) struct CThunderSlashPhalanx {
     element_attack: i32, dexterity: i32, critical_chance: i32, soul_attack: i32,
 }
 
+pub(crate) fn thunder_slash_target(game: &CGame, region_id: i32, phalanx: &CThunderSlashPhalanx) -> Option<ShapeIdentity> {
+    let region = game.find_region(region_id)?.base();
+    let (x, y) = phalanx.tile();
+    let (width, height) = game.area_dimensions();
+    let first = region.get_shape(x, y, width, height, game).ok()??;
+    matches!(first.identity.object_type, 400 | 600)
+        .then_some(first.identity)
+        .filter(|target| game.find_player(phalanx.master().master_id).is_none()
+            || game.owned_player_skill_target_attackable(phalanx.master(), *target, region_id))
+}
+
 impl CThunderSlashPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(

@@ -35,6 +35,20 @@ pub(crate) struct CThunderBlowPhalanx {
     element_modifier: i32,
 }
 
+pub(crate) fn thunder_blow_targets(game: &CGame, region_id: i32, phalanx: &CThunderBlowPhalanx) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (Ok(x), Ok(y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
+    let (width, height) = game.area_dimensions();
+    let mut shapes = Vec::new();
+    if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new() }
+    shapes.into_iter().map(|shape| shape.identity).filter(|identity| {
+        *identity != phalanx.shape().identity()
+            && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
+            && matches!(identity.object_type, 400 | 600)
+            && game.owned_player_skill_target_attackable(phalanx.master(), *identity, region_id)
+    }).collect()
+}
+
 impl CThunderBlowPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(

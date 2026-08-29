@@ -1,8 +1,8 @@
 //! Межвладельческая координация громового удара.
 //!
 //! Применение навыка, срок жизни и формула принадлежат владельцам навыка и формы.
-//! Здесь остаются регистрация формы, публикация снимка, чтение упорядоченного
-//! пространственного индекса и применение атаки к независимому владельцу.
+//! Здесь остаются регистрация формы, публикация снимка и применение атаки к
+//! независимому владельцу.
 
 use super::*;
 use crate::gameserver::appserver::skills::thunderblowphalanx::CThunderBlowPhalanx;
@@ -38,29 +38,4 @@ impl CGame {
         Some(())
     }
 
-    pub(super) fn thunder_blow_targets(
-        &self, region_id: i32, phalanx: &CThunderBlowPhalanx,
-    ) -> Vec<ShapeIdentity> {
-        let Some(region) = self.find_region(region_id).map(|owner| owner.base()) else {
-            return Vec::new();
-        };
-        let (Ok(x), Ok(y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else {
-            return Vec::new();
-        };
-        let mut shapes = Vec::new();
-        if region
-            .get_shapes(x, y, self.area_width, self.area_height, self, &mut shapes)
-            .is_err()
-        {
-            return Vec::new();
-        }
-        shapes.into_iter().map(|shape| shape.identity).filter(|identity| {
-            *identity != phalanx.shape().identity()
-                && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
-                && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                && self.owned_player_skill_target_attackable(
-                    phalanx.master(), *identity, region_id,
-                )
-        }).collect()
-    }
 }
