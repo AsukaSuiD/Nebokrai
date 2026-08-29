@@ -35340,6 +35340,7 @@ impl CGame {
             return;
         };
         let team_id = beneficiary.team_id();
+        let beneficiary_region_id = beneficiary.server_region_id();
         let mut recipients: Vec<i32> = if team_id <= 0 {
             (!beneficiary.is_dead())
                 .then_some(beneficiary_id)
@@ -35350,7 +35351,7 @@ impl CGame {
                 .values()
                 .filter(|player| {
                     player.team_id() == team_id
-                        && player.server_region_id() == Some(region_id)
+                        && player.server_region_id() == beneficiary_region_id
                         && !player.is_dead()
                 })
                 .map(CPlayer::player_id)
@@ -35416,6 +35417,44 @@ impl CGame {
         }
     }
 
+    /// Разрешает одну ступень точного `CMonster::GetBeneficiary`: прямой
+    /// игрок принимается живым в пределах заданного расстояния, иначе используется
+    /// первый существующий участник его команды в том же регионе и в порядке
+    /// `plug_ids_storage` сеанса. Живость резервного результата исходник здесь
+    /// не проверяет.
+    fn resolve_monster_beneficiary_candidate(
+        &self,
+        candidate_id: i32,
+        monster_shape: ShapeView,
+    ) -> Option<i32> {
+        let candidate = self.find_player(candidate_id)?;
+        if !candidate.is_dead()
+            && candidate
+                .shape_view()
+                .is_some_and(|player| {
+                    monster_shape.distance(player)
+                        <= self.globe_setup.contribution_distance_limit()
+                })
+        {
+            return Some(candidate_id);
+        }
+        let team_id = candidate.team_id();
+        if team_id <= 0 {
+            return None;
+        }
+        let candidate_region_id = candidate.server_region_id()?;
+        let session_id = self.get_team_session_id(team_id as u32);
+        self.session_factory
+            .team_member_descriptors(session_id)?
+            .into_iter()
+            .find_map(|(owner_type, player_id, owner_region_id)| {
+                (owner_type == PLAYER_TYPE
+                    && owner_region_id == candidate_region_id
+                    && self.find_player(player_id).is_some())
+                .then_some(player_id)
+            })
+    }
+
     fn finish_monster_kill_effects<Runtime: MonsterDeathContext>(
         &mut self,
         region_id: i32,
@@ -35434,28 +35473,25 @@ impl CGame {
                     .killed_by()
                     .filter(|attack| attack.attacker_type == PLAYER_TYPE)
                     .map_or(killer_id, |attack| attack.attacker_id),
+                monster.shape_view(monster_property)?,
                 monster.original_name().to_vec(),
                 monster.script_file().to_vec(),
             ))
         });
-        let Some((first_attacker, killing_player, original_name, script_file)) = monster_snapshot
+        let Some((
+            first_attacker,
+            killing_player,
+            monster_shape,
+            original_name,
+            script_file,
+        )) = monster_snapshot
         else {
             return;
         };
         let beneficiary_id = [first_attacker, killing_player]
             .into_iter()
-            .find(|candidate| {
-                self.find_player(*candidate).is_some_and(|player| {
-                    if player.is_dead() || player.server_region_id() != Some(region_id) {
-                        return false;
-                    }
-                    let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
-                    else {
-                        return false;
-                    };
-                    real_distance(x, y, target_x, target_y)
-                        <= self.globe_setup.contribution_distance_limit()
-                })
+            .find_map(|candidate| {
+                self.resolve_monster_beneficiary_candidate(candidate, monster_shape)
             });
         if let Some(beneficiary_id) = beneficiary_id {
             let (hit_base_level, _, _, _) = self.globe_setup.monster_continuous_kill_parameters();

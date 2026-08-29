@@ -67,6 +67,9 @@
 //! остаются у регионального runtime-владельца.
 //! Формулы групповой квоты и поправки опыта также принадлежат этому owner-у;
 //! состав живой группы, множители игрока/региона и выдачу координирует `CGame`.
+//! Там же разрешается `GetBeneficiary`: при непригодности прямого кандидата
+//! используется первый участник его типизированного командного сеанса в том
+//! же регионе и в исходном порядке списка подключений.
 
 use std::collections::BTreeMap;
 
@@ -2284,20 +2287,6 @@ impl CMonster {
 // RVA: 0x000E86B0
 // ADDRESS: 004e86b0
 // PROTOTYPE: void __thiscall InitSkills(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetBeneficiary
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:551
-// RVA: 0x000E8780
-// ADDRESS: 004e8780
-// PROTOTYPE: CPlayer * __thiscall GetBeneficiary(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
