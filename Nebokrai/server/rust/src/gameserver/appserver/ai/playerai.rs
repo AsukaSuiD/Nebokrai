@@ -935,121 +935,15 @@ impl CPlayerAI {
         &mut self,
         target: super::super::shape::ShapeIdentity,
     ) -> bool {
-        let matches_target = matches!(
-            self.player_skills.front(),
-            Some(PlayerSkillDispatch::Object { target: current, .. }) if *current == target
-        );
-        if !matches_target {
+        let Some(dispatch @ PlayerSkillDispatch::Object { target: current, .. }) =
+            self.player_skills.front().copied()
+        else {
+            return false;
+        };
+        if current != target {
             return false;
         }
-        self.player_skills.pop_front();
-        self.base_attack = None;
-        self.archery = None;
-        self.heartless_arrow = None;
-        self.heartless_arrow_area = None;
-        self.lighting_arrow = None;
-        self.lighting_arrow_2 = None;
-        self.meteor_arrow_mass = None;
-        self.meteor_arrow = None;
-        self.rain_arrow = None;
-        self.poison_moth = None;
-        self.blood_rose = None;
-        self.scorpion = None;
-        self.boa_lock = None;
-        self.falling_star = None;
-        self.explosive_arrow = None;
-        self.strike = None;
-        self.daub_poison = None;
-        self.yaksha_slash = None;
-        self.agility_family = None;
-        self.base_magic = None;
-        self.fire_bolt = None;
-        self.fire_ball = None;
-        self.item_skill_2 = None;
-        self.chain_lightning = None;
-        self.thunder_blow = None;
-        self.thunder_slash = None;
-        self.pillar = None;
-        self.rush = None;
-        self.rush_2 = None;
-        self.roar = None;
-        self.energy_holding = None;
-        self.inverse_chopped = None;
-        self.thunder_blow_2 = None;
-        self.mosou = None;
-        self.ghost_cut = None;
-        self.knight_cut = None;
-        self.army_break = None;
-        self.rage = None;
-        self.rage_break = None;
-        self.fury = None;
-        self.flash = None;
-        self.swallow = None;
-        self.leaf_cut = None;
-        self.leaf_cut_2 = None;
-        self.leaf_cut_3 = None;
-        self.kerosene = None;
-        self.ignition = None;
-        self.blind = None;
-        self.ju_cut = None;
-        self.lightning_sword = None;
-        self.little_flash = None;
-        self.fire_wall = None;
-        self.poison_fog = None;
-        self.poison_fog_destination = None;
-        self.infernol = None;
-        self.seven_shooting_star = None;
-        self.little_star = None;
-        self.path_projectile = None;
-        self.direct_projectile = None;
-        self.yunsheng_lightning = None;
-        self.corpse_ptomaine = None;
-        self.monster_thorn = None;
-        self.spider_mist = None;
-        self.spider_web = None;
-        self.spider_poison = None;
-        self.summon_creature = None;
-        self.boss_blue_fury = None;
-        self.boss_blue_quake = None;
-        self.boss_fiend_penetrate = None;
-        self.sprite_burn = None;
-        self.wide_arc_attack = None;
-        self.lord_fast_attack = None;
-        self.chaos_sphere = None;
-        self.lightning = None;
-        self.seal = None;
-        self.yin_yang = None;
-        self.yin_yang_2 = None;
-        self.god_punishment = None;
-        self.god_thunder = None;
-        self.god_thunder_2 = None;
-        self.soul_collect = None;
-        self.soul_mirror = None;
-        self.callosity = None;
-        self.hearten = None;
-        self.promotion = None;
-        self.heal_family = [None; 4];
-        self.pets_control = None;
-        self.monster_taming = None;
-        self.knock_out = None;
-        self.snow_storm = None;
-        self.weak = None;
-        self.god_bless = None;
-        self.cure = None;
-        self.machine_shield = None;
-        self.mana_shield = None;
-        self.immediate_state = None;
-        self.non_fun = None;
-        self.swordship = None;
-        self.gibe = None;
-        self.poison_arrow = None;
-        self.blood_loss = None;
-        self.fatal_blow = None;
-        self.thunder = None;
-        self.leiming2 = None;
-        self.tianhuo = None;
-        self.battle_fairy_attribute = None;
-        true
+        self.finish_player_skill(dispatch, SkillTermination::Cancelled)
     }
 
     pub(crate) const fn base_attack(&self) -> Option<BaseAttackExecutionState> {
@@ -2823,7 +2717,11 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnLoseTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутый вызов из `CPet::ReleaseReciprocalTarget` завершает
+// только совпавшую объектную команду через `SkillTermination::Cancelled`, не
+// затрагивая независимую очередь боевой феи. Остались общая очистка цели,
+// восстановление направления и иные недостигнутые вызывающие стороны.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:450
