@@ -1,185 +1,17 @@
-//! Владелец навыка `CYunShengLightning` (`0x19E`). Достигнутый путь монстра
-//! хранит собственные задержки, формулу стихийного урона и пакеты;
-//! общие допустимость цели, защита и последствия смерти использует из боевого
-//! владельца. Расход MP и отличающиеся варианты игрока ниже остаются RAW.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.h
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::CYunShengLightning
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:19
-// RVA: 0x0013A520
-// ADDRESS: 0053a520
-// PROTOTYPE: undefined __thiscall CYunShengLightning(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::~CYunShengLightning
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:29
-// RVA: 0x0013A590
-// ADDRESS: 0053a590
-// PROTOTYPE: void __thiscall ~CYunShengLightning(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:137
-// RVA: 0x0013A5B0
-// ADDRESS: 0053a5b0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:156
-// RVA: 0x0013A680
-// ADDRESS: 0053a680
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:117
-// RVA: 0x0013A770
-// ADDRESS: 0053a770
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightningEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:438
-// RVA: 0x0013A830
-// ADDRESS: 0053a830
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:38
-// RVA: 0x0013ACD0
-// ADDRESS: 0053acd0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::CalculateAttackPower
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:378
-// RVA: 0x0013AE70
-// ADDRESS: 0053ae70
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:354
-// RVA: 0x0013B010
-// ADDRESS: 0053b010
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CYunShengLightning::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\yunshenglightning.cpp:191
-// RVA: 0x0013B130
-// ADDRESS: 0053b130
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+//! Владелец одноцелевой молнии `CYunShengLightning` (`0x19E`).
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/skills/yunshenglightning.cpp`. Player-путь сохраняет повторную
+//! проверку и необратимый расход MP, задержку, постоянное время полёта, один
+//! RNG-вызов elemental-формулы и последующую проверку допустимости живой цели.
+//! Исчезнувшая объектная цель оставляет координату для визуального завершения,
+//! но не получает удар. Monster/pet-путь использует те же стадии с собственной
+//! формулой и attack interval. `CGame` только разрешает владельцев, применяет
+//! рассчитанный удар и выполняет доставку.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
+use super::flash::master_info;
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
@@ -190,22 +22,42 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
+const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 const SKILL_USAGE_MISSILE_FLYING_TIME: u32 = 10_008;
 const SKILL_USAGE_TARGET_FINAL_DAMAGE_MODIFIER: u32 = 20_002;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_MIN_ATTACK: u32 = 20_008;
 const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
 pub(crate) const YUNSHENG_LIGHTNING_SKILL_ID: u32 = 0x19e;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerYunShengLightningExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    destination: (i32, i32),
+    condition_checked: bool,
+    fired: bool,
+}
+
+impl PlayerYunShengLightningExecutionState {
+    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self { Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination, condition_checked: false, fired: false } }
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct YunShengLightningProgress {
@@ -497,4 +349,31 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
         let _ = monster.finish_base_attack_cast(now_ms);
     }
     true
+}
+
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+pub(crate) const fn is_player_yunsheng_lightning_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Point { skill_id: YUNSHENG_LIGHTNING_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: YUNSHENG_LIGHTNING_SKILL_ID, .. }) }
+fn player_destination(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch, fallback: Option<(i32, i32)>) -> Option<(i32, i32)> { match dispatch { PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)), PlayerSkillDispatch::Object { target, .. } => game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y)).or(fallback), PlayerSkillDispatch::SelfTarget { .. } => None } }
+fn player_target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
+fn send_player_failure(game: &CGame, player_id: i32, action: u8) { game.send_self_state_skill_failure(0x000b_fe01, player_id, action); }
+fn send_player_start(game: &mut CGame, player_id: i32, level: i32) { let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return }; let mut message = CMessage::new(0x000b_fe01); message.add_byte(1); message.add_long(YUNSHENG_LIGHTNING_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(direction); let _ = game.send_player_shape_around(player_id, None, &message); }
+fn send_player_fire(game: &mut CGame, player_id: i32, level: i32, target: Option<ShapeIdentity>, destination: (i32, i32)) { let mut message = CMessage::new(0x000b_fe01); message.add_byte(2); message.add_long(YUNSHENG_LIGHTNING_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(target.map_or(0, |target| target.object_type)); message.add_long(target.map_or(0, |target| target.id)); message.add_long(destination.0); message.add_long(destination.1); let _ = game.send_player_shape_around(player_id, None, &message); }
+fn restore_player(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
+fn finish_player<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) { restore_player(game, player_id); finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_yunsheng_lightning_used(now_ms)); }
+pub(crate) fn cancel_player_yunsheng_lightning<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.yunsheng_lightning().map(|state| state.kernel().dispatch()) else { return false }; finish_player(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
+
+fn calculate_player_attack(game: &mut CGame, player_id: i32, level: i32, properties: &CSkillBaseProperties) -> Option<(MasterInfo, AttackInformation)> { let (combat, master) = game.find_player(player_id).map(|player| (player.combat_properties(), master_info(player)))?; let minimum = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32; let span = (properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32).wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32; let random = game.skill_random_below(span); let modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as f32 * 0.01; let element = (combat.add_element_attack as i32).wrapping_add(minimum).wrapping_add(random).wrapping_add((modifier * combat.element_modify as f32).round_ties_even() as i32).max(0); Some((master, AttackInformation { skill_id: YUNSHENG_LIGHTNING_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32, damage_factor: 1.0, damage_modifier: properties.query_property(SKILL_USAGE_TARGET_FINAL_DAMAGE_MODIFIER) as i32, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: element, mp_damage: 0 }] })) }
+
+pub(crate) fn execute_player_yunsheng_lightning<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_player_yunsheng_lightning_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((region_id, source_x, source_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(YUNSHENG_LIGHTNING_SKILL_ID), player.mana()))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(YUNSHENG_LIGHTNING_SKILL_ID, level).cloned() else { if ai.yunsheng_lightning().is_some() { restore_player(game, player_id); abort_skill(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let flight = properties.query_property(SKILL_USAGE_MISSILE_FLYING_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE); let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED); let now = runtime.now_milliseconds();
+    if ai.yunsheng_lightning().is_none() { if ai.yunsheng_lightning_last_used_ms() != 0 && !time_reached(now, ai.yunsheng_lightning_last_used_ms(), reuse) { send_player_failure(game, player_id, 0x0d); return player_terminal(QueuedSkillExecutionState::Rejected) } let Some(destination) = player_destination(game, region_id, dispatch, None) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); return player_terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); return player_terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); } } if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(YUNSHENG_LIGHTNING_SKILL_ID)); } ai.begin_yunsheng_lightning(PlayerYunShengLightningExecutionState::begin(dispatch, destination, now)); }
+    let fallback = ai.yunsheng_lightning().map(|state| state.destination); let Some(destination) = player_destination(game, region_id, dispatch, fallback) else { restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) };
+    if ai.yunsheng_lightning().is_some_and(|state| !state.condition_checked) { let current = game.find_player(player_id).map_or(0, CPlayer::mana); if (current.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current.wrapping_sub(mp_loss)); player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_start(game, player_id, level); if let Some(state) = ai.yunsheng_lightning_mut() { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); } }
+    let started = ai.yunsheng_lightning().map(|state| state.kernel().started_at_ms()).unwrap_or_default(); if ai.yunsheng_lightning().is_some_and(|state| !state.fired) { if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) } let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } let visual_target = player_target(dispatch).filter(|target| game.base_magic_target_view(region_id, *target).is_some()); send_player_fire(game, player_id, level, visual_target, destination); if let Some(state) = ai.yunsheng_lightning_mut() { state.destination = destination; state.fired = true; let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); } }
+    if !time_reached(now, started, delay.wrapping_add(flight)) { return player_terminal(QueuedSkillExecutionState::Pending) }
+    if let Some(target) = player_target(dispatch) && game.base_magic_target_view(region_id, target).is_some() && game.find_player(player_id).map(master_info).is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)) { if let Some((master, attack)) = calculate_player_attack(game, player_id, level, &properties) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } } }
+    if let Some(state) = ai.yunsheng_lightning_mut() { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); } finish_player(game, player_id, ai, runtime); player_terminal(QueuedSkillExecutionState::Completed)
 }

@@ -981,6 +981,10 @@ use crate::gameserver::appserver::skills::chuckstone::{
 use crate::gameserver::appserver::skills::skeletonarchery::{
     execute_player_skeleton_archery, SKELETON_ARCHERY_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::yunshenglightning::{
+    cancel_player_yunsheng_lightning, execute_player_yunsheng_lightning,
+    is_player_yunsheng_lightning_dispatch, YUNSHENG_LIGHTNING_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::snakebolt::{
     SNAKE_BOLT_SKILL_ID, execute_player_snake_bolt,
 };
@@ -34383,6 +34387,7 @@ impl CGame {
                             || player.player_ai().little_star().is_some()
                             || player.player_ai().path_projectile().is_some()
                             || player.player_ai().direct_projectile().is_some()
+                            || player.player_ai().yunsheng_lightning().is_some()
                             || player.player_ai().sprite_burn().is_some()
                             || player.player_ai().wide_arc_attack().is_some()
                             || player.player_ai().lord_fast_attack().is_some()
@@ -35082,6 +35087,7 @@ impl CGame {
                 || player.player_ai().little_star().is_some()
                 || player.player_ai().path_projectile().is_some()
                 || player.player_ai().direct_projectile().is_some()
+                || player.player_ai().yunsheng_lightning().is_some()
                 || player.player_ai().sprite_burn().is_some()
                 || player.player_ai().wide_arc_attack().is_some()
                 || player.player_ai().lord_fast_attack().is_some()
@@ -37633,6 +37639,7 @@ impl CGame {
                 | KNOCK_OUT_SKILL_ID
                 | CHUCK_STONE_SKILL_ID
                 | SKELETON_ARCHERY_SKILL_ID
+                | YUNSHENG_LIGHTNING_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
             && !is_heal_skill(skill_id)
         {
@@ -37685,6 +37692,7 @@ impl CGame {
             CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
                 player_ai.direct_projectile().is_some()
             }
+            YUNSHENG_LIGHTNING_SKILL_ID => player_ai.yunsheng_lightning().is_some(),
             SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
                 player_ai.wide_arc_attack().is_some()
@@ -38093,6 +38101,9 @@ impl CGame {
             }
             CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
                 cancel_player_direct_projectile(self, player_id, &mut player_ai, runtime)
+            }
+            YUNSHENG_LIGHTNING_SKILL_ID => {
+                cancel_player_yunsheng_lightning(self, player_id, &mut player_ai, runtime)
             }
             SPRITE_BURN_SKILL_ID => {
                 cancel_player_sprite_burn(self, player_id, &mut player_ai, runtime)
@@ -38576,6 +38587,7 @@ impl CGame {
             let concrete_little_star = is_player_little_star_dispatch(dispatch);
             let concrete_path_projectile = is_player_path_projectile_dispatch(dispatch);
             let concrete_direct_projectile = is_player_direct_projectile_dispatch(dispatch);
+            let concrete_yunsheng_lightning = is_player_yunsheng_lightning_dispatch(dispatch);
             let path_projectile_skill_id = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -38837,6 +38849,8 @@ impl CGame {
                 execute_player_chuck_stone(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_direct_projectile && path_projectile_skill_id == SKELETON_ARCHERY_SKILL_ID {
                 execute_player_skeleton_archery(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_yunsheng_lightning {
+                execute_player_yunsheng_lightning(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_sprite_burn {
                 execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machinery_stomp {
