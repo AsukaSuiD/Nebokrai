@@ -6,7 +6,9 @@
 //! повторную проверку пути и создание региональной phalanx в конечной клетке.
 //! Вариант `0xE5` разблокирует движение перед повторной проверкой пути, тогда
 //! как `0xE6` делает это только в общем `End`; эта наблюдаемая разница не
-//! сглаживается. `CGame` остаётся владельцем региона и доставки.
+//! сглаживается. Общий `End` возвращает движение при любом исходе, но только
+//! `End(true)` обновляет свойства и фиксирует cooldown. `CGame` остаётся
+//! владельцем региона и доставки.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -16,7 +18,8 @@ use super::basemagic::{
 };
 use super::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -140,11 +143,65 @@ fn master_info(player: &CPlayer) -> MasterInfo {
     }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    let Some(id) = player_ai
+        .heartless_arrow_area()
+        .and_then(|state| skill_id(state.kernel().dispatch()))
+    else {
+        return;
+    };
+    restore_player_movement(game, player_id);
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_heartless_arrow_area_used(id, now_ms);
+    });
+}
+
+fn abort_player_heartless_arrow_area(game: &mut CGame, player_id: i32) {
+    restore_player_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn complete_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .heartless_arrow_area()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    finish_player_heartless_arrow_area(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    _runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .heartless_arrow_area()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    abort_player_heartless_arrow_area(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn send_start(game: &mut CGame, player_id: i32, id: u32, level: i32) {
@@ -211,7 +268,7 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
     };
     let Some(properties) = game.skill_base_properties(id, level) else {
         if player_ai.heartless_arrow_area().is_some() {
-            finish(game, player_id);
+            abort_player_heartless_arrow_area(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -278,13 +335,13 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
     if target_is_dead(game, region_id, dispatch) {
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
-        finish(game, player_id);
+        abort_player_heartless_arrow_area(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if target_identity(dispatch).is_some_and(|target| target.object_type == PLAYER_TYPE && target.id == player_id) {
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0286");
-        finish(game, player_id);
+        abort_player_heartless_arrow_area(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai.heartless_arrow_area().is_some_and(|state| !state.condition_checked) {
@@ -293,7 +350,7 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             game.send_base_magic_failure(player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            abort_player_heartless_arrow_area(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
@@ -302,7 +359,7 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
         if let Some(error) = weapon_failure(game, player) {
             game.send_base_magic_failure(player_id, 0x0e);
             game.send_skill_system_info(player_id, error);
-            finish(game, player_id);
+            abort_player_heartless_arrow_area(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let (destination_x, destination_y) = target_position(game, region_id, dispatch).unwrap_or_else(|| {
@@ -336,19 +393,19 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
     if maximum_distance != 0 && path.len() > maximum_distance as usize {
         game.send_base_magic_failure(player_id, 0x0b);
         game.send_skill_system_info(player_id, b"GS0290");
-        finish(game, player_id);
+        abort_player_heartless_arrow_area(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if path.iter().any(|cell| cell.2 == 2) {
         game.send_base_magic_failure(player_id, 0x0f);
         game.send_skill_system_info_with_text(player_id, b"GS0307", target_name(game, region_id, dispatch));
-        finish(game, player_id);
+        abort_player_heartless_arrow_area(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let flying_time_ms = missile_step_ms.wrapping_mul(path.len() as u32);
     send_fire(game, player_id, id, level, target_identity(dispatch), destination_x, destination_y, flying_time_ms);
     let Some((master, critical_chance)) = game.find_player(player_id).map(|player| (master_info(player), i32::from(player.combat_properties().cch))) else {
-        finish(game, player_id);
+        abort_player_heartless_arrow_area(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let summon_id = game.allocate_summon_shape_id();
@@ -371,7 +428,6 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_heartless_arrow_area_used(id, runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_heartless_arrow_area(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -800,8 +800,11 @@ use crate::gameserver::appserver::skills::heartlessarrow::{
     execute_player_heartless_arrow, is_heartless_arrow_dispatch, HEARTLESS_ARROW_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::heartlessarrow2::{
+    cancel_player_heartless_arrow_area, complete_player_heartless_arrow_area,
     execute_player_heartless_arrow_area, is_heartless_arrow_area_dispatch,
+    HEARTLESS_ARROW_2_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::{
     CHeartlessArrowPhalanx, HeartlessArrowPhalanxTick,
     calculate_owned_heartless_arrow_attack,
@@ -37514,6 +37517,8 @@ impl CGame {
                 | SOUL_MIRROR_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | HEARTLESS_ARROW_SKILL_ID
+                | HEARTLESS_ARROW_2_SKILL_ID
+                | HEARTLESS_ARROW_3_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
                 | AGILITY_SKILL_ID
@@ -37586,6 +37591,9 @@ impl CGame {
             SOUL_MIRROR_SKILL_ID => player_ai.soul_mirror().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             HEARTLESS_ARROW_SKILL_ID => player_ai.heartless_arrow().is_some(),
+            HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
+                player_ai.heartless_arrow_area().is_some()
+            }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
@@ -37610,6 +37618,14 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
+                HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
+                    Some(complete_player_heartless_arrow_area(
+                        self,
+                        player_id,
+                        &mut player_ai,
+                        runtime,
+                    ))
+                }
                 LORD_FAST_ATTACK_SKILL_ID => Some(complete_player_lord_fast_attack(
                     self,
                     player_id,
@@ -37827,6 +37843,9 @@ impl CGame {
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             HEARTLESS_ARROW_SKILL_ID => {
                 cancel_player_heartless_arrow(self, player_id, &mut player_ai, runtime)
+            }
+            HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
+                cancel_player_heartless_arrow_area(self, player_id, &mut player_ai, runtime)
             }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
