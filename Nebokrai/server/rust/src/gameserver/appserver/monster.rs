@@ -12,8 +12,10 @@
 //! исходного имени и разрешает текущий `MonsterProperties` у `CGame`, устраняя
 //! висячий указатель и сохраняя обновление свойств. Снимок создания — имя,
 //! графика, HP и скорость — остаётся в объекте, как в `AddMonster`.
-//! `InitSkills/InitAI`, сериализация и полный автономный ИИ остаются ниже в
-//! исходном материале. Достигнутая цепочка базовой атаки хранит канонические
+//! `InitAI` и `GetAI` материализованы типизированным binding-ом из
+//! `ai/aifactory.rs`; `InitSkills`, сериализация и полный автономный ИИ
+//! остаются ниже в исходном материале. Достигнутая цепочка базовой атаки
+//! хранит канонические
 //! HP, защиту первого нападающего, снимок смертельной атаки и цель боевого ИИ;
 //! `CGame` координирует урон и смерть, `Nation/GodsBattle`, награду, добычу,
 //! сценарий и окончательное удаление из региона. `Defense` и `Died` проходят
@@ -73,6 +75,7 @@
 
 use std::collections::BTreeMap;
 
+use super::ai::aifactory::{ActiveMonsterAi, MonsterAiBinding, MonsterAiKind};
 use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
@@ -152,6 +155,7 @@ pub(crate) struct CMonster {
     smart_gladiator_ai: Option<SmartGladiatorState>,
     guard_station_ai: Option<GuardStationState>,
     jiu_mai_ai: Option<JiuMaiAiState>,
+    ai_binding: Option<MonsterAiBinding>,
     base_ai: CBaseAI,
 }
 
@@ -348,6 +352,7 @@ impl CMonster {
             smart_gladiator_ai: None,
             guard_station_ai: None,
             jiu_mai_ai: None,
+            ai_binding: None,
             base_ai: CBaseAI::default(),
         }
     }
@@ -426,8 +431,15 @@ impl CMonster {
         true
     }
 
-    pub(crate) fn is_carriage(&self, property: &MonsterProperties) -> bool {
-        !self.tamed && property.tamable == 1 && property.maximum_tame_attempt_count == 0
+    pub(crate) fn is_carriage(&self, _property: &MonsterProperties) -> bool {
+        !self.tamed && self.ai_binding.is_some_and(MonsterAiBinding::has_carriage)
+    }
+
+    pub(crate) const fn active_ai(&self) -> Option<ActiveMonsterAi> {
+        match self.ai_binding {
+            Some(binding) => binding.active(self.master_info),
+            None => None,
+        }
     }
 
     pub(crate) const fn carriage_action(&self) -> i32 {
@@ -666,7 +678,10 @@ impl CMonster {
                     .min(maximum_hp);
             }
         }
-        if property.ai == 0x67 {
+        if matches!(
+            self.ai_binding.map(MonsterAiBinding::primary),
+            Some(MonsterAiKind::BossBlue)
+        ) {
             self.boss_blue_ai.wake(self.hit_points, maximum_hp);
         }
         MonsterWakeMutation {
@@ -679,17 +694,34 @@ impl CMonster {
         &mut self.boss_blue_ai
     }
 
-    pub(crate) fn initialize_special_ai(&mut self, ai_type: u32, now_ms: u32) {
-        self.attack_completion_action = if ai_type == 6 {
+    /// Материализует полный `CMonster::InitAI`: фабричный выбор первичного,
+    /// pet- и carriage-владельцев выполняется до инициализации их concrete
+    /// состояния. Повторный вызов заменяет прежний binding, как delete/create
+    /// в исходном owner-е.
+    pub(crate) fn initialize_ai(&mut self, property: &MonsterProperties, now_ms: u32) {
+        let binding = MonsterAiBinding::create(property, self.tame_attempt_count);
+        let primary = binding.primary();
+        let ai_type = binding.ai_type();
+        self.ai_binding = Some(binding);
+        self.attack_completion_action = if matches!(primary, MonsterAiKind::StupidArcher) {
             AiShapeAction::SearchEnemy
         } else {
             crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_action(ai_type)
         };
-        self.boss_fiend_ai = (ai_type == 0x68).then(|| BossFiendAiState::new(now_ms));
-        self.passive_gladiator_ai = (ai_type == 1).then(PassiveGladiatorState::default);
-        self.smart_gladiator_ai = (ai_type == 2).then(SmartGladiatorState::default);
-        self.guard_station_ai = matches!(ai_type, 10 | 15 | 19).then(GuardStationState::default);
-        self.jiu_mai_ai = (ai_type == 0x65).then(JiuMaiAiState::default);
+        self.boss_fiend_ai =
+            matches!(primary, MonsterAiKind::BossFiend).then(|| BossFiendAiState::new(now_ms));
+        self.passive_gladiator_ai =
+            matches!(primary, MonsterAiKind::PassiveGladiator).then(PassiveGladiatorState::default);
+        self.smart_gladiator_ai =
+            matches!(primary, MonsterAiKind::SmartGladiator).then(SmartGladiatorState::default);
+        self.guard_station_ai = matches!(
+            primary,
+            MonsterAiKind::CityGuardWithSword
+                | MonsterAiKind::VillageCountyGuardWithSword
+                | MonsterAiKind::NationCountyGuardWithSword
+        )
+        .then(GuardStationState::default);
+        self.jiu_mai_ai = matches!(primary, MonsterAiKind::JiuMai).then(JiuMaiAiState::default);
     }
 
     pub(crate) fn boss_fiend_ai_mut(&mut self) -> Option<&mut BossFiendAiState> {
@@ -1773,20 +1805,6 @@ impl CMonster {
 //
 
 // ============================================================================
-// FUNCTION: CMonster::GetAI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:123
-// RVA: 0x000E6D80
-// ADDRESS: 004e6d80
-// PROTOTYPE: CBaseAI * __thiscall GetAI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CMonster::DecordFromByteArray
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -1795,20 +1813,6 @@ impl CMonster {
 // RVA: 0x000E6DD0
 // ADDRESS: 004e6dd0
 // PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::InitAI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:323
-// RVA: 0x000E6E10
-// ADDRESS: 004e6e10
-// PROTOTYPE: void __thiscall InitAI(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

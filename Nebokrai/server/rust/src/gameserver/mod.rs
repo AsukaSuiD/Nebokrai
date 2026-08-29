@@ -2,6 +2,7 @@
 
 pub(crate) mod appserver {
     pub(crate) mod ai {
+        pub(crate) mod aifactory;
         pub(crate) mod archer;
         pub(crate) mod baseai;
         pub(crate) mod bossblue;

@@ -1,92 +1,143 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Фабрика владельцев ИИ монстра.
+//!
+//! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
+//! исходный владелец
+//! `e:\\svn\\fengyun_russia_dev\\server\\gameserver\\appserver\\ai\\aifactory.cpp`
+//! подтверждают отображение `tagMonster::dwAI` на конкретный класс, запись
+//! исходного AI type и отдельное создание `CPet`/`CCarriage`. Rust не
+//! воспроизводит C++-иерархию и ручное владение указателями: тот же выбор
+//! хранится как типизированное состояние внутри единственного `CMonster`.
+//! `SetOwner` тем самым выражен принадлежностью binding-а монстру, а повторный
+//! `InitAI` атомарно заменяет прежнее состояние.
+//!
+//! Два `Catch@...` из EXE относятся только к сгенерированной MSVC очистке
+//! временного `std::vector<CGUID>` и не являются семантикой фабрики.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\aifactory.cpp
+use crate::setup::monsterlist::MonsterProperties;
 
-// ============================================================================
-// FUNCTION: Catch@00472717
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\aifactory.cpp
-// RVA: 0x00072717
-// ADDRESS: 00472717
-// PROTOTYPE: undefined Catch@00472717()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+use super::super::masterinfo::MasterInfo;
 
-// ============================================================================
-// FUNCTION: Catch@004727a6
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\aifactory.cpp
-// RVA: 0x000727A6
-// ADDRESS: 004727a6
-// PROTOTYPE: undefined Catch@004727a6()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+const PLAYER_TYPE: i32 = 400;
 
-// ============================================================================
-// FUNCTION: CAIFactory::CreateCarriageAI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\aifactory.cpp:51
-// RVA: 0x001DC450
-// ADDRESS: 005dc450
-// PROTOTYPE: CCarriage * __cdecl CreateCarriageAI(CMonster * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonsterAiKind {
+    Gladiator,
+    PassiveGladiator,
+    SmartGladiator,
+    StupidGladiator,
+    Archer,
+    FixedPositionArcher,
+    StupidArcher,
+    PuninessCreature,
+    GuardWithBow,
+    GuardWithSword,
+    CityGuardWithSword,
+    CityGuardWithBow,
+    Carriage,
+    GuardCountry,
+    GuardCountry2,
+    VillageCountyGuardWithSword,
+    VillageCountyGuardWithBow,
+    WarDefendMonster,
+    WarAttackMonster,
+    NationCountyGuardWithSword,
+    NationGladiator,
+    GodsBattleGuardWithSword,
+    GodsBattleMonster,
+    Lord,
+    JiuMai,
+    BossBlue,
+    BossFiend,
+    Monster,
+}
 
-// ============================================================================
-// FUNCTION: CAIFactory::CreatePetAI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\aifactory.cpp:64
-// RVA: 0x001DC4D0
-// ADDRESS: 005dc4d0
-// PROTOTYPE: CPet * __cdecl CreatePetAI(CMonster * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl MonsterAiKind {
+    pub(crate) const fn from_ai_type(ai_type: u32) -> Self {
+        match ai_type {
+            0 => Self::Gladiator,
+            1 => Self::PassiveGladiator,
+            2 => Self::SmartGladiator,
+            3 => Self::StupidGladiator,
+            4 => Self::Archer,
+            5 => Self::FixedPositionArcher,
+            6 => Self::StupidArcher,
+            7 => Self::PuninessCreature,
+            8 => Self::GuardWithBow,
+            9 => Self::GuardWithSword,
+            10 => Self::CityGuardWithSword,
+            11 => Self::CityGuardWithBow,
+            12 => Self::Carriage,
+            13 | 20 => Self::GuardCountry,
+            14 => Self::GuardCountry2,
+            15 => Self::VillageCountyGuardWithSword,
+            16 => Self::VillageCountyGuardWithBow,
+            17 => Self::WarDefendMonster,
+            18 => Self::WarAttackMonster,
+            19 => Self::NationCountyGuardWithSword,
+            21 => Self::NationGladiator,
+            23 => Self::GodsBattleGuardWithSword,
+            24 => Self::GodsBattleMonster,
+            100 => Self::Lord,
+            101 => Self::JiuMai,
+            103 => Self::BossBlue,
+            104 => Self::BossFiend,
+            _ => Self::Monster,
+        }
+    }
+}
 
-// ============================================================================
-// FUNCTION: CAIFactory::CreateAI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\aifactory.cpp:78
-// RVA: 0x001DC550
-// ADDRESS: 005dc550
-// PROTOTYPE: CBaseAI * __cdecl CreateAI(CMonster * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ActiveMonsterAi {
+    Primary(MonsterAiKind),
+    Pet,
+    Carriage,
+}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonsterAiBinding {
+    primary: MonsterAiKind,
+    ai_type: u32,
+    pet: bool,
+    carriage: bool,
+}
 
+impl MonsterAiBinding {
+    /// Эквивалент `CreateAI`, `CreatePetAI` и `CreateCarriageAI` из одного
+    /// `CMonster::InitAI`. Сравнение числа попыток сохраняет DWORD-семантику.
+    pub(crate) const fn create(property: &MonsterProperties, tame_attempt_count: u32) -> Self {
+        Self {
+            primary: MonsterAiKind::from_ai_type(property.ai),
+            ai_type: property.ai,
+            pet: property.tamable == 1 && tame_attempt_count < property.maximum_tame_attempt_count,
+            carriage: property.tamable == 1 && property.maximum_tame_attempt_count == 0,
+        }
+    }
 
+    pub(crate) const fn primary(self) -> MonsterAiKind {
+        self.primary
+    }
 
+    pub(crate) const fn ai_type(self) -> u32 {
+        self.ai_type
+    }
 
+    pub(crate) const fn has_carriage(self) -> bool {
+        self.carriage
+    }
 
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+    /// Эквивалент `CMonster::GetAI`: до назначения валидного хозяина-игрока
+    /// используется первичный AI, после — carriage либо pet. Отсутствующий
+    /// вспомогательный владелец сохраняется как `None`, как нулевой C++ pointer.
+    pub(crate) const fn active(self, master: MasterInfo) -> Option<ActiveMonsterAi> {
+        if master.master_type != PLAYER_TYPE || master.master_id == 0 {
+            return Some(ActiveMonsterAi::Primary(self.primary));
+        }
+        if self.carriage {
+            Some(ActiveMonsterAi::Carriage)
+        } else if self.pet {
+            Some(ActiveMonsterAi::Pet)
+        } else {
+            None
+        }
+    }
+}

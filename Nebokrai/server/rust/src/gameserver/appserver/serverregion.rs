@@ -597,8 +597,9 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
     /// Возвращает snapshot текущего reloadable `CMonsterList` по original name.
     fn monster_property(&mut self, origin_name: &[u8]) -> Option<MonsterProperties>;
 
-    /// Выполняет `CMonster::Init -> InitSkills/InitAI` у concrete owners.
-    fn initialize_monster(&mut self, monster: &mut CMonster, property: &MonsterProperties);
+    /// Выполняет ещё не достигнутый `CMonster::InitSkills` у concrete owners.
+    /// Последующий `InitAI` принадлежит самому `CMonster`.
+    fn initialize_monster_skills(&mut self, monster: &mut CMonster, property: &MonsterProperties);
 
     /// Virtual `+0x9C(monsterID)` до speed/direction/AddObject для AI 10/11.
     fn initialize_guard_monster(&mut self, monster_id: i32);
@@ -1178,8 +1179,8 @@ impl CServerRegion {
         let id = self.next_monster_id.take();
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
-        context.initialize_monster(&mut monster, property);
-        monster.initialize_special_ai(property.ai, now_ms);
+        context.initialize_monster_skills(&mut monster, property);
+        monster.initialize_ai(property, now_ms);
         monster
             .move_shape_mut()
             .shape_mut()
@@ -1254,13 +1255,13 @@ impl CServerRegion {
         let id = self.next_monster_id.take();
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
-        context.initialize_monster(&mut monster, property);
+        context.initialize_monster_skills(&mut monster, property);
         let special_ai_started_at_ms = if property.ai == 0x68 {
             now_ms(context)
         } else {
             0
         };
-        monster.initialize_special_ai(property.ai, special_ai_started_at_ms);
+        monster.initialize_ai(property, special_ai_started_at_ms);
         monster
             .move_shape_mut()
             .shape_mut()
