@@ -62,7 +62,7 @@ use crate::gameserver::appserver::skills::agilitystate::{
 };
 use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
-use crate::gameserver::appserver::skills::curestate::CureState;
+use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
 use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
@@ -782,6 +782,11 @@ impl CMoveShape {
             .copied()
             .filter_map(|offset| WuXingState::decode(&states, offset).ok())
             .collect();
+        self.cure_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(CURE_STATE_SKILL_ID))
+            .and_then(|offset| CureState::decode(&states, offset).ok());
         self.ex_states.replace(states);
     }
 
@@ -1785,11 +1790,52 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_cure_state(&mut self, state: CureState) -> Option<CureState> {
+        let serialized_offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID));
+        if let Some(offset) = serialized_offset {
+            if let Some(destination) = self.ex_states.get_mut(offset..offset + CURE_STATE_BYTES) {
+                destination.copy_from_slice(&state.encoded());
+            }
+        } else {
+            if self.ex_states.len() < 4 {
+                self.ex_states.clear();
+                LegacyWriter::new(&mut self.ex_states).write_u32(0);
+            }
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
+            self.ex_states.extend_from_slice(&state.encoded());
+        }
         self.cure_state.replace(state)
     }
 
+    pub(crate) const fn cure_state(&self) -> Option<CureState> {
+        self.state_storage.cure_state
+    }
+
     pub(crate) fn take_cure_state_for_ai(&mut self) -> Option<CureState> {
-        self.cure_state.take()
+        let state = self.cure_state.take()?;
+        let Some(offset) = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
+        else {
+            return Some(state);
+        };
+        self.ex_states.drain(offset..offset + CURE_STATE_BYTES);
+        if self.ex_states.len() >= 4 {
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
+        }
+        for known in &mut self.extended_states { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        for known in &mut self.change_body_states { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        for known in &mut self.undead_states { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        if let Some(known) = &mut self.leaf_cut_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        if let Some(known) = &mut self.leaf_cut_3_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        if let Some(known) = &mut self.kerosene_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        if let Some(known) = &mut self.meteor_arrow_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_after(offset, CURE_STATE_BYTES); }
+        Some(state)
     }
 
     pub(crate) fn replace_daub_poison_state(
@@ -3455,6 +3501,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             BLIND_STATE_ID => BLIND_STATE_BYTES,
+            CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

@@ -163,11 +163,16 @@ pub(crate) fn finish_life_shield_state(
     state: LifeShieldState,
     now_ms: u32,
 ) {
-    if let Some(keep_time_ms) = game
+    if game
         .skill_base_properties(state.skill_id(), state.skill_level())
         .map(|properties| properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME))
+        .is_some()
     {
-        let cure = CureState::new(keep_time_ms);
+        let Some(identity) = game.find_player(player_id).map(|player| player.shape().identity()) else {
+            send_life_shield_state_visual(game, player_id, state, false, now_ms);
+            return;
+        };
+        let cure = CureState::new(identity, identity);
         let previous = game
             .find_player_mut(player_id)
             .and_then(|player| player.replace_cure_state(cure));

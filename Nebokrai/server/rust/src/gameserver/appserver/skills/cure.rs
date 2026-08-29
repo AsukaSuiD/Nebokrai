@@ -316,7 +316,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let maximum_distance = properties.query_property(TARGET_MAX_DISTANCE);
     let delay_ms = properties.query_property(DELAY_TIME);
-    let keep_time_ms = properties.query_property(STATE_PERSIST_TIME);
+    let _keep_time_ms = properties.query_property(STATE_PERSIST_TIME);
     let reuse_delay_ms = properties.query_property(REUSE_DELAY_TIME);
     let constant = properties.query_property(CONST);
     let em_modifier = properties.query_property(EM_MODIFIER);
@@ -411,7 +411,12 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         }
     }
     if properties_changed && target.identity.object_type == PLAYER_TYPE { let _ = game.update_player_properties(target.identity.id, runtime); }
-    let installed = install_cure_state(game, region_id, &target, CureState::new(keep_time_ms));
+    let installed = install_cure_state(
+        game,
+        region_id,
+        &target,
+        CureState::new(caster_identity(player_id), target.identity),
+    );
     if let Some(execution) = player_ai.cure_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);

@@ -262,7 +262,7 @@ pub(crate) fn execute_owned_fury(
 
     remove_reached_conflict_states(game, region, monster_id, now_ms);
 
-    let cure = CureState::new(keep_time_ms);
+    let cure = CureState::new(identity, identity);
     let previous_cure = region
         .find_monster_by_id_mut(monster_id)
         .and_then(|monster| monster.move_shape_mut().replace_cure_state(cure));
@@ -471,7 +471,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    let cure = CureState::new(keep_time_ms);
+    let cure = CureState::new(identity, identity);
     let previous_cure = game
         .find_player_mut(player_id)
         .and_then(|player| player.replace_cure_state(cure));

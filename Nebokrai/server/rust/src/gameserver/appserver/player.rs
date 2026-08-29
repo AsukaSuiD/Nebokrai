@@ -4526,6 +4526,10 @@ impl CPlayer {
         self.move_shape.replace_cure_state(state)
     }
 
+    pub(crate) const fn cure_state(&self) -> Option<super::skills::curestate::CureState> {
+        self.move_shape.cure_state()
+    }
+
     pub(crate) fn take_cure_state_for_ai(
         &mut self,
     ) -> Option<super::skills::curestate::CureState> {

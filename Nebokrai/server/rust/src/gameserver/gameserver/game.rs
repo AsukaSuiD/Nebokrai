@@ -28808,6 +28808,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_blind_state(login_tick_ms);
+        let loaded_cure_state = self
+            .players
+            .get(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .cure_state();
         for state in &loaded_appellation_states {
             self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
         }
@@ -28876,6 +28881,9 @@ impl CGame {
                 true,
                 login_tick_ms,
             );
+        }
+        if let Some(state) = loaded_cure_state {
+            send_cure_state_visual(self, expected_player_id, state, true);
         }
         self.restore_player_login_pets(expected_player_id, region_id, context);
         self.restore_player_login_carriage(expected_player_id, region_id, context);

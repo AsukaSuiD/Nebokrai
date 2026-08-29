@@ -4,12 +4,17 @@
 //! `appserver/skills/curestate.cpp`. Класс не переопределяет `AI`, поэтому
 //! унаследованный `CState::AI` завершает его на следующем снимке
 //! `UpdateAbnormality`; состояние успевает участвовать в `OnChangeStates`.
+//! Запись сохраняет ID и четыре `long` базового `CState`:
+//! user type/ID и sufferer type/ID. Это же представление читается при
+//! входе и удаляется вместе с каноническим однотиковым состоянием.
 
 pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
+pub(crate) const CURE_STATE_BYTES: usize = 20;
 
 use super::manashieldstate::{
     MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::gameserver::game::CGame;
@@ -17,12 +22,13 @@ use crate::nets::netserver::message::CMessage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CureState {
-    keep_time_ms: u32,
+    user: ShapeIdentity,
+    sufferer: ShapeIdentity,
 }
 
 impl CureState {
-    pub(crate) const fn new(keep_time_ms: u32) -> Self {
-        Self { keep_time_ms }
+    pub(crate) const fn new(user: ShapeIdentity, sufferer: ShapeIdentity) -> Self {
+        Self { user, sufferer }
     }
 
     pub(crate) const fn skill_id(self) -> u32 {
@@ -30,8 +36,41 @@ impl CureState {
     }
 
     pub(crate) const fn client_time(self) -> i32 {
-        let _ = self.keep_time_ms;
         0
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != CURE_STATE_SKILL_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        Ok(Self::new(
+            ShapeIdentity {
+                object_type: reader.read_i32()?,
+                id: reader.read_i32()?,
+                ex_id: crate::public::guid::CGuid::GUID_INVALID,
+            },
+            ShapeIdentity {
+                object_type: reader.read_i32()?,
+                id: reader.read_i32()?,
+                ex_id: crate::public::guid::CGuid::GUID_INVALID,
+            },
+        ))
+    }
+
+    pub(crate) fn encoded(self) -> [u8; CURE_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(CURE_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(CURE_STATE_SKILL_ID);
+        writer.write_i32(self.user.object_type);
+        writer.write_i32(self.user.id);
+        writer.write_i32(self.sufferer.object_type);
+        writer.write_i32(self.sufferer.id);
+        bytes.try_into().expect("размер состояния очищения фиксирован")
     }
 }
 
