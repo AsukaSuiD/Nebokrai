@@ -126,7 +126,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -174,8 +174,33 @@ impl AllowedAddress {
     }
 
     /// Проверяет исходное правило: port `0` означает совпадение только по IP.
+    /// Поставочный Billing-конфиг может содержать Docker/DNS-имя; оно
+    /// разрешается при admission и сопоставляется с фактическим IPv4 peer-а.
     pub(crate) fn matches(&self, peer_ip: &[u8], peer_port: u16) -> bool {
-        self.ip == peer_ip && (self.port == 0 || self.port == peer_port)
+        if self.port != 0 && self.port != peer_port {
+            return false;
+        }
+        if self.ip == peer_ip {
+            return true;
+        }
+        let Ok(host) = std::str::from_utf8(&self.ip) else {
+            return false;
+        };
+        let Ok(peer_text) = std::str::from_utf8(peer_ip) else {
+            return false;
+        };
+        let Ok(peer) = peer_text.parse::<Ipv4Addr>() else {
+            return false;
+        };
+        (host, 0)
+            .to_socket_addrs()
+            .ok()
+            .is_some_and(|addresses| {
+                addresses.into_iter().any(|address| match address {
+                    SocketAddr::V4(address) => *address.ip() == peer,
+                    SocketAddr::V6(_) => false,
+                })
+            })
     }
 }
 

@@ -129,9 +129,6 @@ pub(crate) enum WorldRegionTextLoadError {
     MonsterNameRequiresLegacyHeapLayout {
         length: usize,
     },
-    ShortWeatherColorCode {
-        length: usize,
-    },
     TooManyEntries {
         collection: &'static str,
         count: usize,
@@ -1215,16 +1212,11 @@ fn append_region_param(destination: &mut Vec<u8>, param: RegionParamState) {
 }
 
 fn translate_color_code(value: &[u8]) -> Result<u32, WorldRegionTextLoadError> {
-    let Some(value) = value.get(..6) else {
- // В 12 поставочных `.weather` после index 400
- // отсутствует color-token. читает следующий `time` в
- // char-buffer, а затем читает ещё два байта за его NUL;
- // их прежнее stack-содержимое неизвестно и безопасно не имитируется.
-        return Err(WorldRegionTextLoadError::ShortWeatherColorCode {
-            length: value.len(),
-        });
-    };
-    Ok(value.iter().fold(0u32, |result, byte| {
+    // В части поставочных `.weather` после fog index отсутствует цвет, поэтому
+    // оригинальный token-reader поглощает следующее `time`. Нулевое дополнение
+    // сохраняет этот порядок без чтения оставшихся байтов из старого стека.
+    Ok((0..6).fold(0u32, |result, index| {
+        let byte = value.get(index).copied().unwrap_or_default();
         let digit = match byte {
             b'0'..=b'9' => u32::from(byte - b'0'),
             b'A'..=b'F' => u32::from(byte - b'A' + 10),

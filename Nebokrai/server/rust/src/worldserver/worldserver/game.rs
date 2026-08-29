@@ -10900,21 +10900,37 @@ impl CGame {
             b"taozhuang",
         ];
         for &profile in SECONDARY_RELOADS {
-            let legacy_result = match self
-                .reload(
-                    reload_context,
-                    jjc,
-                    gods_battle,
-                    skills,
-                    context.gods_battle_database(),
-                    profile,
-                    false,
-                    false,
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
+            let legacy_result = if profile == b"Broadcast" {
+                let source = reload_context.read_resource(b"setup/sysboardcast.ini");
+                let mut random = |upper_bound| context.random(upper_bound);
+                let loaded = self.reload_system_broadcasts(
+                    source.as_deref(),
+                    &mut random,
+                    &mut *callbacks.get_tick,
+                );
+                reload_context.add_log_text(if loaded {
+                    b"Load sysboardcast.ini...OK!"
+                } else {
+                    b"Load sysboardcast.ini...FAILED!"
+                });
+                i32::from(loaded)
+            } else {
+                match self
+                    .reload(
+                        reload_context,
+                        jjc,
+                        gods_battle,
+                        skills,
+                        context.gods_battle_database(),
+                        profile,
+                        false,
+                        false,
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(block) => stop!(WorldGameInitBlockReason::Reload(block)),
+                }
             };
             events.push(WorldGameInitEvent::Reload {
                 profile,
