@@ -35149,12 +35149,22 @@ impl CGame {
     /// Reached `CPet::OnSearchEnemy`: active-mode pet scans type `600` around
     /// its master and transfers the nearest attackable wild target into the
     /// same canonical attack state used by command and retaliation paths.
-    fn run_owned_pet_active_search(&mut self, region_id: i32, monster_id: i32) -> bool {
+    fn run_owned_pet_active_search(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        from_fifo: bool,
+    ) -> bool {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        let selected =
-            execute_owned_pet_active_search(self, owner.base_mut(), region_id, monster_id);
+        let selected = execute_owned_pet_active_search(
+            self,
+            owner.base_mut(),
+            region_id,
+            monster_id,
+            from_fifo,
+        );
         self.restore_region_owner(owner);
         selected
     }
@@ -35826,7 +35836,7 @@ impl CGame {
             .is_some_and(CMonster::is_tamed);
         if tamed {
             self.restore_region_owner(owner);
-            let searched = self.run_owned_pet_active_search(region_id, monster_id);
+            let searched = self.run_owned_pet_active_search(region_id, monster_id, true);
             let Some(mut owner) = self.take_region_owner(region_id) else {
                 return searched;
             };
@@ -42510,7 +42520,7 @@ impl CGame {
                 if !self.run_owned_pet_follow(region_id, monster_id, runtime) {
                     let _ = self.run_owned_monster_base_attack(region_id, monster_id, runtime);
                 }
-                let _ = self.run_owned_pet_active_search(region_id, monster_id);
+                let _ = self.run_owned_pet_active_search(region_id, monster_id, false);
                 let _ = self.run_owned_pet_lifecycle(region_id, monster_id, runtime);
             }
             let skill_phalanx_ids: Vec<i32> = self

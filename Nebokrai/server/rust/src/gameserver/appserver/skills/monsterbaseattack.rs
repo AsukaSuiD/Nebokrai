@@ -130,6 +130,7 @@ use crate::gameserver::appserver::ai::monsterai::{
     one_step_move_delay_ms, queue_monster_idle, schedule_attack_interval, select_attack_skill,
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
+use crate::gameserver::appserver::ai::pet::lose_pet_target_and_search;
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
 use crate::gameserver::appserver::ai::smartgladiator::select_smart_gladiator_enemy;
@@ -810,6 +811,15 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
+    if target.is_none() && cast.is_none() && tamed {
+        lose_pet_target_and_search(
+            region,
+            monster_id,
+            property.stop_frame,
+            runtime,
+        );
+        return true;
+    }
     let selected_skill_id = if let Some(cast) = cast {
         cast.dispatch().skill_id as u16
     } else if let Some(skill_id) = region
@@ -856,7 +866,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let Some(schedule_target) =
             resolve_owned_monster_attack_target(game, region, target)
         else {
-            if matches!(property.ai, 10 | 15 | 19) {
+            if tamed {
+                lose_pet_target_and_search(
+                    region,
+                    monster_id,
+                    property.stop_frame,
+                    runtime,
+                );
+            } else if matches!(property.ai, 10 | 15 | 19) {
                 lose_guard_sword_target(game, region, monster_id, runtime);
             } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if has_owned_search_enemy(property.ai, tamed) {
@@ -891,7 +908,14 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     },
                 );
             }
-            if matches!(property.ai, 10 | 15 | 19) {
+            if tamed {
+                lose_pet_target_and_search(
+                    region,
+                    monster_id,
+                    property.stop_frame,
+                    runtime,
+                );
+            } else if matches!(property.ai, 10 | 15 | 19) {
                 lose_guard_sword_target(game, region, monster_id, runtime);
             } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if has_owned_search_enemy(property.ai, tamed) {
@@ -1291,7 +1315,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         target_carriage,
     )) = target_snapshot
     else {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if tamed {
+            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+        } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
         }
         return true;
@@ -1304,7 +1330,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             && target.object_type == PLAYER_TYPE
             && !game.guard_monster_attackable(target.id, region.id, &property))
     {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if tamed {
+            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+        } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
         }
         return true;
@@ -1336,9 +1364,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .unsigned_abs()
             .max(target_y.wrapping_sub(anchor_y).unsigned_abs());
         if anchor_distance >= game.globe_setup().maximum_pet_tracing_distance() {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
-            }
+            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
             return true;
         }
     }
@@ -1360,16 +1386,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         {
             game.send_base_attack_level_block(attacker_master.master_id, string_id, limit);
             game.release_reciprocal_player_target(target.id, pet_identity);
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
-            }
+            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
             return true;
         }
         if !game.player_base_attackable(attacker_master.master_id, target.id) {
             game.release_reciprocal_player_target(target.id, pet_identity);
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
-            }
+            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
             return true;
         }
     }

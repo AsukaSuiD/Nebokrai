@@ -5,6 +5,9 @@
 //! шестичасовой счётчик жизни, переходы режима/действия, возврат и одичание.
 //! `OnMoving` живого питомца без текущего навыка ставит отдельный
 //! `ASA_SEARCH_ENEMY` в общую FIFO-очередь.
+//! `OnIdle` сохраняет `ChangeSkill? → Stand → SearchEnemy`, а `OnLoseTarget`
+//! для атакующего питомца ставит эту очередь до внешнего повторного поиска и
+//! переводит действие в `FOLLOWING`.
 //! Поиск живых владельцев, пространственное перемещение, пакеты и удаление
 //! остаются у `CGame`; состояние хранится ровно один раз внутри `CMonster`.
 //!
@@ -247,9 +250,14 @@ pub(crate) fn execute_owned_pet_active_search(
     region: &mut CServerRegion,
     region_id: i32,
     monster_id: i32,
+    from_fifo: bool,
 ) -> bool {
     let Some(master) = region.find_monster_by_id(monster_id).and_then(|pet| {
-        (pet.is_tamed() && pet.pet_mode() == 2 && pet.ai_target().is_none())
+        (pet.is_tamed()
+            && pet.pet_mode() == 2
+            && pet.ai_target().is_none()
+            && (from_fifo
+                || (pet.pet_action() == 1 && pet.primary_ai_queues_idle())))
             .then_some(pet.master_info())
     }) else {
         return false;
@@ -310,6 +318,59 @@ pub(crate) fn execute_owned_pet_active_search(
         return true;
     }
     false
+}
+
+/// Ставит точный `CPet::OnIdle` без случайного движения. Каждый исходный
+/// `AddAIEvent` получает отдельный замер часов.
+pub(crate) fn queue_pet_idle<Runtime: GameMainLoopRuntime>(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    stop_frame: u32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((alive, has_skill)) = region.find_monster_by_id(monster_id).map(|pet| {
+        (
+            !CMoveShape::is_died(pet.hit_points()),
+            pet.move_shape().current_skill_id().is_some(),
+        )
+    }) else {
+        return false;
+    };
+    if !alive {
+        return true;
+    }
+    let Some(pet) = region.find_monster_by_id_mut(monster_id) else {
+        return false;
+    };
+    if !has_skill {
+        pet.begin_active_ai_change_skill(runtime.now_milliseconds());
+    }
+    pet.begin_active_ai_stand(stop_frame, runtime.now_milliseconds());
+    pet.begin_active_ai_search_enemy(runtime.now_milliseconds());
+    true
+}
+
+/// Выполняет `CPet::OnLoseTarget` и следующий `SearchEnemy` окружающего
+/// schedule-owner-а. Только действие `ATTACKING` вызывает промежуточный
+/// `OnIdle`; `clear_ai_target` канонически переводит его в `FOLLOWING`.
+pub(crate) fn lose_pet_target_and_search<Runtime: GameMainLoopRuntime>(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    stop_frame: u32,
+    runtime: &mut Runtime,
+) {
+    let was_attacking = region
+        .find_monster_by_id(monster_id)
+        .is_some_and(|pet| pet.is_tamed() && pet.pet_action() == 0);
+    if let Some(pet) = region.find_monster_by_id_mut(monster_id) {
+        pet.clear_ai_target();
+    }
+    if was_attacking {
+        let _ = queue_pet_idle(region, monster_id, stop_frame, runtime);
+    }
+    if let Some(pet) = region.find_monster_by_id_mut(monster_id) {
+        pet.begin_active_ai_search_enemy(runtime.now_milliseconds());
+    }
 }
 
 /// Исполняет достигнутое следование `CPet`: слот питомца задаёт позицию позади
@@ -464,34 +525,6 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 // RVA: 0x000E9450
 // ADDRESS: 004e9450
 // PROTOTYPE: void __thiscall ~CPet(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPet::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:631
-// RVA: 0x000E9580
-// ADDRESS: 004e9580
-// PROTOTYPE: void __thiscall OnIdle(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPet::OnLoseTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:653
-// RVA: 0x000E95F0
-// ADDRESS: 004e95f0
-// PROTOTYPE: int __thiscall OnLoseTarget(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
