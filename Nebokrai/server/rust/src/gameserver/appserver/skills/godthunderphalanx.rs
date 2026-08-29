@@ -8,15 +8,19 @@
 //! формула затем расходует RNG на урон и критический удар для каждой цели.
 
 use super::godthunder::GOD_THUNDER_SKILL_ID;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 const SCOPE_AREA: u32 = 9;
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GodThunderPhalanxTick { Pending, Attack { sampled_at_ms: u32 }, Expired }
@@ -37,6 +41,40 @@ pub(crate) struct CGodThunderPhalanx {
     last_attack_ms: u32,
     attack_count: u32,
     cells: Vec<(i32, i32)>,
+}
+
+pub(crate) fn god_thunder_targets(game: &CGame, region_id: i32, phalanx: &CGodThunderPhalanx) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (area_width, area_height) = game.area_dimensions();
+    let mut targets = Vec::new();
+    for (x, y) in phalanx.attack_cells() {
+        let mut shapes = Vec::new();
+        if region.get_shapes(x, y, area_width, area_height, game, &mut shapes).is_err() { continue }
+        for shape in shapes {
+            let identity = shape.identity;
+            if identity != phalanx.shape().identity()
+                && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
+                && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                && game.owned_player_skill_target_attackable(phalanx.master(), identity, region_id)
+            {
+                targets.push(identity);
+            }
+        }
+    }
+    targets
+}
+
+pub(crate) fn calculate_owned_god_thunder_attack(game: &mut CGame, phalanx: &CGodThunderPhalanx, target_level: u8) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+    let player = game.find_player(phalanx.master().master_id)?;
+    let combat = player.combat_properties();
+    let occupation = player.occupation();
+    let level = player.level();
+    let weapon = player.equipment().get_goods(2).map_or(0, |goods| goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1));
+    let (divisor, minimum) = game.globe_setup().weapon_damage_factors();
+    let delta = weapon.wrapping_sub(i32::from(target_level)).max(0);
+    let factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(minimum) };
+    let critical_rate = game.globe_setup().critical_rate();
+    Some(phalanx.calculate_attack(combat, occupation, level, factor, critical_rate, &mut |maximum| game.skill_random_below(maximum)))
 }
 
 impl CGodThunderPhalanx {

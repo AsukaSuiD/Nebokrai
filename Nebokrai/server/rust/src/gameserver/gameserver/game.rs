@@ -1048,9 +1048,16 @@ use crate::gameserver::appserver::skills::godthunder::{execute_player_god_thunde
 use crate::gameserver::appserver::skills::godthunder2::{execute_player_god_thunder_2, is_god_thunder_2_dispatch};
 use crate::gameserver::appserver::skills::soulcollect::{execute_player_soul_collect, is_soul_collect_skill};
 use crate::gameserver::appserver::skills::soulmirror::{execute_player_soul_mirror, is_soul_mirror_skill};
-use crate::gameserver::appserver::skills::godpunishmentphalanx::GodPunishmentPhalanxTick;
-use crate::gameserver::appserver::skills::godthunderphalanx::GodThunderPhalanxTick;
-use crate::gameserver::appserver::skills::godthunderphalanx2::GodThunder2PhalanxTick;
+use crate::gameserver::appserver::skills::godpunishmentphalanx::{
+    calculate_owned_god_punishment_attack, god_punishment_targets,
+    GodPunishmentPhalanxTick,
+};
+use crate::gameserver::appserver::skills::godthunderphalanx::{
+    calculate_owned_god_thunder_attack, god_thunder_targets, GodThunderPhalanxTick,
+};
+use crate::gameserver::appserver::skills::godthunderphalanx2::{
+    calculate_owned_god_thunder_2_attack, god_thunder_2_targets, GodThunder2PhalanxTick,
+};
 use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
 use crate::gameserver::appserver::skills::godblessstate::{
     finish_monster_god_bless, finish_player_god_bless,
@@ -40372,9 +40379,9 @@ impl CGame {
             SummonedSkillShape::YinYang(phalanx) => {
                 self.calculate_yin_yang_attack(phalanx, target_level)
             }
-            SummonedSkillShape::GodPunishment(phalanx) => self.calculate_god_punishment_attack(phalanx, target_level),
-            SummonedSkillShape::GodThunder(phalanx) => self.calculate_god_thunder_attack(phalanx, target_level),
-            SummonedSkillShape::GodThunder2(phalanx) => self.calculate_god_thunder_2_attack(phalanx, target_level),
+            SummonedSkillShape::GodPunishment(phalanx) => calculate_owned_god_punishment_attack(self, phalanx, target_level),
+            SummonedSkillShape::GodThunder(phalanx) => calculate_owned_god_thunder_attack(self, phalanx, target_level),
+            SummonedSkillShape::GodThunder2(phalanx) => calculate_owned_god_thunder_2_attack(self, phalanx, target_level),
             SummonedSkillShape::HeartlessArrow(phalanx) => {
                 calculate_owned_heartless_arrow_attack(self, phalanx)
             }
@@ -41511,14 +41518,14 @@ impl CGame {
         }
         if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodPunishment(god)) = (tick, &phalanx) {
             let mut applied = false;
-            for target in self.god_punishment_targets(region_id, god) {
+            for target in god_punishment_targets(self, region_id, god) {
                 applied |= match target.object_type { PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime), MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime), _ => false };
             }
             if applied { if let Some(mut owner) = self.take_region_owner(region_id) { if let Some(SummonedSkillShape::GodPunishment(god)) = owner.base_mut().find_skill_phalanx_mut(phalanx_id) { god.finish(); } self.restore_region_owner(owner); } }
             return true;
         }
         if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodThunder(god)) = (tick, &phalanx) {
-            for target in self.god_thunder_targets(region_id, god) {
+            for target in god_thunder_targets(self, region_id, god) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
                     MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
@@ -41528,7 +41535,7 @@ impl CGame {
             return true;
         }
         if let (Some(Some((_, sampled_at_ms))), SummonedSkillShape::GodThunder2(god)) = (tick, &phalanx) {
-            for (target, war_soul_hit) in self.god_thunder_2_targets(region_id, god) {
+            for (target, war_soul_hit) in god_thunder_2_targets(self, region_id, god) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, war_soul_hit, runtime),
                     MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),

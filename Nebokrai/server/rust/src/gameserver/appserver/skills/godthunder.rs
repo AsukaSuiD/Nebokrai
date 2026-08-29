@@ -206,12 +206,14 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
     let summoned = if second {
         let mut phalanx = CGodThunderPhalanx2::new(summon_id, master, summon_time, lifetime, level, frequency, minimum, maximum, element, target_count, cch);
         phalanx.shape_mut().set_region_id(region);
+        phalanx.initialize(target_x, target_y, &mut |maximum| game.skill_random_below(maximum));
         let summoned = game.add_god_thunder_2_phalanx(region, phalanx, target_x, target_y, summon_time, runtime).is_some_and(|result| result.is_ok());
         if summoned { let _ = game.send_god_thunder_2_phalanx_entry(region, summon_id, runtime); }
         summoned
     } else {
         let mut phalanx = CGodThunderPhalanx::new(summon_id, master, summon_time, lifetime, level, frequency, minimum, maximum, element, target_count, cch);
         phalanx.shape_mut().set_region_id(region);
+        phalanx.initialize(target_x, target_y, &mut |maximum| game.skill_random_below(maximum));
         let summoned = game.add_god_thunder_phalanx(region, phalanx, target_x, target_y, summon_time, runtime).is_some_and(|result| result.is_ok());
         if summoned { let _ = game.send_god_thunder_phalanx_entry(region, summon_id, runtime); }
         summoned

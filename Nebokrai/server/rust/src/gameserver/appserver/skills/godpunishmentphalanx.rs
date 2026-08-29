@@ -7,16 +7,47 @@
 //! вызова legacy RNG. Не достигнут только DB/wire decoder восстановленной формы.
 
 use super::godpunishment::GOD_PUNISHMENT_SKILL_ID;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
+
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub(crate) enum GodPunishmentPhalanxTick { Scan { sampled_at_ms: u32 }, Expired }
 #[derive(Clone, Debug, Eq, PartialEq)] pub(crate) struct CGodPunishmentPhalanx { shape: CShape, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32 }
+
+pub(crate) fn god_punishment_targets(game: &CGame, region_id: i32, phalanx: &CGodPunishmentPhalanx) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (Ok(x), Ok(y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
+    let (area_width, area_height) = game.area_dimensions();
+    let mut shapes = Vec::new();
+    if region.get_shapes(x, y, area_width, area_height, game, &mut shapes).is_err() { return Vec::new() }
+    shapes.into_iter().map(|shape| shape.identity).filter(|identity| {
+        *identity != phalanx.shape().identity()
+            && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
+            && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
+    }).collect()
+}
+
+pub(crate) fn calculate_owned_god_punishment_attack(game: &mut CGame, phalanx: &CGodPunishmentPhalanx, target_level: u8) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+    let player = game.find_player(phalanx.master().master_id)?;
+    let combat = player.combat_properties();
+    let occupation = player.occupation();
+    let level = player.level();
+    let weapon = player.equipment().get_goods(2).map_or(0, |goods| goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1));
+    let (divisor, minimum) = game.globe_setup().weapon_damage_factors();
+    let delta = weapon.wrapping_sub(i32::from(target_level)).max(0);
+    let factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(minimum) };
+    let critical = game.globe_setup().critical_rate();
+    Some(phalanx.calculate_attack(factor, combat, occupation, level, critical, &mut |maximum| game.skill_random_below(maximum)))
+}
 impl CGodPunishmentPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32) -> Self { let mut shape = CShape::with_constructor_defaults(); shape.set_identity(ShapeIdentity { object_type: SUMMON_SHAPE_TYPE, id, ex_id: CGuid::GUID_INVALID }); Self { shape, master, started_at_ms, lifetime_ms, skill_level, minimum_attack, maximum_attack, element_modifier } }
