@@ -964,7 +964,10 @@ use crate::gameserver::appserver::skills::ghostcut::{
 };
 use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
-use crate::gameserver::appserver::skills::knightcut::{execute_player_knight_cut, is_knight_cut_dispatch};
+use crate::gameserver::appserver::skills::knightcut::{
+    cancel_player_knight_cut, execute_player_knight_cut, is_knight_cut_dispatch,
+    KNIGHT_CUT_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::armybreak::{execute_player_army_break, is_army_break_dispatch};
 use crate::gameserver::appserver::skills::rage::{
     RAGE_SKILL_ID, end_player_rage, execute_player_rage, is_rage_dispatch,
@@ -37422,6 +37425,7 @@ impl CGame {
                 | GHOST_CUT_SKILL_ID
                 | GHOST_CUT_2_SKILL_ID
                 | GHOST_CUT_3_SKILL_ID
+                | KNIGHT_CUT_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37456,6 +37460,7 @@ impl CGame {
             GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
                 player_ai.ghost_cut().is_some()
             }
+            KNIGHT_CUT_SKILL_ID => player_ai.knight_cut().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37519,6 +37524,9 @@ impl CGame {
             MOSOU_SKILL_ID => cancel_player_mosou(self, player_id, &mut player_ai, runtime),
             GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
                 cancel_player_ghost_cut(self, player_id, &mut player_ai, runtime)
+            }
+            KNIGHT_CUT_SKILL_ID => {
+                cancel_player_knight_cut(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
