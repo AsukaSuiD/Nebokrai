@@ -337,9 +337,10 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     .is_some()
 }
 
-/// Выполняет только подтверждённый `OnSearchEnemy` слабого существа, двух
-/// лучников, городского охранника и двух боссов. Предшествующее событие уже
-/// обработано владельцем FIFO, поэтому здесь не начинается атака в том же такте.
+/// Выполняет только подтверждённый `OnSearchEnemy` обычного агрессивного
+/// монстра, слабого существа, двух лучников, городского охранника и двух
+/// боссов. Предшествующее событие уже обработано владельцем FIFO, поэтому
+/// здесь не начинается атака в том же такте.
 pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -355,7 +356,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     {
         return search_puniness_enemy(game, region, monster_id);
     }
-    let Some((property, owner, area_index, skill_id, skill_level, speed)) = region
+    let Some((property, owner, area_index, skill_id, skill_level, speed, master)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -372,12 +373,22 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 skill_id,
                 skill.level,
                 monster.move_shape().shape().get_speed(),
+                monster.master_info(),
             ))
         })
     else {
         return false;
     };
     let selected = match property.ai {
+        0 | 3 => select_gladiator_enemy(
+            game,
+            region,
+            owner,
+            area_index,
+            &property,
+            false,
+            master,
+        ),
         4 => select_archer_enemy(
             game,
             region,
@@ -554,7 +565,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 4 | 6)
+        && matches!(property.ai, 0 | 3 | 4 | 6)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
@@ -951,27 +962,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 monster.set_ai_target(selected.identity);
             }
             target = Some(selected.identity);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && matches!(property.ai, 0 | 3)
-        && let Some(area_index) = area_index
-    {
-        if let Some(selected) = select_gladiator_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            &property,
-            tamed,
-            attacker_master,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
         }
     }
     let target = cast.map(|cast| cast.dispatch().target).or(target);

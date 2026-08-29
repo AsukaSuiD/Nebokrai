@@ -452,8 +452,9 @@ pub(crate) fn approach_attack_range(
 // IMPLEMENTED: `CMonster::hibernate_ai` и
 // `execute_owned_monster_base_attack` сохраняют проверку соседних игроков и
 // спящий переход. `queue_monster_idle` проводит `ChangeSkill`, точный RNG
-// случайного шага либо `Stand`, а затем `SearchEnemy` для достигнутых AI4,
-// AI6, AI7 и двух боссов. Остальные виртуальные владельцы остаются RAW.
+// случайного шага либо `Stand`, а затем `SearchEnemy` для достигнутых AI0,
+// AI3, AI4, AI6, AI7 и двух боссов. Остальные виртуальные владельцы остаются
+// RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:34
