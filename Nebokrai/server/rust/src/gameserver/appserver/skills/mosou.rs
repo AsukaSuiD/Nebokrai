@@ -7,11 +7,12 @@
 //! бросок оглушения, проверка уровня и `Cure`, replacement состояния `0x192`
 //! и отбрасывание. `CGame` оставляет только межвладельческую доставку, защиту,
 //! износ оружия и пространственное применение уже рассчитанного результата.
+//! Завершение использует подтверждённый общий хвост `CSummonSkill::End(1)`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::CURE_SKILL_ID;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -19,6 +20,7 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -40,11 +42,19 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_mosou_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.mosou().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_mosou(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -201,6 +211,9 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
         player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(MOSOU_SKILL_ID, level) else {
+        if player_ai.mosou().is_some() {
+            finish_player_mosou(game, player_id, player_ai, runtime);
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -238,13 +251,13 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
     if player_ai.mosou().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
-            send_failure(game, player_id, 7, mp_loss); finish(game, player_id);
+            send_failure(game, player_id, 7, mp_loss); finish_player_mosou(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         if game.find_player(player_id).is_none_or(|player| !weapon_is_sword(game, player)) {
-            send_failure(game, player_id, 0x0e, mp_loss); finish(game, player_id);
+            send_failure(game, player_id, 0x0e, mp_loss); finish_player_mosou(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some((target_x, target_y)) = destination(game, region_id, player_id, dispatch)
@@ -288,7 +301,6 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
         );
     }
     if let Some(execution) = player_ai.mosou_mut() { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
-    player_ai.mark_mosou_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_mosou(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
