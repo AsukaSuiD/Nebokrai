@@ -81,9 +81,18 @@ const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
 pub(crate) trait GamePlayerMessageRuntime:
     PlayerReliveContext + GameContainerMessageRuntime + ScriptFunctionRuntime
 {
-    /// Snapshot отсутствующего `CState`/timer/setup owner-а до item mutation;
-    /// blocking state проверяет ordered `PLAYER_ITEM_BLOCKING_SKILL_IDS`.
-    fn player_item_use_facts(&mut self, game: &CGame, player_id: i32) -> PlayerItemUseFacts;
+    /// Единственный ещё не материализованный blocking-state из исходного
+    /// ordered списка: `CStrikeState` (`0xDD`). Остальные состояния принадлежат
+    /// каноническому player owner-у и проверяются непосредственно.
+    fn player_has_unmaterialized_strike_state(&mut self, game: &CGame, player_id: i32) -> bool;
+
+    /// Виртуальный region-policy, запрещающий предметы в contend-состоянии.
+    /// Он остаётся на runtime-границе до восстановления конкретных subtype-ов.
+    fn region_forbids_item_use_while_contending(
+        &mut self,
+        game: &CGame,
+        player_id: i32,
+    ) -> bool;
 
     /// Исполняет только ещё не owned concrete state/skill/relocation
     /// owner; container/player scalars и wire хвост остаются у dispatcher-а.
@@ -98,7 +107,6 @@ pub(crate) trait GamePlayerMessageRuntime:
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerItemUseFacts {
     pub(crate) blocking_skill_state: bool,
-    pub(crate) state_110000_exists: bool,
     pub(crate) fight_state_count: i32,
     pub(crate) mount_state_exists: bool,
     pub(crate) contend_use_forbidden: bool,
@@ -108,7 +116,6 @@ pub(crate) struct PlayerItemUseFacts {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerItemRuntimeEffect {
-    EndState(u32),
     RecallToReturnPoint,
     RecallInsideRegion,
 }
@@ -568,12 +575,27 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
                 return Some(Ok(()));
             }
-            let mut facts = runtime.player_item_use_facts(game, player_id);
-            if let Some(player) = game.find_player(player_id) {
-                facts.mount_state_exists = player.is_rider();
-                facts.fight_state_count = player.fight_state_count();
-                facts.state_110000_exists |= player.script_move_state_count(110000) != 0;
-            }
+            let tick_ms = runtime.now_milliseconds();
+            let unmaterialized_strike_state =
+                runtime.player_has_unmaterialized_strike_state(game, player_id);
+            let contend_use_forbidden =
+                runtime.region_forbids_item_use_while_contending(game, player_id);
+            let facts = game
+                .find_player(player_id)
+                .map(|player| PlayerItemUseFacts {
+                    blocking_skill_state: unmaterialized_strike_state
+                        || PLAYER_ITEM_BLOCKING_SKILL_IDS
+                            .iter()
+                            .copied()
+                            .filter(|state_id| *state_id != 0xDD)
+                            .any(|state_id| player.has_state_by_skill_id(state_id)),
+                    fight_state_count: player.fight_state_count(),
+                    mount_state_exists: player.is_rider(),
+                    contend_use_forbidden,
+                    forbid_return_level: game.globe_setup().forbid_return_level(),
+                    tick_ms,
+                })
+                .unwrap_or_default();
             if facts.blocking_skill_state {
                 let _ = send_item_notice(game, player_id, b"GS0146", &[], 0);
                 trace_player_message_outcome(
@@ -583,14 +605,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
                 return Some(Ok(()));
             }
-            if facts.state_110000_exists {
-                if !game.end_script_auto_protect_state(player_id) {
-                    let _ended = runtime.apply_player_item_runtime_effect(
-                        game,
-                        player_id,
-                        PlayerItemRuntimeEffect::EndState(110000),
-                    );
-                }
+            if game
+                .find_player(player_id)
+                .is_some_and(|player| player.script_move_state_count(110000) != 0)
+            {
+                let _ = game.end_script_auto_protect_state(player_id);
             }
             let Some(slot) = message.base_mut().get_char() else {
                 return Some(Err(GamePlayerMessageError::MissingField(

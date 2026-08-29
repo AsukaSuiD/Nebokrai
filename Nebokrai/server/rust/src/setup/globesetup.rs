@@ -161,6 +161,7 @@ const AUTO_INC_ENERGY_TIME_OFFSET: usize = 0x828;
 const AUTO_INC_TIME_OFFSET: usize = 0x81C;
 const AUTO_INC_EXP_1_OFFSET: usize = 0x820;
 const AUTO_INC_EXP_2_OFFSET: usize = 0x824;
+const FORBID_RETURN_LEVEL_OFFSET: usize = 0x82C;
 const REGIONAL_PROTECTION_OFFSET: usize = 0x830;
 const CARRIAGE_STOP_DISTANCE_OFFSET: usize = 0x810;
 const CARRIAGE_DISAPPEAR_TIME_OFFSET: usize = 0x814;
@@ -779,6 +780,12 @@ impl GlobeSetupSnapshot {
             self.read_u32(HEAL_TIME_INTERVAL_OFFSET),
             self.read_u32(MP_TIME_INTERVAL_OFFSET),
         )
+    }
+
+    /// Точное signed-поле `tagSetup::_forbid_return_lel +0x82C`.
+    /// Предметы возврата сравнивают с ним уровень без нормализации.
+    pub(crate) fn forbid_return_level(&self) -> i32 {
+        self.read_i32(FORBID_RETURN_LEVEL_OFFSET)
     }
 
     /// Exact `dwPkCountPerKill` по подтверждённому ABI offset `+0x4F4`.
