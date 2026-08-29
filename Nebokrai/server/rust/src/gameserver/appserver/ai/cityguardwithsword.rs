@@ -5,8 +5,9 @@
 //! и питомцев по `faction_id`/`union_id`, правило минимальной дистанции и особую
 //! ветвь `Tracing`: шаг назад, `ForceMove` около далёкой цели и сброс за
 //! `chase_range`. `OnMoving` ставит отдельный `ASA_SEARCH_ENEMY`, который
-//! вызывает достигнутый selector. Возврат к заблокированной точке поста,
-//! точная очередь `OnIdle` и отдельный поиск повозок пока сохранены как RAW.
+//! вызывает достигнутую функцию выбора цели. `OnIdle` один раз фиксирует пост
+//! и продолжает через общий idle FIFO. Возврат к заблокированной точке поста и
+//! отдельный поиск повозок пока сохранены как RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -37,20 +38,6 @@
 // RVA: 0x0020E780
 // ADDRESS: 0060e780
 // PROTOTYPE: CMoveShape * __thiscall SearchEnemyGuildCarriage(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithSword::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithsword.cpp:35
-// RVA: 0x0020EA10
-// ADDRESS: 0060ea10
-// PROTOTYPE: void __thiscall OnIdle(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

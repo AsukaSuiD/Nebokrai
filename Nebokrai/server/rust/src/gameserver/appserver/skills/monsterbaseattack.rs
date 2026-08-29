@@ -728,7 +728,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
+        && matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
@@ -886,7 +886,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 10 | 11)
+        && property.ai == 11
         && let Some(area_index) = area_index
     {
         let minimum_skill_distance = game
