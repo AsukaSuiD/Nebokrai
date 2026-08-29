@@ -916,7 +916,7 @@ use crate::gameserver::appserver::skills::firewallphalanx::{
 use crate::gameserver::appserver::skills::poisonfog::{execute_player_poison_fog, is_poison_fog_target};
 use crate::gameserver::appserver::skills::poisonfogphalanx::PoisonFogPhalanxTick;
 use crate::gameserver::appserver::skills::infernol::{
-    execute_player_infernol, is_infernol_dispatch,
+    cancel_player_infernol, execute_player_infernol, is_infernol_dispatch, INFERNOL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::sevenshootingstar::{
     execute_player_seven_shooting_star, is_seven_shooting_star_dispatch,
@@ -37409,6 +37409,7 @@ impl CGame {
                 | ROAR_SKILL_ID
                 | ENERGY_HOLDING_SKILL_ID
                 | INVERSE_CHOPPED_SKILL_ID
+                | INFERNOL_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37437,6 +37438,7 @@ impl CGame {
             ROAR_SKILL_ID => player_ai.roar().is_some(),
             ENERGY_HOLDING_SKILL_ID => player_ai.energy_holding().is_some(),
             INVERSE_CHOPPED_SKILL_ID => player_ai.inverse_chopped().is_some(),
+            INFERNOL_SKILL_ID => player_ai.infernol().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37490,6 +37492,9 @@ impl CGame {
             }
             INVERSE_CHOPPED_SKILL_ID => {
                 cancel_player_inverse_chopped(self, player_id, &mut player_ai, runtime)
+            }
+            INFERNOL_SKILL_ID => {
+                cancel_player_infernol(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {

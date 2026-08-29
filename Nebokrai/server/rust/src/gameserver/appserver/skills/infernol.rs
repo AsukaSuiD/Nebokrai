@@ -8,14 +8,16 @@
 //! повторных целей. Для каждой допустимой цели формула выполняет ровно два
 //! вызова legacy RNG: разброс элементального урона и критический удар.
 //! `CGame` только разрешает независимых владельцев и применяет рассчитанные
-//! атаки через общую защиту.
+//! атаки через общую защиту. Успех, отказ после `Begin` и клиентская отмена
+//! проходят через подтверждённый `CSummonSkill::End(1)` с возвратом движения,
+//! обновлением свойств, очисткой и фиксацией времени восстановления.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -24,6 +26,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -77,11 +80,31 @@ fn send_visual(game: &mut CGame, player_id: i32, level: i32, action: u8) {
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish_player_infernol<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_infernol_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_infernol<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.infernol().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_infernol(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -250,6 +273,9 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(INFERNOL_SKILL_ID, level) else {
+        if player_ai.infernol().is_some() {
+            finish_player_infernol(game, player_id, player_ai, runtime);
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -296,7 +322,7 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            finish_player_infernol(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -357,7 +383,6 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_infernol_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_infernol(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
