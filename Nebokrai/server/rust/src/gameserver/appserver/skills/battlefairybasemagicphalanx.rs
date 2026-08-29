@@ -15,7 +15,9 @@ use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIden
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{
+    SUMMON_SHAPE_TYPE, encode_targeted_phalanx_snapshot,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
@@ -84,6 +86,23 @@ impl CBattleFairyBaseMagicPhalanx {
     pub(crate) const fn minimum_attack(&self) -> i32 { self.minimum_attack }
     pub(crate) const fn maximum_attack(&self) -> i32 { self.maximum_attack }
     pub(crate) const fn element_modifier(&self) -> i32 { self.element_modifier }
+
+    /// Точный клиентский `AddToByteArray` совпадает на уровне одного адреса
+    /// машинного кода с базовой магией и снарядом базовой стрельбы.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        encode_targeted_phalanx_snapshot(
+            &self.shape,
+            super::battlefairybasemagic::BATTLE_FAIRY_BASE_MAGIC_SKILL_ID as i32,
+            self.skill_level,
+            self.target,
+            self.started_at_ms,
+            self.lifetime_ms,
+            now_milliseconds,
+        )
+    }
 
     pub(crate) fn tick(
         &mut self,

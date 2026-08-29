@@ -18,7 +18,9 @@ use crate::gameserver::appserver::shape::{
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{
+    SUMMON_SHAPE_TYPE, encode_targeted_phalanx_snapshot,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
@@ -109,6 +111,23 @@ impl CBaseMagicPhalanx {
 
     pub(crate) const fn target(&self) -> ShapeIdentity {
         self.target
+    }
+
+    /// Точный клиентский `AddToByteArray` использует ту же сведённую линкером
+    /// машинную функцию, что снаряд базовой стрельбы и атака боевой феи.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        encode_targeted_phalanx_snapshot(
+            &self.shape,
+            super::basemagic::BASE_MAGIC_SKILL_ID as i32,
+            self.skill_level,
+            self.target,
+            self.started_at_ms,
+            self.lifetime_ms,
+            now_milliseconds,
+        )
     }
 
     pub(crate) fn tick(

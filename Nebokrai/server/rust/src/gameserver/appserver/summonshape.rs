@@ -35,7 +35,8 @@ use crate::gameserver::appserver::skills::godpunishmentphalanx::CGodPunishmentPh
 use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx2::CGodThunderPhalanx2;
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
-use crate::gameserver::appserver::shape::CShape;
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +67,40 @@ pub(crate) enum SummonedSkillShape {
     GodThunder(CGodThunderPhalanx),
     GodThunder2(CGodThunderPhalanx2),
     HeartlessArrow(CHeartlessArrowPhalanx),
+}
+
+/// Общий точный wire-префикс снарядов, чьи `AddToByteArray` сведены линкером
+/// в одну машинную функцию: skill, level, target и оставшееся время перед
+/// базовым `CShape`. Незавершённая ветвь сохраняет два чтения часов.
+pub(crate) fn encode_targeted_phalanx_snapshot(
+    shape: &CShape,
+    skill_id: i32,
+    skill_level: i32,
+    target: ShapeIdentity,
+    started_at_ms: u32,
+    lifetime_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
+) -> Option<Vec<u8>> {
+    let first_now = now_milliseconds();
+    let remained = if started_at_ms.wrapping_add(lifetime_ms) <= first_now {
+        0
+    } else {
+        lifetime_ms
+            .wrapping_sub(now_milliseconds())
+            .wrapping_add(started_at_ms)
+    };
+    let mut payload = Vec::new();
+    {
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_i32(skill_id);
+        writer.write_i32(skill_level);
+        writer.write_i32(target.object_type);
+        writer.write_i32(target.id);
+        writer.write_u32(remained);
+    }
+    shape
+        .encode_to_byte_array(&mut payload, true)
+        .then_some(payload)
 }
 
 impl SummonedSkillShape {
@@ -139,10 +174,11 @@ impl SummonedSkillShape {
         mut now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         match self {
-            Self::BaseMagic(_)
-            | Self::BattleFairyBaseMagic(_)
-            | Self::FireBolt(_)
-            | Self::HeartlessArrow(_) => None,
+            Self::BaseMagic(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::BattleFairyBaseMagic(shape) => {
+                shape.encode_client_snapshot(&mut now_milliseconds)
+            }
+            Self::FireBolt(_) | Self::HeartlessArrow(_) => None,
             Self::Archery(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::LightingArrow(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)
