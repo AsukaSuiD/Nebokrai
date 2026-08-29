@@ -988,6 +988,7 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::skills::monsterbaseattack::{
     change_owned_monster_attack_skill, execute_owned_monster_base_attack,
+    search_owned_boss_enemy,
 };
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
@@ -35808,6 +35809,26 @@ impl CGame {
         changed
     }
 
+    /// Координирует отдельный FIFO-такт `ASA_SEARCH_ENEMY` боссов. Выбор
+    /// цели остаётся у конкретных владельцев ИИ и не начинает атаку в этом же
+    /// такте.
+    fn run_owned_boss_enemy_search(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        now_ms: u32,
+    ) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let searched = search_owned_boss_enemy(self, owner.base_mut(), monster_id);
+        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            monster.finish_active_ai_search_enemy(now_ms);
+        }
+        self.restore_region_owner(owner);
+        searched
+    }
+
     pub(crate) fn send_skill_system_info(&self, player_id: i32, string_id: &[u8]) {
         let mut message = CMessage::new(0x000b_f807);
         message.add_ulong(CSkillFactory::get_skill_failed_message_color());
@@ -42388,6 +42409,7 @@ impl CGame {
                     let mut move_pending = false;
                     let mut active_action_completed = false;
                     let mut change_skill_pending = false;
+                    let mut search_enemy_pending = false;
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         let processed = monster.process_reached_defense_actions();
                         if processed != 0 {
@@ -42407,11 +42429,15 @@ impl CGame {
                                 active_action_completed = true;
                             }
                         } else {
-                            change_skill_pending = monster.active_ai_change_skill_pending();
+                            search_enemy_pending = monster.active_ai_search_enemy_pending();
+                            if !search_enemy_pending {
+                                change_skill_pending = monster.active_ai_change_skill_pending();
+                            }
                         }
                         if !attack_pending
                             && !move_pending
                             && !active_action_completed
+                            && !search_enemy_pending
                             && !change_skill_pending
                         {
                             schedule_ready = monster.advance_active_ai_stand(now_ms)
@@ -42428,6 +42454,14 @@ impl CGame {
                         continue;
                     }
                     if active_action_completed {
+                        continue;
+                    }
+                    if search_enemy_pending {
+                        let _ = self.run_owned_boss_enemy_search(
+                            region_id,
+                            monster_id,
+                            now_ms,
+                        );
                         continue;
                     }
                     if change_skill_pending {

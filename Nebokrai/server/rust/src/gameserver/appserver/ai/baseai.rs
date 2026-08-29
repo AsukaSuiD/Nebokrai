@@ -162,6 +162,12 @@ impl CBaseAI {
         })
     }
 
+    pub(crate) fn active_search_enemy_pending(&self) -> bool {
+        self.active_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::SearchEnemy && event.handling == 0
+        })
+    }
+
     /// Сообщает, что следующий FIFO-элемент должен продолжить текущий
     /// `CSkill::AI` через подтверждённый `OnFighting`.
     pub(crate) fn active_attack_pending(&self) -> bool {
@@ -174,6 +180,14 @@ impl CBaseAI {
     /// которую исходный `MoveTo` удерживал дальнейшее расписание.
     pub(crate) fn begin_active_move(&mut self, delay_ms: u32, now_ms: u32) {
         self.add_ai_event(AiShapeAction::Move, delay_ms, 0, now_ms);
+    }
+
+    pub(crate) fn begin_active_stand(&mut self, delay_ms: u32, now_ms: u32) {
+        self.add_ai_event(AiShapeAction::Stand, delay_ms, 0, now_ms);
+    }
+
+    pub(crate) fn begin_active_search_enemy(&mut self, now_ms: u32) {
+        self.add_ai_event(AiShapeAction::SearchEnemy, 0, 0, now_ms);
     }
 
     /// Выполняет общий `OnMoving`, который возвращает единицу, и сохраняет
@@ -221,6 +235,19 @@ impl CBaseAI {
             return;
         };
         if event.action != AiShapeAction::ChangeSkill || event.handling != 0 {
+            return;
+        }
+        event.handling = 1;
+        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+            self.active_actions.pop_front();
+        }
+    }
+
+    pub(crate) fn finish_active_search_enemy(&mut self, now_ms: u32) {
+        let Some(event) = self.active_actions.front_mut() else {
+            return;
+        };
+        if event.action != AiShapeAction::SearchEnemy || event.handling != 0 {
             return;
         }
         event.handling = 1;

@@ -10,30 +10,22 @@ use super::monsterai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates};
-use crate::gameserver::appserver::skills::baseattack::time_reached;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::setup::monsterlist::MonsterProperties;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BossIdleProgress {
-    Waiting,
-    SearchEnemy,
-}
-
-/// Проводит последовательный `MOVE/STAND → SEARCH_ENEMY`, не материализуя
-/// параллельную очередь событий. `trace_move_delay` хранит ровно одно уже
-/// начатое действие и не допускает повторного RNG до его завершения.
-pub(crate) fn advance_boss_idle<Runtime: GameMainLoopRuntime>(
+/// Ставит подтверждённую последовательность `MOVE/STAND → SEARCH_ENEMY` в
+/// общую FIFO-очередь `CBaseAI`. Поэтому задержка уже совершённого шага не
+/// допускает повторного RNG до отдельного такта поиска противника.
+pub(crate) fn queue_boss_idle<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     property: &MonsterProperties,
     runtime: &mut Runtime,
-) -> BossIdleProgress {
-    let Some((delay, origin, speed)) = region.find_monster_by_id(monster_id).and_then(|monster| {
+) -> bool {
+    let Some((origin, speed)) = region.find_monster_by_id(monster_id).and_then(|monster| {
         let shape = monster.move_shape().shape();
         Some((
-            monster.trace_move_delay(),
             ShapeAreaCoordinates {
                 x: shape.get_tile_x().ok()?,
                 y: shape.get_tile_y().ok()?,
@@ -41,24 +33,13 @@ pub(crate) fn advance_boss_idle<Runtime: GameMainLoopRuntime>(
             shape.get_speed(),
         ))
     }) else {
-        return BossIdleProgress::Waiting;
+        return false;
     };
-    if let Some(delay) = delay {
-        let now_ms = runtime.now_milliseconds();
-        if !time_reached(now_ms, delay.started_at_ms, delay.delay_ms) {
-            return BossIdleProgress::Waiting;
-        }
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_trace_move_delay();
-        }
-        return BossIdleProgress::SearchEnemy;
-    }
-
     let move_roll = game.skill_random_below(10_000);
-    let delay_ms = if (move_roll as u32) < property.move_timer {
+    let movement_delay = if (move_roll as u32) < property.move_timer {
         let direction = game.skill_random_below(8);
         let Ok(destination) = CShape::get_direction_position(direction, origin) else {
-            return BossIdleProgress::SearchEnemy;
+            return queue_search(region, monster_id, runtime.now_milliseconds());
         };
         if !game.move_owned_monster_step(
             region,
@@ -67,18 +48,31 @@ pub(crate) fn advance_boss_idle<Runtime: GameMainLoopRuntime>(
             destination.y,
             CMonster::figure(property),
         ) {
-            return BossIdleProgress::SearchEnemy;
+            return queue_search(region, monster_id, runtime.now_milliseconds());
         }
-        one_step_move_delay_ms(direction, speed, property.stop_frame)
+        Some(one_step_move_delay_ms(direction, speed, property.stop_frame))
     } else {
-        property.stop_frame
+        None
     };
-    if delay_ms == 0 {
-        return BossIdleProgress::SearchEnemy;
-    }
     let now_ms = runtime.now_milliseconds();
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.begin_trace_move_delay(now_ms, delay_ms);
+        if let Some(delay_ms) = movement_delay {
+            monster.begin_active_ai_move(delay_ms, now_ms);
+        } else {
+            monster.begin_active_ai_stand(property.stop_frame, now_ms);
+        }
+        monster.begin_active_ai_search_enemy(now_ms);
     }
-    BossIdleProgress::Waiting
+    true
+}
+
+fn queue_search(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    now_ms: u32,
+) -> bool {
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_search_enemy(now_ms);
+    }
+    true
 }

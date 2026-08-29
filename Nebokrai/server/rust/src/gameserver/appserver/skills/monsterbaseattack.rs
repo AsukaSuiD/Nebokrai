@@ -107,7 +107,7 @@ use crate::gameserver::appserver::ai::bossblue::{
 use crate::gameserver::appserver::ai::bossfiend::{
     choose_boss_fiend_attack_skill, select_boss_fiend_enemy,
 };
-use crate::gameserver::appserver::ai::bossidle::{BossIdleProgress, advance_boss_idle};
+use crate::gameserver::appserver::ai::bossidle::queue_boss_idle;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
@@ -336,6 +336,60 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     .is_some()
 }
 
+/// Выполняет только подтверждённый `OnSearchEnemy` двух боссов. Событие
+/// бездействия уже снято владельцем FIFO, поэтому здесь нет повторного броска
+/// движения и не начинается атака в том же такте.
+pub(crate) fn search_owned_boss_enemy(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+) -> bool {
+    let Some((property, owner, area_index, skill_id, skill_level)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            let owner = monster.shape_view(&property)?;
+            let area_index = monster.move_shape().shape().area_index()?;
+            let skill_id = monster.move_shape().current_skill_id()?;
+            let skill = installed_monster_skill(&property.skills, skill_id as u16)?;
+            Some((property, owner, area_index, skill_id, skill.level))
+        })
+    else {
+        return false;
+    };
+    let selected = match property.ai {
+        0x67 => select_boss_blue_enemy(
+            game,
+            region,
+            owner,
+            area_index,
+            property.guard_range as i32,
+        ),
+        0x68 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            select_boss_fiend_enemy(
+                game,
+                region,
+                owner,
+                area_index,
+                property.guard_range as i32,
+                minimum_skill_distance,
+            )
+        }
+        _ => return false,
+    };
+    if let Some(selected) = selected
+        && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+    {
+        monster.set_ai_target(selected);
+    }
+    true
+}
+
 pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -488,30 +542,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && cast.is_none()
         && !tamed
         && matches!(property.ai, 0x67 | 0x68)
-        && advance_boss_idle(game, region, monster_id, &property, runtime)
-            == BossIdleProgress::Waiting
+        && queue_boss_idle(game, region, monster_id, &property, runtime)
     {
         return true;
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 0x67
-        && let Some(area_index) = area_index
-        && let Some(selected) = select_boss_blue_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-        )
-    {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.set_ai_target(selected);
-        }
-        target = Some(selected);
-    }
     if target.is_none()
         && cast.is_none()
         && !tamed
@@ -527,29 +562,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     {
         let _ = assign_jiumai_target(region, monster_id, selected);
         target = Some(selected);
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 0x68
-        && let Some(area_index) = area_index
-    {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        if let Some(selected) = select_boss_fiend_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-            minimum_skill_distance,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
-        }
     }
     if target.is_none()
         && cast.is_none()

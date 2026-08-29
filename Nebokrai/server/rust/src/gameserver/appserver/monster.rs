@@ -812,12 +812,24 @@ impl CMonster {
         self.base_ai.active_change_skill_pending()
     }
 
+    pub(crate) fn active_ai_search_enemy_pending(&self) -> bool {
+        self.base_ai.active_search_enemy_pending()
+    }
+
     pub(crate) fn active_ai_attack_pending(&self) -> bool {
         self.base_ai.active_attack_pending()
     }
 
     pub(crate) fn begin_active_ai_move(&mut self, delay_ms: u32, now_ms: u32) {
         self.base_ai.begin_active_move(delay_ms, now_ms);
+    }
+
+    pub(crate) fn begin_active_ai_stand(&mut self, delay_ms: u32, now_ms: u32) {
+        self.base_ai.begin_active_stand(delay_ms, now_ms);
+    }
+
+    pub(crate) fn begin_active_ai_search_enemy(&mut self, now_ms: u32) {
+        self.base_ai.begin_active_search_enemy(now_ms);
     }
 
     pub(crate) fn advance_active_ai_move(&mut self, now_ms: u32) -> bool {
@@ -830,6 +842,10 @@ impl CMonster {
 
     pub(crate) fn finish_active_ai_change_skill(&mut self, now_ms: u32) {
         self.base_ai.finish_active_change_skill(now_ms);
+    }
+
+    pub(crate) fn finish_active_ai_search_enemy(&mut self, now_ms: u32) {
+        self.base_ai.finish_active_search_enemy(now_ms);
     }
 
     pub(crate) fn primary_ai_queues_idle(&self) -> bool {
