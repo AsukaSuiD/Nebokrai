@@ -62,6 +62,9 @@
 //! Достигнутое приручение хранит исходный счётчик попыток в том же владельце:
 //! проверка выполняется до увеличения, а установка признака — после него,
 //! включая исходную недостижимость успеха на последней разрешённой попытке.
+//! `Talk` формирует принадлежащий монстру пакет `0xBF801` и сохраняет строгий
+//! прямоугольный предел `AREA_WIDTH/AREA_HEIGHT`; обход игроков и доставка
+//! остаются у регионального runtime-владельца.
 
 use std::collections::BTreeMap;
 
@@ -91,6 +94,7 @@ use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::SpiderMistProgress;
 use super::skills::summoncreatureskill::SummonCreatureProgress;
 use super::skills::yunshenglightning::YunShengLightningProgress;
+use crate::nets::netserver::message::CMessage;
 use crate::setup::monsterlist::MonsterProperties;
 
 const MONSTER_TYPE: i32 = 600;
@@ -492,6 +496,37 @@ impl CMonster {
         } else {
             name
         }
+    }
+
+    /// Формирует точный кадр `CMonster::Talk`; завершающие нули строк остаются
+    /// частью `CBaseMessage::Add(char const*)` wire-контракта.
+    pub(crate) fn build_talk_message(&self, text: &[u8]) -> CMessage {
+        let identity = self.move_shape.shape().identity();
+        let mut message = CMessage::new(0x000b_f801);
+        message.add_long(0);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.base_mut().add(self.display_name());
+        message.add_byte(0);
+        message.base_mut().add(text);
+        message.add_byte(0);
+        message
+    }
+
+    /// Сохраняет две независимые строгие проверки расстояния из `Talk`.
+    pub(crate) fn talk_reaches(
+        &self,
+        target_x: i32,
+        target_y: i32,
+        area_width: i32,
+        area_height: i32,
+    ) -> bool {
+        let shape = self.move_shape.shape();
+        let (Ok(source_x), Ok(source_y)) = (shape.get_tile_x(), shape.get_tile_y()) else {
+            return false;
+        };
+        i64::from(target_x).abs_diff(i64::from(source_x)) < area_width as u64
+            && i64::from(target_y).abs_diff(i64::from(source_y)) < area_height as u64
     }
 
     pub(crate) const fn hit_points(&self) -> u32 {
@@ -2162,20 +2197,6 @@ impl CMonster {
 // RVA: 0x000E7FE0
 // ADDRESS: 004e7fe0
 // PROTOTYPE: ulong __thiscall CalculateExperienceQuota(CPlayer * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::Talk
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:345
-// RVA: 0x000E8220
-// ADDRESS: 004e8220
-// PROTOTYPE: void __thiscall Talk(char * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

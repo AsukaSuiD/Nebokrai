@@ -31851,14 +31851,7 @@ impl CGame {
                         );
                     }
                 }
-                let mut message = CMessage::new(0x000b_f801);
-                message.add_long(0);
-                message.add_long(shape.identity().object_type);
-                message.add_long(shape.identity().id);
-                message.base_mut().add(monster.display_name());
-                message.add_byte(0);
-                message.base_mut().add(text);
-                message.add_byte(0);
+                let message = monster.build_talk_message(text);
                 for target_id in player_ids {
                     let Some(target) = self.find_player(target_id) else {
                         continue;
@@ -31868,9 +31861,7 @@ impl CGame {
                     else {
                         continue;
                     };
-                    if i64::from(target_x).abs_diff(i64::from(tile_x)) < area_width as u64
-                        && i64::from(target_y).abs_diff(i64::from(tile_y)) < area_height as u64
-                    {
+                    if monster.talk_reaches(target_x, target_y, area_width, area_height) {
                         let delivery = message.send_to_player(self.net_server(), target_id);
                         tracing::trace!(
                             player_id,
