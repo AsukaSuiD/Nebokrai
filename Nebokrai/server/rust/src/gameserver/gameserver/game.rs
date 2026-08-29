@@ -656,9 +656,11 @@ use crate::gameserver::appserver::message::skillmessage::{
 };
 use crate::gameserver::appserver::message::teammessage::dispatch_game_team_message;
 use crate::gameserver::appserver::message::unibillmessage::dispatch_increment_shop_billing_message;
-use crate::gameserver::appserver::monster::{
-    CMonster, MonsterKillingAttack, PetLifecycleFacts, PetLifecycleNotice,
+use crate::gameserver::appserver::ai::carriage::{
+    CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts,
 };
+use crate::gameserver::appserver::ai::pet::{PetLifecycleFacts, PetLifecycleNotice};
+use crate::gameserver::appserver::monster::{CMonster, MonsterKillingAttack};
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver,
     STATE_AUTO_PROTECT, ScriptMoveState, UndeadState,
@@ -35422,9 +35424,6 @@ impl CGame {
         monster_id: i32,
         runtime: &mut Runtime,
     ) -> bool {
-        const FOLLOWING: i32 = 0;
-        const STAYING: i32 = 1;
-
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
@@ -35467,7 +35466,7 @@ impl CGame {
         let mut vanish_reason = CMoveShape::is_died(health).then_some(3);
         let mut vanish = vanish_reason.is_some();
         if !vanish && moveable {
-            if action == FOLLOWING
+            if action == CARRIAGE_FOLLOWING
                 && let Some((master_shape, _)) = &master_snapshot
                 && let (Ok(carriage_x), Ok(carriage_y), Ok(master_x), Ok(master_y), Ok(rear)) = (
                     carriage_shape.get_tile_x(),
@@ -35516,11 +35515,11 @@ impl CGame {
                         }
                         if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id)
                         {
-                            carriage.set_carriage_action(STAYING);
+                            carriage.set_carriage_action(CARRIAGE_STAYING);
                         }
                     }
                 }
-            } else if action == STAYING
+            } else if action == CARRIAGE_STAYING
                 && let Some((master_shape, _)) = &master_snapshot
                 && let (Ok(carriage_x), Ok(carriage_y), Ok(master_x), Ok(master_y)) = (
                     carriage_shape.get_tile_x(),
@@ -35540,68 +35539,52 @@ impl CGame {
                     .send_to_player(self.net_server(), master.master_id);
                 }
                 if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    carriage.set_carriage_action(FOLLOWING);
+                    carriage.set_carriage_action(CARRIAGE_FOLLOWING);
                 }
             }
         }
 
-        let master_check_due = owner
-            .base_mut()
-            .find_monster_by_id_mut(monster_id)
-            .is_some_and(|carriage| carriage.carriage_master_check_due(now_ms));
-        if !vanish && master_check_due {
-            let carriage = owner
-                .base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .expect("carriage master check сохраняет region owner");
-            if !master_present {
-                if !carriage.carriage_master_logout() {
-                    carriage.set_carriage_master_logout(true);
-                    if carriage.carriage_invalid_master_ms() == 0 {
-                        carriage.set_carriage_action(STAYING);
-                        carriage.set_carriage_invalid_master_ms(now_ms);
-                    }
-                }
-            } else {
-                if !carriage.carriage_master_logout() && master_owns_other {
-                    vanish = true;
-                    vanish_reason = Some(5);
-                } else if carriage.carriage_master_logout() {
-                    carriage.set_carriage_action(FOLLOWING);
-                    carriage.set_carriage_master_logout(false);
-                    if let Some(player) = self.find_player_mut(master.master_id) {
-                        player.bind_active_carriage(monster_id);
-                        master_owns = true;
-                    }
-                }
-                let close = master_snapshot.as_ref().is_some_and(|(master_shape, _)| {
-                    carriage_shape
+        let master_close = master_snapshot.as_ref().is_some_and(|(master_shape, _)| {
+            carriage_shape
+                .get_tile_x()
+                .ok()
+                .zip(carriage_shape.get_tile_y().ok())
+                .zip(
+                    master_shape
                         .get_tile_x()
                         .ok()
-                        .zip(carriage_shape.get_tile_y().ok())
-                        .zip(
-                            master_shape
-                                .get_tile_x()
-                                .ok()
-                                .zip(master_shape.get_tile_y().ok()),
-                        )
-                        .is_some_and(|((cx, cy), (mx, my))| {
-                            real_distance(cx, cy, mx, my)
-                                <= self.globe_setup.carriage_stop_distance() as i32
-                        })
-                });
-                if close {
-                    carriage.set_carriage_invalid_master_ms(0);
-                } else if carriage.carriage_invalid_master_ms() == 0 {
-                    carriage.set_carriage_invalid_master_ms(now_ms);
-                }
-            }
-            if carriage.carriage_invalid_master_ms() != 0
-                && now_ms.wrapping_sub(carriage.carriage_invalid_master_ms())
-                    >= self.globe_setup.carriage_disappear_time_ms()
+                        .zip(master_shape.get_tile_y().ok()),
+                )
+                .is_some_and(|((cx, cy), (mx, my))| {
+                    real_distance(cx, cy, mx, my)
+                        <= self.globe_setup.carriage_stop_distance() as i32
+                })
+        });
+        let master_outcome = if vanish {
+            Default::default()
+        } else {
+            owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .expect("повозка остаётся у вынутого region owner-а")
+                .tick_carriage_master(CarriageMasterFacts {
+                    now_ms,
+                    disappear_time_ms: self.globe_setup.carriage_disappear_time_ms(),
+                    master_present,
+                    master_owns_other,
+                    master_close,
+                })
+        };
+        if !vanish && master_outcome.checked {
+            if master_outcome.rebound
+                && let Some(player) = self.find_player_mut(master.master_id)
             {
+                player.bind_active_carriage(monster_id);
+                master_owns = true;
+            }
+            if let Some(reason) = master_outcome.vanish_reason {
                 vanish = true;
-                vanish_reason.get_or_insert(4);
+                vanish_reason = Some(reason);
             }
         }
 

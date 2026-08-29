@@ -65,9 +65,13 @@
 use super::ai::baseai::CBaseAI;
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
+use super::ai::carriage::{
+    CarriageLifecycleState, CarriageMasterFacts, CarriageMasterOutcome,
+};
 use super::ai::guardtarget::GuardStationState;
 use super::ai::jiumai::JiuMaiAiState;
 use super::ai::passivegladiator::PassiveGladiatorState;
+use super::ai::pet::{PetLifecycleFacts, PetLifecycleOutcome, PetLifecycleState};
 use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
@@ -111,15 +115,8 @@ pub(crate) struct CMonster {
     pet_mode: i32,
     pet_action: i32,
     pet_target: Option<ShapeIdentity>,
-    pet_seek_master_ms: u32,
-    pet_life_cycle_ms: u32,
-    pet_life_cycle_counter: u32,
-    pet_invalid_master_ms: u32,
-    pet_master_logout: bool,
-    carriage_action: i32,
-    carriage_invalid_master_ms: u32,
-    carriage_seek_master_ms: u32,
-    carriage_master_logout: bool,
+    pet_lifecycle: PetLifecycleState,
+    carriage_lifecycle: CarriageLifecycleState,
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
@@ -207,30 +204,6 @@ pub(crate) struct MonsterWakeMutation {
     pub(crate) publish_states: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PetLifecycleFacts {
-    pub(crate) now_ms: u32,
-    pub(crate) wild_time_ms: u32,
-    pub(crate) master_present: bool,
-    pub(crate) master_close: bool,
-    pub(crate) safe_cell: bool,
-    pub(crate) reclaimable: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PetLifecycleNotice {
-    AgeWarning,
-    AgeExpired,
-    BecameWild,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PetLifecycleOutcome {
-    pub(crate) notice: Option<PetLifecycleNotice>,
-    pub(crate) reclaim: bool,
-    pub(crate) vanish: bool,
-}
-
 impl CMonster {
     pub(crate) fn with_constructor_defaults() -> Self {
         let mut move_shape = CMoveShape::default();
@@ -261,15 +234,8 @@ impl CMonster {
             pet_mode: 0,
             pet_action: 1,
             pet_target: None,
-            pet_seek_master_ms: 0,
-            pet_life_cycle_ms: 0,
-            pet_life_cycle_counter: 0,
-            pet_invalid_master_ms: 0,
-            pet_master_logout: false,
-            carriage_action: 0,
-            carriage_invalid_master_ms: 0,
-            carriage_seek_master_ms: 0,
-            carriage_master_logout: false,
+            pet_lifecycle: PetLifecycleState::default(),
+            carriage_lifecycle: CarriageLifecycleState::default(),
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
             killed_by: None,
@@ -377,35 +343,18 @@ impl CMonster {
     }
 
     pub(crate) const fn carriage_action(&self) -> i32 {
-        self.carriage_action
+        self.carriage_lifecycle.action()
     }
 
     pub(crate) const fn set_carriage_action(&mut self, action: i32) {
-        self.carriage_action = action;
+        self.carriage_lifecycle.set_action(action);
     }
 
-    pub(crate) const fn carriage_invalid_master_ms(&self) -> u32 {
-        self.carriage_invalid_master_ms
-    }
-
-    pub(crate) const fn set_carriage_invalid_master_ms(&mut self, timestamp_ms: u32) {
-        self.carriage_invalid_master_ms = timestamp_ms;
-    }
-
-    pub(crate) const fn carriage_master_logout(&self) -> bool {
-        self.carriage_master_logout
-    }
-
-    pub(crate) const fn set_carriage_master_logout(&mut self, logout: bool) {
-        self.carriage_master_logout = logout;
-    }
-
-    pub(crate) fn carriage_master_check_due(&mut self, now_ms: u32) -> bool {
-        if now_ms.wrapping_sub(self.carriage_seek_master_ms) < 1_000 {
-            return false;
-        }
-        self.carriage_seek_master_ms = now_ms;
-        true
+    pub(crate) fn tick_carriage_master(
+        &mut self,
+        facts: CarriageMasterFacts,
+    ) -> CarriageMasterOutcome {
+        self.carriage_lifecycle.tick_master(facts)
     }
 
     pub(crate) const fn is_owned_pet(&self, player_id: i32) -> bool {
@@ -478,85 +427,23 @@ impl CMonster {
         self.pet_action
     }
 
-    /// Stateful часть exact `CPet::OnSchedule`; lookup master/region/skill и
-    /// observable wire/delete effects остаются у `CGame` caller-а.
+    /// Состояние точного `CPet::OnSchedule`; поиск хозяина, региона и навыка,
+    /// а также наблюдаемые сетевые эффекты и удаление остаются у `CGame`.
     pub(crate) fn tick_pet_lifecycle(&mut self, facts: PetLifecycleFacts) -> PetLifecycleOutcome {
-        const SEEK_MASTER_INTERVAL_MS: u32 = 1_000;
-        const LIFE_CYCLE_INTERVAL_MS: u32 = 21_600_000;
-
-        let mut outcome = PetLifecycleOutcome::default();
         if !self.tamed {
-            return outcome;
+            return PetLifecycleOutcome::default();
         }
-        if self.pet_seek_master_ms != 0
-            && facts.now_ms.wrapping_sub(self.pet_seek_master_ms) < SEEK_MASTER_INTERVAL_MS
-        {
-            return outcome;
+        let outcome = self
+            .pet_lifecycle
+            .tick(facts, self.pet_mode, self.ai_target.is_some());
+        if outcome.clear_target {
+            self.clear_ai_target();
         }
-        if self.pet_life_cycle_ms == 0 {
-            self.pet_life_cycle_ms = facts.now_ms;
+        if let Some(mode) = outcome.mode {
+            self.pet_mode = mode;
         }
-        if facts.now_ms.wrapping_sub(self.pet_life_cycle_ms) >= LIFE_CYCLE_INTERVAL_MS {
-            self.pet_life_cycle_counter = self.pet_life_cycle_counter.wrapping_add(1);
-            self.pet_life_cycle_ms = facts.now_ms;
-            if self.pet_life_cycle_counter < 4 {
-                if facts.master_present {
-                    outcome.notice = Some(PetLifecycleNotice::AgeWarning);
-                }
-            } else {
-                if facts.master_present {
-                    outcome.notice = Some(PetLifecycleNotice::AgeExpired);
-                }
-                outcome.vanish = true;
-                return outcome;
-            }
-        }
-
-        self.pet_seek_master_ms = facts.now_ms;
-        if !facts.master_present {
-            self.pet_master_logout = true;
-            if self.pet_invalid_master_ms == 0 {
-                self.pet_action = 2;
-                if facts.safe_cell {
-                    self.clear_ai_target();
-                    self.pet_mode = 0;
-                } else {
-                    if self.pet_mode == 2 {
-                        self.clear_ai_target();
-                    }
-                    self.pet_mode = 1;
-                }
-                self.pet_seek_master_ms = 0;
-                self.pet_invalid_master_ms = facts.now_ms;
-            }
-        } else {
-            if self.pet_master_logout && facts.reclaimable {
-                if self.pet_mode == 2 || self.ai_target.is_some() {
-                    self.clear_ai_target();
-                }
-                self.pet_invalid_master_ms = 0;
-                self.pet_seek_master_ms = 0;
-                self.pet_mode = 1;
-                self.pet_action = 1;
-                self.pet_master_logout = false;
-                outcome.reclaim = true;
-            }
-            if facts.master_close {
-                self.pet_invalid_master_ms = 0;
-                return outcome;
-            }
-            if self.pet_invalid_master_ms == 0 {
-                self.pet_invalid_master_ms = facts.now_ms;
-            }
-        }
-
-        if self.pet_invalid_master_ms != 0
-            && facts.now_ms.wrapping_sub(self.pet_invalid_master_ms) >= facts.wild_time_ms
-        {
-            if facts.master_present {
-                outcome.notice = Some(PetLifecycleNotice::BecameWild);
-            }
-            outcome.vanish = true;
+        if let Some(action) = outcome.action {
+            self.pet_action = action;
         }
         outcome
     }

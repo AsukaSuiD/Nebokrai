@@ -7,6 +7,7 @@ pub(crate) mod appserver {
         pub(crate) mod bossblue;
         pub(crate) mod bossfiend;
         pub(crate) mod bossidle;
+        pub(crate) mod carriage;
         pub(crate) mod cityguardwithbow;
         pub(crate) mod cityguardwithsword;
         pub(crate) mod fixedpositionarcher;
@@ -24,6 +25,7 @@ pub(crate) mod appserver {
         pub(crate) mod nationcouguardwithsword;
         pub(crate) mod nationgladiator;
         pub(crate) mod passivegladiator;
+        pub(crate) mod pet;
         pub(crate) mod playerai;
         pub(crate) mod puninesscreature;
         pub(crate) mod smartgladiator;

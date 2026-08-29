@@ -1,6 +1,90 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
+//! Владелец переходов повозки `CCarriage`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
+//! `appserver/ai/carriage.cpp`. Контроллер хранит действие, секундную проверку
+//! хозяина, выход хозяина, повторную привязку и таймер исчезновения. `CGame`
+//! оставляет пространственное перемещение, привязку игрока, журналирование,
+//! пакеты и фактическое удаление.
+//!
+//! Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 //! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Сохранены ещё не сопоставленные поиск хозяина и технические конструкторы.
+
+pub(crate) const CARRIAGE_FOLLOWING: i32 = 0;
+pub(crate) const CARRIAGE_STAYING: i32 = 1;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CarriageLifecycleState {
+    action: i32,
+    invalid_master_ms: u32,
+    seek_master_ms: u32,
+    master_logout: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CarriageMasterFacts {
+    pub(crate) now_ms: u32,
+    pub(crate) disappear_time_ms: u32,
+    pub(crate) master_present: bool,
+    pub(crate) master_owns_other: bool,
+    pub(crate) master_close: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CarriageMasterOutcome {
+    pub(crate) checked: bool,
+    pub(crate) rebound: bool,
+    pub(crate) vanish_reason: Option<i32>,
+}
+
+impl CarriageLifecycleState {
+    pub(crate) const fn action(self) -> i32 {
+        self.action
+    }
+
+    pub(crate) const fn set_action(&mut self, action: i32) {
+        self.action = action;
+    }
+
+    pub(crate) fn tick_master(&mut self, facts: CarriageMasterFacts) -> CarriageMasterOutcome {
+        if facts.now_ms.wrapping_sub(self.seek_master_ms) < 1_000 {
+            return CarriageMasterOutcome::default();
+        }
+        self.seek_master_ms = facts.now_ms;
+        let mut outcome = CarriageMasterOutcome {
+            checked: true,
+            ..Default::default()
+        };
+        if !facts.master_present {
+            if !self.master_logout {
+                self.master_logout = true;
+                if self.invalid_master_ms == 0 {
+                    self.action = CARRIAGE_STAYING;
+                    self.invalid_master_ms = facts.now_ms;
+                }
+            }
+        } else {
+            if !self.master_logout && facts.master_owns_other {
+                outcome.vanish_reason = Some(5);
+            } else if self.master_logout {
+                self.action = CARRIAGE_FOLLOWING;
+                self.master_logout = false;
+                outcome.rebound = true;
+            }
+            if facts.master_close {
+                self.invalid_master_ms = 0;
+            } else if self.invalid_master_ms == 0 {
+                self.invalid_master_ms = facts.now_ms;
+            }
+        }
+        if self.invalid_master_ms != 0
+            && facts.now_ms.wrapping_sub(self.invalid_master_ms) >= facts.disappear_time_ms
+        {
+            outcome.vanish_reason.get_or_insert(4);
+        }
+        outcome
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -49,65 +133,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CCarriage::SetCurrentAction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\carriage.cpp:414
-// RVA: 0x00106710
-// ADDRESS: 00506710
-// PROTOTYPE: void __thiscall SetCurrentAction(CAR_ACTION param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCarriage::OnFallowingSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\carriage.cpp:240
-// RVA: 0x00106720
-// ADDRESS: 00506720
-// PROTOTYPE: void __thiscall OnFallowingSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCarriage::OnStayingSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\carriage.cpp:307
-// RVA: 0x001068F0
-// ADDRESS: 005068f0
-// PROTOTYPE: void __thiscall OnStayingSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCarriage::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\carriage.cpp:37
-// RVA: 0x00106A20
-// ADDRESS: 00506a20
-// PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer
