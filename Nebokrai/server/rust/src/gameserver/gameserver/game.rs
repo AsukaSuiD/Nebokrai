@@ -1138,8 +1138,13 @@ use crate::gameserver::appserver::skills::godpunishment::{
     cancel_player_god_punishment, execute_player_god_punishment,
     is_god_punishment_target, GOD_PUNISHMENT_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::godthunder::{execute_player_god_thunder, is_god_thunder_dispatch};
-use crate::gameserver::appserver::skills::godthunder2::{execute_player_god_thunder_2, is_god_thunder_2_dispatch};
+use crate::gameserver::appserver::skills::godthunder::{
+    cancel_player_god_thunder_family, execute_player_god_thunder,
+    is_god_thunder_dispatch, GOD_THUNDER_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::godthunder2::{
+    execute_player_god_thunder_2, is_god_thunder_2_dispatch, GOD_THUNDER_2_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::soulcollect::{execute_player_soul_collect, is_soul_collect_skill};
 use crate::gameserver::appserver::skills::soulmirror::{execute_player_soul_mirror, is_soul_mirror_skill};
 use crate::gameserver::appserver::skills::godpunishmentphalanx::{
@@ -37476,6 +37481,8 @@ impl CGame {
                 | YIN_YANG_SKILL_ID
                 | YIN_YANG_2_SKILL_ID
                 | GOD_PUNISHMENT_SKILL_ID
+                | GOD_THUNDER_SKILL_ID
+                | GOD_THUNDER_2_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37543,6 +37550,8 @@ impl CGame {
             YIN_YANG_SKILL_ID => player_ai.yin_yang().is_some(),
             YIN_YANG_2_SKILL_ID => player_ai.yin_yang_2().is_some(),
             GOD_PUNISHMENT_SKILL_ID => player_ai.god_punishment().is_some(),
+            GOD_THUNDER_SKILL_ID => player_ai.god_thunder().is_some(),
+            GOD_THUNDER_2_SKILL_ID => player_ai.god_thunder_2().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37676,6 +37685,20 @@ impl CGame {
             GOD_PUNISHMENT_SKILL_ID => {
                 cancel_player_god_punishment(self, player_id, &mut player_ai, runtime)
             }
+            GOD_THUNDER_SKILL_ID => cancel_player_god_thunder_family(
+                self,
+                player_id,
+                &mut player_ai,
+                false,
+                runtime,
+            ),
+            GOD_THUNDER_2_SKILL_ID => cancel_player_god_thunder_family(
+                self,
+                player_id,
+                &mut player_ai,
+                true,
+                runtime,
+            ),
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
