@@ -922,7 +922,8 @@ use crate::gameserver::appserver::skills::sevenshootingstar::{
     execute_player_seven_shooting_star, is_seven_shooting_star_dispatch,
 };
 use crate::gameserver::appserver::skills::littlestar::{
-    execute_player_little_star, is_player_little_star_dispatch,
+    cancel_player_little_star, execute_player_little_star, is_player_little_star_dispatch,
+    LITTLE_STAR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::energybolt::{
     ENERGY_BOLT_SKILL_ID, execute_player_energy_bolt, is_player_path_projectile_dispatch,
@@ -37445,6 +37446,7 @@ impl CGame {
                 | LIGHTNING_SWORD_4_SKILL_ID
                 | LITTLE_FLASH_SKILL_ID
                 | LITTLE_FLASH_2_SKILL_ID
+                | LITTLE_STAR_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37497,6 +37499,7 @@ impl CGame {
             LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
                 player_ai.little_flash().is_some()
             }
+            LITTLE_STAR_SKILL_ID => player_ai.little_star().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37590,6 +37593,9 @@ impl CGame {
             }
             LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
                 cancel_player_little_flash(self, player_id, &mut player_ai, runtime)
+            }
+            LITTLE_STAR_SKILL_ID => {
+                cancel_player_little_star(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {

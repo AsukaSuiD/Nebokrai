@@ -9,6 +9,8 @@
 //! использует ту же геометрию и частоту без расхода, относящегося к игроку.
 //! Формулы, порядок клеток, применение атак и wire-эффекты принадлежат этому
 //! owner-у; `CGame` только разрешает владельцев и доставляет результат.
+//! Player `End` возвращает движение, публикует action `3` и завершает
+//! `CAttackSkill::End(1)`; этот порядок общий для завершения и отмены.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -29,10 +31,13 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::skills::kernel::{
+    SkillExecutionKernel, SkillStage, SkillTermination,
+};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -119,11 +124,39 @@ fn send_player_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish_player(game: &mut CGame, player_id: i32) {
+fn finish_player_little_star<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    level: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    send_player_visual(game, player_id, level, 3, None);
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_little_star_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_little_star<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .little_star()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    let level = game
+        .find_player(player_id)
+        .map_or(0, |player| player.learned_skill_level(LITTLE_STAR_SKILL_ID));
+    finish_player_little_star(game, player_id, level, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 #[allow(clippy::too_many_arguments, reason = "параметры соответствуют подтверждённой формуле навыка")]
@@ -184,6 +217,9 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(LITTLE_STAR_SKILL_ID), player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(LITTLE_STAR_SKILL_ID, level) else {
+        if ai.little_star().is_some() {
+            finish_player_little_star(game, player_id, level, ai, runtime);
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
@@ -222,14 +258,14 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
 
     if ai.little_star().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
         let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
-            finish_player(game, player_id);
+            finish_player_little_star(game, player_id, level, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_player_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_player(game, player_id);
+            finish_player_little_star(game, player_id, level, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -245,7 +281,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
     if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
     if ai.little_star().is_some_and(|state| state.path.is_none()) {
         let Some((target_x, target_y)) = player_target_position(game, region_id, dispatch) else {
-            finish_player(game, player_id);
+            finish_player_little_star(game, player_id, level, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let mut path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, Some(maximum_distance));
@@ -289,13 +325,11 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
 
     let expiration_now = runtime.now_milliseconds();
     if started.wrapping_add(delay).wrapping_add(persist) < expiration_now {
-        send_player_visual(game, player_id, level, 3, None);
         if let Some(state) = ai.little_star_mut() {
             if state.kernel().stage() == SkillStage::Calculate { let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        ai.mark_little_star_used(expiration_now);
-        finish_player(game, player_id);
+        finish_player_little_star(game, player_id, level, ai, runtime);
         terminal(QueuedSkillExecutionState::Completed)
     } else {
         terminal(QueuedSkillExecutionState::Pending)
