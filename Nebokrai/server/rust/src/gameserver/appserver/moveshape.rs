@@ -67,7 +67,9 @@ use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
-use crate::gameserver::appserver::skills::heartenstate::HeartenState;
+use crate::gameserver::appserver::skills::heartenstate::{
+    HeartenState, HEARTEN_STATE_BYTES,
+};
 use crate::gameserver::appserver::skills::healstate::HealState;
 use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
@@ -714,6 +716,13 @@ impl CMoveShape {
                 write_u32(&mut payload, offset + 4, state.remaining_time(now_ms));
             }
         }
+        if let Some(state) = self.hearten_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(now_ms),
+            );
+        }
         for state in &self.defense_shields {
             match state {
                 DefenseShieldState::Mana(state) => {
@@ -832,6 +841,11 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID))
             .and_then(|offset| EnlargeFullMissState::decode(&states, offset).ok());
+        self.hearten_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(super::skills::hearten::HEARTEN_SKILL_ID))
+            .and_then(|offset| HeartenState::decode(&states, offset, 0).ok());
         self.defense_shields.clear();
         self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
             match read_u32(&states, offset) {
@@ -1621,7 +1635,11 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_hearten_state(&mut self, state: HeartenState) -> Option<HeartenState> {
-        self.hearten_state.replace(state)
+        let previous = self.hearten_state.take();
+        self.remove_serialized_state_record(state.skill_id(), HEARTEN_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
+        self.hearten_state = Some(state);
+        previous
     }
 
     pub(crate) const fn hearten_state(&self) -> Option<HeartenState> {
@@ -1630,7 +1648,15 @@ impl CMoveShape {
 
     pub(crate) fn take_expired_hearten_state(&mut self, now_ms: u32) -> Option<HeartenState> {
         self.hearten_state.filter(|state| state.expired(now_ms))?;
-        self.hearten_state.take()
+        let state = self.hearten_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), HEARTEN_STATE_BYTES);
+        Some(state)
+    }
+
+    pub(crate) fn activate_loaded_hearten_state(&mut self, now_ms: u32) {
+        if let Some(state) = &mut self.hearten_state {
+            state.activate_loaded(now_ms);
+        }
     }
 
     pub(crate) fn replace_heal_state(
@@ -3696,6 +3722,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::manashield::MANA_SHIELD_SKILL_ID => MANA_SHIELD_STATE_BYTES,
             super::skills::lifeshield::LIFE_SHIELD_SKILL_ID => LIFE_SHIELD_STATE_BYTES,
             super::skills::promotion::PROMOTION_SKILL_ID => PROMOTION_STATE_BYTES,
+            super::skills::hearten::HEARTEN_SKILL_ID => HEARTEN_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

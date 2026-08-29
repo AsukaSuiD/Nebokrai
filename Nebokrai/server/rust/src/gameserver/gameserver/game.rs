@@ -28815,6 +28815,10 @@ impl CGame {
             .get(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .cure_state();
+        self.players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_hearten_state(login_tick_ms);
         let loaded_defense_shields = self
             .players
             .get_mut(&expected_player_id)

@@ -4703,6 +4703,10 @@ impl CPlayer {
         self.move_shape.activate_loaded_blind_state(now_ms)
     }
 
+    pub(crate) fn activate_loaded_hearten_state(&mut self, now_ms: u32) {
+        self.move_shape.activate_loaded_hearten_state(now_ms);
+    }
+
     pub(crate) fn take_expired_blind_state(
         &mut self,
         now_ms: u32,
