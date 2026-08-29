@@ -983,7 +983,9 @@ use crate::gameserver::appserver::skills::ragebreak::{
 use crate::gameserver::appserver::skills::flash::{
     cancel_player_flash, execute_player_flash, is_flash_dispatch, FLASH_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::swallow::{execute_player_swallow, is_swallow_dispatch};
+use crate::gameserver::appserver::skills::swallow::{
+    cancel_player_swallow, execute_player_swallow, is_swallow_dispatch, SWALLOW_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::leafcut::{execute_player_leaf_cut, is_leaf_cut_dispatch};
 use crate::gameserver::appserver::skills::leafcut2::{execute_player_leaf_cut_2, is_leaf_cut_2_dispatch};
 use crate::gameserver::appserver::skills::leafcut3::{execute_player_leaf_cut_3, is_leaf_cut_3_dispatch};
@@ -37442,6 +37444,7 @@ impl CGame {
                 | RAGE_BREAK_SKILL_ID
                 | FURY_SKILL_ID
                 | FLASH_SKILL_ID
+                | SWALLOW_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37481,6 +37484,7 @@ impl CGame {
             RAGE_BREAK_SKILL_ID => player_ai.rage_break().is_some(),
             FURY_SKILL_ID => player_ai.fury().is_some(),
             FLASH_SKILL_ID => player_ai.flash().is_some(),
+            SWALLOW_SKILL_ID => player_ai.swallow().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37556,6 +37560,7 @@ impl CGame {
             }
             FURY_SKILL_ID => cancel_player_fury(self, player_id, &mut player_ai, runtime),
             FLASH_SKILL_ID => cancel_player_flash(self, player_id, &mut player_ai, runtime),
+            SWALLOW_SKILL_ID => cancel_player_swallow(self, player_id, &mut player_ai, runtime),
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
