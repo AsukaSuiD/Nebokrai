@@ -63,6 +63,22 @@ pub(crate) fn send_hearten_state_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
+pub(crate) fn expire_player_hearten_state(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+) -> bool {
+    let Some(state) = game
+        .find_player_mut(player_id)
+        .and_then(|player| player.take_expired_hearten_state(now_ms))
+    else {
+        return false;
+    };
+    send_hearten_state_visual(game, player_id, state, false, now_ms);
+    let _ = game.publish_player_states(player_id);
+    true
+}
+
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
 // Сохранены только не подключённые конструктор по умолчанию и сериализация.

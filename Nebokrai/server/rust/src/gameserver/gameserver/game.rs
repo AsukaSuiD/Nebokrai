@@ -779,6 +779,7 @@ use crate::gameserver::appserver::skills::baseattack::{
 use crate::gameserver::appserver::skills::agility::{
     execute_player_agility_family, AGILITY_2_SKILL_ID, AGILITY_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::agilitystate2::expire_player_agility_state_2;
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
 use crate::gameserver::appserver::skills::wangsheng::{
@@ -962,9 +963,11 @@ use crate::gameserver::appserver::skills::battlefairybasemagicphalanx::{
 };
 use crate::gameserver::appserver::skills::battlefairyattribute::{
     definition as battle_fairy_attribute_definition, execute_battle_fairy_attribute,
-    send_state_visual as send_battle_fairy_attribute_state_visual,
 };
-use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
+use crate::gameserver::appserver::skills::battlefairyattributestate::{
+    expire_player_battle_fairy_attribute_states,
+    take_expired_monster_battle_fairy_attribute_states, BattleFairyAttributeState,
+};
 use crate::gameserver::appserver::skills::callosity::{
     execute_player_callosity, CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID,
 };
@@ -1011,7 +1014,9 @@ use crate::gameserver::appserver::skills::hearten::{
     execute_player_hearten, HEARTEN_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::gibe::{execute_player_gibe, GIBE_SKILL_ID};
-use crate::gameserver::appserver::skills::heartenstate::send_hearten_state_visual;
+use crate::gameserver::appserver::skills::heartenstate::{
+    expire_player_hearten_state, send_hearten_state_visual,
+};
 use crate::gameserver::appserver::skills::heal::{execute_player_heal, is_heal_skill};
 use crate::gameserver::appserver::skills::healstate::update_stored_heal_states;
 use crate::gameserver::appserver::skills::huoxieshu::{
@@ -1064,9 +1069,6 @@ use crate::gameserver::appserver::skills::swordship::{
 };
 use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
-};
-use crate::gameserver::appserver::skills::lifeshieldstate::{
-    finish_life_shield_state,
 };
 use crate::gameserver::appserver::skills::petscontrol::{
     execute_player_pets_control, PETS_CONTROL_SKILL_ID,
@@ -1136,15 +1138,11 @@ use crate::gameserver::appserver::skills::tianhuophalanx::{
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::machineshieldstate::send_machine_shield_state_visual;
 use crate::gameserver::appserver::skills::selfshield::{
     execute_player_self_shield_dispatch, is_self_shield_skill,
 };
-use crate::gameserver::appserver::skills::manashieldstate::{
-    send_mana_shield_state_visual,
-};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
-use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
+use crate::gameserver::appserver::skills::shieldstate::expire_player_defense_shields;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -26471,70 +26469,12 @@ impl CGame {
                 now_ms,
             );
         }
-        let agility_state_2_ended = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.take_expired_agility_state_2(now_ms))
-            .is_some();
-        if agility_state_2_ended {
-            let _ = self.publish_player_states(player_id);
-        }
-        let expired_hearten = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.take_expired_hearten_state(now_ms));
-        if let Some(state) = expired_hearten {
-            send_hearten_state_visual(self, player_id, state, false, now_ms);
-            let _ = self.publish_player_states(player_id);
-        }
-        let expired_attribute_states = self
-            .find_player_mut(player_id)
-            .map(|player| player.take_expired_battle_fairy_attribute_states(now_ms))
-            .unwrap_or_default();
-        if !expired_attribute_states.is_empty()
-            && let Some((region_id, tile_x, tile_y)) = self.find_player(player_id).and_then(|player| {
-                Some((
-                    player.server_region_id()?,
-                    player.shape().get_tile_x().ok()?,
-                    player.shape().get_tile_y().ok()?,
-                ))
-            })
-        {
-            let target = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
-            for state in expired_attribute_states.iter().copied() {
-                send_battle_fairy_attribute_state_visual(
-                    self, region_id, target, tile_x, tile_y, state, false,
-                );
-            }
-            let _ = self.update_player_properties(player_id, runtime);
-        }
-        let war_soul_mana = self
-            .find_player(player_id)
-            .and_then(|player| player.war_soul_mana(&self.goods_factory));
-        let expired_defense_shields = self
-            .find_player_mut(player_id)
-            .map(|player| player.take_expired_defense_shields(now_ms, war_soul_mana))
-            .unwrap_or_default();
-        let mut ordinary_shield_ended = false;
-        for state in expired_defense_shields.iter().copied() {
-            match state {
-                DefenseShieldState::Life(state) => {
-                    finish_life_shield_state(self, player_id, state, now_ms);
-                }
-                DefenseShieldState::Machine(state) => {
-                    ordinary_shield_ended = true;
-                    send_machine_shield_state_visual(self, player_id, state, false, now_ms);
-                }
-                DefenseShieldState::Mana(state) => {
-                    ordinary_shield_ended = true;
-                    send_mana_shield_state_visual(self, player_id, state, false, now_ms);
-                }
-                DefenseShieldState::Promotion(_) => {
-                    ordinary_shield_ended = true;
-                }
-            }
-        }
-        if ordinary_shield_ended {
-            let _ = self.publish_player_states(player_id);
-        }
+        let agility_state_2_ended =
+            expire_player_agility_state_2(self, player_id, now_ms);
+        let hearten_ended = expire_player_hearten_state(self, player_id, now_ms);
+        let battle_fairy_attribute_states_ended =
+            expire_player_battle_fairy_attribute_states(self, player_id, now_ms, runtime);
+        let defense_shields_ended = expire_player_defense_shields(self, player_id, now_ms);
         let change_body_states_ended =
             self.update_player_change_body_states(player_id, now_ms, runtime);
         let (extended_states_ended, extended_items_consumed) =
@@ -26555,11 +26495,11 @@ impl CGame {
             god_bless_ended,
             roar_ended,
             agility_state_2_ended,
-            hearten_ended = expired_hearten.is_some(),
+            hearten_ended,
             cure_ended = expired_cure.is_some(),
             periodic_attacks_updated,
-            defense_shields_ended = expired_defense_shields.len(),
-            battle_fairy_attribute_states_ended = expired_attribute_states.len(),
+            defense_shields_ended,
+            battle_fairy_attribute_states_ended,
             "обновлены временные состояния игрока"
         );
         Some(())
@@ -42314,26 +42254,18 @@ impl CGame {
                     }
                 }
                 let expired_attribute_states = if let Some(mut owner) = self.take_region_owner(region_id) {
-                    let result = owner.base_mut().find_monster_by_id_mut(monster_id).map(|monster| {
-                        let tile_x = monster.move_shape().shape().get_tile_x().unwrap_or_default();
-                        let tile_y = monster.move_shape().shape().get_tile_y().unwrap_or_default();
-                        let states = monster
-                            .move_shape_mut()
-                            .take_expired_battle_fairy_attribute_states(now_ms);
-                        (states, tile_x, tile_y)
-                    });
+                    let result = take_expired_monster_battle_fairy_attribute_states(
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
                     self.restore_region_owner(owner);
                     result
                 } else {
                     None
                 };
-                if let Some((states, tile_x, tile_y)) = expired_attribute_states {
-                    let target = ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID };
-                    for state in states {
-                        send_battle_fairy_attribute_state_visual(
-                            self, region_id, target, tile_x, tile_y, state, false,
-                        );
-                    }
+                if let Some(expired) = expired_attribute_states {
+                    let _ = expired.deliver(self, region_id);
                 }
                 let periodic_state_ids = self
                     .find_region(region_id)

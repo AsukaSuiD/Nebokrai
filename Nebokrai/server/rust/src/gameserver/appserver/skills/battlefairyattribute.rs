@@ -9,7 +9,7 @@
 
 use super::baseattack::time_reached;
 use super::battlefairyattributestate::{
-    ATTRIBUTE_STATE_BEGIN_MESSAGE, ATTRIBUTE_STATE_END_MESSAGE, BattleFairyAttributeKind,
+    send_battle_fairy_attribute_state_visual, BattleFairyAttributeKind,
     BattleFairyAttributeState,
 };
 use super::kernel::{SkillExecutionKernel, SkillStage};
@@ -120,26 +120,6 @@ fn send_goods_update(game: &mut CGame, update: &crate::gameserver::appserver::co
     message.add_ulong(update.old_client_payload.len() as u32);
     message.base_mut().add(&update.old_client_payload);
     let _ = message.send_to_player(game.net_server(), update.player_id);
-}
-
-pub(crate) fn send_state_visual(
-    game: &mut CGame,
-    region_id: i32,
-    target: ShapeIdentity,
-    tile_x: i32,
-    tile_y: i32,
-    state: BattleFairyAttributeState,
-    begin: bool,
-) {
-    let mut message = CMessage::new(if begin { ATTRIBUTE_STATE_BEGIN_MESSAGE } else { ATTRIBUTE_STATE_END_MESSAGE });
-    message.add_long(target.object_type);
-    message.add_long(target.id);
-    message.add_long(state.skill_id() as i32);
-    if begin {
-        message.add_long(state.keep_time_ms() as i32);
-        message.add_long(state.started_at_ms() as i32);
-    }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
 pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
@@ -256,9 +236,13 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if let Some(previous) = previous {
-        send_state_visual(game, region_id, target, tile_x, tile_y, previous, false);
+        send_battle_fairy_attribute_state_visual(
+            game, region_id, target, tile_x, tile_y, previous, false,
+        );
     }
-    send_state_visual(game, region_id, target, tile_x, tile_y, state, true);
+    send_battle_fairy_attribute_state_visual(
+        game, region_id, target, tile_x, tile_y, state, true,
+    );
     if target.object_type == PLAYER_TYPE {
         let _ = game.update_player_properties(target.id, runtime);
     }

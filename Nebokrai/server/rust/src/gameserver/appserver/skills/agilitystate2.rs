@@ -9,6 +9,7 @@
 
 use super::agility2::AGILITY_2_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::gameserver::game::CGame;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AgilityState2 {
@@ -53,6 +54,21 @@ impl AgilityState2 {
                 .wrapping_add(self.keep_time_ms as u32) as i32
         }
     }
+}
+
+pub(crate) fn expire_player_agility_state_2(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+) -> bool {
+    let ended = game
+        .find_player_mut(player_id)
+        .and_then(|player| player.take_expired_agility_state_2(now_ms))
+        .is_some();
+    if ended {
+        let _ = game.publish_player_states(player_id);
+    }
+    ended
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
