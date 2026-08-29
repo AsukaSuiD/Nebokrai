@@ -35341,26 +35341,30 @@ impl CGame {
         };
         let team_id = beneficiary.team_id();
         let beneficiary_region_id = beneficiary.server_region_id();
-        let mut recipients: Vec<i32> = if team_id <= 0 {
+        let recipients: Vec<i32> = if team_id <= 0 {
             (!beneficiary.is_dead())
                 .then_some(beneficiary_id)
                 .into_iter()
                 .collect()
         } else {
-            self.players
-                .values()
-                .filter(|player| {
-                    player.team_id() == team_id
-                        && player.server_region_id() == beneficiary_region_id
-                        && !player.is_dead()
+            let session_id = self.get_team_session_id(team_id as u32);
+            self.session_factory
+                .team_member_descriptors(session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(owner_type, player_id, owner_region_id)| {
+                    if owner_type != PLAYER_TYPE || Some(owner_region_id) != beneficiary_region_id {
+                        return None;
+                    }
+                    self.find_player(player_id)
+                        .is_some_and(|player| !player.is_dead())
+                        .then_some(player_id)
                 })
-                .map(CPlayer::player_id)
                 .collect()
         };
         if recipients.is_empty() {
             return;
         }
-        recipients.sort_unstable();
         let average_level = recipients
             .iter()
             .filter_map(|id| self.find_player(*id))
