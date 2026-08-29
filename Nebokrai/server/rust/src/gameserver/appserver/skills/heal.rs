@@ -20,10 +20,12 @@ use super::superheal::SUPER_HEAL_SKILL_ID;
 use super::superheal2::SUPER_HEAL_2_SKILL_ID;
 use super::superhealstate::SuperHealState;
 use super::superhealstate2::SuperHealState2;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -173,8 +175,29 @@ fn send_cast(
 fn finish_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, index: usize, runtime: &mut Runtime) {
+    finish_movement(game, player_id);
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_heal_family_used(index, now_ms));
+}
+
+fn abort_player_heal(game: &mut CGame, player_id: i32) {
+    finish_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn complete_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some((index, dispatch)) = (0..4).find_map(|index| player_ai.heal_family(index).map(|execution| (index, execution.dispatch()))) else { return false };
+    finish_player_heal(game, player_id, player_ai, index, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = (0..4).find_map(|index| player_ai.heal_family(index).map(SkillExecutionKernel::dispatch)) else { return false };
+    abort_player_heal(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn replace_state(
@@ -319,7 +342,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     }
 
     let Some(mut target) = target_snapshot(game, region_id, effective_identity) else {
-        finish_movement(game, player_id);
+        abort_player_heal(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target.ordinary_monster {
@@ -329,7 +352,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     }
     if target.dead {
         send_failure(game, player_id, 10);
-        finish_movement(game, player_id);
+        abort_player_heal(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -341,7 +364,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
         if current_mana < mp_loss {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_movement(game, player_id);
+            abort_player_heal(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -438,7 +461,6 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_heal_family_used(index, runtime.now_milliseconds());
-    finish_movement(game, player_id);
+    finish_player_heal(game, player_id, player_ai, index, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

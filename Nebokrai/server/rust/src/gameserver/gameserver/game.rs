@@ -1140,7 +1140,9 @@ use crate::gameserver::appserver::skills::gibe::{execute_player_gibe, GIBE_SKILL
 use crate::gameserver::appserver::skills::heartenstate::{
     expire_player_hearten_state, send_hearten_state_visual,
 };
-use crate::gameserver::appserver::skills::heal::{execute_player_heal, is_heal_skill};
+use crate::gameserver::appserver::skills::heal::{
+    cancel_player_heal, complete_player_heal, execute_player_heal, is_heal_skill,
+};
 use crate::gameserver::appserver::skills::healstate::update_stored_heal_states;
 use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
@@ -1244,7 +1246,8 @@ use crate::gameserver::appserver::skills::poisonarrowstate::{
     PoisonArrowState, update_monster_poison_arrow_state, update_player_poison_arrow_state,
 };
 use crate::gameserver::appserver::skills::promotion::{
-    PROMOTION_SKILL_ID, execute_player_promotion,
+    cancel_player_promotion, complete_player_promotion, execute_player_promotion,
+    PROMOTION_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::promotionstate::expire_monster_promotion_state;
 use crate::gameserver::appserver::skills::poisonfogstate::{
@@ -37608,7 +37611,9 @@ impl CGame {
                 | GOD_BLESS_SKILL_ID
                 | GOD_BLESS_2_SKILL_ID
                 | CURE_SKILL_ID
+                | PROMOTION_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
+            && !is_heal_skill(skill_id)
         {
             return None;
         }
@@ -37705,6 +37710,8 @@ impl CGame {
             WEAK_SKILL_ID => player_ai.weak().is_some(),
             GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => player_ai.god_bless().is_some(),
             CURE_SKILL_ID => player_ai.cure().is_some(),
+            PROMOTION_SKILL_ID => player_ai.promotion().is_some(),
+            _ if is_heal_skill(skill_id) => (0..4).any(|index| player_ai.heal_family(index).is_some()),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(&player_ai, skill_id)
             }
@@ -37861,6 +37868,18 @@ impl CGame {
                     runtime,
                 )),
                 CURE_SKILL_ID => Some(complete_player_cure(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                PROMOTION_SKILL_ID => Some(complete_player_promotion(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                _ if is_heal_skill(skill_id) => Some(complete_player_heal(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38160,6 +38179,12 @@ impl CGame {
                 cancel_player_god_bless(self, player_id, &mut player_ai, runtime)
             }
             CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, runtime),
+            PROMOTION_SKILL_ID => {
+                cancel_player_promotion(self, player_id, &mut player_ai, runtime)
+            }
+            _ if is_heal_skill(skill_id) => {
+                cancel_player_heal(self, player_id, &mut player_ai, runtime)
+            }
             _ if is_self_shield_skill(skill_id) => cancel_player_self_shield_dispatch(
                 self,
                 player_id,

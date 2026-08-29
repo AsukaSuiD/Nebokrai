@@ -10,11 +10,13 @@
 //! потому что её исходный выбор цели состояния ещё не достигнут цепочкой выполнения.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::promotionstate::{PromotionState, send_promotion_state_begin};
+use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -56,8 +58,29 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
 fn finish_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    finish_movement(game, player_id);
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_promotion_used(now_ms));
+}
+
+fn abort_player_promotion(game: &mut CGame, player_id: i32) {
+    finish_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn complete_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.promotion().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_promotion(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.promotion().map(SkillExecutionKernel::dispatch) else { return false };
+    abort_player_promotion(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn requested_target(player_id: i32, dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
@@ -269,13 +292,13 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
     }
 
     let Some(target) = target_snapshot(game, region_id, target_identity) else {
-        finish_movement(game, player_id);
+        abort_player_promotion(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target.dead {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
-        finish_movement(game, player_id);
+        abort_player_promotion(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -287,7 +310,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         if current_mana < mp_loss {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_movement(game, player_id);
+            abort_player_promotion(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -342,8 +365,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_promotion_used(runtime.now_milliseconds());
-    finish_movement(game, player_id);
+    finish_player_promotion(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 
