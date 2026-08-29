@@ -482,9 +482,6 @@
 //! будущего процесса GameServer. Межвладельческие действия налоговых сессий
 //! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
 
-mod leafcut;
-mod leafcut2;
-mod leafcut3;
 mod kerosene;
 mod fatalblow;
 mod firewall;
@@ -1099,13 +1096,16 @@ use crate::gameserver::appserver::skills::bloodlossstate::{
     BloodLossState, update_monster_blood_loss_state, update_player_blood_loss_state,
 };
 use crate::gameserver::appserver::skills::leafcutstate::{
-    LeafCutState, LeafCutStateTick, send_leaf_cut_state_visual,
+    LeafCutState, send_leaf_cut_state_visual, update_monster_leaf_cut_state,
+    update_player_leaf_cut_state,
 };
 use crate::gameserver::appserver::skills::leafcutstate2::{
-    LeafCutState2, LEAF_CUT_2_STATE_ID, send_leaf_cut_2_state_visual,
+    LeafCutState2, LEAF_CUT_2_STATE_ID,
+    update_monster_leaf_cut_2_state, update_player_leaf_cut_2_state,
 };
 use crate::gameserver::appserver::skills::leafcutstate3::{
     LeafCutState3, LEAF_CUT_3_STATE_ID, send_leaf_cut_3_state_visual,
+    update_monster_leaf_cut_3_state, update_player_leaf_cut_3_state,
 };
 use crate::gameserver::appserver::skills::kerosene::{execute_player_kerosene, is_kerosene_dispatch};
 use crate::gameserver::appserver::skills::ignition::{execute_player_ignition, is_ignition_dispatch};
@@ -26447,10 +26447,10 @@ impl CGame {
                 }
                 BLOOD_LOSS_SKILL_ID => update_player_blood_loss_state(self, player_id, runtime),
                 crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
-                    self.update_player_leaf_cut_state(player_id, runtime)
+                    update_player_leaf_cut_state(self, player_id, runtime)
                 }
-                LEAF_CUT_2_STATE_ID => self.update_player_leaf_cut_2_state(player_id, runtime),
-                LEAF_CUT_3_STATE_ID => self.update_player_leaf_cut_3_state(player_id, runtime),
+                LEAF_CUT_2_STATE_ID => update_player_leaf_cut_2_state(self, player_id, runtime),
+                LEAF_CUT_3_STATE_ID => update_player_leaf_cut_3_state(self, player_id, runtime),
                 crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => self.update_player_kerosene_state(player_id, runtime),
                 _ => false,
             };
@@ -42298,13 +42298,13 @@ impl CGame {
                             );
                         }
                         crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
-                            let _ = self.update_monster_leaf_cut_state(region_id, monster_id, runtime);
+                            let _ = update_monster_leaf_cut_state(self, region_id, monster_id, runtime);
                         }
                         LEAF_CUT_2_STATE_ID => {
-                            let _ = self.update_monster_leaf_cut_2_state(region_id, monster_id, runtime);
+                            let _ = update_monster_leaf_cut_2_state(self, region_id, monster_id, runtime);
                         }
                         LEAF_CUT_3_STATE_ID => {
-                            let _ = self.update_monster_leaf_cut_3_state(region_id, monster_id, runtime);
+                            let _ = update_monster_leaf_cut_3_state(self, region_id, monster_id, runtime);
                         }
                         crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => {
                             let _ = self.update_monster_kerosene_state(region_id, monster_id, runtime);

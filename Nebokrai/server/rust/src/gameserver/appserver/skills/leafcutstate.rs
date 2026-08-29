@@ -6,12 +6,14 @@
 //! и частоты, выполняет ровно два вызова MSVCRT RNG на атакующий тик и сохраняет
 //! усечение `float` к нулю. DB-запись длиной 68 байт принадлежит этому типу;
 //! `CanonicalStateStorage` атомарно поддерживает её смещение и жизненный цикл.
+//! Tick извлекается и возвращается здесь же до межвладельческого применения
+//! уже рассчитанной атаки координатором `CGame`.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const LEAF_CUT_STATE_ID: u32 = 0x6b;
@@ -101,4 +103,39 @@ impl LeafCutState {
 
 pub(crate) fn send_leaf_cut_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: LeafCutState, begin: bool, now_ms: u32) {
     let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(state.skill_id() as i32); if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn update_player_leaf_cut_state<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, runtime: &mut Runtime) -> bool {
+    let target = game.find_player_mut(player_id).and_then(|player| {
+        let identity = player.shape().identity(); let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?;
+        let region_id = player.server_region_id()?; let dead = player.is_dead(); let critical_chance = player.combat_properties().cch;
+        let state = player.take_leaf_cut_state_for_ai()?; Some((state, identity, x, y, region_id, dead, critical_chance))
+    });
+    let Some((mut state, identity, x, y, region_id, dead, critical_chance)) = target else { return false };
+    let lifetime_now = runtime.now_milliseconds(); let frequency_now = runtime.now_milliseconds(); let critical_rate = game.globe_setup().critical_rate();
+    let tick = state.tick(lifetime_now, frequency_now, dead, critical_chance, critical_rate, &mut |maximum| game.skill_random_below(maximum));
+    match tick {
+        LeafCutStateTick::Pending => if let Some(player) = game.find_player_mut(player_id) { player.restore_leaf_cut_state_after_ai(state); },
+        LeafCutStateTick::Attack(attack) => { let master = state.master(); if let Some(player) = game.find_player_mut(player_id) { player.restore_leaf_cut_state_after_ai(state); } game.apply_owned_skill_attack_to_player(master, player_id, region_id, attack, runtime); }
+        LeafCutStateTick::Ended => { if let Some(player) = game.find_player_mut(player_id) { player.finish_leaf_cut_state(state); } send_leaf_cut_state_visual(game, region_id, identity, x, y, state, false, lifetime_now); let _ = game.publish_player_states(player_id); }
+    }
+    true
+}
+
+pub(crate) fn update_monster_leaf_cut_state<Runtime: GameMainLoopRuntime>(game: &mut CGame, region_id: i32, monster_id: i32, runtime: &mut Runtime) -> bool {
+    let Some(mut owner) = game.take_region_owner(region_id) else { return false };
+    let target = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
+        let shape = monster.move_shape().shape(); let identity = shape.identity(); let x = shape.get_tile_x().ok()?; let y = shape.get_tile_y().ok()?;
+        let dead = monster.hit_points() == 0; let state = monster.move_shape_mut().take_leaf_cut_state_for_ai()?; Some((state, identity, x, y, dead))
+    });
+    game.restore_region_owner(owner);
+    let Some((mut state, identity, x, y, dead)) = target else { return false };
+    let lifetime_now = runtime.now_milliseconds(); let frequency_now = runtime.now_milliseconds(); let critical_rate = game.globe_setup().critical_rate();
+    let tick = state.tick(lifetime_now, frequency_now, dead, 0, critical_rate, &mut |maximum| game.skill_random_below(maximum));
+    match tick {
+        LeafCutStateTick::Pending => if let Some(mut owner) = game.take_region_owner(region_id) { if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().restore_leaf_cut_state_after_ai(state); } game.restore_region_owner(owner); },
+        LeafCutStateTick::Attack(attack) => { let master = state.master(); if let Some(mut owner) = game.take_region_owner(region_id) { if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().restore_leaf_cut_state_after_ai(state); } game.restore_region_owner(owner); } game.apply_owned_skill_attack_to_monster(master, monster_id, region_id, attack, runtime); }
+        LeafCutStateTick::Ended => { if let Some(mut owner) = game.take_region_owner(region_id) { if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) { monster.move_shape_mut().finish_leaf_cut_state(state); } game.restore_region_owner(owner); } send_leaf_cut_state_visual(game, region_id, identity, x, y, state, false, lifetime_now); }
+    }
+    true
 }
