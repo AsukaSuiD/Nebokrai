@@ -692,8 +692,9 @@ use crate::gameserver::appserver::player::{
     BattleFairyObjectMoveOperation, BattleFairyPotentialAllocationEffect,
     BattleFairyPotentialResetEffect, BattleFairySkillDispatch, BattleFairySkillRequest,
     BattleFairySkillRequestFacts, BattleFairySkillResetEffect, BattleFairySkillResetReport,
-    BattleFairySummonEffect, BattleFairySummonReport, BattleFairyUpgradeEffect,
-    BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition, CiQingContainerConsumption,
+    BattleFairySummonEffect, BattleFairySummonOutcome, BattleFairySummonReport,
+    BattleFairyUpgradeEffect, BattleFairyWarSoulAction, CPlayer, CiQingContainerAddition,
+    CiQingContainerConsumption,
     CiQingHandConsumption, CiQingPacketAddition, CiQingPacketConsumption,
     EnhancementDeselectionBlock, EnhancementDeselectionReport, EnhancementSelectionBlock,
     EnhancementSelectionReport, GoodsDestroyHandConsumption, HotkeyHandTransferOutcome,
@@ -32715,6 +32716,15 @@ impl CGame {
             let player = self.players.get_mut(&player_id)?;
             player.summon_battle_fairy(battle_fairy_enabled, mode, &self.goods_factory)
         };
+        let interrupted_skill = if report.outcome == BattleFairySummonOutcome::Recalled {
+            self.find_player_mut(player_id).is_some_and(|player| {
+                player
+                    .player_ai_mut()
+                    .cancel_active_battle_fairy_skill()
+            })
+        } else {
+            false
+        };
         if let Some(action) = report.spatial_action {
             let spatial_applied = report.region_id.is_some_and(|region_id| {
                 let Some(region) = self.regions.get_mut(&region_id) else {
@@ -32734,7 +32744,13 @@ impl CGame {
             }
         }
         self.deliver_battle_fairy_summon_effects(&mut report);
-        tracing::debug!(player_id, mode, ?report.outcome, "призыв боевой феи обработан");
+        tracing::debug!(
+            player_id,
+            mode,
+            ?report.outcome,
+            interrupted_skill,
+            "призыв боевой феи обработан"
+        );
         Some(())
     }
 
@@ -44373,6 +44389,9 @@ impl CGame {
                                 })
                             });
                             restored = self.find_player(player_id).and_then(|player| {
+                                if player_ai.battle_fairy_skill_is_active() {
+                                    return Some(false);
+                                }
                                 let skill_id = player_ai.selected_battle_fairy_skill_id();
                                 let skill_level =
                                     player.learned_skill_level_if_present(skill_id)?;

@@ -2231,6 +2231,19 @@ impl CPlayerAI {
         true
     }
 
+    pub(crate) const fn battle_fairy_skill_is_active(&self) -> bool {
+        self.current_battle_fairy_skill.is_some()
+    }
+
+    /// Общий унаследованный `End(false)` для spatial удаления war-soul.
+    /// Выбранный skill ID и ещё не начатый FIFO-хвост намеренно сохраняются.
+    pub(crate) fn cancel_active_battle_fairy_skill(&mut self) -> bool {
+        let Some(dispatch) = self.current_battle_fairy_skill else {
+            return false;
+        };
+        self.finish_battle_fairy_skill(dispatch, SkillTermination::Cancelled)
+    }
+
     /// Терминальная ветвь `CPlayerAI::OnLoseTargetWarSoul`: в отличие от
     /// обычного `End`, потеря цели после завершения execution сбрасывает
     /// выбранный навык к установленной конструктором базовой атаке.
