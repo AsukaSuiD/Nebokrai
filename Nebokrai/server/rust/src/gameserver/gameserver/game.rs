@@ -975,6 +975,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
 use crate::gameserver::appserver::skills::knightcutstate::{
     expire_monster_knight_cut_state, expire_player_knight_cut_state,
 };
+use crate::gameserver::appserver::ai::jiumai::synchronize_jiumai_target_loss;
 use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
@@ -35787,6 +35788,7 @@ impl CGame {
             &mut wide_arc_dispatch,
             &mut projectile_dispatch,
         );
+        let _ = synchronize_jiumai_target_loss(owner.base_mut(), monster_id);
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.set_base_attack_owned_tick(handled);
         }

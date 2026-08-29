@@ -1,7 +1,8 @@
 //! Владелец достигнутой семантики AI101: создание и связывание пары Цзюмай,
 //! выбор цели с минимальным текущим HP и передача цели свободному близнецу.
-//! `WhenBeenHurted`, `OnLoseTarget` и `OnSchedule` ниже сохранены как RAW:
-//! их ветви движения и повторной постановки событий ещё не подключены целиком.
+//! `WhenBeenHurted` ниже сохранён как RAW. У `OnSchedule` достигнуто сближение
+//! близнецов перед общим боевым расписанием; RAW оставлен только как источник
+//! ещё не замкнутой очереди боевых событий.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -24,22 +25,11 @@
 //
 
 // ============================================================================
-// FUNCTION: CJiuMai::OnLoseTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\jiumai.cpp:360
-// RVA: 0x0020A990
-// ADDRESS: 0060a990
-// PROTOTYPE: int __thiscall OnLoseTarget(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CJiuMai::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `maintain_jiumai_twin` сохраняет проверку дистанций, один
+// `GetRandomPosInRange` и последующий `ForceMove` до общего боевого такта.
+// REMAINS: точная очередь `ASA_SEARCH_ENEMY/ASA_ATTACK` остаётся RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\jiumai.cpp:84
@@ -58,14 +48,17 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::setup::monsterlist::MonsterProperties;
 
+const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct JiuMaiAiState {
     twins_id: i32,
+    linked_target: bool,
 }
 
 impl JiuMaiAiState {
@@ -75,6 +68,14 @@ impl JiuMaiAiState {
 
     pub(crate) const fn set_twins_id(&mut self, twins_id: i32) {
         self.twins_id = twins_id;
+    }
+
+    const fn linked_target(&self) -> bool {
+        self.linked_target
+    }
+
+    const fn set_linked_target(&mut self, linked_target: bool) {
+        self.linked_target = linked_target;
     }
 }
 
@@ -151,6 +152,78 @@ pub(crate) fn ensure_jiumai_twin<Runtime: GameMainLoopRuntime>(
     true
 }
 
+/// Сохраняет достигнутый префикс `OnSchedule`: если живой близнец дальше
+/// пяти клеток и текущая цель не ближе к владельцу, владелец получает точный
+/// случайный пункт около близнеца и выполняет исходный `ForceMove` с нулевой
+/// длительностью. Порядок RNG остаётся перед общим боевым расписанием.
+pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((twins_id, owner, target)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            Some((
+                monster.jiu_mai_ai()?.twins_id(),
+                monster.shape_view(property)?,
+                monster.ai_target(),
+            ))
+        })
+    else {
+        return false;
+    };
+    let Some(twin) = region.find_monster_by_id(twins_id).and_then(|monster| {
+        (!CMoveShape::is_died(monster.hit_points())).then(|| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            monster.shape_view(property)
+        })?
+    }) else {
+        return true;
+    };
+    if real_distance(owner.tile_x, owner.tile_y, twin.tile_x, twin.tile_y) <= 5 {
+        return true;
+    }
+
+    let target = target.and_then(|identity| match identity.object_type {
+        PLAYER_TYPE => game.find_player(identity.id).and_then(|player| player.shape_view()),
+        MONSTER_TYPE => region.find_monster_by_id(identity.id).and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            monster.shape_view(property)
+        }),
+        _ => None,
+    });
+    if target.is_some_and(|target| {
+        real_distance(target.tile_x, target.tile_y, owner.tile_x, owner.tile_y)
+            <= real_distance(target.tile_x, target.tile_y, twin.tile_x, twin.tile_y)
+    }) {
+        return true;
+    }
+
+    let Ok(destination) = region.region.get_random_pos_in_range(
+        twin.tile_x.wrapping_sub(5),
+        twin.tile_y.wrapping_sub(5),
+        10,
+        10,
+        runtime,
+    ) else {
+        return true;
+    };
+    let _ = game.force_move_owned_shape(
+        region,
+        owner.identity,
+        destination.x,
+        destination.y,
+        0,
+        runtime,
+    );
+    true
+}
+
 /// Выбирает цель `OnSearchEnemy` AI101: среди игроков и питомцев внутри
 /// дальности охраны остаётся первая цель с минимальным текущим HP.
 pub(crate) fn select_jiumai_enemy(
@@ -179,6 +252,9 @@ pub(crate) fn assign_jiumai_target(
     };
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.set_ai_target(target);
+        if let Some(state) = monster.jiu_mai_ai_mut() {
+            state.set_linked_target(true);
+        }
     }
     if twins_id > 0
         && let Some(twin) = region.find_monster_by_id_mut(twins_id)
@@ -186,6 +262,43 @@ pub(crate) fn assign_jiumai_target(
         && twin.ai_target().is_none()
     {
         twin.set_ai_target(target);
+    }
+    true
+}
+
+/// Завершает достигнутый `OnLoseTarget` после общего боевого такта. Метка
+/// отличает реальный переход ранее связанной цели от обычного бездействия:
+/// независимый бой близнеца без предшествующего `SetTarget` не стирается.
+pub(crate) fn synchronize_jiumai_target_loss(
+    region: &mut CServerRegion,
+    monster_id: i32,
+) -> bool {
+    let Some((twins_id, lost_linked_target)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            let state = monster.jiu_mai_ai()?;
+            Some((
+                state.twins_id(),
+                state.linked_target() && monster.ai_target().is_none(),
+            ))
+        })
+    else {
+        return false;
+    };
+    if !lost_linked_target {
+        return true;
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id)
+        && let Some(state) = monster.jiu_mai_ai_mut()
+    {
+        state.set_linked_target(false);
+    }
+    if twins_id > 0
+        && let Some(twin) = region.find_monster_by_id_mut(twins_id)
+        && !CMoveShape::is_died(twin.hit_points())
+        && twin.ai_target().is_some()
+    {
+        twin.clear_ai_target();
     }
     true
 }
