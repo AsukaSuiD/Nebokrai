@@ -136,6 +136,7 @@ pub(crate) struct CMonster {
     skill_last_used_ms: BTreeMap<u32, u32>,
     ai_schedule: MonsterAiScheduleState,
     base_attack_owned_tick: bool,
+    attack_completion_action: AiShapeAction,
     boss_blue_ai: BossBlueAiState,
     boss_fiend_ai: Option<BossFiendAiState>,
     passive_gladiator_ai: Option<PassiveGladiatorState>,
@@ -246,6 +247,7 @@ impl CMonster {
             skill_last_used_ms: BTreeMap::new(),
             ai_schedule: MonsterAiScheduleState::default(),
             base_attack_owned_tick: false,
+            attack_completion_action: AiShapeAction::ChangeSkill,
             boss_blue_ai: BossBlueAiState::default(),
             boss_fiend_ai: None,
             passive_gladiator_ai: None,
@@ -553,6 +555,11 @@ impl CMonster {
     }
 
     pub(crate) fn initialize_special_ai(&mut self, ai_type: u32, now_ms: u32) {
+        self.attack_completion_action = if ai_type == 6 {
+            AiShapeAction::SearchEnemy
+        } else {
+            AiShapeAction::ChangeSkill
+        };
         self.boss_fiend_ai = (ai_type == 0x68).then(|| BossFiendAiState::new(now_ms));
         self.passive_gladiator_ai = (ai_type == 1).then(PassiveGladiatorState::default);
         self.smart_gladiator_ai = (ai_type == 2).then(SmartGladiatorState::default);
@@ -993,11 +1000,13 @@ impl CMonster {
         self.spider_mist_progress = None;
         self.summon_creature_progress = None;
         self.yunsheng_lightning_progress = None;
-        self.move_shape.set_current_skill_id(None);
+        if self.attack_completion_action == AiShapeAction::ChangeSkill {
+            self.move_shape.set_current_skill_id(None);
+        }
         let _ = execution.terminate(SkillTermination::Completed);
         self.skill_last_used_ms.insert(skill_id, now_ms);
         self.base_ai
-            .add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now_ms);
+            .add_ai_event(self.attack_completion_action, 0, 0, now_ms);
         Some(execution)
     }
 

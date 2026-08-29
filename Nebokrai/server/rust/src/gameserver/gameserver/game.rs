@@ -35809,14 +35809,13 @@ impl CGame {
         changed
     }
 
-    /// Координирует отдельный FIFO-такт `ASA_SEARCH_ENEMY` боссов. Выбор
-    /// цели остаётся у конкретных владельцев ИИ и не начинает атаку в этом же
-    /// такте.
-    fn run_owned_monster_enemy_search(
+    /// Координирует отдельный FIFO-такт `ASA_SEARCH_ENEMY`. Выбор цели
+    /// остаётся у конкретных владельцев ИИ и не начинает атаку в этом же такте.
+    fn run_owned_monster_enemy_search<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
         monster_id: i32,
-        now_ms: u32,
+        runtime: &mut Runtime,
     ) -> bool {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
@@ -35832,14 +35831,19 @@ impl CGame {
                 return searched;
             };
             if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                monster.finish_active_ai_search_enemy(now_ms);
+                monster.finish_active_ai_search_enemy(runtime.now_milliseconds());
             }
             self.restore_region_owner(owner);
             return searched;
         }
-        let searched = search_owned_monster_enemy(self, owner.base_mut(), monster_id);
+        let searched = search_owned_monster_enemy(
+            self,
+            owner.base_mut(),
+            monster_id,
+            runtime,
+        );
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-            monster.finish_active_ai_search_enemy(now_ms);
+            monster.finish_active_ai_search_enemy(runtime.now_milliseconds());
         }
         self.restore_region_owner(owner);
         searched
@@ -42484,7 +42488,7 @@ impl CGame {
                         let _ = self.run_owned_monster_enemy_search(
                             region_id,
                             monster_id,
-                            now_ms,
+                            runtime,
                         );
                         continue;
                     }

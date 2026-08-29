@@ -337,13 +337,14 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     .is_some()
 }
 
-/// Выполняет только подтверждённый `OnSearchEnemy` слабого существа, лучника,
-/// городского охранника и двух боссов. Предшествующее событие уже обработано
-/// владельцем FIFO, поэтому здесь не начинается атака в том же такте.
-pub(crate) fn search_owned_monster_enemy(
-    game: &CGame,
+/// Выполняет только подтверждённый `OnSearchEnemy` слабого существа, двух
+/// лучников, городского охранника и двух боссов. Предшествующее событие уже
+/// обработано владельцем FIFO, поэтому здесь не начинается атака в том же такте.
+pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
+    runtime: &mut Runtime,
 ) -> bool {
     if region
         .find_monster_by_id(monster_id)
@@ -354,7 +355,7 @@ pub(crate) fn search_owned_monster_enemy(
     {
         return search_puniness_enemy(game, region, monster_id);
     }
-    let Some((property, owner, area_index, skill_id, skill_level)) = region
+    let Some((property, owner, area_index, skill_id, skill_level, speed)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -364,7 +365,14 @@ pub(crate) fn search_owned_monster_enemy(
             let area_index = monster.move_shape().shape().area_index()?;
             let skill_id = monster.move_shape().current_skill_id()?;
             let skill = installed_monster_skill(&property.skills, skill_id as u16)?;
-            Some((property, owner, area_index, skill_id, skill.level))
+            Some((
+                property,
+                owner,
+                area_index,
+                skill_id,
+                skill.level,
+                monster.move_shape().shape().get_speed(),
+            ))
         })
     else {
         return false;
@@ -377,6 +385,23 @@ pub(crate) fn search_owned_monster_enemy(
             area_index,
             property.guard_range as i32,
         ),
+        6 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            let _ = search_stupid_archer_enemy(
+                game,
+                region,
+                monster_id,
+                owner,
+                area_index,
+                &property,
+                minimum_skill_distance,
+                speed,
+                runtime,
+            );
+            return true;
+        }
         10 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))

@@ -6,32 +6,8 @@
 //! перед питомцами. Если цель ближе минимальной дистанции навыка, владелец
 //! делает ровно один `random(8)`, отходит на соседнюю клетку и выдерживает
 //! исходную задержку `CBaseAI::MoveTo`; иначе цель передаётся существующему
-//! навыку.
-//!
-//! `OnFighting` ниже остаётся RAW: точный момент проверки завершения навыка и
-//! постановки `ASA_SEARCH_ENEMY` ещё не отделён от общего жизненного цикла
-//! навыка.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\stupidarcher.cpp
-
-// FUNCTION: CStupidArcher::OnFighting
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\stupidarcher.cpp:40
-// RVA: 0x0020F6F0
-// ADDRESS: 0060f6f0
-// PROTOTYPE: int __thiscall OnFighting(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
+//! навыку. После завершения навыка `OnFighting` ставит `ASA_SEARCH_ENEMY`, а
+//! отдельный FIFO-такт повторяет тот же выбор цели до следующего расписания.
 
 use super::monsterai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
