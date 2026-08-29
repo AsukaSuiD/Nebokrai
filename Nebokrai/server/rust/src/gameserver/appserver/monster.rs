@@ -65,7 +65,7 @@
 
 use std::collections::BTreeMap;
 
-use super::ai::baseai::CBaseAI;
+use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
 use super::ai::carriage::{
@@ -808,6 +808,14 @@ impl CMonster {
         self.base_ai.advance_active_stand(now_ms)
     }
 
+    pub(crate) fn active_ai_change_skill_pending(&self) -> bool {
+        self.base_ai.active_change_skill_pending()
+    }
+
+    pub(crate) fn finish_active_ai_change_skill(&mut self, now_ms: u32) {
+        self.base_ai.finish_active_change_skill(now_ms);
+    }
+
     pub(crate) fn primary_ai_queues_idle(&self) -> bool {
         self.base_ai.primary_queues_idle()
     }
@@ -944,6 +952,8 @@ impl CMonster {
         self.move_shape.set_current_skill_id(None);
         let _ = execution.terminate(SkillTermination::Completed);
         self.skill_last_used_ms.insert(skill_id, now_ms);
+        self.base_ai
+            .add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now_ms);
         Some(execution)
     }
 

@@ -329,7 +329,10 @@ pub(crate) fn approach_attack_range(
 
 // ============================================================================
 // FUNCTION: CMonsterAI::OnChangeSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: достигнутые владельцы навыков монстра выполняют отдельный
+// FIFO-такт взвешенного выбора; проверка недостигнутых вариантов навыков
+// остаётся RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:167

@@ -153,6 +153,30 @@ impl CBaseAI {
         false
     }
 
+    /// Сообщает, что следующий FIFO-элемент должен выполнить подтверждённый
+    /// `OnChangeSkill`. Сам выбор остаётся у конкретного monster AI owner-а.
+    pub(crate) fn active_change_skill_pending(&self) -> bool {
+        self.active_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::ChangeSkill && event.handling == 0
+        })
+    }
+
+    /// Завершает один вызов `OnChangeSkill`: исходный обработчик возвращает
+    /// единицу, поэтому событие с нулевой задержкой снимается в том же проходе,
+    /// но `Run` всё равно не вызывает `OnSchedule` до следующего такта.
+    pub(crate) fn finish_active_change_skill(&mut self, now_ms: u32) {
+        let Some(event) = self.active_actions.front_mut() else {
+            return;
+        };
+        if event.action != AiShapeAction::ChangeSkill || event.handling != 0 {
+            return;
+        }
+        event.handling = 1;
+        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+            self.active_actions.pop_front();
+        }
+    }
+
     pub(crate) fn active_actions(&self) -> &VecDeque<AiEvent> {
         &self.active_actions
     }
@@ -445,7 +469,8 @@ impl CBaseAI {
 // FUNCTION: CBaseAI::ProcessActiveAction
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `CBaseAI::advance_active_stand` сохраняет достигнутую ветвь
-// `ASA_STAND`, её FIFO-позицию, handling и границу задержки.
+// `ASA_STAND`, а `finish_active_change_skill` — отдельный такт
+// `ASA_CHANGE_SKILL`, их FIFO-позицию, handling и границу задержки.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:531
@@ -602,7 +627,10 @@ impl CBaseAI {
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnFighting
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: завершение материализованного навыка монстра ставит
+// `ASA_CHANGE_SKILL`; отдельный обработчик `ASA_ATTACK` и недостигнутые
+// варианты `CSkill::AI` остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:964

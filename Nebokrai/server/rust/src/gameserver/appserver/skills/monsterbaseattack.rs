@@ -145,7 +145,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
-use crate::setup::monsterlist::MonsterSkill;
+use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -246,6 +246,94 @@ fn default_monster_attack_skill_id(game: &CGame, skills: &[MonsterSkill]) -> u16
     } else {
         BASE_ATTACK_SKILL_ID
     }
+}
+
+fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    monster_health: u32,
+    runtime: &mut Runtime,
+) -> Option<u16> {
+    let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
+    let roll = game.skill_random_below(10_000);
+    let selected = if property.ai == 0x67 {
+        choose_boss_blue_attack_skill(
+            region,
+            monster_id,
+            property,
+            monster_health,
+            roll,
+            default_skill_id,
+        )
+    } else if property.ai == 0x68 {
+        choose_boss_fiend_attack_skill(
+            game,
+            region,
+            monster_id,
+            property,
+            monster_health,
+            roll,
+            runtime,
+        )
+    } else if property.ai == 100 {
+        Some(select_lord_attack_skill(
+            monster_health,
+            property.maximum_hp,
+            &property.skills,
+            roll,
+            default_skill_id,
+        ))
+    } else {
+        Some(select_attack_skill(
+            &property.skills,
+            roll,
+            default_skill_id,
+        ))
+    }
+    .unwrap_or(default_skill_id);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster
+            .move_shape_mut()
+            .set_current_skill_id(Some(u32::from(selected)));
+    }
+    Some(selected)
+}
+
+/// Выполняет достигнутый `CMonsterAI::OnChangeSkill` отдельным FIFO-тактом.
+/// RNG и boss-specific пороги остаются в тех же владельцах, что и первичный
+/// выбор навыка из `OnSchedule`.
+pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((property, monster_health)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            Some((
+                game.find_monster_property_by_origin_name(monster.base_property_key()?)?
+                    .clone(),
+                monster.hit_points(),
+            ))
+        })
+    else {
+        return false;
+    };
+    if !owns_complete_skill_selection(&property.skills, property.ai) {
+        return false;
+    }
+    select_and_store_monster_attack_skill(
+        game,
+        region,
+        monster_id,
+        &property,
+        monster_health,
+        runtime,
+    )
+    .is_some()
 }
 
 pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
@@ -377,52 +465,16 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     {
         skill_id as u16
     } else {
-        let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
-        let roll = game.skill_random_below(10_000);
-        let selected = if property.ai == 0x67 {
-            choose_boss_blue_attack_skill(
-                region,
-                monster_id,
-                &property,
-                monster_health,
-                roll,
-                default_skill_id,
-            )
-        } else if property.ai == 0x68 {
-            choose_boss_fiend_attack_skill(
-                game,
-                region,
-                monster_id,
-                &property,
-                monster_health,
-                roll,
-                runtime,
-            )
-        } else if property.ai == 100 {
-            Some(select_lord_attack_skill(
-                monster_health,
-                property.maximum_hp,
-                &property.skills,
-                roll,
-                default_skill_id,
-            ))
-        } else {
-            Some(select_attack_skill(
-                &property.skills,
-                roll,
-                default_skill_id,
-            ))
-        };
-        let Some(selected) = selected else {
+        let Some(selected) = select_and_store_monster_attack_skill(
+            game,
+            region,
+            monster_id,
+            &property,
+            monster_health,
+            runtime,
+        ) else {
             return true;
         };
-        if property.ai != 0x68
-            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
-        {
-            monster
-                .move_shape_mut()
-                .set_current_skill_id(Some(u32::from(selected)));
-        }
         selected
     };
     let Some(skill) = installed_monster_skill(&property.skills, selected_skill_id) else {

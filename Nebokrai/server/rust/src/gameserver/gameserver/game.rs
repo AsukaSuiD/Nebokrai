@@ -986,7 +986,9 @@ use crate::gameserver::appserver::skills::knightcutstate::{
 use crate::gameserver::appserver::ai::jiumai::{
     retarget_jiumai_after_hurt, synchronize_jiumai_target_loss,
 };
-use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
+use crate::gameserver::appserver::skills::monsterbaseattack::{
+    change_owned_monster_attack_skill, execute_owned_monster_base_attack,
+};
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
     wide_arc_attack_cell_candidates,
@@ -35772,6 +35774,31 @@ impl CGame {
         handled
     }
 
+    /// Координирует один FIFO-такт `ASA_CHANGE_SKILL`; сам взвешенный выбор,
+    /// boss-пороги и RNG принадлежат monster AI owner-у.
+    fn run_owned_monster_change_skill<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let changed = change_owned_monster_attack_skill(
+            self,
+            owner.base_mut(),
+            monster_id,
+            runtime,
+        );
+        let now_ms = runtime.now_milliseconds();
+        if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            monster.finish_active_ai_change_skill(now_ms);
+        }
+        self.restore_region_owner(owner);
+        changed
+    }
+
     pub(crate) fn send_skill_system_info(&self, player_id: i32, string_id: &[u8]) {
         let mut message = CMessage::new(0x000b_f807);
         message.add_ulong(CSkillFactory::get_skill_failed_message_color());
@@ -42348,6 +42375,7 @@ impl CGame {
                 }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let mut schedule_ready = false;
+                    let mut change_skill_pending = false;
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         let processed = monster.process_reached_defense_actions();
                         if processed != 0 {
@@ -42358,10 +42386,21 @@ impl CGame {
                                 "обработаны пассивные Defense-события монстра"
                             );
                         }
-                        schedule_ready = monster.advance_active_ai_stand(now_ms)
-                            && monster.primary_ai_queues_idle();
+                        change_skill_pending = monster.active_ai_change_skill_pending();
+                        if !change_skill_pending {
+                            schedule_ready = monster.advance_active_ai_stand(now_ms)
+                                && monster.primary_ai_queues_idle();
+                        }
                     }
                     self.restore_region_owner(owner);
+                    if change_skill_pending {
+                        let _ = self.run_owned_monster_change_skill(
+                            region_id,
+                            monster_id,
+                            runtime,
+                        );
+                        continue;
+                    }
                     if !schedule_ready {
                         continue;
                     }
