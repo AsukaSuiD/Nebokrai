@@ -8,7 +8,8 @@
 //! Три постоянных состояния взаимно заменяются, а временная `CAgility2`
 //! заменяет только себя. Различающиеся свойства и жизненный цикл принадлежат
 //! `CanonicalStateStorage` и вызывающему `CGame`, а не общему
-//! `SkillExecutionKernel`.
+//! `SkillExecutionKernel`. Клиентская отмена проходит через тот же семейный
+//! владелец и не откатывает уже выполненный расход MP.
 
 use super::agility2::begin_agility_2_state;
 pub(crate) use super::agility2::AGILITY_2_SKILL_ID;
@@ -16,7 +17,7 @@ use super::agilitystate::{
     send_agility_family_state_visual, AgilityState, PersistentAgilityFamilyState,
 };
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::natural::{NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN};
 use super::naturalstate::NaturalState;
 use super::rapture::{RAPTURE_SKILL_ID, SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN};
@@ -64,6 +65,34 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_agility<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_movement(game, player_id);
+    player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
+}
+
+pub(crate) fn cancel_player_agility_family<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .agility_family()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    let skill_id = dispatch.skill_id();
+    finish_player_agility(game, player_id, skill_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
@@ -291,8 +320,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
-    finish_movement(game, player_id);
+    finish_player_agility(game, player_id, skill_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 

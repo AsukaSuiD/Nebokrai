@@ -2,8 +2,9 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/hearten.cpp`. Навык `324` сохраняет две проверки MP,
-//! расход перед cast-start, задержку, направление на цель, замену состояния,
-//! публикацию `OnChangeStates` и отдельное время восстановления.
+//! расход перед началом каста, задержку, направление на цель, замену состояния,
+//! публикацию `OnChangeStates` и отдельное время восстановления. Клиентская
+//! отмена снимает движение и текущий навык, но не возвращает уже списанную MP.
 
 pub(crate) const HEARTEN_SKILL_ID: u32 = 324;
 pub(crate) const HEARTEN_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -17,7 +18,7 @@ pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 
 use super::baseattack::time_reached;
 use super::heartenstate::{send_hearten_state_visual, HeartenState};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::gameserver::game::{
@@ -70,6 +71,29 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_hearten<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_movement(game, player_id);
+    player_ai.mark_hearten_used(runtime.now_milliseconds());
+}
+
+pub(crate) fn cancel_player_hearten<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.hearten().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_hearten(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
@@ -236,7 +260,6 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_hearten_used(runtime.now_milliseconds());
-    finish_movement(game, player_id);
+    finish_player_hearten(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

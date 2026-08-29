@@ -963,6 +963,16 @@ pub(crate) enum PlayerSkillDispatch {
     },
 }
 
+impl PlayerSkillDispatch {
+    pub(crate) const fn skill_id(self) -> u32 {
+        match self {
+            Self::SelfTarget { skill_id, .. }
+            | Self::Point { skill_id, .. }
+            | Self::Object { skill_id, .. } => skill_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BattleFairySkillRequest {
     pub(crate) raw_skill_id: i32,

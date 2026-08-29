@@ -7,7 +7,8 @@
 //! конфликтующего состояния, наложение нового состояния и `OnChangeStates`.
 //! Общий `SkillExecutionKernel` хранит только стадии и часы команды; форматы
 //! сообщений, частичная мутация и два независимых времени восстановления
-//! остаются здесь.
+//! остаются здесь. Клиентская отмена сохраняет уже списанные ресурсы и
+//! завершает тот же активный экземпляр до фиксации времени восстановления.
 //!
 //! Сохранённый ниже псевдокод относится к `CCallosity`; `CCallosity2` имеет
 //! тот же контракт с идентификатором `0x7d` и собственным временем
@@ -21,7 +22,9 @@ use super::callositystate::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::skills::kernel::{
+    SkillExecutionKernel, SkillStage, SkillTermination,
+};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -54,6 +57,34 @@ impl CallosityExecutionState {
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
         &mut self.kernel
     }
+}
+
+fn finish_player_callosity<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+    player_ai.mark_callosity_used(skill_id, runtime.now_milliseconds());
+}
+
+pub(crate) fn cancel_player_callosity<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.callosity().map(|state| state.kernel().dispatch()) else {
+        return false;
+    };
+    let skill_id = dispatch.skill_id();
+    finish_player_callosity(game, player_id, skill_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
@@ -225,11 +256,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_callosity_used(skill_id, runtime.now_milliseconds());
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
+    finish_player_callosity(game, player_id, skill_id, player_ai, runtime);
     QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Completed,
         first_contact: false,

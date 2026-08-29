@@ -781,7 +781,8 @@ use crate::gameserver::appserver::skills::baseattack::{
     real_distance, time_reached,
 };
 use crate::gameserver::appserver::skills::agility::{
-    execute_player_agility_family, AGILITY_2_SKILL_ID, AGILITY_SKILL_ID,
+    cancel_player_agility_family, execute_player_agility_family, AGILITY_2_SKILL_ID,
+    AGILITY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::agilitystate2::expire_player_agility_state_2;
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
@@ -973,7 +974,8 @@ use crate::gameserver::appserver::skills::battlefairyattributestate::{
     take_expired_monster_battle_fairy_attribute_states, BattleFairyAttributeState,
 };
 use crate::gameserver::appserver::skills::callosity::{
-    execute_player_callosity, CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID,
+    cancel_player_callosity, execute_player_callosity, CALLOSITY_2_SKILL_ID,
+    CALLOSITY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::callositystate::send_callosity_state_begin;
 use crate::gameserver::appserver::skills::curestate::{
@@ -1015,7 +1017,7 @@ use crate::gameserver::appserver::skills::monsterprojectile::{
     execute_owned_monster_projectile_target, finish_owned_monster_projectile,
 };
 use crate::gameserver::appserver::skills::hearten::{
-    execute_player_hearten, HEARTEN_SKILL_ID,
+    cancel_player_hearten, execute_player_hearten, HEARTEN_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::gibe::{execute_player_gibe, GIBE_SKILL_ID};
 use crate::gameserver::appserver::skills::heartenstate::{
@@ -37330,7 +37332,16 @@ impl CGame {
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
         if !matches!(
             skill_id,
-            BASE_ATTACK_SKILL_ID | BASE_MAGIC_SKILL_ID | ARCHERY_SKILL_ID
+            BASE_ATTACK_SKILL_ID
+                | BASE_MAGIC_SKILL_ID
+                | ARCHERY_SKILL_ID
+                | CALLOSITY_SKILL_ID
+                | CALLOSITY_2_SKILL_ID
+                | AGILITY_SKILL_ID
+                | AGILITY_2_SKILL_ID
+                | NATURAL_SKILL_ID
+                | RAPTURE_SKILL_ID
+                | HEARTEN_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
         {
             return None;
@@ -37340,6 +37351,11 @@ impl CGame {
             BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
+            CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
+            AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
+                player_ai.agility_family().is_some()
+            }
+            HEARTEN_SKILL_ID => player_ai.hearten().is_some(),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(&player_ai, skill_id)
             }
@@ -37359,6 +37375,15 @@ impl CGame {
                 cancel_player_base_magic(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
+            CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
+                cancel_player_callosity(self, player_id, &mut player_ai, runtime)
+            }
+            AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
+                cancel_player_agility_family(self, player_id, &mut player_ai, runtime)
+            }
+            HEARTEN_SKILL_ID => {
+                cancel_player_hearten(self, player_id, &mut player_ai, runtime)
+            }
             _ if is_self_shield_skill(skill_id) => cancel_player_self_shield_dispatch(
                 self,
                 player_id,
