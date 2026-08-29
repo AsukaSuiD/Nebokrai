@@ -2231,6 +2231,20 @@ impl CPlayerAI {
         true
     }
 
+    /// Терминальная ветвь `CPlayerAI::OnLoseTargetWarSoul`: в отличие от
+    /// обычного `End`, потеря цели после завершения execution сбрасывает
+    /// выбранный навык к установленной конструктором базовой атаке.
+    pub(crate) fn reject_battle_fairy_skill(
+        &mut self,
+        expected: BattleFairySkillDispatch,
+    ) -> bool {
+        if !self.finish_battle_fairy_skill(expected, SkillTermination::Rejected) {
+            return false;
+        }
+        self.selected_battle_fairy_skill_id = 0;
+        true
+    }
+
     pub(crate) const fn battle_fairy_base_magic(
         &self,
     ) -> Option<BattleFairyBaseMagicExecutionState> {
@@ -2736,7 +2750,10 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnLoseTargetWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: scheduler-rejection завершает текущий execution и после `End`
+// возвращает выбранный war-soul skill к базовой атаке. Общий `CBaseAI` target
+// cleanup для ещё не достигнутых вызывающих сторон сохранён ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:484

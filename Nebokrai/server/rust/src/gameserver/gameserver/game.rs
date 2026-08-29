@@ -39428,6 +39428,7 @@ impl CGame {
             } else if concrete_gibe {
                 execute_player_gibe(self, player_id, dispatch, player_ai, runtime)
             } else {
+                self.send_battle_fairy_skill_failure(player_id, 2);
                 tracing::debug!(
                     player_id,
                     ?dispatch,
@@ -39659,8 +39660,9 @@ impl CGame {
                 QueuedSkillExecutionState::Pending => false,
                 QueuedSkillExecutionState::Completed => player_ai
                     .finish_battle_fairy_skill(dispatch, SkillTermination::Completed),
-                QueuedSkillExecutionState::Rejected => player_ai
-                    .finish_battle_fairy_skill(dispatch, SkillTermination::Rejected),
+                QueuedSkillExecutionState::Rejected => {
+                    player_ai.reject_battle_fairy_skill(dispatch)
+                }
             };
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка боевой феи");
