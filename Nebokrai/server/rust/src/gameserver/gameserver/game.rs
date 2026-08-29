@@ -1042,7 +1042,9 @@ use crate::gameserver::appserver::skills::weakstate::{
 };
 use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_yin_yang_target};
 use crate::gameserver::appserver::skills::yinyang2::{execute_player_yin_yang_2, is_yin_yang_2_target};
-use crate::gameserver::appserver::skills::yinyangphalanx::YinYangPhalanxTick;
+use crate::gameserver::appserver::skills::yinyangphalanx::{
+    calculate_owned_yin_yang_attack, yin_yang_targets, YinYangPhalanxTick,
+};
 use crate::gameserver::appserver::skills::godpunishment::{execute_player_god_punishment, is_god_punishment_target};
 use crate::gameserver::appserver::skills::godthunder::{execute_player_god_thunder, is_god_thunder_dispatch};
 use crate::gameserver::appserver::skills::godthunder2::{execute_player_god_thunder_2, is_god_thunder_2_dispatch};
@@ -40379,7 +40381,7 @@ impl CGame {
             SummonedSkillShape::SpiderMist(_) => None,
             SummonedSkillShape::Weak(_) => None,
             SummonedSkillShape::YinYang(phalanx) => {
-                self.calculate_yin_yang_attack(phalanx, target_level)
+                calculate_owned_yin_yang_attack(self, phalanx, target_level)
             }
             SummonedSkillShape::GodPunishment(phalanx) => calculate_owned_god_punishment_attack(self, phalanx, target_level),
             SummonedSkillShape::GodThunder(phalanx) => calculate_owned_god_thunder_attack(self, phalanx, target_level),
@@ -41506,7 +41508,7 @@ impl CGame {
             SummonedSkillShape::YinYang(yin_yang),
         ) = (tick, &phalanx)
         {
-            for target in self.yin_yang_targets(region_id, yin_yang) {
+            for target in yin_yang_targets(self, region_id, yin_yang) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
                     MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
