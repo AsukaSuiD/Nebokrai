@@ -14,8 +14,9 @@
 //! `CGlobeSetup::bAllowClientChangePos`; исходный порядок проверки, поиска и
 //! payload сохранён. Полиморфный `SetTileXY` достигнутых игроков, монстров, NPC
 //! и призванных форм применяется их каноническими владельцами региона после
-//! wire; только прочие категории фигур и полные сериализаторы остаются
-//! границами исполнения.
+//! wire. Внешний resolve не сохраняется: все production-вызовы `add_object`
+//! принадлежат достигнутым owner-ам; виртуальные сериализаторы несуммонных
+//! фигур остаются узкой границей исполнения.
 //! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы всех
 //! достигнутых призванных форм и не уводит их в параллельный runtime callback.
 //! Синхронные отправки не
@@ -40,8 +41,6 @@ const QUEST_MOVE_STEP: u32 = 0x0008_f903;
 const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
-const NPC_TYPE: i32 = 500;
-const MONSTER_TYPE: i32 = 600;
 const SUMMON_SHAPE_TYPE: i32 = 1000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,31 +50,11 @@ pub(crate) struct ShapeSnapshot {
 }
 
 pub(crate) trait GameShapeMessageRuntime: GameClockContext {
-    fn resolve_external_shape_view(
-        &mut self,
-        game: &CGame,
-        region_id: i32,
-        identity: ShapeIdentity,
-    ) -> Option<ShapeView>;
-    fn relocate_external_shape(
-        &mut self,
-        game: &mut CGame,
-        region_id: i32,
-        identity: ShapeIdentity,
-        tile_x: i32,
-        tile_y: i32,
-    );
     fn serialize_shape_snapshot(
         &mut self,
         game: &CGame,
         region_id: i32,
         shape: ShapeView,
-    ) -> Option<ShapeSnapshot>;
-    fn resolve_external_shape_snapshot(
-        &mut self,
-        game: &CGame,
-        region_id: i32,
-        identity: ShapeIdentity,
     ) -> Option<ShapeSnapshot>;
 }
 
@@ -203,9 +182,7 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 id: target_fields.1,
                 ex_id: CGuid::GUID_INVALID,
             };
-            let target = game
-                .find_shape_in_region(region_id, identity)
-                .or_else(|| runtime.resolve_external_shape_view(game, region_id, identity));
+            let target = game.find_shape_in_region(region_id, identity);
             let Some(target) = target else {
                 trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "цель перемещения не найдена");
                 return Some(Ok(()));
@@ -226,45 +203,32 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 target.tile_y,
                 &relocation,
             );
-            if matches!(
-                identity.object_type,
-                PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE | SUMMON_SHAPE_TYPE
+            match game.relocate_region_shape(
+                region_id,
+                identity,
+                position_fields.0,
+                position_fields.1,
             ) {
-                match game.relocate_region_shape(
-                    region_id,
-                    identity,
-                    position_fields.0,
-                    position_fields.1,
-                ) {
-                    Some(Ok(())) => {}
-                    Some(Err(_)) => {
-                        trace!(player_id, region_id, target_id = identity.id, "перемещение заблокировано координатами");
-                        return Some(Ok(()));
-                    }
-                    None => {
-                        return Some(Ok(()));
-                    }
+                Some(Ok(())) => {}
+                Some(Err(_)) => {
+                    trace!(player_id, region_id, target_id = identity.id, "перемещение заблокировано координатами");
+                    return Some(Ok(()));
                 }
-                let contend_state = identity.object_type == PLAYER_TYPE
-                    && game
-                        .find_player(identity.id)
-                        .is_some_and(|player| player.contend_state());
-                if contend_state && game.region_symbol_attackable(region_id) {
-                    let _ = colored_player_notice_message(
-                        0xffff_ffff,
-                        0xffff_0000,
-                        game.get_string_by_id(b"GS0163"),
-                    )
-                    .send_to_player(game.net_server(), identity.id);
+                None => {
+                    return Some(Ok(()));
                 }
-            } else {
-                runtime.relocate_external_shape(
-                    game,
-                    region_id,
-                    identity,
-                    position_fields.0,
-                    position_fields.1,
-                );
+            }
+            let contend_state = identity.object_type == PLAYER_TYPE
+                && game
+                    .find_player(identity.id)
+                    .is_some_and(|player| player.contend_state());
+            if contend_state && game.region_symbol_attackable(region_id) {
+                let _ = colored_player_notice_message(
+                    0xffff_ffff,
+                    0xffff_0000,
+                    game.get_string_by_id(b"GS0163"),
+                )
+                .send_to_player(game.net_server(), identity.id);
             }
             debug!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, tile_x = position_fields.0, tile_y = position_fields.1, "изменена позиция shape");
         }
@@ -365,13 +329,8 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     }
                 }
                 None => {
-                    let Some(snapshot) =
-                        runtime.resolve_external_shape_snapshot(game, region_id, identity)
-                    else {
-                        trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "цель снимка shape не найдена");
-                        return Some(Ok(()));
-                    };
-                    snapshot
+                    trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "цель снимка shape не найдена");
+                    return Some(Ok(()));
                 }
             };
             let Ok(size) = i32::try_from(snapshot.payload.len()) else {
