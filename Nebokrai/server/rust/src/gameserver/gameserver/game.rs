@@ -1126,10 +1126,10 @@ use crate::gameserver::appserver::skills::fatalblowphalanx::{
     CFatalBlowPhalanx, FatalBlowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunder::{
-    THUNDER_SKILL_ID, THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY, execute_battle_fairy_thunder,
+    THUNDER_SKILL_ID, execute_battle_fairy_thunder,
 };
 use crate::gameserver::appserver::skills::thunderphalanx::{
-    CThunderPhalanx, ThunderPhalanxTick,
+    calculate_owned_thunder_attack, thunder_targets, CThunderPhalanx, ThunderPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunder2::{
     LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY, execute_battle_fairy_leiming2,
@@ -40361,7 +40361,7 @@ impl CGame {
             }
             SummonedSkillShape::PoisonFog(_) => None,
             SummonedSkillShape::Thunder(phalanx) => {
-                self.calculate_thunder_attack(phalanx, target_level)
+                calculate_owned_thunder_attack(self, phalanx, target_level)
             }
             SummonedSkillShape::ThunderBlow(phalanx) => {
                 calculate_owned_thunder_blow_attack(self, phalanx, target_level)
@@ -41345,7 +41345,7 @@ impl CGame {
             SummonedSkillShape::Thunder(thunder),
         ) = (tick, &phalanx)
         {
-            for target in self.thunder_targets(region_id, thunder) {
+            for target in thunder_targets(self, region_id, thunder) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
                         &phalanx,

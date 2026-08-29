@@ -305,6 +305,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         cch,
     );
     phalanx.shape_mut().set_region_id(region_id);
+    phalanx.initialize(target_x, target_y, &mut |maximum| game.skill_random_below(maximum));
     let summoned = game.add_thunder_phalanx(
         region_id,
         phalanx,
