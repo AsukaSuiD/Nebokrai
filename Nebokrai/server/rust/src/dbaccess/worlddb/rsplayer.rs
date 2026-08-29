@@ -2921,7 +2921,7 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         };
 
         let (account, _, _) = WINDOWS_1251.decode(visible_c_string(account));
-        let mut query = Query::new("SELECT id FROM csl_player_base WHERE account=@P1");
+        let mut query = Query::new("SELECT ID FROM csl_player_base WHERE Account=@P1");
         query.bind(account.into_owned());
         let rows = match query.query(active_transaction).await {
             Ok(stream) => match stream.into_first_result().await {
