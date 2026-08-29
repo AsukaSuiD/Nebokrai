@@ -14,7 +14,9 @@ use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIden
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{
+    SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
@@ -72,6 +74,26 @@ impl CHeartlessArrowPhalanx {
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
+
+    /// Точный клиентский `AddToByteArray` обоих вариантов читает `skill_id`,
+    /// `skill_level` и сохранённые `master_type/master_id`; `damage_factor` и
+    /// `critical_chance` остаются только серверными параметрами расчёта атаки.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        encode_related_phalanx_snapshot(
+            &self.shape,
+            self.skill_id as i32,
+            self.skill_level,
+            self.master.master_type,
+            self.master.master_id,
+            self.started_at_ms,
+            self.lifetime_ms,
+            now_milliseconds,
+        )
+    }
+
     pub(crate) fn tick(&mut self, now_ms: u32) -> HeartlessArrowPhalanxTick {
         if now_ms.wrapping_sub(self.started_at_ms) > self.lifetime_ms {
             self.shape.set_change_state(SHAPE_CHANGE_DELETE);

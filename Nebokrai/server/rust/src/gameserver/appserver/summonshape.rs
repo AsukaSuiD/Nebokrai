@@ -182,7 +182,7 @@ impl SummonedSkillShape {
                 shape.encode_client_snapshot(&mut now_milliseconds)
             }
             Self::FireBolt(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
-            Self::HeartlessArrow(_) => None,
+            Self::HeartlessArrow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::Archery(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::LightingArrow(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)
