@@ -2580,8 +2580,8 @@ impl RsPlayerOwner for TiberiusRsPlayer {
         active_transaction: Option<&mut WorldTdsClient>,
     ) -> Result<Vec<PlayerBaseDatabaseRow>, PlayerBaseLoadFailure> {
         const EQUIPMENT_ID_FIELDS: [&str; 11] = [
-            "HELM", "BODY", "GLOV", "BOOT", "WEAPON", "BACK", "HEADGEAR", "FROCK",
-            "WING", "MANTEAU", "FAIRY",
+            "HELM", "BODY", "GLOV", "BOOT", "WEAPON", "BACK", "Headgear", "Frock",
+            "Wing", "Manteau", "Fairy",
         ];
         const EQUIPMENT_LEVEL_FIELDS: [&str; 11] = [
             "HelmLevel",
@@ -2590,11 +2590,11 @@ impl RsPlayerOwner for TiberiusRsPlayer {
             "BootLevel",
             "WeaponLevel",
             "BackLevel",
-            "HEADGEARLevel",
-            "FROCKLevel",
-            "WINGLevel",
-            "MANTEAULevel",
-            "FAIRYLevel",
+            "HeadgearLevel",
+            "FrockLevel",
+            "WingLevel",
+            "ManteauLevel",
+            "FairyLevel",
         ];
 
         let Some(active_transaction) = active_transaction else {

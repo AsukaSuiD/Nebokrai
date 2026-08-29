@@ -1450,6 +1450,12 @@ async fn player_base(
         .get_player_count_in_db_by_cdkey(&account, player_database.as_deref_mut())
         .await
     else {
+        while let Some(notice) = rs_player.pop_notice() {
+            eprintln!(
+                "WorldServer: получение количества персонажей завершилось ошибкой: {:?}: {}",
+                notice.operation, notice.error
+            );
+        }
         return send_player_base_failure(game, account, None);
     };
 
@@ -1473,7 +1479,16 @@ async fn player_base(
         .await
     {
         Ok(rows) => rows,
-        Err(_) => return send_player_base_failure(game, account, Some(declared_count)),
+        Err(error) => {
+            eprintln!("WorldServer: базовые данные персонажей не прочитаны: {error:?}");
+            while let Some(notice) = rs_player.pop_notice() {
+                eprintln!(
+                    "WorldServer: ошибка чтения базовых данных персонажей: {:?}: {}",
+                    notice.operation, notice.error
+                );
+            }
+            return send_player_base_failure(game, account, Some(declared_count));
+        }
     };
 
     let mut row_index = 0_i32;
