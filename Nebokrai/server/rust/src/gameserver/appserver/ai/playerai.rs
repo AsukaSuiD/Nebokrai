@@ -32,6 +32,7 @@
 //! семейство призыва трупной свечи, скелета и споры,
 //! ярость синего босса с отложенным self-состоянием,
 //! землетрясение синего босса с фронтальным состоянием и отбрасыванием,
+//! проникающая клеточная атака демона-босса,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -102,6 +103,7 @@ use crate::gameserver::appserver::skills::spidermist::PlayerSpiderMistExecutionS
 use crate::gameserver::appserver::skills::spiderweb::PlayerSpiderWebExecutionState;
 use crate::gameserver::appserver::skills::summoncreatureskill::PlayerSummonCreatureExecutionState;
 use crate::gameserver::appserver::skills::bossbluequake::PlayerBossBlueQuakeExecutionState;
+use crate::gameserver::appserver::skills::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
 use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
@@ -255,6 +257,8 @@ pub(crate) struct CPlayerAI {
     boss_blue_fury_last_used_ms: u32,
     boss_blue_quake: Option<PlayerBossBlueQuakeExecutionState>,
     boss_blue_quake_last_used_ms: u32,
+    boss_fiend_penetrate: Option<PlayerBossFiendPenetrateExecutionState>,
+    boss_fiend_penetrate_last_used_ms: u32,
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -445,6 +449,7 @@ impl CPlayerAI {
         self.summon_creature = None;
         self.boss_blue_fury = None;
         self.boss_blue_quake = None;
+        self.boss_fiend_penetrate = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -756,6 +761,7 @@ impl CPlayerAI {
         if let Some(mut execution) = self.summon_creature.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
         if let Some(mut execution) = self.boss_blue_fury.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ярости синего босса завершено"); }
         if let Some(mut execution) = self.boss_blue_quake.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение землетрясения синего босса завершено"); }
+        if let Some(mut execution) = self.boss_fiend_penetrate.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение проникающей атаки демона-босса завершено"); }
         if let Some(mut execution) = self.sprite_burn.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
@@ -951,6 +957,7 @@ impl CPlayerAI {
         self.summon_creature = None;
         self.boss_blue_fury = None;
         self.boss_blue_quake = None;
+        self.boss_fiend_penetrate = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -1608,6 +1615,11 @@ impl CPlayerAI {
     pub(crate) fn boss_blue_quake_mut(&mut self) -> Option<&mut PlayerBossBlueQuakeExecutionState> { self.boss_blue_quake.as_mut() }
     pub(crate) const fn boss_blue_quake_last_used_ms(&self) -> u32 { self.boss_blue_quake_last_used_ms }
     pub(crate) const fn mark_boss_blue_quake_used(&mut self, now_ms: u32) { self.boss_blue_quake_last_used_ms = now_ms; }
+    pub(crate) fn boss_fiend_penetrate(&self) -> Option<&PlayerBossFiendPenetrateExecutionState> { self.boss_fiend_penetrate.as_ref() }
+    pub(crate) fn begin_boss_fiend_penetrate(&mut self, state: PlayerBossFiendPenetrateExecutionState) { self.boss_fiend_penetrate = Some(state); }
+    pub(crate) fn boss_fiend_penetrate_mut(&mut self) -> Option<&mut PlayerBossFiendPenetrateExecutionState> { self.boss_fiend_penetrate.as_mut() }
+    pub(crate) const fn boss_fiend_penetrate_last_used_ms(&self) -> u32 { self.boss_fiend_penetrate_last_used_ms }
+    pub(crate) const fn mark_boss_fiend_penetrate_used(&mut self, now_ms: u32) { self.boss_fiend_penetrate_last_used_ms = now_ms; }
 
     pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
         self.sprite_burn.as_ref()

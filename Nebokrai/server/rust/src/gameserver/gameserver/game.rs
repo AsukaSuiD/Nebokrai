@@ -1017,6 +1017,11 @@ use crate::gameserver::appserver::skills::bossbluequake::{
     BOSS_BLUE_QUAKE_SKILL_ID, cancel_player_boss_blue_quake,
     execute_player_boss_blue_quake, is_player_boss_blue_quake_dispatch,
 };
+use crate::gameserver::appserver::skills::bossfiendpenetrate::{
+    BOSS_FIEND_PENETRATE_SKILL_ID, cancel_player_boss_fiend_penetrate,
+    complete_player_boss_fiend_penetrate, execute_player_boss_fiend_penetrate,
+    is_player_boss_fiend_penetrate_dispatch,
+};
 use crate::gameserver::appserver::skills::snakebolt::{
     SNAKE_BOLT_SKILL_ID, execute_player_snake_bolt,
 };
@@ -34430,6 +34435,7 @@ impl CGame {
                             || player.player_ai().summon_creature().is_some()
                             || player.player_ai().boss_blue_fury().is_some()
                             || player.player_ai().boss_blue_quake().is_some()
+                            || player.player_ai().boss_fiend_penetrate().is_some()
                             || player.player_ai().sprite_burn().is_some()
                             || player.player_ai().wide_arc_attack().is_some()
                             || player.player_ai().lord_fast_attack().is_some()
@@ -35137,6 +35143,7 @@ impl CGame {
                 || player.player_ai().summon_creature().is_some()
                 || player.player_ai().boss_blue_fury().is_some()
                 || player.player_ai().boss_blue_quake().is_some()
+                || player.player_ai().boss_fiend_penetrate().is_some()
                 || player.player_ai().sprite_burn().is_some()
                 || player.player_ai().wide_arc_attack().is_some()
                 || player.player_ai().lord_fast_attack().is_some()
@@ -37698,6 +37705,7 @@ impl CGame {
                 | SUMMON_SPORE_SKILL_ID
                 | BOSS_BLUE_FURY_SKILL_ID
                 | BOSS_BLUE_QUAKE_SKILL_ID
+                | BOSS_FIEND_PENETRATE_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
             && !is_heal_skill(skill_id)
         {
@@ -37758,6 +37766,7 @@ impl CGame {
             SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID => player_ai.summon_creature().is_some(),
             BOSS_BLUE_FURY_SKILL_ID => player_ai.boss_blue_fury().is_some(),
             BOSS_BLUE_QUAKE_SKILL_ID => player_ai.boss_blue_quake().is_some(),
+            BOSS_FIEND_PENETRATE_SKILL_ID => player_ai.boss_fiend_penetrate().is_some(),
             SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
                 player_ai.wide_arc_attack().is_some()
@@ -37846,6 +37855,12 @@ impl CGame {
                     runtime,
                 )),
                 LIGHTING_ARROW_2_SKILL_ID => Some(complete_player_lighting_arrow_2(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                BOSS_FIEND_PENETRATE_SKILL_ID => Some(complete_player_boss_fiend_penetrate(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38190,6 +38205,9 @@ impl CGame {
             }
             BOSS_BLUE_QUAKE_SKILL_ID => {
                 cancel_player_boss_blue_quake(self, player_id, &mut player_ai, runtime)
+            }
+            BOSS_FIEND_PENETRATE_SKILL_ID => {
+                cancel_player_boss_fiend_penetrate(self, player_id, &mut player_ai, runtime)
             }
             SPRITE_BURN_SKILL_ID => {
                 cancel_player_sprite_burn(self, player_id, &mut player_ai, runtime)
@@ -38681,6 +38699,8 @@ impl CGame {
             let concrete_summon_creature = is_player_summon_creature_dispatch(dispatch);
             let concrete_boss_blue_fury = is_player_boss_blue_fury_dispatch(dispatch);
             let concrete_boss_blue_quake = is_player_boss_blue_quake_dispatch(dispatch);
+            let concrete_boss_fiend_penetrate =
+                is_player_boss_fiend_penetrate_dispatch(dispatch);
             let path_projectile_skill_id = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -38958,6 +38978,14 @@ impl CGame {
                 execute_player_boss_blue_fury(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_boss_blue_quake {
                 execute_player_boss_blue_quake(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_boss_fiend_penetrate {
+                execute_player_boss_fiend_penetrate(
+                    self,
+                    player_id,
+                    dispatch,
+                    player_ai,
+                    runtime,
+                )
             } else if concrete_sprite_burn {
                 execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machinery_stomp {

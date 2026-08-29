@@ -1,267 +1,650 @@
-//! Проникающая атака демона-босса `CBossFiendPenetrate` (`0x1FA`).
+//! Проникающая атака демона-босса `CBossFiendPenetrate` (`0x1FA`) для игрока и монстра.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
-//! `appserver/skills/bossfiendpenetrate.cpp`. Достигнутый объектный путь монстра
-//! сохраняет задержку и направление, единственный пакет запуска полёта,
-//! поражение одной клетки за такт до первого `BLOCK_UNFLY` и запрет повторного
-//! поражения одной цели на всём пути. Порядок кандидатов задаёт регион, формула
-//! и исходная последовательность `random` остаются у навыка, а общие защита, изменение
-//! цели и последствия смерти проходят через `monsterattack`. Варианты игрока,
-//! координатные перегрузки и `OnChangeRegion` остаются исходным материалом.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::OnChangeRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:721
-// RVA: 0x0012AAC0
-// ADDRESS: 0052aac0
-// PROTOTYPE: void __thiscall OnChangeRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrateEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// Действия `0/1/3` объектного пути монстра формируют `send_start`,
-// `send_fire` и `send_empty_path`; клиентские ошибки игрока остаются ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:816
-// RVA: 0x0012AAD0
-// ADDRESS: 0052aad0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::~CBossFiendPenetrate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:34
-// RVA: 0x0012B060
-// ADDRESS: 0052b060
-// PROTOTYPE: void __thiscall ~CBossFiendPenetrate(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// Объектный путь монстра начинает `execute_owned_boss_fiend_penetrate`;
-// вариант игрока остаётся ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:173
-// RVA: 0x0012B0F0
-// ADDRESS: 0052b0f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:196
-// RVA: 0x0012B1F0
-// ADDRESS: 0052b1f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:218
-// RVA: 0x0012B300
-// ADDRESS: 0052b300
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::End
-// STATUS: PARTIALLY_IMPLEMENTED
-// Завершение пути монстра выполняет `finish_base_attack_cast`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:240
-// RVA: 0x0012B410
-// ADDRESS: 0052b410
-// PROTOTYPE: void __thiscall End(int param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::CBossFiendPenetrate
-// STATUS: PARTIALLY_IMPLEMENTED
-// Идентификатор достигнутого пути задаёт `BOSS_FIEND_PENETRATE_SKILL_ID`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:22
-// RVA: 0x0012B4B0
-// ADDRESS: 0052b4b0
-// PROTOTYPE: undefined __thiscall CBossFiendPenetrate(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// Дальность, задержка повторного применения и блокировка движения монстра
-// проверяются в `execute_owned_boss_fiend_penetrate`; экипировка игрока ниже
-// остаётся исходным материалом.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:47
-// RVA: 0x0012B540
-// ADDRESS: 0052b540
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::CalculateAttackPower
-// STATUS: PARTIALLY_IMPLEMENTED
-// Формула и последовательность `random` пути монстра принадлежат
-// `attack_target`; свойства игрока остаются исходным материалом.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:652
-// RVA: 0x0012B8A0
-// ADDRESS: 0052b8a0
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// Уникальность цели и один удар объектного пути монстра выполняют
-// `BossFiendPenetrateProgress` и `attack_target`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:609
-// RVA: 0x0012BB30
-// ADDRESS: 0052bb30
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// Упорядоченный снимок клетки пути монстра даёт
-// `monster_attack_cell_candidates`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:580
-// RVA: 0x0012BC80
-// ADDRESS: 0052bc80
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossFiendPenetrate::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// Стадии объектного пути монстра выполняет
-// `execute_owned_boss_fiend_penetrate`; расход и ошибки игрока остаются ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossfiendpenetrate.cpp:259
-// RVA: 0x0012BD80
-// ADDRESS: 0052bd80
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+//! `appserver/skills/bossfiendpenetrate.cpp`. Навык проверяет задержку повторного применения,
+//! дальность, оружие категории `3` и MP, затем необратимо списывает MP и
+//! повторно проверяет оружие. После общей задержки он строит прямой путь,
+//! прекращает поражение перед первой клеткой `BLOCK_UNFLY` и обрабатывает не
+//! более одной клетки за проход ИИ. Каждая фигура поражается не более одного
+//! раза; формула игрока сохраняет два RNG-вызова и поправку уровня оружия,
+//! формула монстра — физический, стихийный и холистический RNG-порядок.
+//! `SkillExecutionKernel` хранит стадии игрока, а `CGame` только разрешает
+//! владельцев, применяет рассчитанную атаку и доставляет пакеты.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
 };
+use super::kernel::{SkillExecutionKernel, SkillTermination};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
+use super::poisonmoth::{cell_targets, master_info, target_level, target_position};
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_WEAPON_CATEGORY, GAP_WEAPON_DAMAGE_LEVEL,
+};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
 const BLOCK_UNFLY: u8 = 2;
 const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 const SKILL_USAGE_MISSILE_FLYING_TIME: u32 = 10_008;
 const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 
 pub(crate) const BOSS_FIEND_PENETRATE_SKILL_ID: u32 = 0x1fa;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerBossFiendPenetrateExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    destination: (i32, i32),
+    condition_checked: bool,
+    attacking_started: bool,
+    path: Vec<(i32, i32, u8)>,
+    attack_cell_count: usize,
+    current_cell: usize,
+    attacked: Vec<ShapeIdentity>,
+}
+impl PlayerBossFiendPenetrateExecutionState {
+    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
+        Self {
+            kernel: SkillExecutionKernel::begin(dispatch, now_ms),
+            destination,
+            condition_checked: false,
+            attacking_started: false,
+            path: Vec::new(),
+            attack_cell_count: 0,
+            current_cell: 0,
+            attacked: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> {
+        &self.kernel
+    }
+
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
+        &mut self.kernel
+    }
+}
+
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    }
+}
+
+pub(crate) const fn is_player_boss_fiend_penetrate_dispatch(
+    dispatch: PlayerSkillDispatch,
+) -> bool {
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::Point {
+            skill_id: BOSS_FIEND_PENETRATE_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Object {
+            skill_id: BOSS_FIEND_PENETRATE_SKILL_ID,
+            target: ShapeIdentity {
+                object_type: PLAYER_TYPE | MONSTER_TYPE,
+                ..
+            },
+        }
+    )
+}
+
+fn player_weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
+    player.equipment().get_goods(2).is_some_and(|weapon| {
+        weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3
+    })
+}
+
+fn send_player_failure(game: &CGame, player_id: i32, action: u8, mp_loss: u32) {
+    game.send_self_state_skill_failure(0x000b_fe01, player_id, action);
+    match action {
+        7 => game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss),
+        10 => game.send_skill_system_info(player_id, b"GS0285"),
+        0x0b => game.send_skill_system_info(player_id, b"GS0290"),
+        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
+        0x0e => game.send_skill_system_info(player_id, b"GS0297"),
+        _ => {}
+    }
+}
+
+fn send_player_start(game: &mut CGame, player_id: i32, skill_level: i32) {
+    let Some(direction) = game
+        .find_player(player_id)
+        .map(|player| player.shape().get_direction())
+    else {
+        return;
+    };
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(1);
+    message.add_long(BOSS_FIEND_PENETRATE_SKILL_ID as i32);
+    message.add_short(skill_level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(direction);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_player_fire(
+    game: &mut CGame,
+    player_id: i32,
+    skill_level: i32,
+    dispatch: PlayerSkillDispatch,
+    destination: (i32, i32),
+    missile_flying_time_ms: u32,
+) {
+    let target = match dispatch {
+        PlayerSkillDispatch::Object { target, .. } => Some(target),
+        _ => None,
+    };
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(2);
+    message.add_long(BOSS_FIEND_PENETRATE_SKILL_ID as i32);
+    message.add_short(skill_level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(target.map_or(0, |identity| identity.object_type));
+    message.add_long(target.map_or(0, |identity| identity.id));
+    message.add_long(destination.0);
+    message.add_long(destination.1);
+    message.add_ulong(missile_flying_time_ms);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_player_empty_path(game: &mut CGame, player_id: i32, skill_level: i32) {
+    let Some(direction) = game
+        .find_player(player_id)
+        .map(|player| player.shape().get_direction())
+    else {
+        return;
+    };
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(3);
+    message.add_long(BOSS_FIEND_PENETRATE_SKILL_ID as i32);
+    message.add_short(skill_level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    message.add_long(direction);
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+}
+
+fn finish_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+    successful: bool,
+) {
+    restore_player_movement(game, player_id);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    if successful {
+        player_ai.mark_boss_fiend_penetrate_used(runtime.now_milliseconds());
+    }
+}
+
+pub(crate) fn complete_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .boss_fiend_penetrate()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, true);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .boss_fiend_penetrate()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
+fn player_target_is_dead(
+    game: &CGame,
+    region_id: i32,
+    dispatch: PlayerSkillDispatch,
+) -> bool {
+    match dispatch {
+        PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE => {
+            game.find_player(target.id).is_none_or(CPlayer::is_dead)
+        }
+        PlayerSkillDispatch::Object { target, .. } if target.object_type == MONSTER_TYPE => game
+            .find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(target.id))
+            .is_none_or(|monster: &CMonster| monster.hit_points() == 0),
+        PlayerSkillDispatch::Object { .. } => true,
+        _ => false,
+    }
+}
+
+fn calculate_player_attack(
+    game: &mut CGame,
+    player_id: i32,
+    target_level: u8,
+    skill_level: i32,
+    damage_factor_percent: u32,
+    hit_modifier: i32,
+) -> Option<(MasterInfo, AttackInformation)> {
+    let player = game.find_player(player_id)?;
+    let combat = player.combat_properties();
+    let master = master_info(player);
+    let weapon_level = player.equipment().get_goods(2).map_or(0, |weapon| {
+        weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)
+    });
+    let (divisor, floor) = game.globe_setup().weapon_damage_factors();
+    let level_delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
+    let weapon_factor = (if divisor == 0.0 {
+        1.0
+    } else {
+        level_delta as f32 / divisor
+    })
+    .min(1.0)
+    .max(floor);
+    let minimum = combat.minimum_attack as i32;
+    let maximum = combat.maximum_attack as i32;
+    let width = maximum.wrapping_sub(minimum).wrapping_add(1);
+    let physical = minimum
+        .wrapping_add(game.skill_random_below(width))
+        .max(0);
+    let mut attack = AttackInformation {
+        skill_id: BOSS_FIEND_PENETRATE_SKILL_ID,
+        skill_level: skill_level as u8,
+        attacker_type: PLAYER_TYPE,
+        attacker_id: player_id,
+        attacker_team_id: master.master_team_id,
+        attacker_faction_id: master.master_guild_id,
+        attacker_union_id: master.master_union_id,
+        hit_modifier,
+        damage_factor: damage_factor_percent as f32 * weapon_factor * 0.01,
+        damage_modifier: 0,
+        critical: false,
+        blast_attack: false,
+        full_miss: 0,
+        damages: vec![
+            AttackPower {
+                kind: AttackPowerType::Physical,
+                hp_damage: physical,
+                mp_damage: 0,
+            },
+            AttackPower {
+                kind: AttackPowerType::Element,
+                hp_damage: (combat.add_element_attack as i32).max(0),
+                mp_damage: 0,
+            },
+            AttackPower {
+                kind: AttackPowerType::Soul,
+                hp_damage: i32::from(combat.add_soul_attack),
+                mp_damage: 0,
+            },
+        ],
+    };
+    if game.skill_random_below(100) < i32::from(combat.cch) {
+        attack.critical = true;
+        let critical_rate = game.globe_setup().critical_rate();
+        for power in &mut attack.damages {
+            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+        }
+    }
+    Some((master, attack))
+}
+
+#[allow(clippy::too_many_arguments, reason = "аргументы сохраняют исходную клеточную атаку игрока")]
+fn attack_player_cell<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    region_id: i32,
+    skill_level: i32,
+    damage_factor_percent: u32,
+    hit_modifier: i32,
+    cell_x: i32,
+    cell_y: i32,
+    attacked: &mut Vec<ShapeIdentity>,
+    runtime: &mut Runtime,
+) {
+    if cell_x == 0 && cell_y == 0 {
+        return;
+    }
+    let Some(master) = game.find_player(player_id).map(master_info) else {
+        return;
+    };
+    for target in cell_targets(game, region_id, cell_x, cell_y) {
+        if (target.object_type == PLAYER_TYPE && target.id == player_id)
+            || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+            || attacked.contains(&target)
+            || !game.owned_player_skill_target_attackable(master, target, region_id)
+        {
+            continue;
+        }
+        attacked.push(target);
+        let Some(level) = target_level(game, region_id, target) else {
+            continue;
+        };
+        let Some((master, attack)) = calculate_player_attack(
+            game,
+            player_id,
+            level,
+            skill_level,
+            damage_factor_percent,
+            hit_modifier,
+        ) else {
+            continue;
+        };
+        match target.object_type {
+            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(
+                master, target.id, region_id, attack, runtime,
+            ),
+            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(
+                master, target.id, region_id, attack, runtime,
+            ),
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_player_boss_fiend_penetrate_dispatch(dispatch) {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let Some((region_id, source_x, source_y, skill_level, initial_mana)) = game
+        .find_player(player_id)
+        .and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+                player.learned_skill_level(BOSS_FIEND_PENETRATE_SKILL_ID),
+                player.mana(),
+            ))
+        })
+    else {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(properties) = game
+        .skill_base_properties(BOSS_FIEND_PENETRATE_SKILL_ID, skill_level)
+        .cloned()
+    else {
+        if player_ai.boss_fiend_penetrate().is_some() {
+            finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
+        }
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
+    let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let missile_flying_time = properties.query_property(SKILL_USAGE_MISSILE_FLYING_TIME);
+    let damage_factor = properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR);
+    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+
+    if player_ai.boss_fiend_penetrate().is_none() {
+        let Some(destination) = target_position(game, region_id, player_id, dispatch) else {
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let now_ms = runtime.now_milliseconds();
+        if player_ai.boss_fiend_penetrate_last_used_ms() != 0
+            && !time_reached(
+                now_ms,
+                player_ai.boss_fiend_penetrate_last_used_ms(),
+                reuse_delay,
+            )
+        {
+            send_player_failure(game, player_id, 0x0d, mp_loss);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let path = game.base_magic_path(
+            region_id,
+            source_x,
+            source_y,
+            destination.0,
+            destination.1,
+            None,
+        );
+        if maximum_distance != 0 && path.len() > maximum_distance as usize {
+            send_player_failure(game, player_id, 0x0b, mp_loss);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(player) = game.find_player(player_id) else {
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if !player_weapon_is_valid(game, player) {
+            send_player_failure(game, player_id, 0x0e, mp_loss);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_player_failure(game, player_id, 7, mp_loss);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(BOSS_FIEND_PENETRATE_SKILL_ID));
+        }
+        player_ai.begin_boss_fiend_penetrate(PlayerBossFiendPenetrateExecutionState::begin(
+            dispatch,
+            destination,
+            now_ms,
+        ));
+    } else if player_ai
+        .boss_fiend_penetrate()
+        .is_none_or(|state| state.kernel().dispatch() != dispatch)
+    {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    let destination = target_position(game, region_id, player_id, dispatch).unwrap_or_else(|| {
+        player_ai
+            .boss_fiend_penetrate()
+            .map(|state| state.destination)
+            .unwrap_or((source_x, source_y))
+    });
+    if player_target_is_dead(game, region_id, dispatch) {
+        send_player_failure(game, player_id, 10, mp_loss);
+        finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if player_ai
+        .boss_fiend_penetrate()
+        .is_some_and(|state| !state.condition_checked)
+    {
+        let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
+        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
+            send_player_failure(game, player_id, 7, mp_loss);
+            finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_mana(current_mana.wrapping_sub(mp_loss));
+        }
+        let _ = game.update_player_current_state(
+            player_id,
+            GamePlayerFightStatePhase::MoveShapeAi,
+        );
+        if game
+            .find_player(player_id)
+            .is_none_or(|player| !player_weapon_is_valid(game, player))
+        {
+            send_player_failure(game, player_id, 0x0e, mp_loss);
+            finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let direction = get_line_direction(source_x, source_y, destination.0, destination.1);
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.movement_shape_mut().set_direction(direction);
+        }
+        send_player_start(game, player_id, skill_level);
+        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+            state.condition_checked = true;
+            let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+
+    let started_at_ms = player_ai
+        .boss_fiend_penetrate()
+        .map(|state| state.kernel().started_at_ms())
+        .unwrap_or_default();
+    if player_ai
+        .boss_fiend_penetrate()
+        .is_some_and(|state| !state.attacking_started)
+    {
+        if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) {
+            return player_terminal(QueuedSkillExecutionState::Pending);
+        }
+        restore_player_movement(game, player_id);
+        let path = game.base_magic_path(
+            region_id,
+            source_x,
+            source_y,
+            destination.0,
+            destination.1,
+            (maximum_distance != 0).then_some(maximum_distance),
+        );
+        if path.is_empty() {
+            send_player_empty_path(game, player_id, skill_level);
+            finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if maximum_distance != 0
+            && path.len() > maximum_distance.wrapping_add(1) as usize
+        {
+            send_player_failure(game, player_id, 0x0b, mp_loss);
+            finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, false);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let attack_cell_count = path
+            .iter()
+            .position(|cell| cell.2 == BLOCK_UNFLY)
+            .unwrap_or(path.len());
+        let endpoint = path
+            .get(attack_cell_count)
+            .or_else(|| path.last())
+            .copied()
+            .unwrap_or((destination.0, destination.1, BLOCK_UNFLY));
+        let visual_destination = if matches!(dispatch, PlayerSkillDispatch::Object { .. }) {
+            destination
+        } else {
+            (endpoint.0, endpoint.1)
+        };
+        send_player_fire(
+            game,
+            player_id,
+            skill_level,
+            dispatch,
+            visual_destination,
+            missile_flying_time,
+        );
+        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+            state.path = path;
+            state.attack_cell_count = attack_cell_count;
+            state.current_cell = 0;
+            state.attacking_started = true;
+            let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
+            let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
+        }
+    }
+
+    let Some((current_cell, attack_cell_count, cell)) = player_ai
+        .boss_fiend_penetrate()
+        .map(|state| {
+            (
+                state.current_cell,
+                state.attack_cell_count,
+                state.path.get(state.current_cell).copied(),
+            )
+        })
+    else {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if current_cell >= attack_cell_count {
+        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+            let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
+        }
+        finish_player_boss_fiend_penetrate(game, player_id, player_ai, runtime, true);
+        return player_terminal(QueuedSkillExecutionState::Completed);
+    }
+    let cell_due_ms = delay.wrapping_add(
+        missile_flying_time.wrapping_mul(current_cell as u32),
+    );
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, cell_due_ms) {
+        return player_terminal(QueuedSkillExecutionState::Pending);
+    }
+    if let Some((cell_x, cell_y, _)) = cell {
+        let mut attacked = player_ai
+            .boss_fiend_penetrate_mut()
+            .map(|state| std::mem::take(&mut state.attacked))
+            .unwrap_or_default();
+        attack_player_cell(
+            game,
+            player_id,
+            region_id,
+            skill_level,
+            damage_factor,
+            hit_modifier,
+            cell_x,
+            cell_y,
+            &mut attacked,
+            runtime,
+        );
+        if let Some(state) = player_ai.boss_fiend_penetrate_mut() {
+            state.attacked = attacked;
+            state.current_cell = state.current_cell.wrapping_add(1);
+        }
+    }
+    player_terminal(QueuedSkillExecutionState::Pending)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BossFiendPenetrateProgress {
