@@ -8,6 +8,8 @@
 //! урона, затем критический удар. `CGame` только разрешает владельцев цели и
 //! применяет рассчитанную атаку через общую защиту. Координатные перегрузки
 //! `Begin` остаются ниже недостигнутыми.
+//! `End` сбрасывает execution-состояние и завершает `CAttackSkill::End(1)`;
+//! отмена проходит через тот же владеющий путь.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -15,7 +17,7 @@ use super::basemagic::{
     SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -23,6 +25,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -146,11 +149,31 @@ fn send_cancel(game: &mut CGame, player_id: i32, level: i32) {
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish_player_lightning<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_lightning_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_lightning<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.lightning().map(|state| state.kernel().dispatch()) else {
+        return false;
+    };
+    finish_player_lightning(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
@@ -282,6 +305,9 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(LIGHTNING_SKILL_ID, level) else {
+        if player_ai.lightning().is_some() {
+            finish_player_lightning(game, player_id, player_ai, runtime);
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -355,11 +381,11 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            finish_player_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            finish(game, player_id);
+            finish_player_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -396,12 +422,12 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_failure(game, player_id, 10);
-            finish(game, player_id);
+            finish_player_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if target_dead(game, region_id, target) {
             send_failure(game, player_id, 10);
-            finish(game, player_id);
+            finish_player_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((current_source_x, current_source_y)) =
@@ -412,7 +438,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
                 ))
             })
         else {
-            finish(game, player_id);
+            finish_player_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let path = game.base_magic_path(
@@ -426,7 +452,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             send_failure(game, player_id, 0x0b);
             game.send_skill_system_info(player_id, b"GS0290");
-            finish(game, player_id);
+            finish_player_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         send_fire(
@@ -446,14 +472,14 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(master) = game.find_player(player_id).map(master_info) else {
-        finish(game, player_id);
+        finish_player_lightning(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target_dead(game, region_id, target)
         || !game.owned_player_skill_target_attackable(master, target, region_id)
     {
         send_cancel(game, player_id, level);
-        finish(game, player_id);
+        finish_player_lightning(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((master, attack)) = calculate_attack(
@@ -466,7 +492,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         hit_modifier,
         damage_modifier,
     ) else {
-        finish(game, player_id);
+        finish_player_lightning(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     match target.object_type {
@@ -490,8 +516,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_lightning_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_lightning(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 

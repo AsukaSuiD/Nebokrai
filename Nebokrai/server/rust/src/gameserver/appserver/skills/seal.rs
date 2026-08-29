@@ -7,6 +7,8 @@
 //! Формула, пакеты и жизненный цикл состояния принадлежат этому владельцу;
 //! `CGame` только разрешает владельцев, применяет атаку и атомарно заменяет состояние
 //! монстра. Координатные перегрузки `Begin` остаются в RAW ниже.
+//! `End` сбрасывает execution-состояние, возвращает движение и завершает
+//! `CAttackSkill::End(1)` после применения либо при отмене команды.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -14,7 +16,7 @@ use super::basemagic::{
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
     SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::sealstate::SealState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -23,6 +25,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -116,11 +119,31 @@ fn send_fire(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish_player_seal<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_seal_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_seal<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.seal().map(|state| state.kernel().dispatch()) else {
+        return false;
+    };
+    finish_player_seal(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -221,6 +244,9 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         master_info(player),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(SEAL_SKILL_ID, level) else {
+        if player_ai.seal().is_some() {
+            finish_player_seal(game, player_id, player_ai, runtime);
+        }
         return reject_begin(game, player_id);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -278,17 +304,17 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
     let Some((target_x, target_y, target_level, target_name, target_dead)) =
         target_snapshot(game, region_id, target.id)
     else {
-        finish(game, player_id);
+        finish_player_seal(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target_dead {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
-        finish(game, player_id);
+        finish_player_seal(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if !game.owned_player_skill_target_attackable(master, target, region_id) {
-        finish(game, player_id);
+        finish_player_seal(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -297,7 +323,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            finish_player_seal(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -321,25 +347,24 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         let current_source_level = game.find_player(player_id).map_or(0, |player| i32::from(player.level()));
         if current_source_level.wrapping_add(10) < target_level {
             send_failure(game, player_id, 2);
-            player_ai.mark_seal_used(runtime.now_milliseconds());
-            finish(game, player_id);
+            finish_player_seal(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Completed);
         }
         let Some((current_x, current_y)) = game.find_player(player_id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else {
-            finish(game, player_id);
+            finish_player_seal(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let path = game.base_magic_path(region_id, current_x, current_y, target_x, target_y, None);
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             send_failure(game, player_id, 0x0b);
             game.send_skill_system_info(player_id, b"GS0290");
-            finish(game, player_id);
+            finish_player_seal(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             send_failure(game, player_id, 0x0f);
             game.send_skill_system_info_with_text(player_id, b"GS0296", &target_name);
-            finish(game, player_id);
+            finish_player_seal(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let missile_flying_time_ms = missile_per_cell_ms.wrapping_mul(path.len() as u32);
@@ -383,8 +408,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_seal_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_seal(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 

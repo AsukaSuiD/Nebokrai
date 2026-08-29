@@ -1024,9 +1024,11 @@ use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, chaos_sphere_targets, ChaosSpherePhalanxTick,
 };
 use crate::gameserver::appserver::skills::lightning::{
-    execute_player_lightning, is_lightning_target,
+    cancel_player_lightning, execute_player_lightning, is_lightning_target, LIGHTNING_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::seal::{execute_player_seal, is_seal_target};
+use crate::gameserver::appserver::skills::seal::{
+    cancel_player_seal, execute_player_seal, is_seal_target, SEAL_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     execute_battle_fairy_base_magic, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
 };
@@ -37461,6 +37463,8 @@ impl CGame {
                 | LORD_WIDERANGING_ATTACK_SKILL_ID
                 | LORD_FAST_ATTACK_SKILL_ID
                 | CHAOS_SPHERE_SKILL_ID
+                | LIGHTNING_SKILL_ID
+                | SEAL_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37523,6 +37527,8 @@ impl CGame {
             }
             LORD_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
             CHAOS_SPHERE_SKILL_ID => player_ai.chaos_sphere().is_some(),
+            LIGHTNING_SKILL_ID => player_ai.lightning().is_some(),
+            SEAL_SKILL_ID => player_ai.seal().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37635,6 +37641,10 @@ impl CGame {
             CHAOS_SPHERE_SKILL_ID => {
                 cancel_player_chaos_sphere(self, player_id, &mut player_ai, runtime)
             }
+            LIGHTNING_SKILL_ID => {
+                cancel_player_lightning(self, player_id, &mut player_ai, runtime)
+            }
+            SEAL_SKILL_ID => cancel_player_seal(self, player_id, &mut player_ai, runtime),
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
