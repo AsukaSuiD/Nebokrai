@@ -35321,6 +35321,27 @@ impl CGame {
         message.send_to_player(self.net_server(), player_id)
     }
 
+    /// Передаёт временно извлечённый `CPlayerAI` существующему общему
+    /// `End`-dispatcher-у и возвращает того же владельца вызывающему AI-pass.
+    /// Это только координация Rust-заимствований: конкретное завершение и его
+    /// packet/state side effects остаются у skill-owner-а.
+    fn end_detached_player_skill<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        skill_id: u32,
+        cause: MaterializedSkillEndCause,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> Option<PlayerSkillEndRuntimeOutcome> {
+        self.find_player_mut(player_id)?
+            .restore_player_ai(std::mem::take(player_ai));
+        let outcome = self.end_materialized_player_skill(player_id, skill_id, cause, runtime);
+        if let Some(player) = self.find_player_mut(player_id) {
+            *player_ai = player.take_player_ai();
+        }
+        outcome
+    }
+
     pub(crate) fn release_reciprocal_player_target<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -38939,6 +38960,58 @@ impl CGame {
         let active_player_skill = self
             .find_player(player_id)
             .is_some_and(|player| player.current_skill_id().is_some());
+        if execute_player_skill
+            && can_schedule
+            && let Some(dispatch) = player_ai.next_player_skill()
+        {
+            let (is_rider, can_fight, current_skill_id) = self
+                .find_player(player_id)
+                .map(|player| {
+                    (
+                        player.is_rider(),
+                        player.can_fight(),
+                        player.current_skill_id(),
+                    )
+                })
+                .unwrap_or((false, false, None));
+            let blocked_by_ride = !active_player_skill && is_rider;
+            if blocked_by_ride || !can_fight {
+                let ended = if let Some(skill_id) = current_skill_id {
+                    self.end_detached_player_skill(
+                        player_id,
+                        skill_id,
+                        MaterializedSkillEndCause::Interruption,
+                        player_ai,
+                        runtime,
+                    ) == Some(PlayerSkillEndRuntimeOutcome::Ended)
+                } else {
+                    player_ai.finish_player_skill(dispatch, SkillTermination::Rejected)
+                };
+                if !ended && current_skill_id.is_some() {
+                    let released = player_ai.finish_player_skill(
+                        dispatch,
+                        SkillTermination::Cancelled,
+                    );
+                    if released
+                        && let Some(player) = self.find_player_mut(player_id)
+                    {
+                        player.set_skill_moveable(true);
+                        player.set_current_skill_id(None);
+                    }
+                }
+                let delivery = self.send_base_attack_failure(player_id, 2);
+                tracing::trace!(
+                    player_id,
+                    ?dispatch,
+                    blocked_by_ride,
+                    can_fight,
+                    ended,
+                    delivery,
+                    "очередь навыка игрока отклонена общим владельцем расписания"
+                );
+                return (1, 1);
+            }
+        }
         if execute_player_skill
             && (can_schedule || active_player_skill)
             && let Some(dispatch) = player_ai.next_player_skill()

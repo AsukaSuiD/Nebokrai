@@ -2824,9 +2824,9 @@ impl CPlayerAI {
 // ============================================================================
 // FUNCTION: CPlayerAI::OnSchedule
 // STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: ветвь пустой очереди навыков с одним FIFO-назначением,
-// пространственным шагом и `ASA_MOVE`; ожидающая команда не начинается у
-// мёртвого владельца, а ветвь целей ниже ещё не достигнута.
+// IMPLEMENTED: FIFO назначения и навыков, `ASA_MOVE`, запрет начала у мёртвого
+// владельца, удаление ожидающей команды при `RideState` и общий отказ либо
+// `End` при `m_bCanFight == false`. Ветвь разрешения целей ниже ещё не достигнута.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:256
