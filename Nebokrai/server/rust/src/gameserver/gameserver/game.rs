@@ -845,8 +845,14 @@ use crate::gameserver::appserver::skills::bloodrose::{
     cancel_player_blood_rose, complete_player_blood_rose, execute_player_blood_rose,
     is_blood_rose_dispatch, BLOOD_ROSE_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::scorpion::{execute_player_scorpion, is_scorpion_dispatch};
-use crate::gameserver::appserver::skills::boalock::{execute_player_boa_lock, is_boa_lock_dispatch};
+use crate::gameserver::appserver::skills::scorpion::{
+    cancel_player_scorpion, complete_player_scorpion, execute_player_scorpion,
+    is_scorpion_dispatch, SCORPION_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::boalock::{
+    cancel_player_boa_lock, complete_player_boa_lock, execute_player_boa_lock,
+    is_boa_lock_dispatch, BOA_LOCK_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::fallingstar::{execute_player_falling_star, is_falling_star_dispatch};
 use crate::gameserver::appserver::skills::explosivearrow::{
     cancel_player_explosive_arrow, complete_player_explosive_arrow,
@@ -37553,6 +37559,8 @@ impl CGame {
                 | RAIN_ARROW_SKILL_ID
                 | POISON_MOTH_SKILL_ID
                 | BLOOD_ROSE_SKILL_ID
+                | SCORPION_SKILL_ID
+                | BOA_LOCK_SKILL_ID
                 | EXPLOSIVE_ARROW_SKILL_ID
                 | EXPLOSIVE_ARROW_2_SKILL_ID
                 | EXPLOSIVE_ARROW_3_SKILL_ID
@@ -37641,6 +37649,8 @@ impl CGame {
             RAIN_ARROW_SKILL_ID => player_ai.rain_arrow().is_some(),
             POISON_MOTH_SKILL_ID => player_ai.poison_moth().is_some(),
             BLOOD_ROSE_SKILL_ID => player_ai.blood_rose().is_some(),
+            SCORPION_SKILL_ID => player_ai.scorpion().is_some(),
+            BOA_LOCK_SKILL_ID => player_ai.boa_lock().is_some(),
             EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => {
                 player_ai.explosive_arrow().is_some()
             }
@@ -37716,6 +37726,18 @@ impl CGame {
                     runtime,
                 )),
                 BLOOD_ROSE_SKILL_ID => Some(complete_player_blood_rose(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                SCORPION_SKILL_ID => Some(complete_player_scorpion(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                BOA_LOCK_SKILL_ID => Some(complete_player_boa_lock(
                     self,
                     player_id,
                     &mut player_ai,
@@ -37988,6 +38010,12 @@ impl CGame {
             }
             BLOOD_ROSE_SKILL_ID => {
                 cancel_player_blood_rose(self, player_id, &mut player_ai, runtime)
+            }
+            SCORPION_SKILL_ID => {
+                cancel_player_scorpion(self, player_id, &mut player_ai, runtime)
+            }
+            BOA_LOCK_SKILL_ID => {
+                cancel_player_boa_lock(self, player_id, &mut player_ai, runtime)
             }
             EXPLOSIVE_ARROW_SKILL_ID
             | EXPLOSIVE_ARROW_2_SKILL_ID
