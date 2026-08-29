@@ -4649,6 +4649,13 @@ impl CPlayer {
         self.move_shape.tick_boss_blue_fury_state(now_ms)
     }
 
+    pub(crate) fn activate_loaded_boss_blue_fury_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::bossbluefurystate::BossBlueFuryState> {
+        self.move_shape.activate_loaded_boss_blue_fury_state(now_ms)
+    }
+
     pub(crate) const fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
         self.move_shape.soul_collect_state()
     }

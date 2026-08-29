@@ -118,7 +118,8 @@ use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CU
 use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::bossbluefurystate::{
-    BossBlueFuryState, BossBlueFuryTick,
+    BossBlueFuryState, BossBlueFuryTick, BOSS_BLUE_FURY_STATE_BYTES,
+    BOSS_BLUE_FURY_STATE_ID,
 };
 use crate::gameserver::appserver::skills::bossbluequakestate::BossBlueQuakeState;
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
@@ -736,6 +737,9 @@ impl CMoveShape {
         if let Some(state) = self.energy_holding_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded());
         }
+        if let Some(state) = self.boss_blue_fury_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+        }
         for state in &self.defense_shields {
             match state {
                 DefenseShieldState::Mana(state) => {
@@ -890,6 +894,11 @@ impl CMoveShape {
                     .query_property(super::skills::energyholding::PARAMETER_PERCENT);
                 EnergyHoldingState::decode(&states, offset, parameter_percent).ok()
             });
+        self.boss_blue_fury_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(BOSS_BLUE_FURY_STATE_ID))
+            .and_then(|offset| BossBlueFuryState::decode(&states, offset, 0).ok());
         self.defense_shields.clear();
         self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
             match read_u32(&states, offset) {
@@ -1765,11 +1774,14 @@ impl CMoveShape {
     }
 
     pub(crate) fn take_boss_blue_fury_state(&mut self) -> Option<BossBlueFuryState> {
-        self.boss_blue_fury_state.take()
+        let state = self.boss_blue_fury_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_FURY_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn begin_boss_blue_fury_state(&mut self, state: BossBlueFuryState) {
         debug_assert!(self.boss_blue_fury_state.is_none());
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.boss_blue_fury_state = Some(state);
     }
 
@@ -1786,8 +1798,19 @@ impl CMoveShape {
         let snapshot = *state;
         if tick.expired {
             self.boss_blue_fury_state = None;
+            self.remove_serialized_state_record(snapshot.skill_id(), BOSS_BLUE_FURY_STATE_BYTES);
         }
         Some((snapshot, tick))
+    }
+
+    pub(crate) fn activate_loaded_boss_blue_fury_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<BossBlueFuryState> {
+        let mut state = self.boss_blue_fury_state?;
+        state.activate_loaded(now_ms);
+        self.boss_blue_fury_state = Some(state);
+        Some(state)
     }
 
     pub(crate) fn replace_boss_blue_quake_state(
@@ -3825,6 +3848,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::agility2::AGILITY_2_SKILL_ID => AGILITY_STATE_2_BYTES,
             super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
             ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
+            BOSS_BLUE_FURY_STATE_ID => BOSS_BLUE_FURY_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

@@ -6,45 +6,16 @@
 //! фазе, а затем сохраняют состояние до общего срока. Только для монстра минимальная
 //! и максимальная атака заменяются указанной долей коэффициента с исходным округлением
 //! дробной части строго больше `0.5`; визуальные начало и завершение сохраняют
-//! `0xBFE03/04`.
+//! `0xBFE03/04`. DB-запись содержит остаток срока и коэффициент атаки;
+//! `weak_time` после загрузки остаётся нулевым, а `Begin` повторно не вызывается.
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp
-
-// ============================================================================
-// FUNCTION: CBossBlueFuryState::Unserialize
-// STATUS: PARTIALLY_IMPLEMENTED
-// Достигнутый путь монстра хранит те же длительность и коэффициент в
-// `BossBlueFuryState`; чтение сохранённого состояния остаётся ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:190
-// RVA: 0x001D6190
-// ADDRESS: 005d6190
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFuryState::Serialize
-// STATUS: PARTIALLY_IMPLEMENTED
-// Достигнутый путь монстра выражен `BossBlueFuryState::client_time` и
-// каноническим хранилищем; сохранение игрока остаётся неподключённым.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:177
-// RVA: 0x001E7330
-// ADDRESS: 005e7330
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBossBlueFuryState::CBossBlueFuryState
@@ -223,6 +194,7 @@ use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const BOSS_BLUE_FURY_STATE_ID: u32 = 0x1f7;
+pub(crate) const BOSS_BLUE_FURY_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BossBlueFuryState {
@@ -270,6 +242,31 @@ impl BossBlueFuryState {
         } else {
             deadline.wrapping_sub(now_ms) as i32
         }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != BOSS_BLUE_FURY_STATE_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?, 0))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; BOSS_BLUE_FURY_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(BOSS_BLUE_FURY_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(BOSS_BLUE_FURY_STATE_ID);
+        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_i32(self.attack_factor_percent);
+        bytes.try_into().expect("размер состояния ярости синего босса фиксирован")
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; BOSS_BLUE_FURY_STATE_BYTES] {
+        self.encoded(self.started_at_ms)
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) fn tick(&mut self, now_ms: u32) -> BossBlueFuryTick {
