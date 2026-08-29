@@ -8,6 +8,7 @@
 //! `0xBFE03`; отдельного пакета завершения этот владелец не создаёт.
 
 use super::promotion::PROMOTION_SKILL_ID;
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -79,6 +80,29 @@ pub(crate) fn send_promotion_state_begin(
     message.add_long(state.client_time(now_ms));
     message.add_long(0);
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn expire_monster_promotion_state(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    now_ms: u32,
+) -> bool {
+    let ended = region
+        .find_monster_by_id_mut(monster_id)
+        .and_then(|monster| {
+            monster
+                .move_shape_mut()
+                .take_expired_promotion_state(now_ms)
+        })
+        .is_some();
+    if ended {
+        tracing::trace!(
+            region_id = region.id,
+            monster_id,
+            "состояние усиления монстра завершено"
+        );
+    }
+    ended
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.

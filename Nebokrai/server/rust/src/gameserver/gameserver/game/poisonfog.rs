@@ -58,5 +58,4 @@ impl CGame {
         }
         applied
     }
-    pub(super) fn expire_player_poison_fog<Runtime: GameMainLoopRuntime>(&mut self, player_id: i32, now_ms: u32, runtime: &mut Runtime) -> bool { let removed = self.find_player_mut(player_id).and_then(|player| { let region = player.server_region_id()?; let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; let state = player.take_expired_poison_fog_state(now_ms)?; Some((region, x, y, state)) }); let Some((region, x, y, state)) = removed else { return false }; let identity = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID }; send_poison_fog_state_visual(self, region, identity, x, y, state, false, now_ms); let _ = self.update_player_properties(player_id, runtime); true }
 }

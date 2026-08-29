@@ -1083,6 +1083,10 @@ use crate::gameserver::appserver::skills::poisonarrowstate::{
 use crate::gameserver::appserver::skills::promotion::{
     PROMOTION_SKILL_ID, execute_player_promotion,
 };
+use crate::gameserver::appserver::skills::promotionstate::expire_monster_promotion_state;
+use crate::gameserver::appserver::skills::poisonfogstate::{
+    expire_player_poison_fog_state, take_expired_monster_poison_fog_state,
+};
 use crate::gameserver::appserver::skills::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::skills::spiderpoisonstate::{
     SpiderPoisonStateTick, send_spider_poison_state_visual,
@@ -26401,7 +26405,7 @@ impl CGame {
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
         let _ = expire_player_daub_poison_state(self, player_id, now_ms);
-        let _ = self.expire_player_poison_fog(player_id, now_ms, runtime);
+        let _ = expire_player_poison_fog_state(self, player_id, now_ms, runtime);
         let rage_break_context = self.find_player(player_id).and_then(|player| {
             Some((
                 player.server_region_id()?,
@@ -42294,21 +42298,20 @@ impl CGame {
                         monster_id,
                         now_ms,
                     );
-                    let expired_poison_fog = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| { let x = monster.move_shape().shape().get_tile_x().ok()?; let y = monster.move_shape().shape().get_tile_y().ok()?; let state = monster.move_shape_mut().take_expired_poison_fog_state(now_ms)?; Some((x, y, state)) });
-                    let promotion_ended = owner
-                        .base_mut()
-                        .find_monster_by_id_mut(monster_id)
-                        .and_then(|monster| {
-                            monster
-                                .move_shape_mut()
-                                .take_expired_promotion_state(now_ms)
-                        })
-                        .is_some();
-                    if promotion_ended {
-                        tracing::trace!(region_id, monster_id, "состояние усиления монстра завершено");
-                    }
+                    let expired_poison_fog = take_expired_monster_poison_fog_state(
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
+                    let _ = expire_monster_promotion_state(
+                        owner.base_mut(),
+                        monster_id,
+                        now_ms,
+                    );
                     self.restore_region_owner(owner);
-                    if let Some((x, y, state)) = expired_poison_fog { crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual(self, region_id, ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID }, x, y, state, false, now_ms); }
+                    if let Some(expired) = expired_poison_fog {
+                        expired.deliver(self, region_id, now_ms);
+                    }
                 }
                 let expired_attribute_states = if let Some(mut owner) = self.take_region_owner(region_id) {
                     let result = owner.base_mut().find_monster_by_id_mut(monster_id).map(|monster| {
