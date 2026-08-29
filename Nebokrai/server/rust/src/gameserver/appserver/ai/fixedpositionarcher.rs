@@ -8,31 +8,15 @@
 //! достигнутый владелец навыка не использует произвольный порядок хранилища
 //! сущностей. `OnIdle` ставит строгую очередь
 //! `ChangeSkill → Stand → SearchEnemy`, а завершённая атака сохраняет навык и
-//! снова ставит поиск. В `OnChangeSkill` достигнута постановка задержки
-//! выбранного навыка; неизвестный точный смысл его виртуальной проверки
-//! сохранён в RAW.
+//! снова ставит поиск. `OnChangeSkill` проверяет `CSkill::IsRestored` и только
+//! для ещё не восстановленного навыка дописывает полный `GetRestoreTime` в
+//! хвост FIFO.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\fixedpositionarcher.cpp
-
-// FUNCTION: CFixedPositionArcher::OnChangeSkill
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: общий цикл монстра назначает текущий навык, а этот owner
-// добавляет `STAND` с его задержкой в хвост FIFO.
-// UNKNOWN: точный смысл виртуальной проверки навыка перед постановкой `STAND`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\fixedpositionarcher.cpp:26
-// RVA: 0x0020F9F0
-// ADDRESS: 0060f9f0
-// PROTOTYPE: int __thiscall OnChangeSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // COMPONENT_VARIANT_END: GameServer
 
@@ -79,8 +63,9 @@ pub(crate) fn queue_stationary_guard_idle<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Дополняет `OnChangeSkill` AI5 и наследующего его AI23 задержкой выбранного
-/// навыка. Событие добавляется в хвост уже существующей FIFO-очереди.
+/// Дополняет `OnChangeSkill` AI5 и наследующего его AI23: отдельный вызов
+/// часов повторяет `CSkill::IsRestored`, а событие с полным `GetRestoreTime`
+/// добавляется в хвост FIFO только для ещё не восстановленного навыка.
 pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
     game: &CGame,
     region: &mut CServerRegion,
@@ -106,6 +91,14 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
         return;
     };
     let delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let last_used_ms = region
+        .find_monster_by_id(monster_id)
+        .map(|monster| monster.skill_last_used_ms(u32::from(skill.id)))
+        .unwrap_or_default();
+    let restored_at_ms = runtime.now_milliseconds();
+    if last_used_ms == 0 || restored_at_ms.wrapping_sub(last_used_ms) >= delay_ms {
+        return;
+    }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.begin_active_ai_stand(delay_ms, runtime.now_milliseconds());
     }
