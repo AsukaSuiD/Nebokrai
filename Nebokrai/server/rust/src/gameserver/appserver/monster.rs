@@ -837,6 +837,11 @@ impl CMonster {
         self.base_ai.begin_active_search_enemy(now_ms);
     }
 
+    pub(crate) fn begin_active_ai_change_skill(&mut self, now_ms: u32) {
+        self.base_ai
+            .add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now_ms);
+    }
+
     pub(crate) fn advance_active_ai_move(&mut self, now_ms: u32) -> bool {
         self.base_ai.advance_active_move(now_ms)
     }

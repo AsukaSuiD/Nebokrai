@@ -54,14 +54,13 @@ pub(crate) fn queue_boss_idle<Runtime: GameMainLoopRuntime>(
     } else {
         None
     };
-    let now_ms = runtime.now_milliseconds();
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         if let Some(delay_ms) = movement_delay {
-            monster.begin_active_ai_move(delay_ms, now_ms);
+            monster.begin_active_ai_move(delay_ms, runtime.now_milliseconds());
         } else {
-            monster.begin_active_ai_stand(property.stop_frame, now_ms);
+            monster.begin_active_ai_stand(property.stop_frame, runtime.now_milliseconds());
         }
-        monster.begin_active_ai_search_enemy(now_ms);
+        monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
     }
     true
 }

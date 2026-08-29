@@ -9,9 +9,8 @@
 //!
 //! `OnSchedule` вызывает `Tracing` только при существующей цели и пустых
 //! основных очередях `CBaseAI`; PDB-владелец и таблица виртуальных методов
-//! подтверждают эту проверку. Прямой начальный поиск временно представляет ещё
-//! не восстановленный `ProcessActiveAction`, но использует достигнутый
-//! `OnSearchEnemy`.
+//! подтверждают эту проверку. Начальная последовательность
+//! `ChangeSkill → Move/Stand → SearchEnemy` проходит через тот же FIFO.
 
 
 use super::monsterai::one_step_move_delay_ms;
@@ -152,9 +151,66 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    let Some(area_index) = source.area_index() else {
+    if !schedule_idle {
         return true;
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id)
+        && monster.move_shape().current_skill_id().is_none()
+    {
+        monster.begin_active_ai_change_skill(runtime.now_milliseconds());
+    }
+    if (game.skill_random_below(10_000) as u32) < property.move_timer {
+        let direction = game.skill_random_below(8);
+        let origin = ShapeAreaCoordinates {
+            x: source_view.tile_x,
+            y: source_view.tile_y,
+        };
+        if let Ok(destination) = CShape::get_direction_position(direction, origin)
+            && game.move_owned_monster_step(
+                region,
+                monster_id,
+                destination.x,
+                destination.y,
+                CMonster::figure(&property),
+            )
+            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+        {
+            monster.begin_active_ai_move(
+                one_step_move_delay_ms(direction, source.get_speed(), property.stop_frame),
+                runtime.now_milliseconds(),
+            );
+        }
+    } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_stand(property.stop_frame, runtime.now_milliseconds());
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+    }
+    true
+}
+
+/// Выполняет отдельный `OnSearchEnemy` AI7 без движения и без запуска навыка.
+pub(crate) fn search_puniness_enemy(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+) -> bool {
+    let Some((property, source_view, area_index)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            let source_view = monster.shape_view(&property)?;
+            let area_index = monster.move_shape().shape().area_index()?;
+            Some((property, source_view, area_index))
+        })
+    else {
+        return false;
     };
+    if property.ai != 7 {
+        return false;
+    }
     let mut selected = None;
     for player_id in region.player_ids_around_area(area_index) {
         let identity = ShapeIdentity {

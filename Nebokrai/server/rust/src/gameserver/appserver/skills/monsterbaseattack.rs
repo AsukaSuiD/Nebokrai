@@ -125,6 +125,7 @@ use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, hibernates_without_nearby_players, schedule_attack_interval,
     select_attack_skill,
 };
+use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
 use crate::gameserver::appserver::ai::smartgladiator::select_smart_gladiator_enemy;
@@ -336,14 +337,23 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     .is_some()
 }
 
-/// Выполняет только подтверждённый `OnSearchEnemy` лучника, городского
-/// охранника и двух боссов. Предшествующее событие уже обработано владельцем
-/// FIFO, поэтому здесь не начинается атака в том же такте.
+/// Выполняет только подтверждённый `OnSearchEnemy` слабого существа, лучника,
+/// городского охранника и двух боссов. Предшествующее событие уже обработано
+/// владельцем FIFO, поэтому здесь не начинается атака в том же такте.
 pub(crate) fn search_owned_monster_enemy(
     game: &CGame,
     region: &mut CServerRegion,
     monster_id: i32,
 ) -> bool {
+    if region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            game.find_monster_property_by_origin_name(monster.base_property_key()?)
+        })
+        .is_some_and(|property| property.ai == 7)
+    {
+        return search_puniness_enemy(game, region, monster_id);
+    }
     let Some((property, owner, area_index, skill_id, skill_level)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
