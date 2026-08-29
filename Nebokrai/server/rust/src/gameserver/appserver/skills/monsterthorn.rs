@@ -2,7 +2,7 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/monsterthorn.cpp`. Модуль хранит задержку повторного
-//! применения, запрет движения,
+//! применения отдельно от attack-speed расписания ИИ, запрет движения,
 //! стадии, два визуальных пакета, формулу и два исходных RNG-вызова. Общая
 //! `CMonster::IsAttackAble`, защита и применение уже рассчитанного удара идут
 //! через узкий `monsterattack`; `CGame` оставляет только возврат региона и
@@ -168,6 +168,7 @@ use super::monsterattack::{
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -293,9 +294,13 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     if cast.is_none() {
         let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
         let attack_interval = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
-        if !region
-            .find_monster_by_id_mut(monster_id)
-            .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval))
+        let schedule_ready = schedule_attack_interval(property.ai, attack_interval)
+            .is_none_or(|interval| {
+                region
+                    .find_monster_by_id_mut(monster_id)
+                    .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, interval))
+            });
+        if !schedule_ready
             || (last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay_ms))
         {
             return true;

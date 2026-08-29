@@ -106,9 +106,7 @@ use crate::gameserver::appserver::ai::bossblue::{
 use crate::gameserver::appserver::ai::bossfiend::{
     choose_boss_fiend_attack_skill, select_boss_fiend_enemy,
 };
-use crate::gameserver::appserver::ai::bossidle::{
-    BossIdleProgress, advance_boss_idle, schedule_attack_interval,
-};
+use crate::gameserver::appserver::ai::bossidle::{BossIdleProgress, advance_boss_idle};
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
@@ -123,7 +121,8 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, hibernates_without_nearby_players, select_attack_skill,
+    approach_attack_range, hibernates_without_nearby_players, schedule_attack_interval,
+    select_attack_skill,
 };
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;

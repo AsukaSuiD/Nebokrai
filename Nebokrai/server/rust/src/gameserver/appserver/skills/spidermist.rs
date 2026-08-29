@@ -3,7 +3,8 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spidermist.cpp`. Навык сохраняет координаты цели в момент
 //! `Begin`, прямой путь и `BLOCK_UNFLY`, задержку с запретом движения, точные
-//! `0xBFE01` и создание `CSpiderMistPhalanx`. Формулы области и яда остаются
+//! `0xBFE01` и создание `CSpiderMistPhalanx`. После успешного сближения
+//! attack-speed расписания и reuse навыка проверяются раздельно. Формулы области и яда остаются
 //! у соответствующих владельцев; `CGame` выполняет только регистрацию в регионе
 //! и доставку. Перегрузки для игрока и координатной цели остаются RAW ниже.
 
@@ -137,7 +138,9 @@ use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spidermistphalanx::CSpiderMistPhalanx;
-use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -229,14 +232,25 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((source_shape, cast, progress, last_used_ms)) = region
+    let Some((source_shape, cast, progress, last_used_ms, ai_type, attack_interval)) = region
         .find_monster_by_id(monster_id)
-        .map(|monster| (
-            monster.move_shape().shape().clone(),
-            monster.base_attack_cast(),
-            monster.spider_mist_progress(),
-            monster.skill_last_used_ms(SPIDER_MIST_SKILL_ID),
-        ))
+        .and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            let attack_interval = if monster.is_tamed() {
+                monster.pet_attack_properties(property).attack_interval
+            } else {
+                property.attack_speed
+            };
+            Some((
+                monster.move_shape().shape().clone(),
+                monster.base_attack_cast(),
+                monster.spider_mist_progress(),
+                monster.skill_last_used_ms(SPIDER_MIST_SKILL_ID),
+                property.ai,
+                attack_interval,
+            ))
+        })
     else {
         return false;
     };
@@ -332,6 +346,14 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     if (maximum_distance != 0 && path.len() > maximum_distance as usize)
         || path.iter().any(|cell| cell.2 == BLOCK_UNFLY)
     {
+        return true;
+    }
+    let schedule_ready = schedule_attack_interval(ai_type, attack_interval).is_none_or(|interval| {
+        region
+            .find_monster_by_id_mut(monster_id)
+            .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, interval))
+    });
+    if !schedule_ready {
         return true;
     }
     let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);

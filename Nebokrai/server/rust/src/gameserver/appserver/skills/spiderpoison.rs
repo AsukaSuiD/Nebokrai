@@ -3,7 +3,8 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spiderpoison.cpp`. Достигнутый monster-путь сохраняет
 //! проверку пути, задержку, блокировку движения, прямой удар с обязательными
-//! вызовами RNG и условную замену `CSpiderPoisonState`. Пакеты навыка и формулы
+//! вызовами RNG и условную замену `CSpiderPoisonState`. Attack-speed ИИ и
+//! per-skill reuse остаются независимыми. Пакеты навыка и формулы
 //! остаются здесь; `CGame` только координирует владельцев и смерть. Перегрузки
 //! игрока и наложение `DaubPoison` остаются RAW ниже.
 
@@ -179,7 +180,9 @@ use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoisonstate::{
     SpiderPoisonState, send_spider_poison_state_visual_in_region,
 };
-use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -329,8 +332,15 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         }
         let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
         let attack_interval = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
-        if !region.find_monster_by_id_mut(monster_id).is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval))
-            || (last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay)) {
+        let schedule_ready = schedule_attack_interval(property.ai, attack_interval)
+            .is_none_or(|interval| {
+                region.find_monster_by_id_mut(monster_id).is_some_and(|monster| {
+                    monster.begin_ai_attack_attempt(now_ms, interval)
+                })
+            });
+        if !schedule_ready
+            || (last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay))
+        {
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);

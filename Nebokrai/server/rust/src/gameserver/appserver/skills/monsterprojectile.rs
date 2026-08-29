@@ -3,7 +3,8 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходные владельцы
 //! `CSkeletonArchery` и `CChuckStone`, подтверждает общий порядок подготовки,
 //! проверки преград, расчёта времени полёта и удара по клетке. Конкретный
-//! владелец сохраняет идентификатор навыка; выбор цели, защита и последствия
+//! владелец сохраняет идентификатор навыка, а начало полёта отдельно занимает
+//! attack-speed timestamp ИИ; выбор цели, защита и последствия
 //! смерти остаются у существующих владельцев боя и `CGame`.
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
@@ -14,6 +15,7 @@ use super::monsterattack::{
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -179,10 +181,13 @@ pub(crate) fn prepare_owned_monster_projectile(
         } else {
             property.attack_speed
         };
-        if !region
-            .find_monster_by_id_mut(monster_id)
-            .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval))
-        {
+        let schedule_ready = schedule_attack_interval(property.ai, attack_interval)
+            .is_none_or(|interval| {
+                region
+                    .find_monster_by_id_mut(monster_id)
+                    .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, interval))
+            });
+        if !schedule_ready {
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);

@@ -4,7 +4,8 @@
 //! `appserver/skills/spiderweb.cpp`. Достигнутый monster/pet-путь сохраняет
 //! проверку прямого пути и `BLOCK_UNFLY`, запрет движения на задержке,
 //! сохранённое время полёта снаряда, проверку уровней, `Cure` и wrapping-
-//! длительность. `CGame` только предоставляет владельцев и доставку; стадии,
+//! длительность. Attack-speed расписания фиксируется после сближения отдельно
+//! от reuse навыка. `CGame` только предоставляет владельцев и доставку; стадии,
 //! пакет `0xBFE01` и состояние принадлежат этому модулю. Координатная и
 //! объектная player-перегрузки остаются RAW ниже.
 
@@ -111,7 +112,9 @@ use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::monsterattack::{owned_monster_attackable, resolve_owned_monster_attack_target};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderwebstate::{SpiderWebState, send_spider_web_state_visual};
-use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -286,15 +289,22 @@ pub(crate) fn execute_owned_spider_web(
     properties: &CSkillBaseProperties,
     now_ms: u32,
 ) -> bool {
-    let Some((source_shape, source_property, source_master, source_tamed, cast, last_used_ms)) =
+    let Some((source_shape, source_property, source_master, source_tamed, cast, last_used_ms, attack_interval)) =
         region.find_monster_by_id(monster_id).and_then(|monster| {
+            let source_property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone();
+            let attack_interval = if monster.is_tamed() {
+                monster.pet_attack_properties(&source_property).attack_interval
+            } else {
+                source_property.attack_speed
+            };
             Some((
                 monster.move_shape().shape().clone(),
-                game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
+                source_property,
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.base_attack_cast(),
                 monster.skill_last_used_ms(SPIDER_WEB_SKILL_ID),
+                attack_interval,
             ))
         })
     else {
@@ -346,6 +356,15 @@ pub(crate) fn execute_owned_spider_web(
             maximum_distance,
             now_ms,
         ) {
+            return true;
+        }
+        let schedule_ready = schedule_attack_interval(source_property.ai, attack_interval)
+            .is_none_or(|interval| {
+                region
+                    .find_monster_by_id_mut(monster_id)
+                    .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, interval))
+            });
+        if !schedule_ready {
             return true;
         }
         let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_SKILL_DELAY_TIME);
