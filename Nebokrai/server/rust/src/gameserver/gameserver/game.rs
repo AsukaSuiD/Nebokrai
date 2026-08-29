@@ -528,7 +528,9 @@ use rustix::time::{ClockId, clock_gettime};
 use thiserror::Error;
 use tracing::{debug, info, trace, warn};
 
-use crate::gameserver::appserver::ai::playerai::{CPlayerAI, PlayerAutoProgress};
+use crate::gameserver::appserver::ai::playerai::{
+    BattleFairySkillQueueOutcome, CPlayerAI, PlayerAutoProgress,
+};
 use crate::gameserver::appserver::ai::puninesscreature::execute_owned_puniness_creature;
 use crate::gameserver::appserver::area::{
     AreaAiContext, AreaMonsterAiFacts, AreaWokenMonsterClass,
@@ -34720,17 +34722,20 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
-                    let replaced = self
+                    let outcome = self
                         .players
                         .get_mut(&player_id)
                         .expect("battle-fairy dispatch сохраняет canonical player")
                         .player_ai_mut()
                         .queue_battle_fairy_skill(dispatch);
+                    if outcome == BattleFairySkillQueueOutcome::ActiveRejected {
+                        self.send_battle_fairy_skill_failure(player_id, 2);
+                    }
                     trace!(
                         player_id,
                         ?dispatch,
-                        replaced,
-                        "Навык боевой феи поставлен в очередь AI"
+                        ?outcome,
+                        "Запрос навыка боевой феи обработан очередью ИИ"
                     );
                 }
                 GameEffect::RegionTaxPrompt { .. }
@@ -39329,7 +39334,7 @@ impl CGame {
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
-        if let Some(dispatch) = player_ai.next_battle_fairy_skill() {
+        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill() {
             let attribute_skill = match dispatch {
                 BattleFairySkillDispatch::SelfTarget { skill_id, .. }
                 | BattleFairySkillDispatch::Point { skill_id, .. }

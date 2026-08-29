@@ -1018,6 +1018,16 @@ pub(crate) enum BattleFairySkillDispatch {
     },
 }
 
+impl BattleFairySkillDispatch {
+    pub(crate) const fn skill_id(self) -> u32 {
+        match self {
+            Self::SelfTarget { skill_id, .. }
+            | Self::Point { skill_id, .. }
+            | Self::Object { skill_id, .. } => skill_id,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyManaSpendOutcome {
     MissingEquipment,

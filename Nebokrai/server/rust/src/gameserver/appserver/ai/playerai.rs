@@ -48,6 +48,9 @@
 //! `CBaseAI`: свободная соседняя клетка проверяется до `0xBF605`, а задержка
 //! шага сохраняет скорость игрока, диагональный множитель и исходный нулевой
 //! остановочный кадр. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
+//! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
+//! следующий навык продвигается только после завершения текущего.
 
 use std::collections::VecDeque;
 
@@ -123,11 +126,19 @@ pub(crate) struct PlayerAiDestination {
     pub(crate) is_run: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleFairySkillQueueOutcome {
+    ActiveRejected,
+    PendingUnchanged,
+    Queued { replaced: usize },
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerAI {
     base_ai: CBaseAI,
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
+    current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
     base_attack: Option<BaseAttackExecutionState>,
     base_attack_last_used_ms: u32,
@@ -387,7 +398,9 @@ impl CPlayerAI {
     }
 
     pub(crate) fn has_queued_skill(&self) -> bool {
-        !self.player_skills.is_empty() || !self.battle_fairy_skills.is_empty()
+        !self.player_skills.is_empty()
+            || self.current_battle_fairy_skill.is_some()
+            || !self.battle_fairy_skills.is_empty()
     }
 
     pub(crate) fn next_destination(&self) -> Option<PlayerAiDestination> {
@@ -521,25 +534,23 @@ impl CPlayerAI {
         rejected
     }
 
-    pub(crate) fn queue_battle_fairy_skill(&mut self, dispatch: BattleFairySkillDispatch) -> usize {
+    pub(crate) fn queue_battle_fairy_skill(
+        &mut self,
+        dispatch: BattleFairySkillDispatch,
+    ) -> BattleFairySkillQueueOutcome {
+        if self
+            .current_battle_fairy_skill
+            .is_some_and(|current| current.skill_id() == dispatch.skill_id())
+        {
+            return BattleFairySkillQueueOutcome::ActiveRejected;
+        }
         if self.battle_fairy_skills.front().copied() == Some(dispatch) {
-            return 0;
+            return BattleFairySkillQueueOutcome::PendingUnchanged;
         }
         let replaced = self.battle_fairy_skills.len();
         self.battle_fairy_skills.clear();
-        self.battle_fairy_base_magic = None;
-        self.life_shield = None;
-        self.battle_fairy_transfer = None;
-        self.wangsheng = None;
-        self.poison_arrow = None;
-        self.blood_loss = None;
-        self.fatal_blow = None;
-        self.thunder = None;
-        self.leiming2 = None;
-        self.tianhuo = None;
-        self.battle_fairy_attribute = None;
         self.battle_fairy_skills.push_back(dispatch);
-        replaced
+        BattleFairySkillQueueOutcome::Queued { replaced }
     }
 
     pub(crate) fn player_skills(&self) -> &VecDeque<PlayerSkillDispatch> {
@@ -2194,12 +2205,16 @@ impl CPlayerAI {
         self.gibe_last_used_ms = now_ms;
     }
 
-    pub(crate) fn battle_fairy_skills(&self) -> &VecDeque<BattleFairySkillDispatch> {
-        &self.battle_fairy_skills
-    }
-
-    pub(crate) fn next_battle_fairy_skill(&self) -> Option<BattleFairySkillDispatch> {
-        self.battle_fairy_skills.front().copied()
+    /// Продвигает ровно одну ожидающую команду только после конечного состояния
+    /// предыдущей. Новый запрос может заменить ещё не начатый хвост FIFO, но
+    /// не уничтожает уже начатый `SkillExecutionKernel`.
+    pub(crate) fn begin_next_battle_fairy_skill(
+        &mut self,
+    ) -> Option<BattleFairySkillDispatch> {
+        if self.current_battle_fairy_skill.is_none() {
+            self.current_battle_fairy_skill = self.battle_fairy_skills.pop_front();
+        }
+        self.current_battle_fairy_skill
     }
 
     pub(crate) fn finish_battle_fairy_skill(
@@ -2207,10 +2222,10 @@ impl CPlayerAI {
         expected: BattleFairySkillDispatch,
         termination: SkillTermination,
     ) -> bool {
-        if self.battle_fairy_skills.front().copied() != Some(expected) {
+        if self.current_battle_fairy_skill != Some(expected) {
             return false;
         }
-        self.battle_fairy_skills.pop_front();
+        self.current_battle_fairy_skill = None;
         if let Some(mut execution) = self.battle_fairy_base_magic.take() {
             let _ = execution
                 .kernel_mut()
@@ -2878,7 +2893,9 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: типизированная FIFO-очередь объектных команд, замена ожидающего
+// хвоста и отдельное удержание уже начатого навыка; прочие проверки сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:711
@@ -2892,7 +2909,9 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: типизированная FIFO-очередь координатных команд, замена ожидающего
+// хвоста и отдельное удержание уже начатого навыка; прочие проверки сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:841
