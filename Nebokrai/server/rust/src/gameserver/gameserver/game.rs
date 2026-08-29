@@ -1469,6 +1469,7 @@ const GOODS_TYPE: i32 = 700;
 const DEFAULT_SOCKET_TYPE: i32 = 1;
 const WORLD_REGISTRATION: i32 = 0x0005_FA01;
 const BILLING_REGISTRATION: i32 = 0x000E_F101;
+const GAME_RELEASE_REGION_SAVE_MESSAGE: i32 = 0x0005_FA07;
 const GAME_RELEASE_PLAYER_SAVE_MESSAGE: i32 = 0x0005_FB02;
 const GAME_AUCTION_GOODS_SYNC_MESSAGE: i32 = 0x0006_0807;
 const GAME_AUCTION_STATE_REQUEST_MESSAGE: i32 = 0x0006_0808;
@@ -4216,7 +4217,6 @@ impl<Runtime: GameMainLoopRuntime> AreaAiContext for GameAreaAiContext<'_, Runti
 }
 
 pub(crate) trait GameReleaseRuntime {
-    fn save_city_region(&mut self, game: &CGame, region_id: i32);
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
 }
 
@@ -27806,6 +27806,52 @@ impl CGame {
         stop_reconnect_task(&mut self.billing_reconnect_task).await;
     }
 
+    /// Отправляет WorldServer точные снимки всех регионов при `region_id == 0`.
+    ///
+    /// Исходный `SaveCityRegion` обходил signed map-order, для каждого региона
+    /// записывал его ID первым `long`, дописывал region-wire и немедленно
+    /// отправлял `0x5FA07`. Финальная запись длины в первое слово общего header
+    /// уже принадлежит `CBaseMessage::add`. Ошибка одного безопасного
+    /// Rust-сериализатора не меняет порядок остальных регионов и остаётся
+    /// локальной диагностикой.
+    fn save_city_regions(&self, region_id: i32) {
+        if region_id != 0 {
+            return;
+        }
+
+        for (&region_key, owner) in &self.regions {
+            let region_id = owner.base().id;
+            let mut region_payload = Vec::new();
+            if let Err(error) = owner
+                .base()
+                .region
+                .add_to_byte_array(&mut region_payload, true)
+            {
+                tracing::warn!(
+                    region_key,
+                    region_id,
+                    ?error,
+                    "не удалось сериализовать регион при завершении GameServer"
+                );
+                continue;
+            }
+
+            let mut message = CMessage::new(GAME_RELEASE_REGION_SAVE_MESSAGE);
+            message.add_long(region_id);
+            message.base_mut().add(&region_payload);
+            let delivery = message.send(self, false);
+            if !delivery.as_ref().is_ok_and(|result| *result != 0) {
+                tracing::warn!(
+                    region_key,
+                    region_id,
+                    wire_length = message.as_wire_bytes().len(),
+                    ?delivery,
+                    "не удалось отправить регион при завершении GameServer"
+                );
+            }
+        }
+    }
+
     /// Полное достигнутое освобождение `Release`. Ручные удаления заменены на
     /// `Drop` и `take/clear`; порядок владельцев и внешних отправок сохранён.
     /// Диагностика публикуется в точке действия и не повторяет teardown в
@@ -27854,8 +27900,8 @@ impl CGame {
             "завершена отправка данных игроков"
         );
 
-        runtime.save_city_region(self, 0);
-        tracing::debug!(region_id = 0, "сохранён городской регион");
+        self.save_city_regions(0);
+        tracing::debug!(region_id = 0, "завершена отправка регионов");
 
         let players = self.players.len();
         self.players.clear();
@@ -46715,19 +46761,7 @@ fn shape_view(
 // IMPLEMENTED: `CGame::AI` signed region-map order и virtual region AI с
 // base-tail `ClearPlayerAI` материализованы выше.
 
-// ============================================================================
-// FUNCTION: CGame::SaveCityRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\game.cpp:1085
-// RVA: 0x000051B0
-// ADDRESS: 004051b0
-// PROTOTYPE: void __thiscall SaveCityRegion(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CGame::SaveCityRegion` материализован в release-owner-е выше.
 
 // IMPLEMENTED: `ProcessMessage` материализован выше; static scratch deque
 // заменён тремя последовательными owned snapshot-очередями.
@@ -46874,7 +46908,7 @@ fn shape_view(
 
 // IMPLEMENTED: достигнутый `Release` teardown материализован выше. Широкий
 // RAW-блок и split funclets ниже сохранены как доказательство ещё не
-// материализованных player serializer-а, SaveCityRegion, validate-time map и
+// материализованных player serializer-а, validate-time map и
 // exception-specific debug paths; он не считается полностью заменённым.
 
 // ============================================================================
