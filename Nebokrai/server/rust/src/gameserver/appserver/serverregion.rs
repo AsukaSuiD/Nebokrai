@@ -3509,6 +3509,53 @@ impl CServerRegion {
         Some(result)
     }
 
+    /// Применяет уже опубликованную `CHANGE_POSITION` к каноническому
+    /// владельцу монстра без повторной wire-доставки.
+    pub(crate) fn set_owned_monster_tile_position(
+        &mut self,
+        monster_id: i32,
+        destination_x: i32,
+        destination_y: i32,
+        figure: ShapeFigure,
+        area_width: i32,
+        area_height: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        let mut taken = self.owned_monsters.take(monster_id)?;
+        let facts = taken
+            .monster_mut()
+            .movement_position_facts(figure, area_width, area_height);
+        let result = self.set_move_shape_tile_position(
+            taken.monster_mut().move_shape_mut().shape_mut(),
+            destination_x,
+            destination_y,
+            facts,
+        );
+        self.owned_monsters.restore(taken);
+        Some(result)
+    }
+
+    /// Применяет уже опубликованную `CHANGE_POSITION` к каноническому NPC;
+    /// временное изъятие сохраняет единственного владельца spatial-состояния.
+    pub(crate) fn set_owned_npc_tile_position(
+        &mut self,
+        npc_id: i32,
+        destination_x: i32,
+        destination_y: i32,
+        area_width: i32,
+        area_height: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        let mut npc = self.owned_npcs.remove(&npc_id)?;
+        let facts = npc.movement_position_facts(area_width, area_height);
+        let result = self.set_move_shape_tile_position(
+            npc.move_shape_mut().shape_mut(),
+            destination_x,
+            destination_y,
+            facts,
+        );
+        self.owned_npcs.insert(npc_id, npc);
+        Some(result)
+    }
+
     /// Временно освобождает поколенческую ячейку, чтобы `ForceMove`
     /// одновременно отправил пакет, изменил пространственное членство и
     /// поставил исходное ожидание искусственному интеллекту.

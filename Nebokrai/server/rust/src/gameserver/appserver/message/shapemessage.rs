@@ -12,8 +12,10 @@
 //! `OnCannotMove`, сброс эмоции и FIFO назначения в принадлежащем игроку
 //! `CPlayerAI`. Разрешение клиентской позиции читается из действующего
 //! `CGlobeSetup::bAllowClientChangePos`; исходный порядок проверки, поиска и
-//! payload сохранён. Полиморфный `SetTileXY` не-игрока и полные сериализаторы
-//! player/goods/shape остаются границами исполнения. Синхронные отправки не
+//! payload сохранён. Полиморфный `SetTileXY` достигнутых player/monster/NPC
+//! применяется их каноническими владельцами региона после wire; только прочие
+//! категории shape и полные сериализаторы остаются границами исполнения.
+//! Синхронные отправки не
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 //! Эмоция `0x8F905` сохраняет странность EXE: наличие `ChangeBody` сначала
 //! публикует `GS1038`, но не прерывает последующую проверку цели и
@@ -35,6 +37,8 @@ const QUEST_MOVE_STEP: u32 = 0x0008_f903;
 const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
+const NPC_TYPE: i32 = 500;
+const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShapeSnapshot {
@@ -218,10 +222,10 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 target.tile_y,
                 &relocation,
             );
-            if identity.object_type == PLAYER_TYPE && game.find_player(identity.id).is_some() {
-                match game.relocate_player_shape(
-                    identity.id,
+            if matches!(identity.object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE) {
+                match game.relocate_region_shape(
                     region_id,
+                    identity,
                     position_fields.0,
                     position_fields.1,
                 ) {
@@ -234,9 +238,10 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                         return Some(Ok(()));
                     }
                 }
-                let contend_state = game
-                    .find_player(identity.id)
-                    .is_some_and(|player| player.contend_state());
+                let contend_state = identity.object_type == PLAYER_TYPE
+                    && game
+                        .find_player(identity.id)
+                        .is_some_and(|player| player.contend_state());
                 if contend_state && game.region_symbol_attackable(region_id) {
                     let _ = colored_player_notice_message(
                         0xffff_ffff,

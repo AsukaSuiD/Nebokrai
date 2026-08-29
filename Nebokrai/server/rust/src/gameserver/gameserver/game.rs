@@ -39364,6 +39364,53 @@ impl CGame {
         Some(result)
     }
 
+    /// Координирует виртуальный `SetTileXY` только для достигнутых владельцев
+    /// региона. Публикация `BF603` остаётся у вызывающего message-owner-а и
+    /// предшествует этой пространственной мутации, как в исходном dispatcher-е.
+    pub(crate) fn relocate_region_shape(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        tile_x: i32,
+        tile_y: i32,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        if identity.object_type == PLAYER_TYPE {
+            return self.relocate_player_shape(identity.id, region_id, tile_x, tile_y);
+        }
+
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        let monster_figure = if identity.object_type == MONSTER_TYPE {
+            let region = self.find_region(region_id)?.base();
+            let monster = region.find_monster_by_id(identity.id)?;
+            let property = self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            Some(CMonster::figure(property))
+        } else {
+            None
+        };
+        let mut owner = self.take_region_owner(region_id)?;
+        let result = match identity.object_type {
+            MONSTER_TYPE => owner.base_mut().set_owned_monster_tile_position(
+                identity.id,
+                tile_x,
+                tile_y,
+                monster_figure.expect("figure вычислена для монстра"),
+                area_width,
+                area_height,
+            ),
+            NPC_TYPE => owner.base_mut().set_owned_npc_tile_position(
+                identity.id,
+                tile_x,
+                tile_y,
+                area_width,
+                area_height,
+            ),
+            _ => None,
+        };
+        self.restore_region_owner(owner);
+        result
+    }
+
     /// Собирает снимок фигур для сценарных функций блокировки региона.
     /// Координаты и `!IsDied` берутся у достигнутых владельцев игрока,
     /// монстра и NPC, а не из временных указателей старого C++.

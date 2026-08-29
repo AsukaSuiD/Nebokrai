@@ -17,7 +17,7 @@
 //! virtual `DeleteChildObject` исходника. Полная shape serialization и Talk
 //! остаются RAW ниже до подключения соответствующих owner-цепочек.
 
-use super::moveshape::CMoveShape;
+use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{ShapeFigure, ShapeView};
 
 const NPC_TYPE: i32 = 500;
@@ -84,6 +84,23 @@ impl CNpc {
             pos_y_bits: shape.get_pos_y().to_bits(),
             figure: ShapeFigure::default(),
         })
+    }
+
+    /// Факты для виртуального `CMoveShape::SetTileXY`: NPC всегда занимает
+    /// новую клетку независимо от здоровья, что отдельно учитывает общий
+    /// позиционный механизм по type `500`.
+    pub(crate) fn movement_position_facts(
+        &self,
+        area_width: i32,
+        area_height: i32,
+    ) -> MoveShapePositionFacts {
+        MoveShapePositionFacts {
+            current_hit_points: 0,
+            figure: ShapeFigure::default(),
+            current_area: None,
+            area_width,
+            area_height,
+        }
     }
 
     pub(crate) const fn set_show_list(&mut self, show_list: bool) {
