@@ -190,6 +190,11 @@ impl CBaseAI {
         self.add_ai_event(AiShapeAction::SearchEnemy, 0, 0, now_ms);
     }
 
+    pub(crate) fn cancel_active_move(&mut self) {
+        self.active_actions
+            .retain(|event| event.action != AiShapeAction::Move);
+    }
+
     /// Выполняет общий `OnMoving`, который возвращает единицу, и сохраняет
     /// исходную границу задержки уже совершённого шага. Производные реакции
     /// лучника, охранника и питомца остаются отдельными проходами владельцев.

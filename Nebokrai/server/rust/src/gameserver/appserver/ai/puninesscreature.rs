@@ -19,7 +19,7 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::{real_distance, time_reached};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -78,7 +78,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, source, source_view, target, move_delay, schedule_idle)) = region
+    let Some((property, source, source_view, target, schedule_idle)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -89,7 +89,6 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
                 monster.move_shape().shape().clone(),
                 monster.shape_view(&property)?,
                 monster.ai_target(),
-                monster.trace_move_delay(),
                 monster.primary_ai_queues_idle(),
             ))
         })
@@ -123,15 +122,6 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
             }
             return true;
         }
-        if let Some(delay) = move_delay {
-            let now_ms = runtime.now_milliseconds();
-            if !time_reached(now_ms, delay.started_at_ms, delay.delay_ms) {
-                return true;
-            }
-        }
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_trace_move_delay();
-        }
         let direction = get_line_direction(
             target_view.tile_x,
             target_view.tile_y,
@@ -151,11 +141,10 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
                 destination.y,
                 figure,
             ) {
-                let started_at_ms = runtime.now_milliseconds();
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster.begin_trace_move_delay(
-                        started_at_ms,
+                    monster.begin_active_ai_move(
                         one_step_move_delay_ms(direction, source.get_speed(), property.stop_frame),
+                        runtime.now_milliseconds(),
                     );
                 }
             }

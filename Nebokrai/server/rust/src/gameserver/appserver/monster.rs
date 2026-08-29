@@ -136,7 +136,6 @@ pub(crate) struct CMonster {
     skill_last_used_ms: BTreeMap<u32, u32>,
     ai_schedule: MonsterAiScheduleState,
     base_attack_owned_tick: bool,
-    trace_move_delay: Option<MonsterTraceMoveDelay>,
     boss_blue_ai: BossBlueAiState,
     boss_fiend_ai: Option<BossFiendAiState>,
     passive_gladiator_ai: Option<PassiveGladiatorState>,
@@ -195,12 +194,6 @@ pub(crate) struct MonsterBaseAttackDispatch {
 pub(crate) type MonsterBaseAttackCast = SkillExecutionKernel<MonsterBaseAttackDispatch>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MonsterTraceMoveDelay {
-    pub(crate) started_at_ms: u32,
-    pub(crate) delay_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MonsterWakeMutation {
     pub(crate) hit_points: u32,
     pub(crate) publish_states: bool,
@@ -253,7 +246,6 @@ impl CMonster {
             skill_last_used_ms: BTreeMap::new(),
             ai_schedule: MonsterAiScheduleState::default(),
             base_attack_owned_tick: false,
-            trace_move_delay: None,
             boss_blue_ai: BossBlueAiState::default(),
             boss_fiend_ai: None,
             passive_gladiator_ai: None,
@@ -417,7 +409,7 @@ impl CMonster {
         if self.pet_behavior.set_action(action) {
             self.ai_target = None;
             self.cancel_base_attack_cast();
-            self.trace_move_delay = None;
+            self.base_ai.cancel_active_move();
         }
     }
 
@@ -442,7 +434,7 @@ impl CMonster {
         self.pet_behavior.begin_target();
         self.ai_target = Some(target);
         self.cancel_base_attack_cast();
-        self.trace_move_delay = None;
+        self.base_ai.cancel_active_move();
     }
 
     pub(crate) fn retarget_passive_pet(&mut self, target: ShapeIdentity) -> bool {
@@ -1004,7 +996,7 @@ impl CMonster {
     pub(crate) fn clear_ai_target(&mut self) {
         self.ai_target = None;
         self.cancel_base_attack_cast();
-        self.trace_move_delay = None;
+        self.base_ai.cancel_active_move();
         self.pet_behavior.target_cleared(self.tamed);
     }
 
@@ -1046,21 +1038,6 @@ impl CMonster {
 
     pub(crate) fn take_base_attack_owned_tick(&mut self) -> bool {
         std::mem::take(&mut self.base_attack_owned_tick)
-    }
-
-    pub(crate) const fn trace_move_delay(&self) -> Option<MonsterTraceMoveDelay> {
-        self.trace_move_delay
-    }
-
-    pub(crate) const fn begin_trace_move_delay(&mut self, started_at_ms: u32, delay_ms: u32) {
-        self.trace_move_delay = Some(MonsterTraceMoveDelay {
-            started_at_ms,
-            delay_ms,
-        });
-    }
-
-    pub(crate) const fn clear_trace_move_delay(&mut self) {
-        self.trace_move_delay = None;
     }
 
     pub(crate) const fn movement_position_facts(

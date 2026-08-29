@@ -38,7 +38,7 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::{real_distance, time_reached};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -87,19 +87,6 @@ pub(crate) fn search_stupid_archer_enemy<Runtime: GameMainLoopRuntime>(
     speed: f32,
     runtime: &mut Runtime,
 ) -> StupidArcherSearch {
-    if let Some(delay) = region
-        .find_monster_by_id(monster_id)
-        .and_then(CMonster::trace_move_delay)
-    {
-        let now_ms = runtime.now_milliseconds();
-        if !time_reached(now_ms, delay.started_at_ms, delay.delay_ms) {
-            return StupidArcherSearch::Handled;
-        }
-    }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.clear_trace_move_delay();
-    }
-
     let mut selected = None;
     for player_id in region.player_ids_around_area(area_index) {
         let Some(player) = game.find_player(player_id) else {
@@ -177,9 +164,9 @@ pub(crate) fn search_stupid_archer_enemy<Runtime: GameMainLoopRuntime>(
         if moved
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
-            monster.begin_trace_move_delay(
-                runtime.now_milliseconds(),
+            monster.begin_active_ai_move(
                 one_step_move_delay_ms(direction, speed, property.stop_frame),
+                runtime.now_milliseconds(),
             );
         }
     }
