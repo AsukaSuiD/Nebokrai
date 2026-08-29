@@ -357,6 +357,45 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     {
         return search_puniness_enemy(game, region, monster_id);
     }
+    if region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            game.find_monster_property_by_origin_name(monster.base_property_key()?)
+        })
+        .is_some_and(|property| property.ai == 1)
+    {
+        let Some((property, owner)) = region
+            .find_monster_by_id(monster_id)
+            .and_then(|monster| {
+                let property = game
+                    .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                    .clone();
+                Some((property.clone(), monster.shape_view(&property)?))
+            })
+        else {
+            return false;
+        };
+        let Some(mut state) = region
+            .find_monster_by_id_mut(monster_id)
+            .and_then(CMonster::take_passive_gladiator_ai)
+        else {
+            return false;
+        };
+        let selected = state.select_target(owner, property.chase_range as i32, |player_id| {
+            game.find_player(player_id).and_then(|player| {
+                (player.server_region_id() == Some(region.id) && !player.is_dead())
+                    .then(|| player.shape_view())
+                    .flatten()
+            })
+        });
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.restore_passive_gladiator_ai(state);
+            if let Some(selected) = selected {
+                monster.set_ai_target(selected);
+            }
+        }
+        return true;
+    }
     let Some((property, owner, area_index, skill_id, skill_level, speed, master)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
@@ -633,7 +672,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 6 | 8 | 9 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
+        && matches!(property.ai, 0 | 1 | 3 | 4 | 6 | 8 | 9 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
@@ -716,28 +755,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             return true;
         }
-    }
-    if target.is_none() && cast.is_none() && !tamed && property.ai == 1 {
-        let Some(mut state) = region
-            .find_monster_by_id_mut(monster_id)
-            .and_then(CMonster::take_passive_gladiator_ai)
-        else {
-            return false;
-        };
-        let selected = state.select_target(monster_view, property.chase_range as i32, |player_id| {
-            game.find_player(player_id).and_then(|player| {
-                (player.server_region_id() == Some(region.id) && !player.is_dead())
-                    .then(|| player.shape_view())
-                    .flatten()
-            })
-        });
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.restore_passive_gladiator_ai(state);
-            if let Some(selected) = selected {
-                monster.set_ai_target(selected);
-            }
-        }
-        target = selected;
     }
     if target.is_none()
         && cast.is_none()
