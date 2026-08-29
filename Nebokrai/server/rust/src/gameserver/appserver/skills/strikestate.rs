@@ -1,6 +1,48 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Состояние полной блокировки `CStrikeState` (`0xDD`).
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/skills/strikestate.cpp`. Достигнутый путь загрузки сохраняет
+//! унаследованную запись `CState::Serialize`: идентификатор класса и четыре
+//! `i32` владельца/цели. Каноническое хранилище использует типизированное
+//! присутствие состояния для запрета предметов, а исходный payload остаётся
+//! единственным двоичным кодеком. Создание, снятие и visual-пакеты ниже
+//! остаются RAW до появления их настоящего вызывающего пути.
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+
+pub(crate) const STRIKE_STATE_ID: u32 = 0xdd;
+pub(crate) const STRIKE_STATE_BYTES: usize = 20;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StrikeState {
+    user_type: i32,
+    user_id: i32,
+    sufferer_type: i32,
+    sufferer_id: i32,
+}
+
+impl StrikeState {
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != STRIKE_STATE_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        Ok(Self {
+            user_type: reader.read_i32()?,
+            user_id: reader.read_i32()?,
+            sufferer_type: reader.read_i32()?,
+            sufferer_id: reader.read_i32()?,
+        })
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        STRIKE_STATE_ID
+    }
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

@@ -16,6 +16,8 @@
 //! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
 //! паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
+//! Загруженный `CStrikeState` хранится типизированно поверх неизменяемой
+//! 20-байтной legacy-записи и непосредственно участвует в запрете предметов.
 //! Рыцарский удар хранит здесь единственную каноническую блокировку движения
 //! и боя; замена, истечение и снятие очищением меняют те же счётчики.
 //! Подготовка яростного удара также имеет здесь единственный типизированный
@@ -90,6 +92,9 @@ use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
+use crate::gameserver::appserver::skills::strikestate::{
+    STRIKE_STATE_BYTES, STRIKE_STATE_ID, StrikeState,
+};
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
 use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_ID};
@@ -524,6 +529,7 @@ pub(crate) struct CanonicalStateStorage {
     leaf_cut_3_state: Option<LeafCutState3>,
     kerosene_state: Option<KeroseneState>,
     swordship_states: Vec<SwordshipState>,
+    strike_states: Vec<StrikeState>,
     wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
     automatic_restore_states: Vec<AutomaticRestoreState>,
     consumable_restore_states: ConsumableRestoreStateStorage,
@@ -743,6 +749,12 @@ impl CMoveShape {
         self.meteor_arrow_state = known_offsets.iter().copied()
             .find(|offset| read_u32(&states, *offset) == Some(METEOR_ARROW_MASS_SKILL_ID))
             .and_then(|offset| MeteorArrowState::decode(&states, offset).ok());
+        self.strike_states = known_offsets
+            .iter()
+            .copied()
+            .filter(|offset| read_u32(&states, *offset) == Some(STRIKE_STATE_ID))
+            .filter_map(|offset| StrikeState::decode(&states, offset).ok())
+            .collect();
         self.ex_states.replace(states);
     }
 
@@ -795,6 +807,7 @@ impl CMoveShape {
         self.leaf_cut_2_state = None;
         self.leaf_cut_3_state = None;
         self.kerosene_state = None;
+        self.strike_states.clear();
         self.wuxing_states.clear();
         self.automatic_restore_states.clear();
         self.particular_states.clear();
@@ -1168,6 +1181,11 @@ impl CMoveShape {
             self.kerosene_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let strike = self
+            .strike_states
+            .iter()
+            .filter(|state| state.skill_id() as i32 == state_id)
+            .count();
         let battle_fairy_attributes = self
             .battle_fairy_attribute_states
             .iter()
@@ -1214,6 +1232,7 @@ impl CMoveShape {
             .saturating_add(leaf_cut_2)
             .saturating_add(leaf_cut_3)
             .saturating_add(kerosene)
+            .saturating_add(strike)
             .saturating_add(battle_fairy_attributes)
             .saturating_add(shields)
             .saturating_add(change_body)
@@ -1323,6 +1342,10 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .swordship_states
+                .iter()
+                .any(|state| state.skill_id() == state_id)
+            || self
+                .strike_states
                 .iter()
                 .any(|state| state.skill_id() == state_id)
             || self
@@ -3316,6 +3339,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
             LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
             KEROSENE_STATE_ID => KEROSENE_STATE_BYTES,
+            STRIKE_STATE_ID => STRIKE_STATE_BYTES,
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             RIDE_STATE_ID => {

@@ -298,6 +298,7 @@ pub(crate) mod appserver {
         pub(crate) mod explosivearrow2;
         pub(crate) mod explosivearrow3;
         pub(crate) mod strike;
+        pub(crate) mod strikestate;
         pub(crate) mod promotion;
         pub(crate) mod promotionstate;
         pub(crate) mod pojia;

@@ -80,13 +80,7 @@ const LEI_TING_REWARD_SCRIPTS: [&[u8]; 9] = [
 
 pub(crate) trait GamePlayerMessageRuntime:
     PlayerReliveContext + GameContainerMessageRuntime + ScriptFunctionRuntime
-{
-    /// Единственный ещё не материализованный blocking-state из исходного
-    /// ordered списка: `CStrikeState` (`0xDD`). Остальные состояния принадлежат
-    /// каноническому player owner-у и проверяются непосредственно.
-    fn player_has_unmaterialized_strike_state(&mut self, game: &CGame, player_id: i32) -> bool;
-
-}
+{}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerItemUseFacts {
@@ -558,17 +552,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 return Some(Ok(()));
             }
             let tick_ms = runtime.now_milliseconds();
-            let unmaterialized_strike_state =
-                runtime.player_has_unmaterialized_strike_state(game, player_id);
             let facts = game
                 .find_player(player_id)
                 .map(|player| PlayerItemUseFacts {
-                    blocking_skill_state: unmaterialized_strike_state
-                        || PLAYER_ITEM_BLOCKING_SKILL_IDS
-                            .iter()
-                            .copied()
-                            .filter(|state_id| *state_id != 0xDD)
-                            .any(|state_id| player.has_state_by_skill_id(state_id)),
+                    blocking_skill_state: PLAYER_ITEM_BLOCKING_SKILL_IDS
+                        .iter()
+                        .copied()
+                        .any(|state_id| player.has_state_by_skill_id(state_id)),
                     fight_state_count: player.fight_state_count(),
                     mount_state_exists: player.is_rider(),
                     forbid_return_level: game.globe_setup().forbid_return_level(),
