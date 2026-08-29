@@ -17,6 +17,7 @@ pub(crate) mod appserver {
         pub(crate) mod guardcountry;
         pub(crate) mod guardcountry2;
         pub(crate) mod guardtarget;
+        pub(crate) mod jiumai;
         pub(crate) mod lord;
         pub(crate) mod monsterai;
         pub(crate) mod nationcouguardwithsword;

@@ -66,6 +66,7 @@ use super::ai::baseai::CBaseAI;
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
 use super::ai::guardtarget::GuardStationState;
+use super::ai::jiumai::JiuMaiAiState;
 use super::ai::passivegladiator::PassiveGladiatorState;
 use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
@@ -142,6 +143,7 @@ pub(crate) struct CMonster {
     passive_gladiator_ai: Option<PassiveGladiatorState>,
     smart_gladiator_ai: Option<SmartGladiatorState>,
     guard_station_ai: Option<GuardStationState>,
+    jiu_mai_ai: Option<JiuMaiAiState>,
     base_ai: CBaseAI,
 }
 
@@ -291,6 +293,7 @@ impl CMonster {
             passive_gladiator_ai: None,
             smart_gladiator_ai: None,
             guard_station_ai: None,
+            jiu_mai_ai: None,
             base_ai: CBaseAI::default(),
         }
     }
@@ -686,6 +689,7 @@ impl CMonster {
         self.passive_gladiator_ai = (ai_type == 1).then(PassiveGladiatorState::default);
         self.smart_gladiator_ai = (ai_type == 2).then(SmartGladiatorState::default);
         self.guard_station_ai = matches!(ai_type, 10 | 15 | 19).then(GuardStationState::default);
+        self.jiu_mai_ai = (ai_type == 0x65).then(JiuMaiAiState::default);
     }
 
     pub(crate) fn boss_fiend_ai_mut(&mut self) -> Option<&mut BossFiendAiState> {
@@ -718,6 +722,14 @@ impl CMonster {
 
     pub(crate) fn guard_station_ai_mut(&mut self) -> Option<&mut GuardStationState> {
         self.guard_station_ai.as_mut()
+    }
+
+    pub(crate) const fn jiu_mai_ai(&self) -> Option<&JiuMaiAiState> {
+        self.jiu_mai_ai.as_ref()
+    }
+
+    pub(crate) fn jiu_mai_ai_mut(&mut self) -> Option<&mut JiuMaiAiState> {
+        self.jiu_mai_ai.as_mut()
     }
 
     pub(crate) fn combat_properties(
