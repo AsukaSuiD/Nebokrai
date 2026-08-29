@@ -8,11 +8,12 @@
 //! и полный такт lifecycle принадлежат этому модулю; `CGame` только применяет
 //! рассчитанную атаку к независимому владельцу игрока или монстра и выполняет
 //! доставку.
-//! Не достигнуты восстановление из DB и координатные перегрузки `Begin`; их RAW
-//! сохранён ниже без второго изменяемого представления состояния.
+//! DB-запись сохраняет десять DWORD `MasterInfo`, остаток срока, частоту и
+//! потерю HP. Недостигнутые координатные перегрузки `Begin` сохранены ниже.
 
 use super::poisonarrow::POISON_ARROW_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
@@ -24,6 +25,7 @@ use crate::nets::netserver::message::CMessage;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+pub(crate) const POISON_ARROW_STATE_BYTES: usize = 56;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PoisonArrowStateTick {
@@ -76,6 +78,43 @@ impl PoisonArrowState {
             self.keep_time_ms.wrapping_sub(elapsed) as i32
         }
     }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != POISON_ARROW_SKILL_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        let master = MasterInfo {
+            master_type: reader.read_i32()?, master_id: reader.read_i32()?,
+            master_guild_id: reader.read_i32()?, master_team_id: reader.read_i32()?,
+            master_union_id: reader.read_i32()?, master_country_id: reader.read_i32()?,
+            permitted_to_kill_player: reader.read_i32()?, permitted_to_kill_teammate: reader.read_i32()?,
+            permitted_to_kill_guild_member: reader.read_i32()?, permitted_to_kill_criminal: reader.read_i32()?,
+        };
+        Ok(Self::new(master, now_ms, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; POISON_ARROW_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(POISON_ARROW_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(POISON_ARROW_SKILL_ID);
+        for value in [self.master.master_type, self.master.master_id, self.master.master_guild_id,
+            self.master.master_team_id, self.master.master_union_id, self.master.master_country_id,
+            self.master.permitted_to_kill_player, self.master.permitted_to_kill_teammate,
+            self.master.permitted_to_kill_guild_member, self.master.permitted_to_kill_criminal] {
+            writer.write_i32(value);
+        }
+        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_u32(self.frequency_ms);
+        writer.write_u32(self.hp_loss);
+        bytes.try_into().expect("размер состояния отравленной стрелы фиксирован")
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; POISON_ARROW_STATE_BYTES] {
+        self.encoded(self.started_at_ms)
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
 
     pub(crate) fn tick(
         &mut self,
@@ -190,7 +229,7 @@ pub(crate) fn update_player_poison_arrow_state<Runtime: GameMainLoopRuntime>(
         }
         PoisonArrowStateTick::Ended => {
             if let Some(player) = game.find_player_mut(player_id) {
-                player.finish_periodic_attack_state(state.skill_id());
+                player.finish_poison_arrow_state(state);
             }
             send_poison_arrow_state_visual(
                 game,
@@ -271,9 +310,7 @@ pub(crate) fn update_monster_poison_arrow_state<Runtime: GameMainLoopRuntime>(
         PoisonArrowStateTick::Ended => {
             if let Some(mut owner) = game.take_region_owner(region_id) {
                 if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    monster
-                        .move_shape_mut()
-                        .finish_periodic_attack_state(state.skill_id());
+                    monster.move_shape_mut().finish_poison_arrow_state(state);
                 }
                 game.restore_region_owner(owner);
             }
@@ -292,8 +329,8 @@ pub(crate) fn update_monster_poison_arrow_state<Runtime: GameMainLoopRuntime>(
     true
 }
 
-// Остаются недостигнутыми создание состояния для DB-восстановления,
-// его чтение и координатные overload-ы Begin.
+// Остаются недостигнутыми конструктор по умолчанию и координатные
+// перегрузки `Begin`.
 // ============================================================================
 // FUNCTION: CPoisonArrowState::CPoisonArrowState
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -331,20 +368,6 @@ pub(crate) fn update_monster_poison_arrow_state<Runtime: GameMainLoopRuntime>(
 // RVA: 0x001E3390
 // ADDRESS: 005e3390
 // PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPoisonArrowState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\poisonarrowstate.cpp:210
-// RVA: 0x001E3500
-// ADDRESS: 005e3500
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

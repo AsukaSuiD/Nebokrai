@@ -100,7 +100,9 @@ use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES, KEROSENE_STATE_ID};
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::PillarState;
-use crate::gameserver::appserver::skills::poisonarrowstate::PoisonArrowState;
+use crate::gameserver::appserver::skills::poisonarrowstate::{
+    PoisonArrowState, POISON_ARROW_STATE_BYTES,
+};
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
@@ -740,6 +742,9 @@ impl CMoveShape {
         if let Some(state) = self.boss_blue_fury_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
+        if let Some(state) = self.poison_arrow_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+        }
         for state in &self.defense_shields {
             match state {
                 DefenseShieldState::Mana(state) => {
@@ -899,6 +904,16 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(BOSS_BLUE_FURY_STATE_ID))
             .and_then(|offset| BossBlueFuryState::decode(&states, offset, 0).ok());
+        self.periodic_attack_order
+            .shift_remove(&super::skills::poisonarrow::POISON_ARROW_SKILL_ID);
+        self.poison_arrow_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(super::skills::poisonarrow::POISON_ARROW_SKILL_ID))
+            .and_then(|offset| PoisonArrowState::decode(&states, offset, 0).ok());
+        if self.poison_arrow_state.is_some() {
+            self.periodic_attack_order.insert(super::skills::poisonarrow::POISON_ARROW_SKILL_ID);
+        }
         self.defense_shields.clear();
         self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
             match read_u32(&states, offset) {
@@ -2162,11 +2177,31 @@ impl CMoveShape {
         state: PoisonArrowState,
     ) -> Option<PoisonArrowState> {
         self.periodic_attack_order.insert(state.skill_id());
-        self.poison_arrow_state.replace(state)
+        let previous = self.poison_arrow_state.replace(state);
+        let serialized_exists = known_state_record_offsets(&self.ex_states)
+            .into_iter().any(|offset| read_u32(&self.ex_states, offset) == Some(state.skill_id()));
+        if previous.is_some() && serialized_exists {
+            update_known_state_record(&mut self.ex_states, state.skill_id(), &state.encoded_for_install());
+        } else if !serialized_exists {
+            self.append_serialized_state_record(&state.encoded_for_install());
+        }
+        previous
     }
 
     pub(crate) fn take_poison_arrow_state_for_ai(&mut self) -> Option<PoisonArrowState> {
         self.poison_arrow_state.take()
+    }
+
+    pub(crate) fn finish_poison_arrow_state(&mut self, state: PoisonArrowState) {
+        self.periodic_attack_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), POISON_ARROW_STATE_BYTES);
+    }
+
+    pub(crate) fn activate_loaded_poison_arrow_state(&mut self, now_ms: u32) -> Option<PoisonArrowState> {
+        let mut state = self.poison_arrow_state?;
+        state.activate_loaded(now_ms);
+        self.poison_arrow_state = Some(state);
+        Some(state)
     }
 
     pub(crate) fn replace_spider_poison_state(
@@ -3849,6 +3884,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
             ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
             BOSS_BLUE_FURY_STATE_ID => BOSS_BLUE_FURY_STATE_BYTES,
+            super::skills::poisonarrow::POISON_ARROW_SKILL_ID => POISON_ARROW_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

@@ -28839,6 +28839,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_boss_blue_fury_state(login_tick_ms);
+        let loaded_poison_arrow_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_poison_arrow_state(login_tick_ms);
         let loaded_defense_shields = self
             .players
             .get_mut(&expected_player_id)
@@ -28997,6 +29002,15 @@ impl CGame {
                 state,
                 true,
                 login_tick_ms,
+            );
+        }
+        if let Some(state) = loaded_poison_arrow_state
+            && let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
+                Some((player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+            })
+        {
+            crate::gameserver::appserver::skills::poisonarrowstate::send_poison_arrow_state_visual(
+                self, region_id, identity, tile_x, tile_y, state, true, login_tick_ms,
             );
         }
         for state in loaded_defense_shields {

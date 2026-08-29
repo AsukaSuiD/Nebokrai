@@ -4584,6 +4584,20 @@ impl CPlayer {
         self.move_shape.take_poison_arrow_state_for_ai()
     }
 
+    pub(crate) fn finish_poison_arrow_state(
+        &mut self,
+        state: super::skills::poisonarrowstate::PoisonArrowState,
+    ) {
+        self.move_shape.finish_poison_arrow_state(state);
+    }
+
+    pub(crate) fn activate_loaded_poison_arrow_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::poisonarrowstate::PoisonArrowState> {
+        self.move_shape.activate_loaded_poison_arrow_state(now_ms)
+    }
+
     pub(crate) fn replace_spider_poison_state(
         &mut self,
         state: super::skills::spiderpoisonstate::SpiderPoisonState,
