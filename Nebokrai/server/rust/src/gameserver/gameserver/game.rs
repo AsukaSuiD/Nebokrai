@@ -844,7 +844,7 @@ use crate::gameserver::appserver::skills::fireballphalanx::{
     calculate_owned_fire_ball_attack, fire_ball_targets, FireBallPhalanxTick,
 };
 use crate::gameserver::appserver::skills::itemskill2::{execute_player_item_skill_2, is_item_skill_2_dispatch};
-use crate::gameserver::appserver::skills::thunderfirephalanx::{calculate_owned_thunder_fire_attack, ThunderFirePhalanxTick};
+use crate::gameserver::appserver::skills::thunderfirephalanx::{calculate_owned_thunder_fire_attack, thunder_fire_targets, ThunderFirePhalanxTick};
 use crate::gameserver::appserver::skills::thunderblow::{
     execute_player_thunder_blow, is_thunder_blow_dispatch,
 };
@@ -41222,7 +41222,7 @@ impl CGame {
                         && self.find_region(region_id).is_some_and(|owner| owner.base().block_at(center_x, center_y) == Some(3))
                     {
                         let mut applied = false;
-                        for (target, war_soul_hit) in self.thunder_fire_targets(region_id, thunder_fire, center_x, center_y) {
+                        for (target, war_soul_hit) in thunder_fire_targets(self, region_id, thunder_fire, center_x, center_y) {
                             applied |= match target.object_type {
                                 PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, war_soul_hit, runtime),
                                 MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),

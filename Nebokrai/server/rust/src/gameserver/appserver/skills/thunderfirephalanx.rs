@@ -26,6 +26,8 @@ pub(crate) struct CThunderFirePhalanx {
     speed_ms:u32, soul_count:i32, soul_variable:u32, current_position:usize, force_moved:bool,
 }
 
+pub(crate) fn thunder_fire_targets(game:&CGame,region_id:i32,p:&CThunderFirePhalanx,x:i32,y:i32)->Vec<(ShapeIdentity,bool)>{let Some(region)=game.find_region(region_id).map(|owner|owner.base())else{return Vec::new()};let(width,height)=game.area_dimensions();let mut targets=Vec::new();for(&player_id,_)in &region.war_souls_at(x,y){let player_id=player_id as i32;if player_id!=p.master().master_id&&game.find_player(player_id).is_some_and(|player|!player.is_dead())&&game.player_base_attackable(p.master().master_id,player_id){targets.push((ShapeIdentity{object_type:400,id:player_id,ex_id:CGuid::GUID_INVALID},true));}}let mut shapes=Vec::new();if region.get_shapes(x,y,width,height,game,&mut shapes).is_ok(){for shape in shapes{let identity=shape.identity;if identity==p.shape().identity()||(identity.object_type==p.master().master_type&&identity.id==p.master().master_id)||!matches!(identity.object_type,400|600)||targets.iter().any(|(stored,_)|*stored==identity){continue}if p.master().master_type==400&&identity.object_type==400&&!game.player_base_attackable(p.master().master_id,identity.id){continue}targets.push((identity,false));}}targets}
+
 impl CThunderFirePhalanx {
     #[allow(clippy::too_many_arguments, reason="поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(id:i32,master:MasterInfo,started_at_ms:u32,lifetime_ms:u32,skill_level:i32,minimum_attack:i32,maximum_attack:i32,element_modifier:i32,path:Vec<(i32,i32)>,speed_ms:u32,soul_count:i32,soul_variable:u32)->Self{
