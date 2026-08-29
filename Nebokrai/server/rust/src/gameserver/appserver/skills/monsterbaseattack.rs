@@ -57,7 +57,8 @@ use super::monsterfastattack::{
 };
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
-    monster_attackable_by_monster,
+    monster_attackable_by_monster, owned_monster_attackable,
+    resolve_owned_monster_attack_target,
 };
 use super::monsterrangeattack::{
     MONSTER_RANGE_ATTACK_SKILL_ID, MonsterRangeAttackDispatch,
@@ -852,6 +853,45 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
+    if cast.is_none() {
+        let Some(schedule_target) =
+            resolve_owned_monster_attack_target(game, region, target)
+        else {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.clear_ai_target();
+            }
+            return true;
+        };
+        let attackable = owned_monster_attackable(
+            game,
+            region.id,
+            &property,
+            tamed,
+            attacker_master,
+            target,
+            &schedule_target,
+        );
+        if schedule_target.dead
+            || schedule_target.god
+            || schedule_target.city_dead
+            || !attackable
+        {
+            if !attackable && tamed && target.object_type == PLAYER_TYPE {
+                game.release_reciprocal_player_target(
+                    target.id,
+                    ShapeIdentity {
+                        object_type: MONSTER_TYPE,
+                        id: monster_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                );
+            }
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.clear_ai_target();
+            }
+            return true;
+        }
+    }
     let Some(skill_properties) = game
         .skill_base_properties(skill_id, i32::from(skill.level))
         .cloned()
