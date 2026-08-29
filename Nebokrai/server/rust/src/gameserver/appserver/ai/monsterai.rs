@@ -7,11 +7,13 @@
 //! Выбранный ID хранится каноническим `CMoveShape::current_skill_id`; конкретный
 //! владелец навыка разрешает уровень и исполняет стадии. Общий достигнутый шаг
 //! преследования сохраняет slip-порядок, задержку движения и ограничения
-//! питомца без дополнительного RNG. Остальные AI-ветви ниже остаются RAW.
+//! питомца без дополнительного RNG. Реакция `WhenBeenHurted` назначает новую
+//! цель только свободному ИИ: игрок принимается всегда, а монстр — только после
+//! подтверждения приручения. Остальные AI-ветви ниже остаются RAW.
 
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates};
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::skills::baseattack::{real_distance, time_reached};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::tools::get_line_direction;
@@ -34,6 +36,19 @@ pub(crate) fn select_attack_skill(
         }
     }
     default_skill_id
+}
+
+/// Сохраняет целевую часть `CMonsterAI::WhenBeenHurted`: существующая цель
+/// не заменяется, игрок допустим непосредственно, а монстр требует успешного
+/// `DoesCreatureBeenTamed` у отдельного владельца атакующего.
+pub(crate) const fn accepts_hurt_target(
+    current_target: Option<ShapeIdentity>,
+    attacker: ShapeIdentity,
+    attacker_is_tamed: bool,
+) -> bool {
+    current_target.is_none()
+        && (attacker.object_type == 400
+            || (attacker.object_type == 600 && attacker_is_tamed))
 }
 
 /// Общая длительность одного шага `CBaseAI::MoveTo`: диагональ длиннее
@@ -333,7 +348,10 @@ pub(crate) fn approach_attack_range(
 
 // ============================================================================
 // FUNCTION: CMonsterAI::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `accepts_hurt_target` и `CMonster::when_been_hurted_by`
+// сохраняют достигнутую постановку `Defense` и правила назначения цели при
+// нулевой длительности оглушения.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:218

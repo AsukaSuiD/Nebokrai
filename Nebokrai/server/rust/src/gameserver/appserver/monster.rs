@@ -70,6 +70,7 @@ use super::ai::carriage::{
 };
 use super::ai::guardtarget::GuardStationState;
 use super::ai::jiumai::JiuMaiAiState;
+use super::ai::monsterai::accepts_hurt_target;
 use super::ai::passivegladiator::PassiveGladiatorState;
 use super::ai::pet::{PetBehaviorState, PetLifecycleFacts, PetLifecycleOutcome};
 use super::ai::smartgladiator::SmartGladiatorState;
@@ -742,9 +743,14 @@ impl CMonster {
         self.killed_by
     }
 
-    pub(crate) fn when_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
+    pub(crate) fn when_been_hurted_by(
+        &mut self,
+        attacker: ShapeIdentity,
+        attacker_is_tamed: bool,
+        now_ms: u32,
+    ) {
         self.when_been_hurted(now_ms);
-        if self.ai_target.is_none() && matches!(attacker.object_type, 400 | 600) {
+        if accepts_hurt_target(self.ai_target, attacker, attacker_is_tamed) {
             self.ai_target = Some(attacker);
         }
     }

@@ -348,14 +348,17 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         return;
     }
     let current_health = target_health - damage;
-    let passive_attacker_is_owned_creature = region
+    let (attacker_is_tamed, passive_attacker_is_owned_creature) = region
         .find_monster_by_id(monster_id)
         .and_then(|attacker| {
             let property = game
                 .find_monster_property_by_origin_name(attacker.base_property_key()?)?;
-            Some(attacker.is_tamed() || attacker.is_carriage(property))
+            Some((
+                attacker.is_tamed(),
+                attacker.is_tamed() || attacker.is_carriage(property),
+            ))
         })
-        .unwrap_or(false);
+        .unwrap_or((false, false));
     if target.object_type == PLAYER_TYPE {
         if let Some(player) = game.find_player_mut(target.id) {
             player.set_health(current_health);
@@ -429,7 +432,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             {
                 monster.when_been_hurted(now_ms);
             } else {
-                monster.when_been_hurted_by(attacker, now_ms);
+                monster.when_been_hurted_by(attacker, attacker_is_tamed, now_ms);
             }
         }
         if !target_tamed

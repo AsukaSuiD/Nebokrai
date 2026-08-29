@@ -31227,6 +31227,7 @@ impl CGame {
                         id: player_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
+                    false,
                     now_ms,
                 );
             }
@@ -36598,6 +36599,7 @@ impl CGame {
                                 id: player_id,
                                 ex_id: CGuid::GUID_INVALID,
                             },
+                            false,
                             now_ms,
                         );
                     }
@@ -40692,6 +40694,7 @@ impl CGame {
                                 id: master.master_id,
                                 ex_id: CGuid::GUID_INVALID,
                             },
+                            false,
                             now_ms,
                         );
                     }
