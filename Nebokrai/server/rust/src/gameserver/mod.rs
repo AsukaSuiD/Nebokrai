@@ -471,4 +471,5 @@ pub(crate) mod gameserver {
     pub(crate) mod game;
     pub(crate) mod honorranks;
     pub(crate) mod playerranks;
+    pub(crate) mod runtime;
 }
