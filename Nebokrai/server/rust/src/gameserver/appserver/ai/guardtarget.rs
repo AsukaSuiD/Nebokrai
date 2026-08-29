@@ -18,6 +18,10 @@ pub(crate) struct GuardStationState {
 }
 
 impl GuardStationState {
+    pub(crate) const fn station(&self) -> Option<ShapeAreaCoordinates> {
+        self.station
+    }
+
     pub(crate) fn record_station(&mut self, owner: ShapeView) {
         self.station.get_or_insert(ShapeAreaCoordinates {
             x: owner.tile_x,

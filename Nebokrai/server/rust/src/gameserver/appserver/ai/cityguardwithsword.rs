@@ -7,28 +7,15 @@
 //! `chase_range`. Городской AI10 и производные окружные AI15/AI19 наследуют
 //! `OnMoving` с отдельным `ASA_SEARCH_ENEMY` и эту ветвь преследования, меняя
 //! только selector. `OnIdle` один раз фиксирует пост и продолжает через общий
-//! idle FIFO. Возврат к заблокированной точке поста и отдельный поиск повозок
-//! пока сохранены как RAW.
+//! idle FIFO. `OnLoseTarget` возвращает владельца к посту, выбирая случайную
+//! соседнюю клетку для заблокированной точки, и лишь затем ставит поиск.
+//! Отдельный поиск повозок пока сохранён как RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithsword.cpp
-
-// ============================================================================
-// FUNCTION: CCityGuardWithSword::OnLoseTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithsword.cpp:353
-// RVA: 0x0020D020
-// ADDRESS: 0060d020
-// PROTOTYPE: int __thiscall OnLoseTarget(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CCityGuardWithSword::SearchEnemyGuildCarriage
@@ -168,6 +155,59 @@ pub(crate) fn select_city_guard_enemy(
 pub(crate) enum CitySwordTraceOutcome {
     Ready,
     Handled,
+}
+
+/// Выполняет унаследованный `OnLoseTarget` AI10/AI15/AI19 перед тем, как
+/// окружающий `OnSchedule` поставит `SearchEnemy`: цель очищается, владелец
+/// возвращается к сохранённому посту, а заблокированная клетка заменяется одним
+/// `GetRandomPosInRange` на квадрате 3×3.
+pub(crate) fn lose_guard_sword_target<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) {
+    let station = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        monster.clear_ai_target();
+        monster.guard_station_ai_mut()?.station()
+    });
+    if let Some(station) = station {
+        let (destination_x, destination_y) = if region
+            .region
+            .get_block(station.x, station.y)
+            .unwrap_or(2)
+            != 0
+        {
+            region
+                .region
+                .get_random_pos_in_range(
+                    station.x.wrapping_sub(1),
+                    station.y.wrapping_sub(1),
+                    3,
+                    3,
+                    runtime,
+                )
+                .map(|position| (position.x, position.y))
+                .unwrap_or((station.x, station.y))
+        } else {
+            (station.x, station.y)
+        };
+        let _ = game.force_move_owned_shape(
+            region,
+            ShapeIdentity {
+                object_type: MONSTER_TYPE,
+                id: monster_id,
+                ex_id: CGuid::GUID_INVALID,
+            },
+            destination_x,
+            destination_y,
+            0,
+            runtime,
+        );
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+    }
 }
 
 /// Выполняет общую ветвь `Tracing` AI10 и производных AI15/AI19. Слишком

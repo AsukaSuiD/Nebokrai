@@ -109,7 +109,8 @@ use crate::gameserver::appserver::ai::bossfiend::{
 };
 use crate::gameserver::appserver::ai::bossidle::queue_boss_idle;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
-    CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
+    CitySwordTraceOutcome, lose_guard_sword_target, select_city_guard_enemy,
+    trace_city_sword_target,
 };
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
@@ -734,9 +735,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             })
             .unwrap_or(false);
         if left_chase_range {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.clear_ai_target();
-            }
+            lose_guard_sword_target(game, region, monster_id, runtime);
             return true;
         }
     }
@@ -857,7 +856,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let Some(schedule_target) =
             resolve_owned_monster_attack_target(game, region, target)
         else {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if matches!(property.ai, 10 | 15 | 19) {
+                lose_guard_sword_target(game, region, monster_id, runtime);
+            } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if has_owned_search_enemy(property.ai, tamed) {
                     monster.lose_ai_target_and_search(runtime.now_milliseconds());
                 } else {
@@ -890,7 +891,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     },
                 );
             }
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if matches!(property.ai, 10 | 15 | 19) {
+                lose_guard_sword_target(game, region, monster_id, runtime);
+            } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if has_owned_search_enemy(property.ai, tamed) {
                     monster.lose_ai_target_and_search(runtime.now_milliseconds());
                 } else {
