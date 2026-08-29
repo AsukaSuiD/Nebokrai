@@ -7,6 +7,18 @@
 //! постановки команды через `GameEffectJournal`; уже выполняемые синхронно
 //! боевые действия в журнал не копируются.
 
+/// Точная беззнаковая проверка `CSkill::IsRestored`: сложение выполняется в
+/// `u32`, после чего результат сравнивается с текущими миллисекундами. Это не
+/// устойчивый к переполнению срок и потому намеренно отличается от
+/// периодических часов.
+pub(crate) const fn skill_is_restored(
+    last_used_ms: u32,
+    reuse_delay_ms: u32,
+    now_ms: u32,
+) -> bool {
+    last_used_ms.wrapping_add(reuse_delay_ms) <= now_ms
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SkillStage {
     Begin,

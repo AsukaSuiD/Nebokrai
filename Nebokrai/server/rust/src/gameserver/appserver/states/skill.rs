@@ -1,6 +1,8 @@
 //! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
 //! Декомпилятор: Ghidra 12.1.2
 //! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутый `CSkill::IsRestored` материализован общей проверкой часов в
+//! `appserver/skills/kernel.rs`; ниже сохранены только ещё не заменённые тела.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -88,20 +90,6 @@
 // RVA: 0x000D81F0
 // ADDRESS: 004d81f0
 // PROTOTYPE: long __thiscall GetAffectCostMP(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSkill::IsRestored
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\skill.cpp:172
-// RVA: 0x000D8220
-// ADDRESS: 004d8220
-// PROTOTYPE: int __thiscall IsRestored(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

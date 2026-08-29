@@ -231,10 +231,11 @@
 //! `OnDied`/`OnRelive` и millisecond-tail `PeriodicalUpdate`: owned state
 //! хранит три PDB-поля `+0xBA5/+0xBA8/+0xBAC`, а конкретные self/around
 //! маршруты сообщений остаются у `CGame`, владеющего network/session runtime.
-//! Periodic `ComputeWarSoulXY` сохраняет float follow-state, exact dead/snap
-//! thresholds, общий area-map tail и последующий `0xBF605`; restored-state
-//! concrete skill остаётся входным фактом. Non-finite повреждённый float-state
-//! блокируется typed outcome до старого x87 integer conversion.
+//! Периодический `ComputeWarSoulXY` сохраняет вещественное состояние
+//! следования, точные пороги смерти и мгновенного переноса, общий хвост карты
+//! областей и последующий `0xBF605`; готовность конкретного навыка остаётся
+//! входным фактом. Повреждённое нечисловое состояние блокируется
+//! типизированным результатом до прежнего целочисленного преобразования x87.
 //! Periodic HP-death prefix `CPlayer::AI` повторно нормализует summon/state и
 //! recall/died флаги нулевой по HP equipped fairy, затем вызывает
 //! `PropertiesChanged`; `CGame` собирает exact `0xBF721` целиком из owned
@@ -9380,6 +9381,10 @@ impl CPlayer {
 
     pub(crate) fn learned_skill_level(&self, skill_id: u32) -> i32 {
         self.move_shape.skill_level(skill_id)
+    }
+
+    pub(crate) fn learned_skill_level_if_present(&self, skill_id: u32) -> Option<i32> {
+        self.move_shape.skill(skill_id).map(|skill| skill.level())
     }
 
     pub(crate) const fn has_pet(&self) -> bool {

@@ -50,7 +50,10 @@
 //! остановочный кадр. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
-//! следующий навык продвигается только после завершения текущего.
+//! следующий навык продвигается только после завершения текущего. Выбранный
+//! ID при этом переживает `End`, как исходный `m_tgCurrentWarSoulSkill`, и
+//! отдельно связывает восстановление завершённого навыка с периодическим
+//! следованием.
 
 use std::collections::VecDeque;
 
@@ -138,6 +141,7 @@ pub(crate) struct CPlayerAI {
     base_ai: CBaseAI,
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
+    selected_battle_fairy_skill_id: u32,
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
     base_attack: Option<BaseAttackExecutionState>,
@@ -2213,8 +2217,65 @@ impl CPlayerAI {
     ) -> Option<BattleFairySkillDispatch> {
         if self.current_battle_fairy_skill.is_none() {
             self.current_battle_fairy_skill = self.battle_fairy_skills.pop_front();
+            if let Some(dispatch) = self.current_battle_fairy_skill {
+                self.selected_battle_fairy_skill_id = dispatch.skill_id();
+            }
         }
         self.current_battle_fairy_skill
+    }
+
+    /// Исходный игрок сохраняет выбранный навык после его `End`; нулевое
+    /// начальное поле Rust кодирует установленную конструктором базовую атаку.
+    pub(crate) const fn selected_battle_fairy_skill_id(&self) -> u32 {
+        if self.selected_battle_fairy_skill_id == 0 {
+            crate::gameserver::appserver::skills::battlefairybasemagic::BATTLE_FAIRY_BASE_MAGIC_SKILL_ID
+        } else {
+            self.selected_battle_fairy_skill_id
+        }
+    }
+
+    /// Возвращает часы конкретного выбранного навыка боевого духа. Все ID
+    /// диапазона `0x212..0x224` уже имеют отдельное типизированное состояние
+    /// исполнения и одну временную отметку.
+    pub(crate) const fn selected_battle_fairy_skill_last_used_ms(&self) -> Option<u32> {
+        let skill_id = self.selected_battle_fairy_skill_id();
+        match skill_id {
+            0x212..=0x219 => Some(self.battle_fairy_attribute_last_used_ms(skill_id)),
+            crate::gameserver::appserver::skills::tianhuo::TIANHUO_SKILL_ID => {
+                Some(self.tianhuo_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::thunder2::LEIMING2_SKILL_ID => {
+                Some(self.leiming2_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::fatalblow::FATAL_BLOW_SKILL_ID => {
+                Some(self.fatal_blow_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::bloodloss::BLOOD_LOSS_SKILL_ID => {
+                Some(self.blood_loss_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::poisonarrow::POISON_ARROW_SKILL_ID => {
+                Some(self.poison_arrow_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::thunder::THUNDER_SKILL_ID => {
+                Some(self.thunder_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::lifeshield::LIFE_SHIELD_SKILL_ID => {
+                Some(self.life_shield_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::wangsheng::WANGSHENG_SKILL_ID => {
+                Some(self.wangsheng_last_used_ms)
+            }
+            crate::gameserver::appserver::skills::huoxieshu::HUOXIESHU_SKILL_ID => Some(
+                self.battle_fairy_transfer_last_used_ms(BattleFairyTransferKind::Health),
+            ),
+            crate::gameserver::appserver::skills::lingzhishu::LINGZHISHU_SKILL_ID => Some(
+                self.battle_fairy_transfer_last_used_ms(BattleFairyTransferKind::Mana),
+            ),
+            crate::gameserver::appserver::skills::battlefairybasemagic::BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => {
+                Some(self.battle_fairy_base_magic_last_used_ms)
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn finish_battle_fairy_skill(

@@ -4159,14 +4159,15 @@ pub(crate) trait GameMainLoopRuntime:
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет оставшийся `CBaseAI::Run` prefix virtual `CPlayerAI::Run`
     /// после owned `UpdateCurrentState` и двух materialized FIFO front.
-    /// Возвращает post-AI restored-state current war-soul skill; owned
-    /// auto-exp/CheckLevel/energy tails идут сразу после.
+    /// Выбранный навык боевого духа и его восстановление принадлежат
+    /// каноническому `CPlayerAI`; хвосты auto-exp/CheckLevel/energy идут сразу
+    /// после.
     fn player_move_shape_active_state_ai(
         &mut self,
         game: &mut CGame,
         player_id: i32,
         player_ai: &mut CPlayerAI,
-    ) -> Option<bool>;
+    );
     /// Разрешает state ground goods и прочих external shape owners, которых
     /// нет в player/monster/NPC Rust storage.
     fn external_region_shape_change_state(
@@ -41424,8 +41425,8 @@ impl CGame {
     }
 
     /// Завершает periodic `ComputeWarSoulXY` tick через тот же region area-map,
-    /// который обслуживает summon/recall. Skill restored-state остаётся exact
-    /// fact ещё не перенесённого concrete `CSkill`.
+    /// который обслуживает summon/recall. Готовность вычислена из выбранного
+    /// канонического навыка боевого духа после полного хвоста `CPlayerAI::Run`.
     pub(crate) fn compute_war_soul_xy(
         &mut self,
         player_id: i32,
@@ -44191,7 +44192,7 @@ impl CGame {
                                         runtime,
                                     ));
                             if self.find_player(player_id).is_some() && !destination_handled {
-                                restored = runtime.player_move_shape_active_state_ai(
+                                runtime.player_move_shape_active_state_ai(
                                     self,
                                     player_id,
                                     &mut player_ai,
@@ -44230,6 +44231,26 @@ impl CGame {
                                 player_ai.regenerate_player_energy(player, interval_ms, &mut || {
                                     runtime.now_milliseconds()
                                 })
+                            });
+                            restored = self.find_player(player_id).and_then(|player| {
+                                let skill_id = player_ai.selected_battle_fairy_skill_id();
+                                let skill_level =
+                                    player.learned_skill_level_if_present(skill_id)?;
+                                let last_used_ms =
+                                    player_ai.selected_battle_fairy_skill_last_used_ms()?;
+                                let properties = self
+                                    .skill_factory
+                                    .query_skill_base_properties(skill_id, skill_level);
+                                Some(properties.is_none_or(|properties| {
+                                    let reuse_delay_ms = properties.query_property(
+                                        crate::gameserver::appserver::skills::basemagic::SKILL_USAGE_REUSE_DELAY_TIME,
+                                    );
+                                    crate::gameserver::appserver::skills::kernel::skill_is_restored(
+                                        last_used_ms,
+                                        reuse_delay_ms,
+                                        runtime.now_milliseconds(),
+                                    )
+                                }))
                             });
                             if let Some(player) = self.find_player_mut(player_id) {
                                 player.restore_player_ai(player_ai);
