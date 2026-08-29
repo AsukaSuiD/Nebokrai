@@ -793,6 +793,10 @@ impl CMonster {
         self.base_ai.process_reached_defense_actions()
     }
 
+    pub(crate) fn advance_active_ai_stand(&mut self, now_ms: u32) -> bool {
+        self.base_ai.advance_active_stand(now_ms)
+    }
+
     pub(crate) fn primary_ai_queues_idle(&self) -> bool {
         self.base_ai.primary_queues_idle()
     }

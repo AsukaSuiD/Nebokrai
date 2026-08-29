@@ -16,7 +16,9 @@
 //!
 //! Состояние сна также принадлежит этому владельцу: `Hibernate` запоминает
 //! оборачивающийся счётчик времени, а `WakeUp` один раз вычисляет интервал сна.
-//! Указатель владельца, цель, обработчики и остальные методы ниже остаются
+//! Достигнутый `Stand` из `ProcessActiveAction` удерживает расписание до
+//! исходного срока и сохраняет отдельный первый такт обработки. Указатель
+//! владельца, цель, остальные действия и обработчики ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
@@ -116,6 +118,38 @@ impl CBaseAI {
             processed = processed.wrapping_add(1);
         }
         processed
+    }
+
+    /// Выполняет достигнутую `Stand`-ветвь `ProcessActiveAction` и сообщает,
+    /// разрешено ли в этом же такте переходить к `OnSchedule`.
+    ///
+    /// Первый вызов обработчика всегда считается исполнением, даже если
+    /// нулевая либо уже истёкшая задержка позволяет сразу снять событие.
+    /// Повторный вызов после истечения снимает событие и разрешает расписание
+    /// только при пустом остатке FIFO. Другие активные действия пока не
+    /// интерпретируются и поэтому продолжают блокировать расписание.
+    pub(crate) fn advance_active_stand(&mut self, now_ms: u32) -> bool {
+        let Some(event) = self.active_actions.front_mut() else {
+            return true;
+        };
+        if event.action != AiShapeAction::Stand {
+            return false;
+        }
+        if event.handling == 1 {
+            if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+                self.active_actions.pop_front();
+                return self.active_actions.is_empty();
+            }
+            return false;
+        }
+        if event.handling != 0 {
+            return false;
+        }
+        event.handling = 1;
+        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+            self.active_actions.pop_front();
+        }
+        false
     }
 
     pub(crate) fn active_actions(&self) -> &VecDeque<AiEvent> {
@@ -405,7 +439,9 @@ impl CBaseAI {
 
 // ============================================================================
 // FUNCTION: CBaseAI::ProcessActiveAction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `CBaseAI::advance_active_stand` сохраняет достигнутую ветвь
+// `ASA_STAND`, её FIFO-позицию, handling и границу задержки.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:531

@@ -42337,6 +42337,7 @@ impl CGame {
                     continue;
                 }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
+                    let mut schedule_ready = false;
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         let processed = monster.process_reached_defense_actions();
                         if processed != 0 {
@@ -42347,8 +42348,13 @@ impl CGame {
                                 "обработаны пассивные Defense-события монстра"
                             );
                         }
+                        schedule_ready = monster.advance_active_ai_stand(now_ms)
+                            && monster.primary_ai_queues_idle();
                     }
                     self.restore_region_owner(owner);
+                    if !schedule_ready {
+                        continue;
+                    }
                 }
                 if self.run_owned_puniness_creature(region_id, monster_id, runtime) {
                     continue;
