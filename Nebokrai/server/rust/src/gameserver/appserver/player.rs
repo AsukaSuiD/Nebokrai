@@ -335,6 +335,7 @@ use super::shape::{
 };
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use super::states::automaticrestore::AutomaticRestoreMutation;
+use super::restorestate::ConsumableRestoreMutation;
 use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
@@ -12223,6 +12224,85 @@ impl CPlayer {
             .restore_automatic_hp_mp_states(self.combat_properties);
     }
 
+    pub(crate) fn begin_consumable_health_restore(
+        &mut self,
+        amount: u32,
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        interval_ms: u32,
+        now_ms: impl FnMut() -> u32,
+    ) -> bool {
+        self.move_shape.begin_consumable_health_restore(
+            amount,
+            time_to_keep_ms,
+            frequency_ms,
+            interval_ms,
+            now_ms,
+        )
+    }
+
+    pub(crate) fn begin_consumable_mana_restore(
+        &mut self,
+        amount: u32,
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        interval_ms: u32,
+        now_ms: impl FnMut() -> u32,
+    ) -> bool {
+        self.move_shape.begin_consumable_mana_restore(
+            amount,
+            time_to_keep_ms,
+            frequency_ms,
+            interval_ms,
+            now_ms,
+        )
+    }
+
+    pub(crate) const fn consumable_restore_state_count(&self) -> usize {
+        self.move_shape.consumable_restore_state_count()
+    }
+
+    pub(crate) fn consumable_restore_state_is_health(&self, index: usize) -> Option<bool> {
+        self.move_shape.consumable_restore_state_is_health(index)
+    }
+
+    pub(crate) fn tick_consumable_restore_state(
+        &mut self,
+        index: usize,
+        checked_at_ms: u32,
+    ) -> Option<ConsumableRestoreMutation> {
+        let health = self.move_shape.consumable_restore_state_is_health(index)?;
+        let (current, maximum) = if health {
+            (self.health(), self.maximum_health())
+        } else {
+            (self.mana(), self.maximum_mana())
+        };
+        let mutation = self.move_shape.tick_consumable_restore_state(
+            index,
+            checked_at_ms,
+            current,
+            maximum,
+        )?;
+        match mutation {
+            ConsumableRestoreMutation::Health(value) => self.set_health(value),
+            ConsumableRestoreMutation::Mana(value) => self.set_mana(value),
+        }
+        Some(mutation)
+    }
+
+    pub(crate) fn consumable_restore_state_expired(
+        &self,
+        index: usize,
+        checked_at_ms: u32,
+    ) -> Option<bool> {
+        self.move_shape
+            .consumable_restore_state_expired(index, checked_at_ms)
+    }
+
+    pub(crate) fn remove_consumable_restore_state(&mut self, index: usize) -> bool {
+        self.move_shape.remove_consumable_restore_state(index)
+    }
+
     pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
         self.move_shape.take_particular_states()
     }
@@ -15262,34 +15342,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x00043C5B
 // ADDRESS: 00443c5b
 // PROTOTYPE: undefined Catch@00443c5b()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::RestoreHp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:7785
-// RVA: 0x00044C80
-// ADDRESS: 00444c80
-// PROTOTYPE: int __thiscall RestoreHp(ulong param_1, ulong param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::RestoreMp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:7804
-// RVA: 0x00044D50
-// ADDRESS: 00444d50
-// PROTOTYPE: int __thiscall RestoreMp(ulong param_1, ulong param_2, ulong param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -1,26 +1,75 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Состояние восстановления здоровья `CRestoreHpState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/other states/restorehpstate.cpp`. Состояние хранит исходные
+//! `DWORD` срока, частоты, прироста и счётчика. Живой игрок получает один шаг,
+//! когда `frequency * count + started < now`; сложение выполняется с
+//! переполнением и ограничивается текущим максимумом HP. После второго чтения
+//! часов состояние завершается при строгом `time_to_keep + started < now`.
+//! Смерть приостанавливает и шаги, и истечение.
+
+pub(crate) const RESTORE_HP_STATE_ID: i32 = 100_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RestoreHpState {
+    time_to_keep_ms: u32,
+    frequency_ms: u32,
+    health_gain: u32,
+    restore_count: u32,
+    started_at_ms: u32,
+}
+
+impl RestoreHpState {
+    pub(crate) const fn new(
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        health_gain: u32,
+        started_at_ms: u32,
+    ) -> Self {
+        Self {
+            time_to_keep_ms,
+            frequency_ms,
+            health_gain,
+            restore_count: 0,
+            started_at_ms,
+        }
+    }
+
+    pub(crate) const fn state_id(self) -> i32 {
+        RESTORE_HP_STATE_ID
+    }
+
+    pub(crate) fn tick(
+        &mut self,
+        checked_at_ms: u32,
+        current_health: u32,
+        maximum_health: u32,
+    ) -> Option<u32> {
+        let due_at_ms = self
+            .frequency_ms
+            .wrapping_mul(self.restore_count)
+            .wrapping_add(self.started_at_ms);
+        if due_at_ms >= checked_at_ms {
+            return None;
+        }
+        self.restore_count = self.restore_count.wrapping_add(1);
+        Some(current_health.wrapping_add(self.health_gain).min(maximum_health))
+    }
+
+    pub(crate) const fn expired(self, checked_at_ms: u32) -> bool {
+        self.time_to_keep_ms
+            .wrapping_add(self.started_at_ms)
+            < checked_at_ms
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp
-
-// ============================================================================
-// FUNCTION: CRestoreHpState::CRestoreHpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp:15
-// RVA: 0x000F8410
-// ADDRESS: 004f8410
-// PROTOTYPE: undefined __thiscall CRestoreHpState(ulong param_1, ulong param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CRestoreHpState::CRestoreHpState
@@ -37,19 +86,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CRestoreHpState::~CRestoreHpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp:40
-// RVA: 0x000F8510
-// ADDRESS: 004f8510
-// PROTOTYPE: void __thiscall ~CRestoreHpState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CRestoreHpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -65,6 +101,7 @@
 //
 
 // ============================================================================
+// ============================================================================
 // FUNCTION: CRestoreHpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -79,32 +116,5 @@
 //
 
 // ============================================================================
-// FUNCTION: CRestoreHpState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp:91
-// RVA: 0x000F8650
-// ADDRESS: 004f8650
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CRestoreHpState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\restorehpstate.cpp:51
-// RVA: 0x000F8720
-// ADDRESS: 004f8720
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // COMPONENT_VARIANT_END: GameServer

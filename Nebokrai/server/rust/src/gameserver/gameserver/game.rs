@@ -26698,6 +26698,53 @@ impl CGame {
         }
     }
 
+    /// Исполняет единый живой список `CRestoreHpState/CRestoreMpState` после
+    /// ранее созданных автоматических состояний. Для живого игрока часы
+    /// читаются сначала для шага, затем отдельно для строгого истечения.
+    /// После удаления индекс продолжает расти и сохраняет исходный пропуск
+    /// сдвинутого элемента в текущем проходе `UpdateAbnormality`.
+    fn update_player_consumable_restore_states<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let state_count = self
+            .find_player(player_id)
+            .map(CPlayer::consumable_restore_state_count)
+            .unwrap_or_default();
+        let mut removed = 0usize;
+        for index in 0..state_count {
+            let Some(dead) = self.find_player(player_id).map(CPlayer::is_dead) else {
+                break;
+            };
+            if dead {
+                continue;
+            }
+            let checked_at_ms = runtime.now_milliseconds();
+            let changed = self
+                .find_player_mut(player_id)
+                .and_then(|player| player.tick_consumable_restore_state(index, checked_at_ms));
+            if changed.is_some() {
+                let _ = self.publish_player_states(player_id);
+            }
+            let expiry_checked_at_ms = runtime.now_milliseconds();
+            let expired = self
+                .find_player(player_id)
+                .and_then(|player| {
+                    player.consumable_restore_state_expired(index, expiry_checked_at_ms)
+                })
+                .unwrap_or(false);
+            if expired
+                && self
+                    .find_player_mut(player_id)
+                    .is_some_and(|player| player.remove_consumable_restore_state(index))
+            {
+                removed = removed.wrapping_add(1);
+            }
+        }
+        removed
+    }
+
     pub(crate) fn change_body_after_region_transition<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,
@@ -32089,6 +32136,46 @@ impl CGame {
         }
         self.find_player_mut(player_id)?.restore_automatic_hp_mp_states();
         Some(())
+    }
+
+    pub(crate) fn begin_player_consumable_health_restore(
+        &mut self,
+        player_id: i32,
+        amount: u32,
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        now_ms: impl FnMut() -> u32,
+    ) -> bool {
+        let (interval_ms, _) = self.globe_setup.item_restore_intervals_ms();
+        self.find_player_mut(player_id).is_some_and(|player| {
+            player.begin_consumable_health_restore(
+                amount,
+                time_to_keep_ms,
+                frequency_ms,
+                interval_ms,
+                now_ms,
+            )
+        })
+    }
+
+    pub(crate) fn begin_player_consumable_mana_restore(
+        &mut self,
+        player_id: i32,
+        amount: u32,
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        now_ms: impl FnMut() -> u32,
+    ) -> bool {
+        let (_, interval_ms) = self.globe_setup.item_restore_intervals_ms();
+        self.find_player_mut(player_id).is_some_and(|player| {
+            player.begin_consumable_mana_restore(
+                amount,
+                time_to_keep_ms,
+                frequency_ms,
+                interval_ms,
+                now_ms,
+            )
+        })
     }
 
     fn deliver_battle_fairy_summon_effects(&mut self, report: &mut BattleFairySummonReport) {
@@ -42307,6 +42394,7 @@ impl CGame {
                             player_abnormalities = player_abnormalities.wrapping_add(1);
                         }
                         self.update_player_automatic_restore_states(player_id, runtime);
+                        let _ = self.update_player_consumable_restore_states(player_id, runtime);
                         runtime.player_move_shape_unmaterialized_state_ai(self, player_id);
                         if self.find_player(player_id).is_some() {
                             if let Some(fight_state) = self.update_player_current_state(

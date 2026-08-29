@@ -115,6 +115,8 @@ const FAIRY_SYNCRETIC_NEEDED_GOODS_OFFSET: usize = 0x8A0;
 const FAIRY_SYNCRETIC_NEEDED_EXP_OFFSET: usize = 0x8A4;
 const FAIRY_SYNCRETIC_NEEDED_MONEY_OFFSET: usize = 0x8A8;
 const PK_COUNT_PER_KILL_OFFSET: usize = 0x4F4;
+const HEAL_TIME_INTERVAL_OFFSET: usize = 0x500;
+const MP_TIME_INTERVAL_OFFSET: usize = 0x504;
 const FIGHT_STATE_TIMER_OFFSET: usize = 0x364;
 const ATTACK_MONSTER_PROTECTION_OFFSET: usize = 0x36C;
 const EXPERIENCE_RATIO_OFFSET: usize = 0x3B8;
@@ -768,6 +770,15 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn gold_coin_limit(&self) -> u32 {
         self.read_u32(0x4fc)
+    }
+
+    /// Точные интервалы между созданием `CRestoreHpState` и
+    /// `CRestoreMpState` из `tagSetup +0x500/+0x504`.
+    pub(crate) fn item_restore_intervals_ms(&self) -> (u32, u32) {
+        (
+            self.read_u32(HEAL_TIME_INTERVAL_OFFSET),
+            self.read_u32(MP_TIME_INTERVAL_OFFSET),
+        )
     }
 
     /// Exact `dwPkCountPerKill` по подтверждённому ABI offset `+0x4F4`.

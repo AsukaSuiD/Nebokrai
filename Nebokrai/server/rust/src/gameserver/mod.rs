@@ -52,6 +52,12 @@ pub(crate) mod appserver {
     pub(crate) mod particularstate;
     #[path = "other states/ridestate.rs"]
     pub(crate) mod ridestate;
+    #[path = "other states/restorehpstate.rs"]
+    pub(crate) mod restorehpstate;
+    #[path = "other states/restorempstate.rs"]
+    pub(crate) mod restorempstate;
+    #[path = "other states/restorestate.rs"]
+    pub(crate) mod restorestate;
     #[path = "other states/teamstate.rs"]
     pub(crate) mod teamstate;
     #[path = "other states/scriptstate.rs"]

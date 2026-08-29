@@ -109,16 +109,6 @@ pub(crate) struct PlayerItemUseFacts {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerItemRuntimeEffect {
     EndState(u32),
-    RestoreHp {
-        amount: u32,
-        delay_ms: u32,
-        step_ms: u32,
-    },
-    RestoreMp {
-        amount: u32,
-        delay_ms: u32,
-        step_ms: u32,
-    },
     RecallToReturnPoint,
     RecallInsideRegion,
 }
@@ -793,16 +783,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                         |value_id| goods.addon_property_value(&goods_factory, property, value_id);
                     match property {
                         0x21 | 0x43 => {
-                            let result = runtime.apply_player_item_runtime_effect(
-                                game,
+                            consume = game.begin_player_consumable_health_restore(
                                 player_id,
-                                PlayerItemRuntimeEffect::RestoreHp {
-                                    amount: value(1) as u32,
-                                    delay_ms: (value(2) as u32).wrapping_mul(400),
-                                    step_ms: 400,
-                                },
+                                value(1) as u32,
+                                (value(2) as u32).wrapping_mul(400),
+                                400,
+                                || runtime.now_milliseconds(),
                             );
-                            consume = result.applied;
                         }
                         0x22 => {
                             let maximum = game
@@ -811,17 +798,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 .maximum_health();
                             let amount =
                                 (f64::from(maximum) * f64::from(value(1)) * 0.01).round() as u32;
-                            consume = runtime
-                                .apply_player_item_runtime_effect(
-                                    game,
-                                    player_id,
-                                    PlayerItemRuntimeEffect::RestoreHp {
-                                        amount,
-                                        delay_ms: 0,
-                                        step_ms: 400,
-                                    },
-                                )
-                                .applied;
+                            consume = game.begin_player_consumable_health_restore(
+                                player_id,
+                                amount,
+                                0,
+                                400,
+                                || runtime.now_milliseconds(),
+                            );
                         }
                         0x23 => {
                             let delay_ms = if value(2) == 0 {
@@ -829,17 +812,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             } else {
                                 (value(2) as u32).wrapping_sub(1).wrapping_mul(400)
                             };
-                            consume = runtime
-                                .apply_player_item_runtime_effect(
-                                    game,
-                                    player_id,
-                                    PlayerItemRuntimeEffect::RestoreMp {
-                                        amount: value(1) as u32,
-                                        delay_ms,
-                                        step_ms: 400,
-                                    },
-                                )
-                                .applied;
+                            consume = game.begin_player_consumable_mana_restore(
+                                player_id,
+                                value(1) as u32,
+                                delay_ms,
+                                400,
+                                || runtime.now_milliseconds(),
+                            );
                         }
                         0x24 => {
                             let maximum = game
@@ -848,17 +827,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 .maximum_mana();
                             let amount =
                                 (f64::from(maximum) * f64::from(value(1)) * 0.01).round() as u32;
-                            consume = runtime
-                                .apply_player_item_runtime_effect(
-                                    game,
-                                    player_id,
-                                    PlayerItemRuntimeEffect::RestoreMp {
-                                        amount,
-                                        delay_ms: 0,
-                                        step_ms: 400,
-                                    },
-                                )
-                                .applied;
+                            consume = game.begin_player_consumable_mana_restore(
+                                player_id,
+                                amount,
+                                0,
+                                400,
+                                || runtime.now_milliseconds(),
+                            );
                         }
                         0x27 if 0 <= value(2) => {
                             let skill_id = value(1) as u32;

@@ -47,6 +47,7 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
+use super::restorestate::{ConsumableRestoreMutation, ConsumableRestoreStateStorage};
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::teamstate::CTeamState;
@@ -525,6 +526,7 @@ pub(crate) struct CanonicalStateStorage {
     swordship_states: Vec<SwordshipState>,
     wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
     automatic_restore_states: Vec<AutomaticRestoreState>,
+    consumable_restore_states: ConsumableRestoreStateStorage,
     particular_states: Vec<ParticularState>,
     team_recruitment_states: Vec<CTeamState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
@@ -797,6 +799,7 @@ impl CMoveShape {
         self.automatic_restore_states.clear();
         self.particular_states.clear();
         self.team_recruitment_states.clear();
+        self.consumable_restore_states = ConsumableRestoreStateStorage::default();
         self.battle_fairy_attribute_states.clear();
         self.periodic_attack_order.clear();
         self.defense_shields.clear();
@@ -852,6 +855,7 @@ impl CMoveShape {
             || self.state_storage.leaf_cut_3_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.particular_states.is_empty()
+            || !self.state_storage.consumable_restore_states.is_empty()
             || !self.state_storage.team_recruitment_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
             || !self.state_storage.change_body_states.is_empty()
@@ -865,6 +869,71 @@ impl CMoveShape {
         properties: super::player::PlayerCombatProperties,
     ) {
         self.automatic_restore_states = AutomaticRestoreState::restored(properties).into();
+    }
+
+    pub(crate) fn begin_consumable_health_restore(
+        &mut self,
+        amount: u32,
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        interval_ms: u32,
+        now_ms: impl FnMut() -> u32,
+    ) -> bool {
+        self.consumable_restore_states.begin_health(
+            amount,
+            time_to_keep_ms,
+            frequency_ms,
+            interval_ms,
+            now_ms,
+        )
+    }
+
+    pub(crate) fn begin_consumable_mana_restore(
+        &mut self,
+        amount: u32,
+        time_to_keep_ms: u32,
+        frequency_ms: u32,
+        interval_ms: u32,
+        now_ms: impl FnMut() -> u32,
+    ) -> bool {
+        self.consumable_restore_states.begin_mana(
+            amount,
+            time_to_keep_ms,
+            frequency_ms,
+            interval_ms,
+            now_ms,
+        )
+    }
+
+    pub(crate) const fn consumable_restore_state_count(&self) -> usize {
+        self.state_storage.consumable_restore_states.len()
+    }
+
+    pub(crate) fn consumable_restore_state_is_health(&self, index: usize) -> Option<bool> {
+        self.consumable_restore_states.is_health(index)
+    }
+
+    pub(crate) fn tick_consumable_restore_state(
+        &mut self,
+        index: usize,
+        checked_at_ms: u32,
+        current: u32,
+        maximum: u32,
+    ) -> Option<ConsumableRestoreMutation> {
+        self.consumable_restore_states
+            .tick(index, checked_at_ms, current, maximum)
+    }
+
+    pub(crate) fn consumable_restore_state_expired(
+        &self,
+        index: usize,
+        checked_at_ms: u32,
+    ) -> Option<bool> {
+        self.consumable_restore_states.expired(index, checked_at_ms)
+    }
+
+    pub(crate) fn remove_consumable_restore_state(&mut self, index: usize) -> bool {
+        self.consumable_restore_states.remove(index)
     }
 
     pub(crate) fn particular_states(&self) -> &[ParticularState] {
@@ -961,6 +1030,7 @@ impl CMoveShape {
             .iter()
             .filter(|state| state.state_id() == state_id)
             .count();
+        let consumable_restore = self.consumable_restore_states.count(state_id);
         let change_body = (state_id == 0x37)
             .then_some(self.change_body_states.len())
             .unwrap_or(0);
@@ -1109,6 +1179,7 @@ impl CMoveShape {
             .filter(|state| state.skill_id() as i32 == state_id)
             .count();
         scripted
+            .saturating_add(consumable_restore)
             .saturating_add(agility)
             .saturating_add(callosity)
             .saturating_add(taiji)
@@ -1266,6 +1337,7 @@ impl CMoveShape {
                 .script_states
                 .iter()
                 .any(|state| state.state_id() as u32 == state_id)
+            || self.consumable_restore_states.contains(state_id)
             || self
                 .change_body_states
                 .iter()
