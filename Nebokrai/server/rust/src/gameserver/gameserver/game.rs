@@ -35496,6 +35496,9 @@ impl CGame {
         else {
             return;
         };
+        if monster_property.kind == 5 {
+            return;
+        }
         if let Some(attacker_id) = direct_attacking_player {
             let (hit_base_level, _, _, _) =
                 self.globe_setup.monster_continuous_kill_parameters();
@@ -35536,7 +35539,7 @@ impl CGame {
             drop_goods_position: Some((target_x, target_y)),
             ..ScriptExecutionContext::default()
         };
-        if !script_file.is_empty() {
+        if beneficiary_id.is_some() && !script_file.is_empty() {
             let _ = self.queue_script_file(&script_file, context);
         }
         let _ = self.queue_script_file(b"scripts/monster/monster_all.script", context);
