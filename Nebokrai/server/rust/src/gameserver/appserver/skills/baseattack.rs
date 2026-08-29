@@ -7,10 +7,10 @@
 //! цель завершает навык кодом 2, удалённая цель — кодом `0x0b`.
 //! `SkillExecutionKernel` хранится в `CPlayerAI` и переживает задержку между
 //! тактами. Формулы PvP, RNG и сетевые последствия ранения и смерти остаются
-//! у вызывающего `CGame`. Общий хвост `BaseMagic/Archery::End` сохраняет
+//! у вызывающего `CGame`. Общий хвост подтверждённых `CAttackSkill::End` сохраняет
 //! восстановление движения, `AfterUseSkill`, время восстановления и очистку
-//! текущего навыка;
-//! другие идентификаторы навыков сюда не направляются.
+//! текущего навыка; конкретный владелец явно выбирает задержанный или
+//! немедленный вариант и передаёт свой cooldown.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -74,18 +74,30 @@ pub(crate) fn finish_delayed_base_attack<Runtime, MarkUsed>(
     finish_base_attack_owner(game, player_id, player_ai, runtime, true, mark_used);
 }
 
+pub(crate) fn finish_immediate_base_attack<Runtime, MarkUsed>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+    mark_used: MarkUsed,
+) where
+    Runtime: GameMainLoopRuntime,
+    MarkUsed: FnOnce(&mut CPlayerAI, u32),
+{
+    finish_base_attack_owner(game, player_id, player_ai, runtime, false, mark_used);
+}
+
 pub(crate) fn finish_player_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_base_attack_owner(
+    finish_immediate_base_attack(
         game,
         player_id,
         player_ai,
         runtime,
-        false,
         |player_ai, now_ms| player_ai.mark_base_attack_used(now_ms),
     );
 }
