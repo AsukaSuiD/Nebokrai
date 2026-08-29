@@ -1324,6 +1324,9 @@ use crate::gameserver::appserver::skills::spiderpoison::{
 use crate::gameserver::appserver::skills::spiderpoisonstate::{
     update_monster_spider_poison_state, update_player_spider_poison_state,
 };
+use crate::gameserver::appserver::skills::spriteburnstate::{
+    update_monster_sprite_burn_state, update_player_sprite_burn_state,
+};
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
@@ -27047,6 +27050,9 @@ impl CGame {
                 SPIDER_POISON_SKILL_ID => {
                     update_player_spider_poison_state(self, player_id, runtime)
                 }
+                SPRITE_BURN_SKILL_ID => {
+                    update_player_sprite_burn_state(self, player_id, runtime)
+                }
                 BLOOD_LOSS_SKILL_ID => update_player_blood_loss_state(self, player_id, runtime),
                 crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
                     update_player_leaf_cut_state(self, player_id, runtime)
@@ -43918,6 +43924,14 @@ impl CGame {
                         }
                         SPIDER_POISON_SKILL_ID => {
                             let _ = update_monster_spider_poison_state(
+                                self,
+                                region_id,
+                                monster_id,
+                                runtime,
+                            );
+                        }
+                        SPRITE_BURN_SKILL_ID => {
+                            let _ = update_monster_sprite_burn_state(
                                 self,
                                 region_id,
                                 monster_id,

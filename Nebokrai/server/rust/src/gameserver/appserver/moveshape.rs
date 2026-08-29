@@ -109,6 +109,7 @@ use crate::gameserver::appserver::skills::poisonarrowstate::{
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
+use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
 use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
@@ -529,6 +530,7 @@ pub(crate) struct CanonicalStateStorage {
     poison_fog_state: Option<PoisonFogState>,
     meteor_arrow_state: Option<MeteorArrowState>,
     spider_poison_state: Option<SpiderPoisonState>,
+    sprite_burn_state: Option<SpriteBurnState>,
     spider_web_state: Option<SpiderWebState>,
     weak_state: Option<WeakState>,
     god_bless_state: Option<GodBlessState>,
@@ -986,6 +988,7 @@ impl CMoveShape {
         self.poison_arrow_state = None;
         self.poison_fog_state = None;
         self.spider_poison_state = None;
+        self.sprite_burn_state = None;
         self.spider_web_state = None;
         self.weak_state = None;
         self.god_bless_state = None;
@@ -1053,6 +1056,7 @@ impl CMoveShape {
             || self.state_storage.poison_arrow_state.is_some()
             || self.state_storage.poison_fog_state.is_some()
             || self.state_storage.spider_poison_state.is_some()
+            || self.state_storage.sprite_burn_state.is_some()
             || self.state_storage.spider_web_state.is_some()
             || self.state_storage.weak_state.is_some()
             || self.state_storage.god_bless_state.is_some()
@@ -1339,6 +1343,10 @@ impl CMoveShape {
             self.spider_poison_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let sprite_burn = usize::from(
+            self.sprite_burn_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let spider_web = usize::from(
             self.spider_web_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -1422,6 +1430,7 @@ impl CMoveShape {
             .saturating_add(poison_fog)
             .saturating_add(meteor_arrow)
             .saturating_add(spider_poison)
+            .saturating_add(sprite_burn)
             .saturating_add(spider_web)
             .saturating_add(weak)
             .saturating_add(god_bless)
@@ -1508,6 +1517,9 @@ impl CMoveShape {
             || self.meteor_arrow_state.is_some_and(|state| state.skill_id() == state_id)
             || self
                 .spider_poison_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .sprite_burn_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .spider_web_state
@@ -2251,6 +2263,26 @@ impl CMoveShape {
 
     pub(crate) fn take_spider_poison_state(&mut self) -> Option<SpiderPoisonState> {
         let state = self.spider_poison_state.take()?;
+        self.periodic_attack_order.shift_remove(&state.skill_id());
+        self.curable_state_order.shift_remove(&state.skill_id());
+        Some(state)
+    }
+
+    pub(crate) fn replace_sprite_burn_state(
+        &mut self,
+        state: SpriteBurnState,
+    ) -> Option<SpriteBurnState> {
+        self.periodic_attack_order.insert(state.skill_id());
+        self.curable_state_order.insert(state.skill_id());
+        self.sprite_burn_state.replace(state)
+    }
+
+    pub(crate) fn take_sprite_burn_state_for_ai(&mut self) -> Option<SpriteBurnState> {
+        self.sprite_burn_state.take()
+    }
+
+    pub(crate) fn take_sprite_burn_state(&mut self) -> Option<SpriteBurnState> {
+        let state = self.sprite_burn_state.take()?;
         self.periodic_attack_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
         Some(state)

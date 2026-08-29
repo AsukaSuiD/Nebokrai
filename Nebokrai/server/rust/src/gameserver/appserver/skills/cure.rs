@@ -5,7 +5,7 @@
 //! время восстановления, путь и препятствия, задержку, направление, точную
 //! вероятность и один вызов генератора MSVCRT на каждое подходящее состояние
 //! в порядке исходного вектора состояний. Из уже типизированных состояний
-//! достигнуты `0xC9`, `0x138`, `0x191`, `0x192`, `0x199` и `0x1F8`; неизвестные старые записи
+//! достигнуты `0xC9`, `0x138`, `0x191`, `0x192`, `0x199`, `0x1A6` и `0x1F8`; неизвестные старые записи
 //! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
 //! доставку. Координатная перегрузка
 //! `Begin` остаётся ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -30,6 +30,11 @@ use super::spiderpoison::SPIDER_POISON_SKILL_ID;
 use super::spiderpoisonstate::{
     SpiderPoisonState, finish_player_spider_poison_state_on_cure,
     send_spider_poison_state_visual,
+};
+use super::spriteburn::SPRITE_BURN_SKILL_ID;
+use super::spriteburnstate::{
+    SpriteBurnState, finish_player_sprite_burn_state_on_cure,
+    send_sprite_burn_state_visual,
 };
 use super::spiderweb::SPIDER_WEB_SKILL_ID;
 use super::spiderwebstate::{
@@ -192,6 +197,7 @@ fn curable_state_ids(game: &CGame, region_id: i32, target: ShapeIdentity) -> Vec
 enum RemovedMonsterCurableState {
     Seal(SealState),
     SpiderPoison(SpiderPoisonState),
+    SpriteBurn(SpriteBurnState),
     SpiderWeb(SpiderWebState),
     KnockOut(KnockOutState),
     BossBlueQuake(BossBlueQuakeState),
@@ -216,6 +222,7 @@ fn finish_monster_curable_state(
                 RemovedMonsterCurableState::Seal(state)
             }
             SPIDER_POISON_SKILL_ID => RemovedMonsterCurableState::SpiderPoison(monster.move_shape_mut().take_spider_poison_state()?),
+            SPRITE_BURN_SKILL_ID => RemovedMonsterCurableState::SpriteBurn(monster.move_shape_mut().take_sprite_burn_state()?),
             SPIDER_WEB_SKILL_ID => {
                 let state = monster.move_shape_mut().take_spider_web_state()?;
                 monster.move_shape_mut().set_moveable(true);
@@ -250,6 +257,7 @@ fn finish_monster_curable_state(
     match removed {
         RemovedMonsterCurableState::Seal(state) => send_seal_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpiderPoison(state) => send_spider_poison_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
+        RemovedMonsterCurableState::SpriteBurn(state) => send_sprite_burn_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpiderWeb(state) => send_spider_web_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::KnockOut(state) => send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::BossBlueQuake(state) => send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
@@ -262,6 +270,7 @@ fn finish_monster_curable_state(
 pub(crate) fn finish_curable_state(game: &mut CGame, region_id: i32, target: ShapeIdentity, state_id: u32, now_ms: u32) -> bool {
     match (target.object_type, state_id) {
         (PLAYER_TYPE, SPIDER_POISON_SKILL_ID) => finish_player_spider_poison_state_on_cure(game, target.id, now_ms),
+        (PLAYER_TYPE, SPRITE_BURN_SKILL_ID) => finish_player_sprite_burn_state_on_cure(game, target.id, now_ms),
         (PLAYER_TYPE, SPIDER_WEB_SKILL_ID) => finish_player_spider_web_state_on_defense(game, target.id, now_ms),
         (PLAYER_TYPE, KNOCK_OUT_STATE_ID) => finish_player_knock_out_state_on_defense(game, target.id, now_ms),
         (PLAYER_TYPE, BOSS_BLUE_QUAKE_STATE_ID) => finish_player_boss_blue_quake_state_on_cure(game, target.id, now_ms),

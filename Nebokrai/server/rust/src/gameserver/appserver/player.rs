@@ -4639,6 +4639,25 @@ impl CPlayer {
         self.move_shape.take_spider_poison_state()
     }
 
+    pub(crate) fn replace_sprite_burn_state(
+        &mut self,
+        state: super::skills::spriteburnstate::SpriteBurnState,
+    ) -> Option<super::skills::spriteburnstate::SpriteBurnState> {
+        self.move_shape.replace_sprite_burn_state(state)
+    }
+
+    pub(crate) fn take_sprite_burn_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::spriteburnstate::SpriteBurnState> {
+        self.move_shape.take_sprite_burn_state_for_ai()
+    }
+
+    pub(crate) fn take_sprite_burn_state(
+        &mut self,
+    ) -> Option<super::skills::spriteburnstate::SpriteBurnState> {
+        self.move_shape.take_sprite_burn_state()
+    }
+
     pub(crate) fn replace_spider_web_state(
         &mut self,
         state: super::skills::spiderwebstate::SpiderWebState,

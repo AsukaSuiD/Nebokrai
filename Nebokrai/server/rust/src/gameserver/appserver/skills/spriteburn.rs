@@ -6,7 +6,7 @@
 //! срабатывания. После задержки навык читает текущую клетку владельца, обходит
 //! подтверждённую маску 7×7 в порядке X → Y и живой порядок объектов каждой
 //! клетки, исключает мёртвые и недоступные цели с `CureState`, затем атомарно
-//! заменяет их канонический `SpiderPoisonState` (`0x191`). Состояние создаётся
+//! заменяет их канонический `SpriteBurnState` (`0x1a6`). Состояние создаётся
 //! с отдельным чтением часов для каждой цели. `CGame` только разрешает
 //! независимых владельцев региона и цели и выполняет фактическую доставку.
 //! Player `End` возвращает движение и выполняет `CSummonSkill::End(1)`;
@@ -21,8 +21,8 @@ use super::monsterattack::{
 };
 use super::monsterrangeattack::range_attack_scope_cells;
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderpoison::{install_spider_poison_state, target_has_cure};
-use super::spiderpoisonstate::SpiderPoisonState;
+use super::spiderpoison::target_has_cure;
+use super::spriteburnstate::{SpriteBurnState, install_sprite_burn_state};
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, schedule_attack_interval,
 };
@@ -169,11 +169,11 @@ fn apply_player_scope<Runtime: GameMainLoopRuntime>(
             let Some(mut owner) = game.take_region_owner(region_id) else { return };
             if !target_has_cure(game, owner.base(), target) {
                 let now_ms = runtime.now_milliseconds();
-                install_spider_poison_state(
+                install_sprite_burn_state(
                     game,
                     owner.base_mut(),
                     target,
-                    SpiderPoisonState::new(master, now_ms, lifetime_ms, frequency_ms, constant),
+                    SpriteBurnState::new(master, now_ms, lifetime_ms, frequency_ms, constant),
                     now_ms,
                 );
             }
@@ -456,11 +456,11 @@ pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
                 continue;
             }
             let state_now_ms = runtime.now_milliseconds();
-            install_spider_poison_state(
+            install_sprite_burn_state(
                 game,
                 region,
                 identity,
-                SpiderPoisonState::new(
+                SpriteBurnState::new(
                     state_master,
                     state_now_ms,
                     properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
