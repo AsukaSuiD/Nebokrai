@@ -890,6 +890,13 @@ impl GlobeSetupSnapshot {
         )
     }
 
+    /// Exact numeric gate `bUseJJc`, который GameServer проверяет перед
+    /// отправкой заявки `0x60902`. Ненулевые значения исторически означают
+    /// включённую арену.
+    pub(crate) fn jjc_enabled(&self) -> bool {
+        self.read_i32(JJC_ENABLED_OFFSET) != 0
+    }
+
     /// Возвращает `lTransferMoneyTime` для reconnect-gate `CDbMisc`.
     /// Поставочный файл может не содержать последнюю запись; zero-filled
     /// snapshot тогда сохраняет исходный нулевой интервал.

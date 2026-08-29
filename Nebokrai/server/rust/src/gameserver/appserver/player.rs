@@ -4045,6 +4045,33 @@ impl CPlayer {
         &self.jjc_data
     }
 
+    /// Восемь `unsigned short` из точного `tagJJcData` лежат подряд в
+    /// GameSave/wire-порядке: четыре недельных, затем четыре сезонных счётчика.
+    pub(crate) fn jjc_counter(&self, selector: i32) -> Option<u16> {
+        let index = usize::try_from(selector.checked_sub(1)?).ok()?;
+        let offset = index.checked_mul(2)?;
+        let bytes = self.jjc_data.get(offset..offset.checked_add(2)?)?;
+        Some(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    pub(crate) fn set_jjc_counter(&mut self, selector: i32, value: u16) -> bool {
+        let Some(offset) = selector
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| index.checked_mul(2))
+        else {
+            return false;
+        };
+        let Some(bytes) = self
+            .jjc_data
+            .get_mut(offset..offset.saturating_add(2))
+        else {
+            return false;
+        };
+        bytes.copy_from_slice(&value.to_le_bytes());
+        true
+    }
+
     /// Exact `JJcWeekClear`: первые четыре WORD — weekly counters; при
     /// пятнадцати участиях score получает level-dependent award с x87
     /// round-to-nearest-even и cap 1500.

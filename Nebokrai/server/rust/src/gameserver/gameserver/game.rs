@@ -17046,6 +17046,140 @@ impl CGame {
             .send_to_player(self.net_server(), player_id)
     }
 
+    /// Exact `CJJcSystem::ApplyJJc`: проверка process-настройки и занятости
+    /// предшествует wire-заявке, а результат `Send` не меняет исторический
+    /// `true` — заявка считается принятой сразу после построения сообщения.
+    pub(crate) fn apply_player_jjc(&self, player_id: i32) -> bool {
+        let Some(player) = self.players.get(&player_id) else {
+            tracing::trace!(player_id, "JJC-заявка отклонена: игрок отсутствует");
+            return false;
+        };
+        if !self.globe_setup.jjc_enabled() {
+            let delivery = self.jjc_notify_application(player_id, 1);
+            tracing::trace!(player_id, delivery, "JJC-заявка отклонена настройкой");
+            return false;
+        }
+        if player.current_progress() != PlayerProgress::None || player.jjc_pk_state() {
+            let delivery = self.jjc_notify_application(player_id, 2);
+            tracing::trace!(player_id, delivery, "JJC-заявка отклонена состоянием игрока");
+            return false;
+        }
+        let Some(region_id) = player.server_region_id() else {
+            tracing::trace!(player_id, "JJC-заявка отклонена: регион отсутствует");
+            return false;
+        };
+        let level = player.level();
+        let jjc_level = player.jjc_level();
+        let tile_x = player.shape().get_pos_x().round_ties_even() as i32;
+        let tile_y = player.shape().get_pos_y().round_ties_even() as i32;
+        let mut request = CMessage::new(0x0006_0902);
+        request.add_long(player_id);
+        request.add_byte(level);
+        request.add_ulong(jjc_level);
+        request.add_long(region_id);
+        request.add_long(tile_x);
+        request.add_long(tile_y);
+        let world_delivery = request.send(self, false);
+        tracing::debug!(
+            player_id,
+            level,
+            jjc_level,
+            region_id,
+            tile_x,
+            tile_y,
+            ?world_delivery,
+            "JJC-заявка отправлена WorldServer"
+        );
+        true
+    }
+
+    pub(crate) fn jjc_opponent_info(
+        &self,
+        selector: u32,
+        region_id: i32,
+        player_id: i32,
+    ) -> i32 {
+        self.jjc_system
+            .opponent_info(selector, region_id, player_id)
+            .unwrap_or_default()
+    }
+
+    /// Exact reached `EndPK -> UpdateJJcData -> OnRelive(1) -> BackRegion`.
+    /// Сведения матча удаляются лишь после выбора и запуска возврата.
+    pub(crate) fn end_player_jjc<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        region_id: i32,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let (region_min, region_max, _, buff_id) = self.globe_setup.jjc_game_config();
+        let Some(player) = self.players.get_mut(&player_id) else {
+            tracing::trace!(player_id, region_id, "завершение JJC пропущено: игрок отсутствует");
+            return false;
+        };
+        let _ = player.delete_undead_state(buff_id);
+
+        let mut ended = CMessage::new(0x0006_0904);
+        ended.add_long(region_id);
+        ended.add_long(player_id);
+        let world_delivery = ended.send(self, false);
+        let data_delivery = self.send_jjc_data(player_id);
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.set_jjc_pk_state(false);
+        }
+        let relived = self
+            .players
+            .get(&player_id)
+            .is_some_and(|player| CMoveShape::is_died(player.health()));
+        if relived {
+            self.relive_player(player_id, 1, runtime);
+        }
+
+        let return_facts = self.players.get(&player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.country(),
+                player.shape().get_direction(),
+            ))
+        });
+        let return_target = return_facts.and_then(|(current_region_id, country, direction)| {
+            self.jjc_system
+                .return_target(
+                    player_id,
+                    current_region_id,
+                    country,
+                    region_min,
+                    region_max,
+                )
+                .map(|target| (target, direction))
+        });
+        let region_change = return_target.map(|(target, direction)| {
+            self.change_player_region(
+                player_id,
+                target.region_id,
+                target.tile_x,
+                target.tile_y,
+                direction,
+                0,
+                0,
+                0,
+                runtime,
+            )
+        });
+        self.jjc_system.finish_pk(region_id, player_id);
+        tracing::debug!(
+            player_id,
+            region_id,
+            ?world_delivery,
+            ?data_delivery,
+            relived,
+            ?return_target,
+            ?region_change,
+            "JJC-бой завершён"
+        );
+        true
+    }
+
     pub(crate) fn jjc_start_player<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,

@@ -453,6 +453,7 @@ pub(crate) mod appserver {
     pub(crate) mod script {
         pub(crate) mod buffskillfunc;
         pub(crate) mod function;
+        pub(crate) mod jjcfunc;
         pub(crate) mod parser;
         pub(crate) mod script;
         pub(crate) mod variablelist;

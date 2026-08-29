@@ -64,6 +64,7 @@ use super::function::{
     run_add_time_goods_script_function, script_function_parameter_kind,
     script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
+use super::jjcfunc::{JjcScriptFunctionOutcome, dispatch_jjc_script_function};
 use super::parser;
 use super::variablelist::section_records;
 use crate::gameserver::gameserver::game::CGame;
@@ -822,50 +823,68 @@ impl<'a> CScript<'a> {
                 }
             }
         }
-        let dispatch_outcome = if function_id == SCRIPT_FUNCTION_ADD_TIME_GOODS {
-            let player_id = self.context.player_id;
-            run_add_time_goods_script_function(
-                game,
-                runtime,
-                player_id,
-                string_arguments[0].as_deref(),
-                &integer_arguments,
-                |game, runtime| {
-                    let mut sockets = [(0, 0); 10];
-                    for (socket, pair) in sockets.iter_mut().enumerate() {
-                        let color = parameters
-                            .get(12 + socket * 2)
-                            .and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
-                            .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
-                        let gem_index = parameters
-                            .get(13 + socket * 2)
-                            .and_then(|parameter| self.evaluate_integer(game, runtime, parameter))
-                            .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
-                        if matches!(color, SCRIPT_INT_PARAMETER_ERROR | -1) {
-                            return None;
-                        }
-                        *pair = (color, gem_index);
-                    }
-                    Some(sockets)
-                },
-            )
-        } else {
-            dispatch_script_function(
-                game,
-                runtime,
-                self.context.player_id,
-                self.context.npc_id,
-                self.context.region_id,
-                self.context.used_item_id,
-                self.context.died_monster_index,
-                self.context.drop_goods_position,
-                self.script_id,
-                self.path,
-                function_id,
-                parameters.len(),
-                integer_arguments,
-                std::array::from_fn(|index| string_arguments[index].as_deref()),
-            )
+        let dispatch_outcome = match dispatch_jjc_script_function(
+            game,
+            runtime,
+            self.context.player_id,
+            self.context.region_id,
+            function_id,
+            integer_arguments,
+        ) {
+            JjcScriptFunctionOutcome::Handled { legacy_return } => {
+                ScriptFunctionDispatchOutcome::Handled { legacy_return }
+            }
+            JjcScriptFunctionOutcome::DifferentFunction => {
+                if function_id == SCRIPT_FUNCTION_ADD_TIME_GOODS {
+                    let player_id = self.context.player_id;
+                    run_add_time_goods_script_function(
+                        game,
+                        runtime,
+                        player_id,
+                        string_arguments[0].as_deref(),
+                        &integer_arguments,
+                        |game, runtime| {
+                            let mut sockets = [(0, 0); 10];
+                            for (socket, pair) in sockets.iter_mut().enumerate() {
+                                let color = parameters
+                                    .get(12 + socket * 2)
+                                    .and_then(|parameter| {
+                                        self.evaluate_integer(game, runtime, parameter)
+                                    })
+                                    .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+                                let gem_index = parameters
+                                    .get(13 + socket * 2)
+                                    .and_then(|parameter| {
+                                        self.evaluate_integer(game, runtime, parameter)
+                                    })
+                                    .unwrap_or(SCRIPT_INT_PARAMETER_ERROR);
+                                if matches!(color, SCRIPT_INT_PARAMETER_ERROR | -1) {
+                                    return None;
+                                }
+                                *pair = (color, gem_index);
+                            }
+                            Some(sockets)
+                        },
+                    )
+                } else {
+                    dispatch_script_function(
+                        game,
+                        runtime,
+                        self.context.player_id,
+                        self.context.npc_id,
+                        self.context.region_id,
+                        self.context.used_item_id,
+                        self.context.died_monster_index,
+                        self.context.drop_goods_position,
+                        self.script_id,
+                        self.path,
+                        function_id,
+                        parameters.len(),
+                        integer_arguments,
+                        std::array::from_fn(|index| string_arguments[index].as_deref()),
+                    )
+                }
+            }
         };
         match dispatch_outcome {
             ScriptFunctionDispatchOutcome::Invalid => ScriptCommandOutcome::InvalidExpression,

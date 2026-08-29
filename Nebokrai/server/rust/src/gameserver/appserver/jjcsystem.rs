@@ -5,8 +5,11 @@
 //! ordered map: region → пара участников и player → сведения соперника.
 //! Match/start/timeout/week/season и `CPlayer::OnLost -> QuitJJc` вызываются
 //! реальным `CGame::ProcessMessage`; player, region, script и network effects
-//! выполняет `CGame`. Не достигнутые без следующих script-function ID
-//! `ApplyJJc`, `EndPK` и `BackRegion` остаются в RAW-корпусе ниже.
+//! выполняет `CGame`. `CScript::JJcFunction 10000..10009` теперь достигает
+//! также `ApplyJJc`, `EndPK` и `BackRegion`: этот owner выбирает сведения матча
+//! и точку возврата, а `CGame` сохраняет порядок сообщений, воскрешения и
+//! смены региона. Неопределённые значения EAX после исходных void-вызовов не
+//! считаются игровым контрактом и нормализованы диспетчером в ноль.
 
 use std::collections::BTreeMap;
 
@@ -25,6 +28,13 @@ pub(crate) struct JjcInfo {
 pub(crate) struct CJJcSystem {
     pk_list: BTreeMap<i32, (i32, i32)>,
     player_info: BTreeMap<i32, JjcInfo>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct JjcReturnTarget {
+    pub(crate) region_id: i32,
+    pub(crate) tile_x: i32,
+    pub(crate) tile_y: i32,
 }
 
 impl CJJcSystem {
@@ -54,6 +64,55 @@ impl CJJcSystem {
             2 => Some(opponent.jjc_level as i32),
             _ => None,
         }
+    }
+
+    pub(crate) fn return_target(
+        &self,
+        player_id: i32,
+        current_region_id: i32,
+        country: u8,
+        region_min: i32,
+        region_max: i32,
+    ) -> Option<JjcReturnTarget> {
+        let info = self.player_info.get(&player_id).copied().unwrap_or_default();
+        if info.old_region_id != 0 {
+            return Some(JjcReturnTarget {
+                region_id: info.old_region_id,
+                tile_x: info.pos_x,
+                tile_y: info.pos_y,
+            });
+        }
+        if !(region_min..=region_max).contains(&current_region_id) {
+            return None;
+        }
+        match country {
+            1 => Some(JjcReturnTarget {
+                region_id: 11_000,
+                tile_x: 0x113,
+                tile_y: 0x11a,
+            }),
+            2 => Some(JjcReturnTarget {
+                region_id: 12_000,
+                tile_x: 0xdc,
+                tile_y: 0x106,
+            }),
+            3 => Some(JjcReturnTarget {
+                region_id: 13_000,
+                tile_x: 0xdc,
+                tile_y: 0x106,
+            }),
+            4 => Some(JjcReturnTarget {
+                region_id: 14_000,
+                tile_x: 0x113,
+                tile_y: 0x11a,
+            }),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn finish_pk(&mut self, region_id: i32, player_id: i32) {
+        self.player_info.remove(&player_id);
+        self.pk_list.remove(&region_id);
     }
 }
 
