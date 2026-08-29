@@ -99,6 +99,18 @@ fn abort_player_yin_yang(game: &mut CGame, player_id: i32) {
     abort_skill(game, player_id);
 }
 
+pub(crate) fn complete_player_yin_yang_family<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    second: bool,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = execution(player_ai, second).map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_yin_yang(game, player_id, player_ai, second, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
 pub(crate) fn cancel_player_yin_yang_family<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,

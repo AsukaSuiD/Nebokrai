@@ -170,6 +170,17 @@ fn abort_player_lightning(game: &mut CGame, player_id: i32) {
     abort_skill(game, player_id);
 }
 
+pub(crate) fn complete_player_lightning<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.lightning().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_lightning(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
 pub(crate) fn cancel_player_lightning<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,

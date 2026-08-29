@@ -85,6 +85,12 @@ fn abort_player_soul_collect(game: &mut CGame, player_id: i32) {
     abort_skill(game, player_id);
 }
 
+pub(crate) fn complete_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.soul_collect().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_soul_collect(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
 pub(crate) fn cancel_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
     let Some(dispatch) = player_ai.soul_collect().map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_soul_collect(game, player_id);

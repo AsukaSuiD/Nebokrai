@@ -128,6 +128,12 @@ fn abort_player_god_thunder(game: &mut CGame, player_id: i32) {
     abort_skill(game, player_id);
 }
 
+pub(crate) fn complete_player_god_thunder_family<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, second: bool, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = execution(ai, second).map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_god_thunder(game, player_id, ai, second, runtime);
+    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
 pub(crate) fn cancel_player_god_thunder_family<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, second: bool, _runtime: &mut Runtime) -> bool {
     let Some(dispatch) = execution(ai, second).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_god_thunder(game, player_id);

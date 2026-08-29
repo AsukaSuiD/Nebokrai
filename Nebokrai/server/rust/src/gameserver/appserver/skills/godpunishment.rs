@@ -65,6 +65,12 @@ fn abort_player_god_punishment(game: &mut CGame, player: i32) {
     abort_skill(game, player);
 }
 
+pub(crate) fn complete_player_god_punishment<Runtime: GameMainLoopRuntime>(game: &mut CGame, player: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = ai.god_punishment().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_god_punishment(game, player, ai, runtime);
+    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
 pub(crate) fn cancel_player_god_punishment<Runtime: GameMainLoopRuntime>(game: &mut CGame, player: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
     let Some(dispatch) = ai.god_punishment().map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_god_punishment(game, player);

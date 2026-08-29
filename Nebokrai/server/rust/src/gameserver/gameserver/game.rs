@@ -796,7 +796,8 @@ use crate::gameserver::appserver::skills::archery::{
     cancel_player_archery, execute_player_archery, ARCHERY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::heartlessarrow::{
-    execute_player_heartless_arrow, is_heartless_arrow_dispatch,
+    cancel_player_heartless_arrow, complete_or_release_player_heartless_arrow,
+    execute_player_heartless_arrow, is_heartless_arrow_dispatch, HEARTLESS_ARROW_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::heartlessarrow2::{
     execute_player_heartless_arrow_area, is_heartless_arrow_area_dispatch,
@@ -948,12 +949,12 @@ use crate::gameserver::appserver::skills::lordwiderangingattack::{
     LORD_WIDERANGING_ATTACK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::lordfastattack::{
-    cancel_player_lord_fast_attack, execute_player_lord_fast_attack,
-    is_lord_fast_attack_dispatch, LORD_FAST_ATTACK_SKILL_ID,
+    cancel_player_lord_fast_attack, complete_player_lord_fast_attack,
+    execute_player_lord_fast_attack, is_lord_fast_attack_dispatch, LORD_FAST_ATTACK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::chaossphere::{
-    cancel_player_chaos_sphere, execute_player_chaos_sphere, is_chaos_sphere_dispatch,
-    CHAOS_SPHERE_SKILL_ID,
+    cancel_player_chaos_sphere, complete_player_chaos_sphere,
+    execute_player_chaos_sphere, is_chaos_sphere_dispatch, CHAOS_SPHERE_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::chainlightning::{
     cancel_player_chain_lightning, execute_player_chain_lightning, is_chain_lightning_dispatch,
@@ -1024,10 +1025,12 @@ use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, chaos_sphere_targets, ChaosSpherePhalanxTick,
 };
 use crate::gameserver::appserver::skills::lightning::{
-    cancel_player_lightning, execute_player_lightning, is_lightning_target, LIGHTNING_SKILL_ID,
+    cancel_player_lightning, complete_player_lightning, execute_player_lightning,
+    is_lightning_target, LIGHTNING_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::seal::{
-    cancel_player_seal, execute_player_seal, is_seal_target, SEAL_SKILL_ID,
+    cancel_player_seal, complete_player_seal, execute_player_seal, is_seal_target,
+    SEAL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::battlefairybasemagic::{
     execute_battle_fairy_base_magic, BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
@@ -1125,8 +1128,8 @@ use crate::gameserver::appserver::skills::weakstate::{
     finish_monster_weak_outside, finish_player_weak_outside,
 };
 use crate::gameserver::appserver::skills::yinyang::{
-    cancel_player_yin_yang_family, execute_player_yin_yang, is_yin_yang_target,
-    YIN_YANG_SKILL_ID,
+    cancel_player_yin_yang_family, complete_player_yin_yang_family,
+    execute_player_yin_yang, is_yin_yang_target, YIN_YANG_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::yinyang2::{
     execute_player_yin_yang_2, is_yin_yang_2_target, YIN_YANG_2_SKILL_ID,
@@ -1135,23 +1138,23 @@ use crate::gameserver::appserver::skills::yinyangphalanx::{
     calculate_owned_yin_yang_attack, yin_yang_targets, YinYangPhalanxTick,
 };
 use crate::gameserver::appserver::skills::godpunishment::{
-    cancel_player_god_punishment, execute_player_god_punishment,
-    is_god_punishment_target, GOD_PUNISHMENT_SKILL_ID,
+    cancel_player_god_punishment, complete_player_god_punishment,
+    execute_player_god_punishment, is_god_punishment_target, GOD_PUNISHMENT_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::godthunder::{
-    cancel_player_god_thunder_family, execute_player_god_thunder,
-    is_god_thunder_dispatch, GOD_THUNDER_SKILL_ID,
+    cancel_player_god_thunder_family, complete_player_god_thunder_family,
+    execute_player_god_thunder, is_god_thunder_dispatch, GOD_THUNDER_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::godthunder2::{
     execute_player_god_thunder_2, is_god_thunder_2_dispatch, GOD_THUNDER_2_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::soulcollect::{
-    cancel_player_soul_collect, execute_player_soul_collect, is_soul_collect_skill,
-    SOUL_COLLECT_SKILL_ID,
+    cancel_player_soul_collect, complete_player_soul_collect,
+    execute_player_soul_collect, is_soul_collect_skill, SOUL_COLLECT_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::soulmirror::{
-    cancel_player_soul_mirror, execute_player_soul_mirror, is_soul_mirror_skill,
-    SOUL_MIRROR_SKILL_ID,
+    cancel_player_soul_mirror, complete_player_soul_mirror,
+    execute_player_soul_mirror, is_soul_mirror_skill, SOUL_MIRROR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::godpunishmentphalanx::{
     calculate_owned_god_punishment_attack, god_punishment_targets,
@@ -1967,6 +1970,12 @@ pub(crate) enum QueuedSkillExecutionState {
     Pending,
     Completed,
     Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MaterializedSkillEndCause {
+    ClientRequest,
+    Interruption,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34313,7 +34322,12 @@ impl CGame {
                     };
                     let materialized_ended = changes_command
                         && current_skill_id.is_some_and(|skill_id| {
-                            self.end_materialized_player_skill(player_id, skill_id, runtime)
+                            self.end_materialized_player_skill(
+                                player_id,
+                                skill_id,
+                                MaterializedSkillEndCause::Interruption,
+                                runtime,
+                            )
                                 .is_some()
                         });
                     let rejected = {
@@ -35004,7 +35018,12 @@ impl CGame {
             return;
         };
         let materialized_ended = current_skill_id.is_some_and(|skill_id| {
-            self.end_materialized_player_skill(player_id, skill_id, runtime)
+            self.end_materialized_player_skill(
+                player_id,
+                skill_id,
+                MaterializedSkillEndCause::Interruption,
+                runtime,
+            )
                 .is_some()
         });
         let released = self.find_player_mut(player_id).is_some_and(|player| {
@@ -37424,13 +37443,15 @@ impl CGame {
         }
     }
 
-    /// Завершает только уже материализованные владельцы навыков.
-    /// Извлечение `CPlayerAI` остаётся здесь как координация заимствований, а
-    /// порядок игровых последствий принадлежит соответствующему владельцу.
+    /// Передаёт `End(true)` или `End(false)` только уже материализованному
+    /// владельцу навыка. Извлечение `CPlayerAI` остаётся здесь как координация
+    /// заимствований, а завершение, прерывание и особый выпуск удерживаемой
+    /// атаки принадлежат соответствующему владельцу.
     pub(crate) fn end_materialized_player_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         skill_id: u32,
+        cause: MaterializedSkillEndCause,
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
         if !matches!(
@@ -37492,6 +37513,7 @@ impl CGame {
                 | SOUL_COLLECT_SKILL_ID
                 | SOUL_MIRROR_SKILL_ID
                 | ARCHERY_SKILL_ID
+                | HEARTLESS_ARROW_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
                 | AGILITY_SKILL_ID
@@ -37563,6 +37585,7 @@ impl CGame {
             SOUL_COLLECT_SKILL_ID => player_ai.soul_collect().is_some(),
             SOUL_MIRROR_SKILL_ID => player_ai.soul_mirror().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
+            HEARTLESS_ARROW_SKILL_ID => player_ai.heartless_arrow().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
@@ -37579,7 +37602,93 @@ impl CGame {
             }
             return None;
         }
-        let ended = match skill_id {
+        let explicitly_completed = if cause == MaterializedSkillEndCause::ClientRequest {
+            match skill_id {
+                HEARTLESS_ARROW_SKILL_ID => Some(complete_or_release_player_heartless_arrow(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                LORD_FAST_ATTACK_SKILL_ID => Some(complete_player_lord_fast_attack(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                CHAOS_SPHERE_SKILL_ID => Some(complete_player_chaos_sphere(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                LIGHTNING_SKILL_ID => Some(complete_player_lightning(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                SEAL_SKILL_ID => Some(complete_player_seal(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                YIN_YANG_SKILL_ID => Some(complete_player_yin_yang_family(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    false,
+                    runtime,
+                )),
+                YIN_YANG_2_SKILL_ID => Some(complete_player_yin_yang_family(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    true,
+                    runtime,
+                )),
+                GOD_PUNISHMENT_SKILL_ID => Some(complete_player_god_punishment(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                GOD_THUNDER_SKILL_ID => Some(complete_player_god_thunder_family(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    false,
+                    runtime,
+                )),
+                GOD_THUNDER_2_SKILL_ID => Some(complete_player_god_thunder_family(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    true,
+                    runtime,
+                )),
+                SOUL_COLLECT_SKILL_ID => Some(complete_player_soul_collect(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                SOUL_MIRROR_SKILL_ID => Some(complete_player_soul_mirror(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let ended = if let Some(ended) = explicitly_completed {
+            ended
+        } else {
+            match skill_id {
             BASE_ATTACK_SKILL_ID => {
                 cancel_player_base_attack(self, player_id, &mut player_ai, runtime)
             }
@@ -37716,6 +37825,9 @@ impl CGame {
                 cancel_player_soul_mirror(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
+            HEARTLESS_ARROW_SKILL_ID => {
+                cancel_player_heartless_arrow(self, player_id, &mut player_ai, runtime)
+            }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
             }
@@ -37732,7 +37844,8 @@ impl CGame {
                 &mut player_ai,
                 runtime,
             ),
-            _ => unreachable!("фильтр ограничивает materialized end владельцами"),
+                _ => unreachable!("фильтр ограничивает materialized end владельцами"),
+            }
         };
         if let Some(player) = self.find_player_mut(player_id) {
             player.restore_player_ai(player_ai);

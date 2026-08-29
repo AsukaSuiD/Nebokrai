@@ -29,7 +29,7 @@ use crate::gameserver::appserver::player::{BattleFairySkillRequest, PlayerSkillR
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, colored_player_notice_message,
+    CGame, GameMainLoopRuntime, MaterializedSkillEndCause, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
 use tracing::trace;
@@ -127,7 +127,12 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
                 None => "нет текущего навыка",
                 Some(current) if current != requested_skill_id as u32 => "идентификатор не совпал",
                 Some(current) => match game
-                    .end_materialized_player_skill(player_id, current, runtime)
+                    .end_materialized_player_skill(
+                        player_id,
+                        current,
+                        MaterializedSkillEndCause::ClientRequest,
+                        runtime,
+                    )
                     .unwrap_or_else(|| runtime.end_current_player_skill(game, player_id, current))
                 {
                     PlayerSkillEndRuntimeOutcome::AlreadyEnded => "уже завершён",

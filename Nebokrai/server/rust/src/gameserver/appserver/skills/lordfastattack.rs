@@ -165,6 +165,17 @@ fn abort_player_lord_fast_attack(game: &mut CGame, player_id: i32) {
     abort_skill(game, player_id);
 }
 
+pub(crate) fn complete_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.lord_fast_attack().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
 pub(crate) fn cancel_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
