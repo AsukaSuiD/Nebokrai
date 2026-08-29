@@ -832,7 +832,11 @@ use crate::gameserver::appserver::skills::meteorarrowmass::{
 use crate::gameserver::appserver::skills::meteorarrowphalanx::{
     calculate_meteor_arrow_attack, MeteorArrowPhalanxTick,
 };
-use crate::gameserver::appserver::skills::rainarrow::{execute_player_rain_arrow, is_rain_arrow_dispatch};
+use crate::gameserver::appserver::skills::rainarrow::{
+    cancel_player_rain_arrow, complete_player_rain_arrow, execute_player_rain_arrow,
+    is_rain_arrow_dispatch,
+};
+use crate::gameserver::appserver::skills::rainarrowphalanx::RAIN_ARROW_SKILL_ID;
 use crate::gameserver::appserver::skills::poisonmoth::{execute_player_poison_moth, is_poison_moth_dispatch};
 use crate::gameserver::appserver::skills::bloodrose::{execute_player_blood_rose, is_blood_rose_dispatch};
 use crate::gameserver::appserver::skills::scorpion::{execute_player_scorpion, is_scorpion_dispatch};
@@ -37528,6 +37532,7 @@ impl CGame {
                 | LIGHTING_ARROW_2_SKILL_ID
                 | METEOR_ARROW_MASS_SKILL_ID
                 | METEOR_ARROW_SKILL_ID
+                | RAIN_ARROW_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
                 | AGILITY_SKILL_ID
@@ -37607,6 +37612,7 @@ impl CGame {
             LIGHTING_ARROW_2_SKILL_ID => player_ai.lighting_arrow_2().is_some(),
             METEOR_ARROW_MASS_SKILL_ID => player_ai.meteor_arrow_mass().is_some(),
             METEOR_ARROW_SKILL_ID => player_ai.meteor_arrow().is_some(),
+            RAIN_ARROW_SKILL_ID => player_ai.rain_arrow().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
@@ -37658,6 +37664,12 @@ impl CGame {
                     runtime,
                 )),
                 METEOR_ARROW_SKILL_ID => Some(complete_player_meteor_arrow(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                RAIN_ARROW_SKILL_ID => Some(complete_player_rain_arrow(
                     self,
                     player_id,
                     &mut player_ai,
@@ -37895,6 +37907,9 @@ impl CGame {
             }
             METEOR_ARROW_SKILL_ID => {
                 cancel_player_meteor_arrow(self, player_id, &mut player_ai, runtime)
+            }
+            RAIN_ARROW_SKILL_ID => {
+                cancel_player_rain_arrow(self, player_id, &mut player_ai, runtime)
             }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)

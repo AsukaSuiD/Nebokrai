@@ -4,18 +4,21 @@
 //! `appserver/skills/rainarrow.cpp`. Модуль владеет проверками, MP, углом,
 //! построением и обрезкой трёх путей, сообщением выстрела и созданием phalanx. MP
 //! списывается до поздней проверки лука без отката; `CGame` только разрешает
-//! владельцев, регистрирует форму и доставляет построенные сообщения.
+//! владельцев, регистрирует форму и доставляет построенные сообщения. Общий
+//! `End` очищает все три пути и возвращает движение; только `End(true)`
+//! обновляет свойства и фиксирует cooldown.
 
 use super::baseattack::{real_distance, time_reached, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::rainarrowphalanx::{CRainArrowPhalanx, RainArrowCell, RAIN_ARROW_SKILL_ID};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -40,7 +43,22 @@ impl RainArrowExecutionState {
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
 }
 fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish(game: &mut CGame, id: i32) { if let Some(player) = game.find_player_mut(id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
+fn restore_player_movement(game: &mut CGame, id: i32) { if let Some(player) = game.find_player_mut(id) { player.set_skill_moveable(true); } }
+fn finish_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, runtime: &mut R) {
+    restore_player_movement(game, id);
+    finish_summon_skill(game, id, ai, runtime, |ai, now_ms| ai.mark_rain_arrow_used(now_ms));
+}
+fn abort_player_rain_arrow(game: &mut CGame, id: i32) { restore_player_movement(game, id); abort_skill(game, id); }
+pub(crate) fn complete_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, runtime: &mut R) -> bool {
+    let Some(dispatch) = ai.rain_arrow().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_rain_arrow(game, id, ai, runtime);
+    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+pub(crate) fn cancel_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, _runtime: &mut R) -> bool {
+    let Some(dispatch) = ai.rain_arrow().map(|state| state.kernel().dispatch()) else { return false };
+    abort_player_rain_arrow(game, id);
+    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
 fn weapon_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3) }
 fn master(player: &CPlayer) -> MasterInfo { let p = player.pk_permissions(); MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(),
     master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()),
@@ -80,7 +98,7 @@ pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame
     if !is_rain_arrow_dispatch(dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
     let Some((region, level, source, direction)) = game.find_player(id).and_then(|p| Some((p.server_region_id()?, p.learned_skill_level(RAIN_ARROW_SKILL_ID),
         (p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?), p.shape().get_direction()))) else { return outcome(QueuedSkillExecutionState::Rejected) };
-    let Some(props) = game.skill_base_properties(RAIN_ARROW_SKILL_ID, level) else { return outcome(QueuedSkillExecutionState::Rejected) };
+    let Some(props) = game.skill_base_properties(RAIN_ARROW_SKILL_ID, level) else { if ai.rain_arrow().is_some() { abort_player_rain_arrow(game, id); } return outcome(QueuedSkillExecutionState::Rejected) };
     let mp = props.query_property(USER_MP_LOSE); let reuse = props.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = props.query_property(SKILL_USAGE_DELAY_TIME);
     let maximum = props.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let min_angle = props.query_property(MINIMUM_ANGLE); let max_angle = props.query_property(MAXIMUM_ANGLE);
     let flight = props.query_property(MISSILE_FLYING_TIME); let lifetime = props.query_property(SUMMONED_LIFETIME); let speed = props.query_property(SUMMONED_SPEED) as i32;
@@ -97,10 +115,10 @@ pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame
         if let Some(p) = game.find_player_mut(id) { p.set_skill_moveable(false); p.set_current_skill_id(Some(RAIN_ARROW_SKILL_ID)); }
         ai.begin_rain_arrow(RainArrowExecutionState::begin(dispatch, destination, target, runtime.now_milliseconds()));
     } else if ai.rain_arrow().is_none_or(|s| s.kernel().dispatch() != dispatch) { return outcome(QueuedSkillExecutionState::Rejected) }
-    let mut state = ai.rain_arrow().expect("выполнение дождя стрел создано"); if let Some(target) = state.target { match target_snapshot(game, region, target) { Some((x, y, false)) => state.destination = (x, y), _ => { game.send_base_magic_failure(id, 10); game.send_skill_system_info(id, b"GS0285"); finish(game, id); return outcome(QueuedSkillExecutionState::Rejected) } } }
-    if !state.condition_checked { let mana = game.find_player(id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp) as i32) < 0 { game.send_base_magic_failure(id, 7); game.send_skill_system_info_with_unsigned(id, b"GS0288", mp); finish(game, id); return outcome(QueuedSkillExecutionState::Rejected) }
+    let mut state = ai.rain_arrow().expect("выполнение дождя стрел создано"); if let Some(target) = state.target { match target_snapshot(game, region, target) { Some((x, y, false)) => state.destination = (x, y), _ => { game.send_base_magic_failure(id, 10); game.send_skill_system_info(id, b"GS0285"); abort_player_rain_arrow(game, id); return outcome(QueuedSkillExecutionState::Rejected) } } }
+    if !state.condition_checked { let mana = game.find_player(id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp) as i32) < 0 { game.send_base_magic_failure(id, 7); game.send_skill_system_info_with_unsigned(id, b"GS0288", mp); abort_player_rain_arrow(game, id); return outcome(QueuedSkillExecutionState::Rejected) }
         if let Some(p) = game.find_player_mut(id) { p.set_mana(mana.wrapping_sub(mp)); } let _ = game.update_player_current_state(id, GamePlayerFightStatePhase::MoveShapeAi);
-        if game.find_player(id).is_none_or(|p| !weapon_valid(game, p)) { game.send_base_magic_failure(id, 0x0e); game.send_skill_system_info(id, b"GS0297"); finish(game, id); return outcome(QueuedSkillExecutionState::Rejected) }
+        if game.find_player(id).is_none_or(|p| !weapon_valid(game, p)) { game.send_base_magic_failure(id, 0x0e); game.send_skill_system_info(id, b"GS0297"); abort_player_rain_arrow(game, id); return outcome(QueuedSkillExecutionState::Rejected) }
         if let Some(p) = game.find_player_mut(id) { p.movement_shape_mut().set_direction(get_line_direction(source.0, source.1, state.destination.0, state.destination.1)); }
         let distance = real_distance(source.0, source.1, state.destination.0, state.destination.1).max(1) as u32; let distance = if maximum == 0 { distance } else { distance.min(maximum) };
         let divisor = if maximum == 0 { 1.0 } else { maximum as f32 }; let angle = max_angle as f32 - distance as f32 / divisor * max_angle.wrapping_sub(min_angle) as f32; state.angle_bits = angle.to_bits();
@@ -115,10 +133,10 @@ pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame
     let (center_count, block) = usable(&state.center); if let Some(block) = block { state.destination = block } let (left_count, _) = usable(&state.left); let (right_count, _) = usable(&state.right);
     let right_impact = impact(&state.right, right_count, source); let left_impact = impact(&state.left, left_count, source);
     send_fire(game, id, level, state.target, state.destination, right_impact, left_impact, flight);
-    let Some(player) = game.find_player(id) else { finish(game, id); return outcome(QueuedSkillExecutionState::Rejected) }; let master = master(player); let face = player.shape().get_face_position().ok();
+    let Some(player) = game.find_player(id) else { abort_player_rain_arrow(game, id); return outcome(QueuedSkillExecutionState::Rejected) }; let master = master(player); let face = player.shape().get_face_position().ok();
     let summon_id = game.allocate_summon_shape_id(); let now = runtime.now_milliseconds(); let mut phalanx = CRainArrowPhalanx::new(summon_id, master, now, lifetime, level, hit, factor,
         state.left, left_count, state.center, center_count, state.right, right_count, speed, maximum as i32); phalanx.shape_mut().set_region_id(region);
     if let Some(face) = face { let result = game.add_rain_arrow_phalanx(region, phalanx, face.x, face.y, now, runtime); if result.is_some_and(|r| r.is_ok()) { let _ = game.send_rain_arrow_phalanx_entry(region, summon_id, runtime); } }
     if let Some(s) = ai.rain_arrow_mut() { let _ = s.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = s.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = s.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
-    ai.mark_rain_arrow_used(runtime.now_milliseconds()); finish(game, id); outcome(QueuedSkillExecutionState::Completed)
+    finish_player_rain_arrow(game, id, ai, runtime); outcome(QueuedSkillExecutionState::Completed)
 }
