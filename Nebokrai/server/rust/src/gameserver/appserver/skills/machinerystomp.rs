@@ -50,7 +50,9 @@ use super::monsterattack::{
     resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::PetAttackProperties;
@@ -575,6 +577,18 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             now_ms,
         ) {
             return true;
+        }
+        let attack_interval_ms = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
+        if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
+        {
+            let attack_started = region
+                .find_monster_by_id_mut(monster_id)
+                .is_some_and(|monster| {
+                    monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
+                });
+            if !attack_started {
+                return true;
+            }
         }
         if last_used_ms != 0
             && !time_reached(
