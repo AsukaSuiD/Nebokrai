@@ -1,8 +1,9 @@
-//! Каноническое состояние пары `CCallosityState/CCallosityState2`.
+//! Каноническое состояние `CCallosityState` и общий владелец пары закалок.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
-//! `appserver/skills/callositystate.cpp` и `callositystate2.cpp`. Состояния
-//! взаимно исключают друг друга и хранятся одним типизированным владельцем.
+//! `appserver/skills/callositystate.cpp` и `callositystate2.cpp`. Конкретное
+//! второе состояние реализовано в `callositystate2.rs`; enum семейства не даёт
+//! двум взаимно исключающим состояниям образовать параллельные источники истины.
 //! Подтверждённая
 //! странность сохранена: `time_to_keep` не обслуживается отдельным `AI`, а
 //! унаследованные `GetClientStateTime/GetAdditionalData` возвращают нули.
@@ -10,7 +11,8 @@
 //! такой проход повторно публикует начальный визуальный эффект, как
 //! `OnUpdateProperties`.
 
-use super::callosity::{CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID};
+use super::callosity::CALLOSITY_SKILL_ID;
+use super::callositystate2::CallosityState2;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -19,23 +21,20 @@ pub(crate) const CALLOSITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CallosityState {
-    skill_id: u32,
     blast_factor: u16,
     time_to_keep: i32,
 }
 
 impl CallosityState {
-    pub(crate) const fn new(skill_id: u32, blast_factor: u16, time_to_keep: i32) -> Self {
-        debug_assert!(skill_id == CALLOSITY_SKILL_ID || skill_id == CALLOSITY_2_SKILL_ID);
+    pub(crate) const fn new(blast_factor: u16, time_to_keep: i32) -> Self {
         Self {
-            skill_id,
             blast_factor,
             time_to_keep,
         }
     }
 
     pub(crate) const fn skill_id(self) -> u32 {
-        self.skill_id
+        CALLOSITY_SKILL_ID
     }
 
     pub(crate) const fn blast_factor(self) -> u16 {
@@ -63,10 +62,49 @@ impl CallosityState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CallosityFamilyState {
+    Callosity(CallosityState),
+    Callosity2(CallosityState2),
+}
+
+impl CallosityFamilyState {
+    pub(crate) const fn skill_id(self) -> u32 {
+        match self {
+            Self::Callosity(state) => state.skill_id(),
+            Self::Callosity2(state) => state.skill_id(),
+        }
+    }
+
+    pub(crate) const fn client_state_time(self) -> i32 {
+        match self {
+            Self::Callosity(state) => state.client_state_time(),
+            Self::Callosity2(state) => state.client_state_time(),
+        }
+    }
+
+    pub(crate) const fn additional_data(self) -> u32 {
+        match self {
+            Self::Callosity(state) => state.additional_data(),
+            Self::Callosity2(state) => state.additional_data(),
+        }
+    }
+
+    pub(crate) const fn apply_to_player(
+        self,
+        properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        match self {
+            Self::Callosity(state) => state.apply_to_player(properties),
+            Self::Callosity2(state) => state.apply_to_player(properties),
+        }
+    }
+}
+
 pub(crate) fn send_callosity_state_begin(
     game: &mut CGame,
     player_id: i32,
-    state: CallosityState,
+    state: CallosityFamilyState,
 ) {
     let Some(player) = game.find_player(player_id) else {
         return;

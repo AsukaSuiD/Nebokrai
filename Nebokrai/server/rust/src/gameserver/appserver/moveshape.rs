@@ -55,7 +55,7 @@ use crate::gameserver::appserver::skills::agilitystate::{
     AgilityState, PersistentAgilityFamilyState,
 };
 use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
-use crate::gameserver::appserver::skills::callositystate::CallosityState;
+use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::CureState;
 use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
 use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
@@ -509,7 +509,7 @@ impl DerefMut for LegacyStateCodec {
 pub(crate) struct CanonicalStateStorage {
     persistent_agility_family_state: Option<PersistentAgilityFamilyState>,
     agility_state_2: Option<AgilityState2>,
-    callosity_state: Option<CallosityState>,
+    callosity_state: Option<CallosityFamilyState>,
     taiji_state: Option<TaiJiState>,
     enlarge_full_miss_state: Option<EnlargeFullMissState>,
     enlarge_max_hp_state: Option<EnlargeMaxHpState>,
@@ -1259,17 +1259,17 @@ impl CMoveShape {
                 .any(|state| state.state_id() == state_id)
     }
 
-    pub(crate) fn callosity_state(&self) -> Option<CallosityState> {
+    pub(crate) fn callosity_state(&self) -> Option<CallosityFamilyState> {
         self.state_storage.callosity_state
     }
 
-    pub(crate) fn take_callosity_state(&mut self, skill_id: u32) -> Option<CallosityState> {
+    pub(crate) fn take_callosity_state(&mut self, skill_id: u32) -> Option<CallosityFamilyState> {
         self.callosity_state
             .filter(|state| state.skill_id() == skill_id)?;
         self.callosity_state.take()
     }
 
-    pub(crate) fn begin_callosity_state(&mut self, state: CallosityState) {
+    pub(crate) fn begin_callosity_state(&mut self, state: CallosityFamilyState) {
         debug_assert!(self.callosity_state.is_none());
         self.callosity_state = Some(state);
     }

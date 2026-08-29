@@ -1412,7 +1412,7 @@ pub(crate) struct PlayerCombatProperties {
 
 pub(crate) struct PlayerStatePropertyPass {
     pub(crate) properties: PlayerCombatProperties,
-    pub(crate) callosity_visual: Option<super::skills::callositystate::CallosityState>,
+    pub(crate) callosity_visual: Option<super::skills::callositystate::CallosityFamilyState>,
     pub(crate) hearten_visual: Option<super::skills::heartenstate::HeartenState>,
     pub(crate) script_visuals: Vec<super::moveshape::ScriptMoveState>,
 }
@@ -4142,20 +4142,20 @@ impl CPlayer {
 
     pub(crate) fn callosity_state(
         &self,
-    ) -> Option<super::skills::callositystate::CallosityState> {
+    ) -> Option<super::skills::callositystate::CallosityFamilyState> {
         self.move_shape.callosity_state()
     }
 
     pub(crate) fn take_callosity_state(
         &mut self,
         skill_id: u32,
-    ) -> Option<super::skills::callositystate::CallosityState> {
+    ) -> Option<super::skills::callositystate::CallosityFamilyState> {
         self.move_shape.take_callosity_state(skill_id)
     }
 
     pub(crate) fn begin_callosity_state(
         &mut self,
-        state: super::skills::callositystate::CallosityState,
+        state: super::skills::callositystate::CallosityFamilyState,
     ) {
         self.move_shape.begin_callosity_state(state);
     }

@@ -14,7 +14,11 @@
 //! восстановления.
 
 use super::baseattack::time_reached;
-use super::callositystate::{send_callosity_state_begin, CallosityState};
+use super::callosity2::create_callosity_2_state;
+pub(crate) use super::callosity2::CALLOSITY_2_SKILL_ID;
+use super::callositystate::{
+    send_callosity_state_begin, CallosityFamilyState, CallosityState,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
@@ -23,7 +27,6 @@ use crate::gameserver::gameserver::game::{
 };
 
 pub(crate) const CALLOSITY_SKILL_ID: u32 = 0x75;
-pub(crate) const CALLOSITY_2_SKILL_ID: u32 = 0x7d;
 pub(crate) const CALLOSITY_EFFECT_MESSAGE: i32 = 0x000b_fe01;
 pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 pub(crate) const SKILL_USAGE_USER_RP_LOSE: u32 = 3;
@@ -201,7 +204,17 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     if removed.is_some() {
         let _ = game.publish_player_states(player_id);
     }
-    let state = CallosityState::new(skill_id, blast_factor, state_persist_time);
+    let state = if skill_id == CALLOSITY_2_SKILL_ID {
+        CallosityFamilyState::Callosity2(create_callosity_2_state(
+            blast_factor,
+            state_persist_time,
+        ))
+    } else {
+        CallosityFamilyState::Callosity(CallosityState::new(
+            blast_factor,
+            state_persist_time,
+        ))
+    };
     if let Some(player) = game.find_player_mut(player_id) {
         player.begin_callosity_state(state);
     }
