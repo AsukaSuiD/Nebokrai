@@ -132,9 +132,7 @@ use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
 use crate::gameserver::appserver::ai::smartgladiator::select_smart_gladiator_enemy;
-use crate::gameserver::appserver::ai::stupidarcher::{
-    StupidArcherSearch, search_stupid_archer_enemy,
-};
+use crate::gameserver::appserver::ai::stupidarcher::search_stupid_archer_enemy;
 use crate::gameserver::appserver::ai::warattackmonster::select_country_war_enemy;
 use crate::gameserver::appserver::ai::vilcouguardwithsword::select_village_country_guard_enemy;
 use crate::gameserver::appserver::monster::CMonster;
@@ -670,7 +668,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         monster_shape,
         monster_view,
         monster_health,
-        mut target,
+        target,
         cast,
         tamed,
         attacker_master,
@@ -849,50 +847,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 4
-        && let Some(area_index) = area_index
-    {
-        if let Some(selected) = select_archer_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 6
-        && let Some(area_index) = area_index
-    {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        match search_stupid_archer_enemy(
-            game,
-            region,
-            monster_id,
-            monster_view,
-            area_index,
-            &property,
-            minimum_skill_distance,
-            monster_shape.get_speed(),
-            runtime,
-        ) {
-            StupidArcherSearch::NoTarget => {}
-            StupidArcherSearch::Target(selected) => target = Some(selected),
-            StupidArcherSearch::Handled => return true,
-        }
-    }
     let target = cast.map(|cast| cast.dispatch().target).or(target);
     let Some(target) =
         target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE))
