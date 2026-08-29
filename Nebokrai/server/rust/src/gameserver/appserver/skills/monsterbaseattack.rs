@@ -115,7 +115,7 @@ use crate::gameserver::appserver::ai::godsbattlemonster::select_gods_battle_enem
 use crate::gameserver::appserver::ai::godsbattleguardwithsword::select_gods_battle_guard_enemy;
 use crate::gameserver::appserver::ai::guardwithbow::select_guard_with_bow_target;
 use crate::gameserver::appserver::ai::guardcountry::select_country_guard_target;
-use crate::gameserver::appserver::ai::lord::select_lord_attack_skill;
+use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
@@ -475,6 +475,24 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             }
             target = Some(selected);
         }
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 100
+        && let Some(area_index) = area_index
+        && let Some(selected) = select_lord_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            property.guard_range as i32,
+        )
+    {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.set_ai_target(selected);
+        }
+        target = Some(selected);
     }
     if target.is_none()
         && cast.is_none()

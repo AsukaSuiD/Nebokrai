@@ -77,35 +77,14 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
-use crate::gameserver::appserver::moveshape::CMoveShape;
+use super::guardtarget::select_nearest_player_or_pet;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
 const BOSS_BLUE_FURY_SKILL_ID: u16 = 0x1f7;
 const EXCLUDED_ARCHERY_SKILL_ID: u16 = 2;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BossBlueTarget {
-    identity: ShapeIdentity,
-    distance: i32,
-}
-
-fn consider_boss_blue_target(
-    selected: Option<BossBlueTarget>,
-    candidate: BossBlueTarget,
-    guard_range: i32,
-) -> Option<BossBlueTarget> {
-    if candidate.distance > guard_range {
-        return selected;
-    }
-    match selected {
-        Some(current) if current.distance < candidate.distance => Some(current),
-        _ => Some(candidate),
-    }
-}
 
 /// Выполняет подтверждённый `OnSearchEnemy` синего босса: ближайшая живая
 /// цель выбирается общим проходом игроков, затем питомцев; равенство заменяет
@@ -117,58 +96,8 @@ pub(crate) fn select_boss_blue_enemy(
     area_index: usize,
     guard_range: i32,
 ) -> Option<ShapeIdentity> {
-    let mut selected = None;
-    for player_id in region.player_ids_around_area(area_index) {
-        let Some(player) = game.find_player(player_id) else {
-            continue;
-        };
-        if player.server_region_id() != Some(region.id) || player.is_dead() {
-            continue;
-        }
-        let Some(candidate) = player.shape_view() else {
-            continue;
-        };
-        selected = consider_boss_blue_target(
-            selected,
-            BossBlueTarget {
-                identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
-            },
-            guard_range,
-        );
-    }
-    for pet_id in region.pet_ids_around_area(area_index) {
-        let Some(candidate) = region
-            .find_monster_by_id(pet_id)
-            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
-            .and_then(|pet| {
-                let property =
-                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
-                pet.shape_view(property)
-            })
-        else {
-            continue;
-        };
-        selected = consider_boss_blue_target(
-            selected,
-            BossBlueTarget {
-                identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
-            },
-            guard_range,
-        );
-    }
-    selected.map(|selected| selected.identity)
+    select_nearest_player_or_pet(game, region, owner, area_index, guard_range)
+        .map(|selected| selected.identity)
 }
 
 /// Восемь одноразовых порогов ярости принадлежат конкретному ИИ синего босса.

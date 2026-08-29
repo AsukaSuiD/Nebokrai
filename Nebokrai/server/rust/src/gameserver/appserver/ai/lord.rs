@@ -3,11 +3,12 @@
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
 //! исходный владелец `appserver/ai/lord.cpp` подтверждают один RNG-бросок и
 //! зависимое от доли HP сжатие его шкалы перед упорядоченным выбором навыка.
-//! Реальный путь `monsterbaseattack` назначает результат, а `lordfastattack` и
+//! Этот владелец выбирает навык и ближайшую живую цель, реальный путь
+//! `monsterbaseattack` назначает результат, а `lordfastattack` и
 //! `lordwiderangingattack` исполняют конкретные стадии и эффекты.
 //!
-//! `WhenBeenHurted` и `OnSearchEnemy` ниже остаются RAW: специальное уклонение
-//! от summon-shape и самостоятельный поиск ближайшей цели ещё не подключены.
+//! `WhenBeenHurted` ниже остаётся RAW: специальное уклонение от summon-shape
+//! ещё не подключено.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -29,27 +30,29 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CLord::OnSearchEnemy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp:94
-// RVA: 0x0020B2C0
-// ADDRESS: 0060b2c0
-// PROTOTYPE: int __thiscall OnSearchEnemy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 // COMPONENT_VARIANT_END: GameServer
 
+use super::guardtarget::select_nearest_player_or_pet;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterSkill;
 
 const EXCLUDED_BASE_ATTACK_SKILL_ID: u16 = 1;
 const EXCLUDED_ARCHERY_SKILL_ID: u16 = 2;
+
+/// Выполняет подтверждённый `OnSearchEnemy` AI100 через общий nearest-проход,
+/// сохраняя игроков перед питомцами и замену при равной дистанции.
+pub(crate) fn select_lord_enemy(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+) -> Option<ShapeIdentity> {
+    select_nearest_player_or_pet(game, region, owner, area_index, guard_range)
+        .map(|selected| selected.identity)
+}
 
 /// Сохраняет единственный исходный бросок и зависимое от HP сжатие его шкалы:
 /// в диапазоне `[20%, 50%)` применяется `ROUND(roll * 0.6666667)`, ниже 20% —
