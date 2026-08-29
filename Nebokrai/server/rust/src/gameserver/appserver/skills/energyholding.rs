@@ -4,15 +4,19 @@
 //! `appserver/skills/energyholding.cpp`. Здесь находятся проверка лука,
 //! перезарядка, предел зарядов по уровню навыка, расход MP, задержка и
 //! визуальная последовательность. `CGame` оставляет только доступ к владельцу
-//! `CPlayer` и рассылку изменения канонического состояния вокруг него.
+//! `CPlayer` и рассылку изменения канонического состояния вокруг него. Заряд
+//! добавляется только после задержки; общий `CSummonSkill::End(1)` затем
+//! возвращает движение, обновляет свойства и фиксирует cooldown. Клиентская
+//! отмена проходит тот же хвост без добавления заряда.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::energyholdingstate::add_player_energy_holding;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
@@ -63,14 +67,37 @@ fn send_visual(game: &mut CGame, player_id: i32, level: i32, apply: bool) {
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); }
+fn finish_player_energy_holding<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_energy_holding_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_energy_holding<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.energy_holding().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_energy_holding(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_energy_holding_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((level, mana, energy_count)) = game.find_player(player_id).map(|player| (player.learned_skill_level(ENERGY_HOLDING_SKILL_ID), player.mana(), player.energy_holding_state().map_or(0, |state| state.energy_count()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(ENERGY_HOLDING_SKILL_ID, level) else { if ai.energy_holding().is_some() { finish(game, player_id) } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(ENERGY_HOLDING_SKILL_ID, level) else { if ai.energy_holding().is_some() { finish_player_energy_holding(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -91,13 +118,12 @@ pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: 
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
         failure(game, player_id, 2, mp_loss);
-        ai.mark_energy_holding_used(runtime.now_milliseconds());
-        finish(game, player_id);
+        finish_player_energy_holding(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if ai.energy_holding().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish_player_energy_holding(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, false);
@@ -112,7 +138,6 @@ pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: 
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    ai.mark_energy_holding_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_energy_holding(game, player_id, ai, runtime);
     terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }

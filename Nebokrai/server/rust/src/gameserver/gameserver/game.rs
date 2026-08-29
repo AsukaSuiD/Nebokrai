@@ -899,7 +899,10 @@ use crate::gameserver::appserver::skills::roar::{
 use crate::gameserver::appserver::skills::roarstate::{
     finish_monster_roar, finish_player_roar,
 };
-use crate::gameserver::appserver::skills::energyholding::{execute_player_energy_holding, is_energy_holding_dispatch};
+use crate::gameserver::appserver::skills::energyholding::{
+    cancel_player_energy_holding, execute_player_energy_holding, is_energy_holding_dispatch,
+    ENERGY_HOLDING_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::inversechopped::{execute_player_inverse_chopped, is_inverse_chopped_dispatch};
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
@@ -37401,6 +37404,7 @@ impl CGame {
                 | RUSH_SKILL_ID
                 | RUSH_2_SKILL_ID
                 | ROAR_SKILL_ID
+                | ENERGY_HOLDING_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37427,6 +37431,7 @@ impl CGame {
             RUSH_SKILL_ID => player_ai.rush().is_some(),
             RUSH_2_SKILL_ID => player_ai.rush_2().is_some(),
             ROAR_SKILL_ID => player_ai.roar().is_some(),
+            ENERGY_HOLDING_SKILL_ID => player_ai.energy_holding().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37475,6 +37480,9 @@ impl CGame {
             RUSH_SKILL_ID => cancel_player_rush(self, player_id, &mut player_ai, runtime),
             RUSH_2_SKILL_ID => cancel_player_rush_2(self, player_id, &mut player_ai, runtime),
             ROAR_SKILL_ID => cancel_player_roar(self, player_id, &mut player_ai, runtime),
+            ENERGY_HOLDING_SKILL_ID => {
+                cancel_player_energy_holding(self, player_id, &mut player_ai, runtime)
+            }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
