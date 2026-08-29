@@ -881,11 +881,15 @@ use crate::gameserver::appserver::skills::pillar::{
     cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::pillarstate::expire_player_pillar_state;
-use crate::gameserver::appserver::skills::rush::{execute_player_rush, is_rush_dispatch};
+use crate::gameserver::appserver::skills::rush::{
+    cancel_player_rush, execute_player_rush, is_rush_dispatch, RUSH_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::rushstate::{
     expire_monster_rush_state, expire_player_rush_state,
 };
-use crate::gameserver::appserver::skills::rush2::{execute_player_rush_2, is_rush_2_dispatch};
+use crate::gameserver::appserver::skills::rush2::{
+    cancel_player_rush_2, execute_player_rush_2, is_rush_2_dispatch, RUSH_2_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::rushstate2::{
     expire_monster_rush_2_state, expire_player_rush_2_state,
 };
@@ -37392,6 +37396,8 @@ impl CGame {
                 | THUNDER_BLOW_SKILL_ID
                 | ITEM_SKILL_2_ID
                 | PILLAR_SKILL_ID
+                | RUSH_SKILL_ID
+                | RUSH_2_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37415,6 +37421,8 @@ impl CGame {
             THUNDER_BLOW_SKILL_ID => player_ai.thunder_blow().is_some(),
             ITEM_SKILL_2_ID => player_ai.item_skill_2().is_some(),
             PILLAR_SKILL_ID => player_ai.pillar().is_some(),
+            RUSH_SKILL_ID => player_ai.rush().is_some(),
+            RUSH_2_SKILL_ID => player_ai.rush_2().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37460,6 +37468,8 @@ impl CGame {
             PILLAR_SKILL_ID => {
                 cancel_player_pillar(self, player_id, &mut player_ai, runtime)
             }
+            RUSH_SKILL_ID => cancel_player_rush(self, player_id, &mut player_ai, runtime),
+            RUSH_2_SKILL_ID => cancel_player_rush_2(self, player_id, &mut player_ai, runtime),
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)

@@ -7,11 +7,14 @@
 //! фигуры первой заблокированной либо целевой клетки в региональном порядке.
 //! Формула длительности, замена `RushState` и отбрасывание принадлежат
 //! этому владельцу; `CGame` только координирует владельцев, пространство и сеть.
+//! Общий с `CRush2` хвост `End(1)` возвращает движение, освобождает путь,
+//! обновляет свойства игрока и фиксирует cooldown; он не повторяет уже
+//! выполненные перемещение, состояние или отбрасывание.
 
 use super::baseattack::{SKILL_USAGE_REUSE_DELAY_TIME, real_distance, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::rushstate::RushState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -51,11 +54,48 @@ pub(super) fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecution
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
-pub(super) fn finish(game: &mut CGame, player_id: i32) {
+pub(super) fn finish_rush_owner<Runtime, MarkUsed>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+    mark_used: MarkUsed,
+) where
+    Runtime: GameMainLoopRuntime,
+    MarkUsed: FnOnce(&mut CPlayerAI, u32),
+{
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
+    }
+    let _ = game.update_player_properties(player_id, runtime);
+    if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
+    mark_used(player_ai, runtime.now_milliseconds());
+}
+
+fn finish_player_rush<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_rush_owner(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_rush_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_rush<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.rush().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_rush(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool {
@@ -280,7 +320,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
         )))
     else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(RUSH_SKILL_ID, level) else {
-        if ai.rush().is_some() { finish(game, player_id) }
+        if ai.rush().is_some() { finish_player_rush(game, player_id, ai, runtime) }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -329,7 +369,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
     if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
         failure(game, player_id, 7, mp_loss);
-        finish(game, player_id);
+        finish_player_rush(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if let Some(player) = game.find_player_mut(player_id) {
@@ -338,7 +378,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
     if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
         failure(game, player_id, 8, rp_loss);
-        finish(game, player_id);
+        finish_player_rush(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if let Some(player) = game.find_player_mut(player_id) {
@@ -347,11 +387,11 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
     if game.find_player(player_id).is_none_or(|player| !weapon_is_valid(game, player)) {
         failure(game, player_id, 0x0e, 0);
-        finish(game, player_id);
+        finish_player_rush(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((target_x, target_y)) = destination(game, region_id, player_id, dispatch) else {
-        finish(game, player_id);
+        finish_player_rush(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let direction = get_line_direction(source_x, source_y, target_x, target_y);
@@ -361,7 +401,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
     let Some((destination, impact)) = build_path(
         game, region_id, source_x, source_y, target_x, target_y, maximum,
     ) else {
-        finish(game, player_id);
+        finish_player_rush(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let _ = game.relocate_player_shape(player_id, region_id, destination.0, destination.1);
@@ -375,7 +415,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
         || real_distance(destination.0, destination.1, impact.0, impact.1) > maximum as i32
     {
         game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2);
-        finish(game, player_id);
+        finish_player_rush(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     apply_targets(
@@ -387,7 +427,6 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    ai.mark_rush_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_rush(game, player_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
