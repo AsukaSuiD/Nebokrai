@@ -161,6 +161,30 @@ impl CBaseAI {
         })
     }
 
+    /// Сообщает, что следующий FIFO-элемент должен продолжить текущий
+    /// `CSkill::AI` через подтверждённый `OnFighting`.
+    pub(crate) fn active_attack_pending(&self) -> bool {
+        self.active_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::Attack && event.handling == 0
+        })
+    }
+
+    /// Снимает завершённый `ASA_ATTACK` после того, как владелец навыка уже
+    /// поставил следующий `ASA_CHANGE_SKILL`. Нулевая исходная задержка
+    /// сохраняет их относительный FIFO-порядок.
+    pub(crate) fn finish_active_attack(&mut self, now_ms: u32) {
+        let Some(event) = self.active_actions.front_mut() else {
+            return;
+        };
+        if event.action != AiShapeAction::Attack || event.handling != 0 {
+            return;
+        }
+        event.handling = 1;
+        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+            self.active_actions.pop_front();
+        }
+    }
+
     /// Завершает один вызов `OnChangeSkill`: исходный обработчик возвращает
     /// единицу, поэтому событие с нулевой задержкой снимается в том же проходе,
     /// но `Run` всё равно не вызывает `OnSchedule` до следующего такта.
@@ -469,8 +493,9 @@ impl CBaseAI {
 // FUNCTION: CBaseAI::ProcessActiveAction
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `CBaseAI::advance_active_stand` сохраняет достигнутую ветвь
-// `ASA_STAND`, а `finish_active_change_skill` — отдельный такт
-// `ASA_CHANGE_SKILL`, их FIFO-позицию, handling и границу задержки.
+// `ASA_STAND`, `active_attack_pending` — продолжение `ASA_ATTACK`, а
+// `finish_active_change_skill` — отдельный такт `ASA_CHANGE_SKILL`, их
+// FIFO-позицию, handling и границу задержки.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:531
@@ -628,9 +653,9 @@ impl CBaseAI {
 // ============================================================================
 // FUNCTION: CBaseAI::OnFighting
 // STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: завершение материализованного навыка монстра ставит
-// `ASA_CHANGE_SKILL`; отдельный обработчик `ASA_ATTACK` и недостигнутые
-// варианты `CSkill::AI` остаются RAW.
+// IMPLEMENTED: активный `ASA_ATTACK` продолжает материализованный навык, а
+// после его завершения ставит `ASA_CHANGE_SKILL`; недостигнутые варианты
+// `CSkill::AI` остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:964

@@ -35771,6 +35771,15 @@ impl CGame {
                 self.restore_region_owner(owner);
             }
         }
+        if let Some(mut owner) = self.take_region_owner(region_id) {
+            if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id)
+                && monster.active_ai_attack_pending()
+                && monster.base_attack_cast().is_none()
+            {
+                monster.finish_active_ai_attack(runtime.now_milliseconds());
+            }
+            self.restore_region_owner(owner);
+        }
         handled
     }
 
@@ -42375,6 +42384,8 @@ impl CGame {
                 }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let mut schedule_ready = false;
+                    let mut attack_pending = false;
+                    let mut active_action_completed = false;
                     let mut change_skill_pending = false;
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         let processed = monster.process_reached_defense_actions();
@@ -42386,13 +42397,33 @@ impl CGame {
                                 "обработаны пассивные Defense-события монстра"
                             );
                         }
-                        change_skill_pending = monster.active_ai_change_skill_pending();
-                        if !change_skill_pending {
+                        if monster.active_ai_attack_pending() {
+                            if monster.base_attack_cast().is_some() {
+                                attack_pending = true;
+                            } else {
+                                monster.finish_active_ai_attack(now_ms);
+                                active_action_completed = true;
+                            }
+                        } else {
+                            change_skill_pending = monster.active_ai_change_skill_pending();
+                        }
+                        if !attack_pending
+                            && !active_action_completed
+                            && !change_skill_pending
+                        {
                             schedule_ready = monster.advance_active_ai_stand(now_ms)
                                 && monster.primary_ai_queues_idle();
                         }
                     }
                     self.restore_region_owner(owner);
+                    if attack_pending {
+                        let _ =
+                            self.run_owned_monster_base_attack(region_id, monster_id, runtime);
+                        continue;
+                    }
+                    if active_action_completed {
+                        continue;
+                    }
                     if change_skill_pending {
                         let _ = self.run_owned_monster_change_skill(
                             region_id,

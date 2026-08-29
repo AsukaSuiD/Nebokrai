@@ -812,6 +812,14 @@ impl CMonster {
         self.base_ai.active_change_skill_pending()
     }
 
+    pub(crate) fn active_ai_attack_pending(&self) -> bool {
+        self.base_ai.active_attack_pending()
+    }
+
+    pub(crate) fn finish_active_ai_attack(&mut self, now_ms: u32) {
+        self.base_ai.finish_active_attack(now_ms);
+    }
+
     pub(crate) fn finish_active_ai_change_skill(&mut self, now_ms: u32) {
         self.base_ai.finish_active_change_skill(now_ms);
     }
@@ -847,6 +855,8 @@ impl CMonster {
         }, now_ms);
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         self.base_attack_cast = Some(execution);
+        self.base_ai
+            .add_ai_event(AiShapeAction::Attack, 0, 0, now_ms);
     }
 
     pub(crate) fn begin_fast_attack_progress(&mut self) {
