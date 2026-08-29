@@ -1,26 +1,37 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Сценарное состояние `CImproveExpState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/other states/improveexpstate.cpp`. Достигнутый путь создаётся
+//! `CMoveShape::AddState`; каждый живой экземпляр независимо добавляет
+//! `coefficient * 0.01` к множителю опыта в порядке канонического списка.
+
+pub(crate) const IMPROVE_EXP_STATE_ID: i32 = 100_009;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ImproveExpState {
+    _time_to_keep: u32,
+    coefficient: u32,
+}
+
+impl ImproveExpState {
+    pub(crate) const fn new(time_to_keep: u32, coefficient: u32) -> Self {
+        Self { _time_to_keep: time_to_keep, coefficient }
+    }
+
+    pub(crate) const fn state_id(self) -> i32 { IMPROVE_EXP_STATE_ID }
+
+    pub(crate) const fn multiplier_delta(self) -> f32 {
+        self.coefficient as f32 * 0.01
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp
-
-// ============================================================================
-// FUNCTION: CImproveExpState::CImproveExpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp:15
-// RVA: 0x001D5E10
-// ADDRESS: 005d5e10
-// PROTOTYPE: undefined __thiscall CImproveExpState(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CImproveExpState::CImproveExpState
@@ -37,33 +48,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CImproveExpState::~CImproveExpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp:36
-// RVA: 0x001D5F00
-// ADDRESS: 005d5f00
-// PROTOTYPE: void __thiscall ~CImproveExpState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CImproveExpState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp:39
-// RVA: 0x001D5F10
-// ADDRESS: 005d5f10
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CImproveExpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -79,6 +63,7 @@
 //
 
 // ============================================================================
+// ============================================================================
 // FUNCTION: CImproveExpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -93,35 +78,5 @@
 //
 
 // ============================================================================
-// FUNCTION: CImproveExpState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp:53
-// RVA: 0x001D60F0
-// ADDRESS: 005d60f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CImproveExpStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\improveexpstate.cpp:144
-// RVA: 0x001D61C0
-// ADDRESS: 005d61c0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

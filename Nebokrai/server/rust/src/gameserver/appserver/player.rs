@@ -1424,7 +1424,7 @@ pub(crate) struct PlayerStatePropertyPass {
     pub(crate) properties: PlayerCombatProperties,
     pub(crate) callosity_visual: Option<super::skills::callositystate::CallosityFamilyState>,
     pub(crate) hearten_visual: Option<super::skills::heartenstate::HeartenState>,
-    pub(crate) script_visuals: Vec<super::moveshape::ScriptMoveState>,
+    pub(crate) script_visuals: Vec<super::scriptstate::ScriptMoveState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4876,7 +4876,7 @@ impl CPlayer {
         value1: i32,
         value2: i32,
         sufferer_is_gm: bool,
-    ) -> Option<super::moveshape::ScriptMoveState> {
+    ) -> Option<super::scriptstate::ScriptMoveState> {
         self.move_shape
             .add_script_state(state_id, value1, value2, sufferer_is_gm)
     }
@@ -4890,10 +4890,10 @@ impl CPlayer {
         )
     }
 
-    pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::moveshape::ScriptMoveState> {
+    pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::scriptstate::ScriptMoveState> {
         let removed = self
             .move_shape
-            .take_first_script_state(super::moveshape::STATE_AUTO_PROTECT)?;
+            .take_first_script_state(super::autoprotectstate::AUTO_PROTECT_STATE_ID)?;
         self.auto_protected = false;
         Some(removed)
     }
@@ -4910,44 +4910,10 @@ impl CPlayer {
         mut properties: PlayerCombatProperties,
     ) -> (
         PlayerCombatProperties,
-        Vec<super::moveshape::ScriptMoveState>,
+        Vec<super::scriptstate::ScriptMoveState>,
     ) {
         for state in self.move_shape.script_states() {
-            let coefficient = state.coefficient();
-            let percent_delta =
-                |base: u32| ((coefficient as f32) * 0.01 * (base as f32)).round() as u32;
-            match state.state_id() {
-                super::moveshape::STATE_USER_GOODS_ENLARGE_MAX_HP => {
-                    properties.maximum_hp = properties
-                        .maximum_hp
-                        .saturating_add(percent_delta(properties.maximum_hp))
-                        .min(i32::MAX as u32);
-                }
-                super::moveshape::STATE_USER_GOODS_ENLARGE_MAX_MP => {
-                    properties.maximum_mp = properties
-                        .maximum_mp
-                        .saturating_add(percent_delta(properties.maximum_mp))
-                        .min(i32::MAX as u32);
-                }
-                super::moveshape::STATE_USER_GOODS_ENLARGE_DEF => {
-                    properties.defense = properties
-                        .defense
-                        .wrapping_add(percent_delta(properties.defense))
-                        & 0xffff;
-                }
-                super::moveshape::STATE_USER_GOODS_ENLARGE_ELM_DEF => {
-                    properties.element_resistance = properties
-                        .element_resistance
-                        .wrapping_add(percent_delta(properties.element_resistance))
-                        & 0xffff;
-                }
-                super::moveshape::STATE_USER_GOODS_ENLARGE_FULL_MISS => {
-                    properties.full_miss = properties.full_miss.wrapping_add(coefficient as u16);
-                }
-                super::moveshape::STATE_AUTO_PROTECT => self.auto_protected = true,
-                super::moveshape::STATE_IMPROVE_EXP => {}
-                _ => unreachable!("список содержит только фабричные состояния сценария"),
-            }
+            state.apply_properties(&mut properties, &mut self.auto_protected);
         }
         let visuals = self.move_shape.take_pending_script_state_visuals();
         (properties, visuals)
@@ -4957,9 +4923,8 @@ impl CPlayer {
         self.move_shape
             .script_states()
             .iter()
-            .filter(|state| state.state_id() == super::moveshape::STATE_IMPROVE_EXP)
             .fold(1.0_f32, |multiplier, state| {
-                multiplier + state.coefficient() as f32 * 0.01
+                multiplier + state.experience_multiplier_delta()
             })
     }
 

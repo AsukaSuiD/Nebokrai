@@ -47,6 +47,7 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
+use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::teamstate::CTeamState;
 use super::shape::{
@@ -120,40 +121,6 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const UNDEAD_STATE_ID: u32 = 0x38;
 const UNDEAD_STATE_PARAMETER_BYTES: usize = 72;
-pub(crate) const STATE_USER_GOODS_ENLARGE_MAX_HP: i32 = 100_007;
-pub(crate) const STATE_USER_GOODS_ENLARGE_MAX_MP: i32 = 100_008;
-pub(crate) const STATE_IMPROVE_EXP: i32 = 100_009;
-pub(crate) const STATE_USER_GOODS_ENLARGE_DEF: i32 = 100_010;
-pub(crate) const STATE_USER_GOODS_ENLARGE_ELM_DEF: i32 = 100_011;
-pub(crate) const STATE_USER_GOODS_ENLARGE_FULL_MISS: i32 = 100_012;
-pub(crate) const STATE_AUTO_PROTECT: i32 = 110_000;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ScriptMoveState {
-    state_id: i32,
-    keep_time: u32,
-    coefficient: u32,
-    visual_pending: bool,
-}
-
-impl ScriptMoveState {
-    pub(crate) const fn state_id(self) -> i32 {
-        self.state_id
-    }
-
-    pub(crate) const fn keep_time(self) -> u32 {
-        self.keep_time
-    }
-
-    pub(crate) const fn coefficient(self) -> u32 {
-        self.coefficient
-    }
-
-    pub(crate) const fn is_auto_protect(self) -> bool {
-        self.state_id == STATE_AUTO_PROTECT
-    }
-}
-
 /// Достигнутая common-проекция `CSkill`: identity, level, category и name.
 /// Исполнение concrete attack/defense/state/summon owners остаётся у самих
 /// skill owners; здесь хранится точный результат `CMoveShape::AddSkill`.
@@ -978,31 +945,12 @@ impl CMoveShape {
         value2: i32,
         sufferer_is_gm: bool,
     ) -> Option<ScriptMoveState> {
-        let supported = matches!(
+        let state = ScriptMoveState::from_factory(
             state_id,
-            STATE_USER_GOODS_ENLARGE_MAX_HP
-                | STATE_USER_GOODS_ENLARGE_MAX_MP
-                | STATE_IMPROVE_EXP
-                | STATE_USER_GOODS_ENLARGE_DEF
-                | STATE_USER_GOODS_ENLARGE_ELM_DEF
-                | STATE_USER_GOODS_ENLARGE_FULL_MISS
-                | STATE_AUTO_PROTECT
-        );
-        if !supported || (state_id == STATE_AUTO_PROTECT && sufferer_is_gm) {
-            return None;
-        }
-        let state = ScriptMoveState {
-            state_id,
-            keep_time: value1 as u32,
-            coefficient: if state_id == STATE_AUTO_PROTECT {
-                0
-            } else {
-                value2 as u32
-            },
-            // У `AutoProtect` зацикленный визуальный эффект публикует начало
-            // прямо из `Begin`; остальные эффекты ждут `UpdateProperty`.
-            visual_pending: state_id != STATE_AUTO_PROTECT,
-        };
+            value1,
+            value2,
+            sufferer_is_gm,
+        )?;
         self.script_states.push(state);
         Some(state)
     }
@@ -1011,7 +959,7 @@ impl CMoveShape {
         let scripted = self
             .script_states
             .iter()
-            .filter(|state| state.state_id == state_id)
+            .filter(|state| state.state_id() == state_id)
             .count();
         let change_body = (state_id == 0x37)
             .then_some(self.change_body_states.len())
@@ -1317,7 +1265,7 @@ impl CMoveShape {
             || self
                 .script_states
                 .iter()
-                .any(|state| state.state_id as u32 == state_id)
+                .any(|state| state.state_id() as u32 == state_id)
             || self
                 .change_body_states
                 .iter()
@@ -2312,7 +2260,7 @@ impl CMoveShape {
         let index = self
             .script_states
             .iter()
-            .position(|state| state.state_id == state_id)?;
+            .position(|state| state.state_id() == state_id)?;
         Some(self.script_states.remove(index))
     }
 
@@ -2323,8 +2271,7 @@ impl CMoveShape {
     pub(crate) fn take_pending_script_state_visuals(&mut self) -> Vec<ScriptMoveState> {
         let mut pending = Vec::new();
         for state in &mut self.script_states {
-            if state.visual_pending {
-                state.visual_pending = false;
+            if state.take_pending_visual() {
                 pending.push(*state);
             }
         }

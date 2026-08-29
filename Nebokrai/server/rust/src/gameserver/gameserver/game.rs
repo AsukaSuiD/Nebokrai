@@ -659,11 +659,14 @@ use crate::gameserver::appserver::ai::pet::{
 };
 use crate::gameserver::appserver::monster::{CMonster, MonsterKillingAttack};
 use crate::gameserver::appserver::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver,
-    STATE_AUTO_PROTECT, ScriptMoveState, UndeadState,
+    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
+use crate::gameserver::appserver::autoprotectstate::AUTO_PROTECT_STATE_ID;
 use crate::gameserver::appserver::particularstate::{
     ParticularState, particular_state_visual_message,
+};
+use crate::gameserver::appserver::scriptstate::{
+    ScriptMoveState, script_state_visual_message,
 };
 use crate::gameserver::appserver::organizingsystem::attackcitysys::{
     AttackCityMembershipBlock, CAttackCitySys,
@@ -5319,17 +5322,7 @@ impl CGame {
         begin: bool,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
         let player = self.find_player(player_id)?;
-        let identity = player.shape().identity();
-        let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(state.state_id());
-        if begin {
-            // Эти семь классов наследуют базовые нулевые значения
-            // `GetClientStateTime` и `GetAdditionalData`.
-            message.add_long(0);
-            message.add_long(0);
-        }
+        let message = script_state_visual_message(player.shape(), state, begin);
         self.send_player_shape_around(player_id, None, &message)
     }
 
@@ -5366,7 +5359,7 @@ impl CGame {
         else {
             return false;
         };
-        debug_assert_eq!(state.state_id(), STATE_AUTO_PROTECT);
+        debug_assert_eq!(state.state_id(), AUTO_PROTECT_STATE_ID);
         let _ = self.send_script_move_state_visual(player_id, state, false);
         true
     }
@@ -34575,7 +34568,7 @@ impl CGame {
             .find_player_mut(player_id)
             .map(|player| {
                 let transition = player.enter_combat_state(fight_timer);
-                let had_state = player.script_move_state_count(STATE_AUTO_PROTECT) != 0;
+                let had_state = player.script_move_state_count(AUTO_PROTECT_STATE_ID) != 0;
                 (transition, had_state)
             })
             .unzip();

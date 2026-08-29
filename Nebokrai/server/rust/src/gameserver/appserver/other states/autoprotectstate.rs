@@ -1,26 +1,36 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Сценарное состояние `CAutoProtectState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/other states/autoprotectstate.cpp`. Состояние запрещено GM,
+//! немедленно включает защитный флаг и визуальный эффект, а вход в бой либо
+//! полученный удар завершает первый живой экземпляр с точным end-пакетом.
+
+pub(crate) const AUTO_PROTECT_STATE_ID: i32 = 110_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AutoProtectState {
+    _time_to_keep: i32,
+}
+
+impl AutoProtectState {
+    pub(crate) const fn new(time_to_keep: i32, sufferer_is_gm: bool) -> Option<Self> {
+        if sufferer_is_gm { None } else { Some(Self { _time_to_keep: time_to_keep }) }
+    }
+
+    pub(crate) const fn state_id(self) -> i32 { AUTO_PROTECT_STATE_ID }
+
+    pub(crate) const fn apply(self, auto_protected: &mut bool) {
+        *auto_protected = true;
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp
-
-// ============================================================================
-// FUNCTION: CAutoProtectState::CAutoProtectState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:15
-// RVA: 0x001D4130
-// ADDRESS: 005d4130
-// PROTOTYPE: undefined __thiscall CAutoProtectState(long param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CAutoProtectState::CAutoProtectState
@@ -37,47 +47,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CAutoProtectState::~CAutoProtectState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:33
-// RVA: 0x001D4210
-// ADDRESS: 005d4210
-// PROTOTYPE: void __thiscall ~CAutoProtectState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAutoProtectState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:44
-// RVA: 0x001D4240
-// ADDRESS: 005d4240
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAutoProtectState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:63
-// RVA: 0x001D4290
-// ADDRESS: 005d4290
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CAutoProtectState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -93,6 +62,7 @@
 //
 
 // ============================================================================
+// ============================================================================
 // FUNCTION: CAutoProtectState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -107,42 +77,5 @@
 //
 
 // ============================================================================
-// FUNCTION: CAutoProtectState::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:137
-// RVA: 0x001D44E0
-// ADDRESS: 005d44e0
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAutoProtectStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\autoprotectstate.cpp:205
-// RVA: 0x001D4530
-// ADDRESS: 005d4530
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

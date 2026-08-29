@@ -41,15 +41,31 @@ pub(crate) mod appserver {
     pub(crate) mod build;
     #[path = "other states/chbystate.rs"]
     pub(crate) mod chbystate;
+    #[path = "other states/autoprotectstate.rs"]
+    pub(crate) mod autoprotectstate;
     pub(crate) mod citygate;
     #[path = "other states/exstate.rs"]
     pub(crate) mod exstate;
+    #[path = "other states/improveexpstate.rs"]
+    pub(crate) mod improveexpstate;
     #[path = "other states/particularstate.rs"]
     pub(crate) mod particularstate;
     #[path = "other states/ridestate.rs"]
     pub(crate) mod ridestate;
     #[path = "other states/teamstate.rs"]
     pub(crate) mod teamstate;
+    #[path = "other states/scriptstate.rs"]
+    pub(crate) mod scriptstate;
+    #[path = "other states/usegoodsenlargedefstate.rs"]
+    pub(crate) mod usegoodsenlargedefstate;
+    #[path = "other states/usegoodsenlargeelmdefstate.rs"]
+    pub(crate) mod usegoodsenlargeelmdefstate;
+    #[path = "other states/usegoodsenlargefullmissstate.rs"]
+    pub(crate) mod usegoodsenlargefullmissstate;
+    #[path = "other states/usegoodsenlargemaxhpstate.rs"]
+    pub(crate) mod usegoodsenlargemaxhpstate;
+    #[path = "other states/usegoodsenlargemaxmpstate.rs"]
+    pub(crate) mod usegoodsenlargemaxmpstate;
     pub(crate) mod container {
         pub(crate) mod camountlimitgoodscontainer;
         pub(crate) mod camountlimitgoodsshadowcontainer;

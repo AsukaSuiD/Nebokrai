@@ -1,26 +1,41 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Состояние предмета `CUseGoodsEnlargeMaxHpState`.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/other states/usegoodsenlargemaxhpstate.cpp`. Достигнутый путь
+//! создаётся фабрикой `CMoveShape::AddState`, хранит исходные `DWORD` времени
+//! и коэффициента и при пересчёте увеличивает максимум HP с float-округлением
+//! и верхней границей `i32::MAX`. Недостигнутые перегрузки сохранены ниже.
+
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+
+pub(crate) const USE_GOODS_ENLARGE_MAX_HP_STATE_ID: i32 = 100_007;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UseGoodsEnlargeMaxHpState {
+    _time_to_keep: u32,
+    coefficient: u32,
+}
+
+impl UseGoodsEnlargeMaxHpState {
+    pub(crate) const fn new(time_to_keep: u32, coefficient: u32) -> Self {
+        Self { _time_to_keep: time_to_keep, coefficient }
+    }
+
+    pub(crate) const fn state_id(self) -> i32 { USE_GOODS_ENLARGE_MAX_HP_STATE_ID }
+
+    pub(crate) fn apply(self, properties: &mut PlayerCombatProperties) {
+        let delta = ((self.coefficient as f32) * 0.01 * (properties.maximum_hp as f32)).round() as u32;
+        properties.maximum_hp = properties.maximum_hp.saturating_add(delta).min(i32::MAX as u32);
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp
-
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpState::CUseGoodsEnlargeMaxHpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:15
-// RVA: 0x001D5920
-// ADDRESS: 005d5920
-// PROTOTYPE: undefined __thiscall CUseGoodsEnlargeMaxHpState(ulong param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CUseGoodsEnlargeMaxHpState::CUseGoodsEnlargeMaxHpState
@@ -37,19 +52,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpState::~CUseGoodsEnlargeMaxHpState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:35
-// RVA: 0x001D5A20
-// ADDRESS: 005d5a20
-// PROTOTYPE: void __thiscall ~CUseGoodsEnlargeMaxHpState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // ============================================================================
 // FUNCTION: CUseGoodsEnlargeMaxHpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
@@ -65,6 +67,7 @@
 //
 
 // ============================================================================
+// ============================================================================
 // FUNCTION: CUseGoodsEnlargeMaxHpState::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -79,47 +82,5 @@
 //
 
 // ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpState::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:47
-// RVA: 0x001D5BE0
-// ADDRESS: 005d5be0
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:67
-// RVA: 0x001D5C90
-// ADDRESS: 005d5c90
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CUseGoodsEnlargeMaxHpVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\usegoodsenlargemaxhpstate.cpp:154
-// RVA: 0x001D5D30
-// ADDRESS: 005d5d30
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 
 // COMPONENT_VARIANT_END: GameServer
