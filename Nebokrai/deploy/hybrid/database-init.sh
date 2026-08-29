@@ -31,6 +31,16 @@ restore_database GameDB GameDB05.bak FY_GameDB05_dat FY_GameDB05_log
 restore_database LogDB LogDB.bak LogDB_dat LogDB_log
 restore_database LoginDB LoginDB.bak LoginDB_dat LoginDB_log
 
+# Поставочный LoginDB не содержит внешнюю userinfo. Для локального стека
+# публикуем ровно требуемую LoginServer-проекцию существующих billing-аккаунтов.
+"$sqlcmd" -S mssql -U sa -P "$MSSQL_SA_PASSWORD" -C -b -d LoginDB -Q "
+IF OBJECT_ID(N'dbo.userinfo') IS NULL
+    EXEC(N'CREATE VIEW dbo.userinfo AS
+        SELECT AccountID AS userid,
+               CAST(NULL AS varchar(32)) AS originsdid,
+               passwd
+        FROM BillingDB.dbo.TBL_Member_Data');"
+
 "$sqlcmd" -S mssql -U sa -P "$MSSQL_SA_PASSWORD" -C -b \
     -v MIRACLE_PASSWORD="$MIRACLE_DB_PASSWORD" -Q "
 DECLARE @password nvarchar(128) = N'\$(MIRACLE_PASSWORD)';
