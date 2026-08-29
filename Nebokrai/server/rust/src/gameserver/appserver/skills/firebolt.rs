@@ -6,9 +6,12 @@
 //! запуска с длительностью полёта. После применения создаётся принадлежащий
 //! региону `CFireBoltPhalanx`; урон выполняется только его ИИ после строгой
 //! временной границы. Не достигнутый `CSoulCollectState` не подменяется
-//! параллельным состоянием. Координатная перегрузка `Begin` остаётся ниже.
+//! параллельным состоянием. Обычное, отказное и клиентское завершение после
+//! `Begin` используют подтверждённый хвост `End(1)`: возврат движения,
+//! `AfterUseSkill`, очистку текущего навыка и фиксацию времени восстановления.
+//! Координатная перегрузка `Begin` остаётся ниже.
 
-use super::baseattack::{real_distance, time_reached};
+use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagic::{
     BaseMagicExecutionState, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
@@ -16,7 +19,7 @@ use super::basemagic::{
     SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fireboltphalanx::CFireBoltPhalanx;
-use super::kernel::SkillStage;
+use super::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -89,11 +92,28 @@ fn send_fire(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
+fn finish_player_fire_bolt<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_fire_bolt_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_fire_bolt<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.fire_bolt().map(|state| state.kernel().dispatch()) else {
+        return false;
+    };
+    finish_player_fire_bolt(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) const fn is_fire_bolt_target(dispatch: PlayerSkillDispatch) -> bool {
@@ -192,7 +212,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     if target_dead(game, region_id, target) {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
-        finish(game, player_id);
+        finish_player_fire_bolt(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai.fire_bolt().is_some_and(|state| !state.condition_checked()) {
@@ -200,12 +220,12 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            finish_player_fire_bolt(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_failure(game, player_id, 10);
-            finish(game, player_id);
+            finish_player_fire_bolt(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -235,14 +255,14 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     }
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
         send_failure(game, player_id, 10);
-        finish(game, player_id);
+        finish_player_fire_bolt(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target_dead(game, region_id, target) {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
         send_failure(game, player_id, 10);
-        finish(game, player_id);
+        finish_player_fire_bolt(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let attack_time_ms = real_distance(
@@ -320,8 +340,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_fire_bolt_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_fire_bolt(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
 

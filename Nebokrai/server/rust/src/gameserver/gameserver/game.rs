@@ -846,7 +846,9 @@ use crate::gameserver::appserver::skills::basemagic::{
 use crate::gameserver::appserver::skills::basemagicphalanx::{
     calculate_owned_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
 };
-use crate::gameserver::appserver::skills::firebolt::{execute_player_fire_bolt, is_fire_bolt_target};
+use crate::gameserver::appserver::skills::firebolt::{
+    cancel_player_fire_bolt, execute_player_fire_bolt, is_fire_bolt_target, FIRE_BOLT_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::fireboltphalanx::{
     calculate_owned_fire_bolt_attack, FireBoltPhalanxTick,
 };
@@ -37375,6 +37377,7 @@ impl CGame {
             skill_id,
             BASE_ATTACK_SKILL_ID
                 | BASE_MAGIC_SKILL_ID
+                | FIRE_BOLT_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37391,6 +37394,7 @@ impl CGame {
         let materialized = match skill_id {
             BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
+            FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37414,6 +37418,9 @@ impl CGame {
             }
             BASE_MAGIC_SKILL_ID => {
                 cancel_player_base_magic(self, player_id, &mut player_ai, runtime)
+            }
+            FIRE_BOLT_SKILL_ID => {
+                cancel_player_fire_bolt(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
