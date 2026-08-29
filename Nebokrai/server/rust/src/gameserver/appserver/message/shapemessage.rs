@@ -16,8 +16,8 @@
 //! и призванных форм применяется их каноническими владельцами региона после
 //! wire; только прочие категории фигур и полные сериализаторы остаются
 //! границами исполнения.
-//! `QUERY_SHAPE_SNAPSHOT` напрямую использует достигнутые сериализаторы
-//! призванных форм; неподтверждённые производные payload не имитируются.
+//! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы всех
+//! достигнутых призванных форм и не уводит их в параллельный runtime callback.
 //! Синхронные отправки не
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 //! Эмоция `0x8F905` сохраняет странность EXE: наличие `ChangeBody` сначала
@@ -344,11 +344,15 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             };
             let snapshot = match game.find_shape_in_region(region_id, identity) {
                 Some(shape) => {
-                    if let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
-                        region_id,
-                        identity,
-                        || runtime.now_milliseconds(),
-                    ) {
+                    if identity.object_type == SUMMON_SHAPE_TYPE {
+                        let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
+                            region_id,
+                            identity,
+                            || runtime.now_milliseconds(),
+                        ) else {
+                            trace!(player_id, region_id, target_id = identity.id, "снимок призванной формы не сериализован владельцем");
+                            return Some(Ok(()));
+                        };
                         ShapeSnapshot { identity, payload }
                     } else {
                         let Some(snapshot) =
