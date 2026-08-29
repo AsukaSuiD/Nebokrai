@@ -9,6 +9,8 @@
 //! также сохраняет урон стихией и душой и износ оружия. `CGame` только разрешает
 //! независимых владельцев, применяет защиту и последствия смерти и доставляет
 //! пакеты. Координатные перегрузки `Begin` остаются ниже недостигнутыми.
+//! Player-варианты используют общий `End`: возврат движения и
+//! `CSummonSkill::End(1)` с cooldown соответствующего идентификатора.
 
 // ============================================================================
 // FUNCTION: CMachineryStomp::Begin
@@ -59,10 +61,11 @@ use crate::gameserver::appserver::monster::PetAttackProperties;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -130,11 +133,40 @@ fn send_player_fire(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish_player(game: &mut CGame, player_id: i32) {
+fn finish_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_wide_arc_attack_used(skill_id, now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .wide_arc_attack()
+        .map(|kernel| kernel.dispatch())
+    else {
+        return false;
+    };
+    let skill_id = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+    };
+    finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn calculate_player_attack(
@@ -241,7 +273,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
         send_player_failure(game, player_id, if active { 0x0d } else { 2 });
         if active {
-            finish_player(game, player_id);
+            finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -290,17 +322,17 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
 
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
         send_player_failure(game, player_id, 0x0d);
-        finish_player(game, player_id);
+        finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     if game.periodic_state_target_dead(region_id, target) {
         send_player_failure(game, player_id, 10);
-        finish_player(game, player_id);
+        finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai.wide_arc_attack().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
         let Some(source) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
-            finish_player(game, player_id);
+            finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -320,7 +352,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(source_view) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
-        finish_player(game, player_id);
+        finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     send_player_fire(game, player_id, skill_id, level, target_view.tile_x, target_view.tile_y);
@@ -349,8 +381,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_wide_arc_attack_used(skill_id, runtime.now_milliseconds());
-    finish_player(game, player_id);
+    finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
     player_terminal(QueuedSkillExecutionState::Completed)
 }
 

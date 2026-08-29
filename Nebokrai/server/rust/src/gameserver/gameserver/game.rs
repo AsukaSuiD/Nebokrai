@@ -940,10 +940,12 @@ use crate::gameserver::appserver::skills::spriteburn::{
     SPRITE_BURN_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::machinerystomp::{
-    execute_player_machinery_stomp, is_machinery_stomp_dispatch,
+    cancel_player_wide_arc_attack, execute_player_machinery_stomp,
+    is_machinery_stomp_dispatch, MACHINERY_STOMP_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::lordwiderangingattack::{
     execute_player_lord_wideranging_attack, is_lord_wideranging_attack_dispatch,
+    LORD_WIDERANGING_ATTACK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::lordfastattack::{
     execute_player_lord_fast_attack, is_lord_fast_attack_dispatch,
@@ -37453,6 +37455,8 @@ impl CGame {
                 | ZOMBIE_CLAW_SKILL_ID
                 | SNAKE_BOLT_SKILL_ID
                 | SPRITE_BURN_SKILL_ID
+                | MACHINERY_STOMP_SKILL_ID
+                | LORD_WIDERANGING_ATTACK_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37510,6 +37514,9 @@ impl CGame {
                 player_ai.path_projectile().is_some()
             }
             SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
+            MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
+                player_ai.wide_arc_attack().is_some()
+            }
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37612,6 +37619,9 @@ impl CGame {
             }
             SPRITE_BURN_SKILL_ID => {
                 cancel_player_sprite_burn(self, player_id, &mut player_ai, runtime)
+            }
+            MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
+                cancel_player_wide_arc_attack(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
