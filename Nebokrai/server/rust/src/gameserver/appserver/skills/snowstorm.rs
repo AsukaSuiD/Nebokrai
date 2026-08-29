@@ -8,12 +8,13 @@
 //! владельцев, регистрирует область и выполняет фактическую доставку.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::snowstormphalanx::CSnowStormPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -68,11 +69,32 @@ fn send_visual(game: &mut CGame, player_id: i32, skill_level: i32, action: u8, d
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    restore_player_movement(game, player_id);
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_snow_storm_used(now_ms));
+}
+
+fn abort_player_snow_storm(game: &mut CGame, player_id: i32) {
+    restore_player_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn complete_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.snow_storm().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_snow_storm(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.snow_storm().map(SkillExecutionKernel::dispatch) else { return false };
+    abort_player_snow_storm(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
@@ -133,16 +155,16 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
     }
 
     if player_ai.snow_storm().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
-        let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
+        let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { abort_player_snow_storm(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
         if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) {
             send_error(game, player_id, 10);
-            finish(game, player_id);
+            abort_player_snow_storm(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if current_mana < mp_loss {
             send_error(game, player_id, 7);
-            finish(game, player_id);
+            abort_player_snow_storm(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -158,14 +180,14 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
 
     let started_at_ms = player_ai.snow_storm().map(SkillExecutionKernel::started_at_ms).expect("выполнение снежной бури создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending); }
-    let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { abort_player_snow_storm(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
     if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) {
         send_error(game, player_id, 10);
-        finish(game, player_id);
+        abort_player_snow_storm(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     send_visual(game, player_id, skill_level, 2, Some((target_x, target_y)));
-    let Some(player) = game.find_player(player_id) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(player) = game.find_player(player_id) else { abort_player_snow_storm(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
     let master = MasterInfo { master_type: PLAYER_TYPE, master_id: player_id, master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(player.pk_permissions().player), permitted_to_kill_teammate: i32::from(player.pk_permissions().teammate), permitted_to_kill_guild_member: i32::from(player.pk_permissions().guild_member), permitted_to_kill_criminal: i32::from(player.pk_permissions().criminal) };
     let element_modifier = player.combat_properties().element_modify;
     let summon_id = game.allocate_summon_shape_id();
@@ -181,8 +203,7 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_snow_storm_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_snow_storm(game, player_id, player_ai, runtime);
     terminal(if summoned { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
 

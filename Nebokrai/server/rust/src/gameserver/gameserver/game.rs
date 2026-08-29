@@ -953,7 +953,10 @@ use crate::gameserver::appserver::skills::firewall::{
 use crate::gameserver::appserver::skills::firewallphalanx::{
     calculate_owned_fire_wall_attack, fire_wall_targets, FireWallPhalanxTick,
 };
-use crate::gameserver::appserver::skills::poisonfog::{execute_player_poison_fog, is_poison_fog_target};
+use crate::gameserver::appserver::skills::poisonfog::{
+    cancel_player_poison_fog, complete_player_poison_fog, execute_player_poison_fog,
+    is_poison_fog_target, POISON_FOG_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::poisonfogphalanx::PoisonFogPhalanxTick;
 use crate::gameserver::appserver::skills::infernol::{
     cancel_player_infernol, execute_player_infernol, is_infernol_dispatch, INFERNOL_SKILL_ID,
@@ -1155,13 +1158,16 @@ use crate::gameserver::appserver::skills::boalockstate::{
     expire_monster_boa_lock_state, expire_player_boa_lock_state,
 };
 use crate::gameserver::appserver::skills::snowstorm::{
-    execute_player_snow_storm, is_snow_storm_target,
+    cancel_player_snow_storm, complete_player_snow_storm, execute_player_snow_storm,
+    is_snow_storm_target, SNOW_STORM_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::snowstormphalanx::{
     calculate_owned_snow_storm_attack, snow_storm_targets, CSnowStormPhalanx,
     SnowStormPhalanxTick,
 };
-use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
+use crate::gameserver::appserver::skills::weak::{
+    cancel_player_weak, complete_player_weak, execute_player_weak, is_weak_target, WEAK_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
 use crate::gameserver::appserver::skills::weakstate::{
     finish_monster_weak_outside, finish_player_weak_outside,
@@ -37590,6 +37596,9 @@ impl CGame {
                 | NATURAL_SKILL_ID
                 | RAPTURE_SKILL_ID
                 | HEARTEN_SKILL_ID
+                | POISON_FOG_SKILL_ID
+                | SNOW_STORM_SKILL_ID
+                | WEAK_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
         {
             return None;
@@ -37682,6 +37691,9 @@ impl CGame {
                 player_ai.agility_family().is_some()
             }
             HEARTEN_SKILL_ID => player_ai.hearten().is_some(),
+            POISON_FOG_SKILL_ID => player_ai.poison_fog().is_some(),
+            SNOW_STORM_SKILL_ID => player_ai.snow_storm().is_some(),
+            WEAK_SKILL_ID => player_ai.weak().is_some(),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(&player_ai, skill_id)
             }
@@ -37808,6 +37820,24 @@ impl CGame {
                     runtime,
                 )),
                 BLIND_SKILL_ID => Some(complete_player_blind(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                POISON_FOG_SKILL_ID => Some(complete_player_poison_fog(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                SNOW_STORM_SKILL_ID => Some(complete_player_snow_storm(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                WEAK_SKILL_ID => Some(complete_player_weak(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38096,6 +38126,13 @@ impl CGame {
             HEARTEN_SKILL_ID => {
                 cancel_player_hearten(self, player_id, &mut player_ai, runtime)
             }
+            POISON_FOG_SKILL_ID => {
+                cancel_player_poison_fog(self, player_id, &mut player_ai, runtime)
+            }
+            SNOW_STORM_SKILL_ID => {
+                cancel_player_snow_storm(self, player_id, &mut player_ai, runtime)
+            }
+            WEAK_SKILL_ID => cancel_player_weak(self, player_id, &mut player_ai, runtime),
             _ if is_self_shield_skill(skill_id) => cancel_player_self_shield_dispatch(
                 self,
                 player_id,
