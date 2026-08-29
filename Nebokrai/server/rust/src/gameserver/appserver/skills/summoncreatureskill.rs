@@ -12,6 +12,9 @@
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -21,6 +24,7 @@ use crate::nets::netserver::message::CMessage;
 
 const MONSTER_TYPE: i32 = 600;
 const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME: u32 = 30_001;
@@ -103,13 +107,24 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((source, cast, last_used_ms)) = region
+    let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
-        .map(|monster| (
-            monster.move_shape().shape().clone(),
-            monster.base_attack_cast(),
-            monster.skill_last_used_ms(skill_id),
-        ))
+        .and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            let attack_interval_ms = monster
+                .is_tamed()
+                .then(|| monster.pet_attack_properties(&property))
+                .map_or(property.attack_speed, |pet| pet.attack_interval);
+            Some((
+                monster.move_shape().shape().clone(),
+                property,
+                attack_interval_ms,
+                monster.base_attack_cast(),
+                monster.skill_last_used_ms(skill_id),
+            ))
+        })
     else {
         return false;
     };
@@ -176,14 +191,40 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
+    let Some((destination_x, destination_y)) = target_coordinates(game, region, target) else {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_ai_target();
+        }
+        return true;
+    };
+    if !approach_attack_range(
+        game,
+        region,
+        monster_id,
+        destination_x,
+        destination_y,
+        properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+        now_ms,
+    ) {
+        return true;
+    }
+    if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms) {
+        let attack_started = region
+            .find_monster_by_id_mut(monster_id)
+            .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval_ms));
+        if !attack_started {
+            return true;
+        }
+    }
     if last_used_ms != 0
-        && !time_reached(now_ms, last_used_ms, properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME))
+        && !time_reached(
+            now_ms,
+            last_used_ms,
+            properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+        )
     {
         return true;
     }
-    let Some((destination_x, destination_y)) = target_coordinates(game, region, target) else {
-        return true;
-    };
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().set_moveable(false);

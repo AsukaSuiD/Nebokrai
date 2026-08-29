@@ -440,22 +440,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     {
         return true;
     }
-    if skill_id == FURY_SKILL_ID {
-        let Some(skill_properties) = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .cloned()
-        else {
-            return false;
-        };
-        return execute_owned_fury(
-            game,
-            region,
-            monster_id,
-            skill.level,
-            &skill_properties,
-            runtime.now_milliseconds(),
-        );
-    }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
     if target.is_none()
         && cast.is_none()
@@ -875,6 +859,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let now_ms = runtime.now_milliseconds();
+    if skill_id == FURY_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_fury(
+            game,
+            region,
+            monster_id,
+            target,
+            skill.level,
+            &skill_properties,
+            now_ms,
+        );
+    }
     if matches!(skill_id, SKELETON_ARCHERY_SKILL_ID | CHUCK_STONE_SKILL_ID) {
         let skill_properties = skill_properties.clone();
         return prepare_owned_monster_projectile(
