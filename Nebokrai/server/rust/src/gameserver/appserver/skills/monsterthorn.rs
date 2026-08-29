@@ -162,13 +162,18 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use super::baseattack::{
+    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
+    time_reached,
+};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -292,6 +297,17 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     };
 
     if cast.is_none() {
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            target_x,
+            target_y,
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+            now_ms,
+        ) {
+            return true;
+        }
         let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
         let attack_interval = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
         let schedule_ready = schedule_attack_interval(property.ai, attack_interval)
