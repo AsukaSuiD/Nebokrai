@@ -903,7 +903,10 @@ use crate::gameserver::appserver::skills::energyholding::{
     cancel_player_energy_holding, execute_player_energy_holding, is_energy_holding_dispatch,
     ENERGY_HOLDING_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::inversechopped::{execute_player_inverse_chopped, is_inverse_chopped_dispatch};
+use crate::gameserver::appserver::skills::inversechopped::{
+    cancel_player_inverse_chopped, execute_player_inverse_chopped, is_inverse_chopped_dispatch,
+    INVERSE_CHOPPED_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
 };
@@ -37405,6 +37408,7 @@ impl CGame {
                 | RUSH_2_SKILL_ID
                 | ROAR_SKILL_ID
                 | ENERGY_HOLDING_SKILL_ID
+                | INVERSE_CHOPPED_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37432,6 +37436,7 @@ impl CGame {
             RUSH_2_SKILL_ID => player_ai.rush_2().is_some(),
             ROAR_SKILL_ID => player_ai.roar().is_some(),
             ENERGY_HOLDING_SKILL_ID => player_ai.energy_holding().is_some(),
+            INVERSE_CHOPPED_SKILL_ID => player_ai.inverse_chopped().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37482,6 +37487,9 @@ impl CGame {
             ROAR_SKILL_ID => cancel_player_roar(self, player_id, &mut player_ai, runtime),
             ENERGY_HOLDING_SKILL_ID => {
                 cancel_player_energy_holding(self, player_id, &mut player_ai, runtime)
+            }
+            INVERSE_CHOPPED_SKILL_ID => {
+                cancel_player_inverse_chopped(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
