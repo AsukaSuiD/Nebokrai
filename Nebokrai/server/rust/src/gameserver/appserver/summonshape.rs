@@ -131,6 +131,47 @@ impl SummonedSkillShape {
         }
     }
 
+    /// Сериализует только те призванные формы, чей точный клиентский payload
+    /// уже принадлежит конкретному владельцу. Формы без достигнутого формата
+    /// возвращают `None`, не подменяя его общим префиксом `CShape`.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        match self {
+            Self::Archery(_)
+            | Self::BaseMagic(_)
+            | Self::BattleFairyBaseMagic(_)
+            | Self::FireBolt(_)
+            | Self::HeartlessArrow(_) => None,
+            Self::LightingArrow(shape) => {
+                shape.encode_client_snapshot(&mut now_milliseconds)
+            }
+            Self::MeteorArrow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::RainArrow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::FatalBlow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::FireBall(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::ThunderFire(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::ChaosSphere(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::FireWall(shape) => shape.encode_client_snapshot(),
+            Self::PoisonFog(shape) => shape.encode_client_snapshot(),
+            Self::Thunder(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::ThunderBlow(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::ThunderSlash(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::Leiming2(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::Tianhuo(shape) => shape.encode_client_snapshot(),
+            Self::SpiderMist(shape) => shape.encode_client_snapshot(),
+            Self::SnowStorm(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::Weak(shape) => shape.encode_client_snapshot(),
+            Self::YinYang(shape) => shape.encode_client_snapshot(),
+            Self::GodPunishment(shape) => {
+                shape.encode_client_snapshot(&mut now_milliseconds)
+            }
+            Self::GodThunder(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::GodThunder2(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+        }
+    }
+
     pub(crate) const fn master(&self) -> MasterInfo {
         match self {
             Self::Archery(shape) => shape.master(),

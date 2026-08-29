@@ -15,6 +15,8 @@
 //! payload сохранён. Полиморфный `SetTileXY` достигнутых игроков, монстров и NPC
 //! применяется их каноническими владельцами региона после wire; только прочие
 //! категории фигур и полные сериализаторы остаются границами исполнения.
+//! `QUERY_SHAPE_SNAPSHOT` напрямую использует достигнутые сериализаторы
+//! призванных форм; неподтверждённые производные payload не имитируются.
 //! Синхронные отправки не
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 //! Эмоция `0x8F905` сохраняет странность EXE: наличие `ChangeBody` сначала
@@ -337,12 +339,21 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             };
             let snapshot = match game.find_shape_in_region(region_id, identity) {
                 Some(shape) => {
-                    let Some(snapshot) = runtime.serialize_shape_snapshot(game, region_id, shape)
-                    else {
-                        trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок shape не сериализован");
-                        return Some(Ok(()));
-                    };
-                    snapshot
+                    if let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
+                        region_id,
+                        identity,
+                        || runtime.now_milliseconds(),
+                    ) {
+                        ShapeSnapshot { identity, payload }
+                    } else {
+                        let Some(snapshot) =
+                            runtime.serialize_shape_snapshot(game, region_id, shape)
+                        else {
+                            trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок shape не сериализован");
+                            return Some(Ok(()));
+                        };
+                        snapshot
+                    }
                 }
                 None => {
                     let Some(snapshot) =

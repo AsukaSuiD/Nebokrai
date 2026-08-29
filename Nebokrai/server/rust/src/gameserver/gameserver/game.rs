@@ -39823,6 +39823,27 @@ impl CGame {
         )
     }
 
+    /// Разрешает подтверждённый виртуальный клиентский сериализатор формы у
+    /// канонического владельца региона. Сейчас полностью достигнута часть
+    /// семейства `SummonedSkillShape`; остальные категории не имитируются.
+    pub(crate) fn serialize_owned_shape_snapshot(
+        &self,
+        region_id: i32,
+        identity: ShapeIdentity,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<(ShapeIdentity, Vec<u8>)> {
+        if identity.object_type != SUMMON_SHAPE_TYPE {
+            return None;
+        }
+        let phalanx = self.find_region(region_id)?.base().find_skill_phalanx(identity.id)?;
+        let canonical_identity = phalanx.shape().identity();
+        if canonical_identity != identity {
+            return None;
+        }
+        let payload = phalanx.encode_client_snapshot(now_milliseconds)?;
+        Some((canonical_identity, payload))
+    }
+
     /// Достигнутый `CBaseAI::GetTarget` игрока: до планирования FIFO-команды
     /// поля цели ещё нулевые, поэтому требуется совпадающий текущий навык.
     /// Координатная и самостоятельная команды указатель цели не создают.
