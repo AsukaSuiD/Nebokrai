@@ -35467,12 +35467,15 @@ impl CGame {
     ) {
         let monster_snapshot = self.find_region(region_id).and_then(|owner| {
             let monster = owner.base().find_monster_by_id(monster_id)?;
+            let killing_attack = monster.killed_by();
             Some((
                 monster.first_attack_player_id(),
-                monster
-                    .killed_by()
+                killing_attack
                     .filter(|attack| attack.attacker_type == PLAYER_TYPE)
                     .map_or(killer_id, |attack| attack.attacker_id),
+                killing_attack
+                    .filter(|attack| attack.attacker_type == PLAYER_TYPE)
+                    .map(|attack| attack.attacker_id),
                 monster.shape_view(monster_property)?,
                 monster.original_name().to_vec(),
                 monster.script_file().to_vec(),
@@ -35481,6 +35484,7 @@ impl CGame {
         let Some((
             first_attacker,
             killing_player,
+            direct_attacking_player,
             monster_shape,
             original_name,
             script_file,
@@ -35488,19 +35492,22 @@ impl CGame {
         else {
             return;
         };
+        if let Some(attacker_id) = direct_attacking_player {
+            let (hit_base_level, _, _, _) =
+                self.globe_setup.monster_continuous_kill_parameters();
+            if i32::from(self.find_player(attacker_id).map_or(0, CPlayer::level))
+                - hit_base_level
+                <= monster_property.level as i32
+            {
+                let _ = self.increase_player_continuous_kill(attacker_id, runtime);
+            }
+        }
         let beneficiary_id = [first_attacker, killing_player]
             .into_iter()
             .find_map(|candidate| {
                 self.resolve_monster_beneficiary_candidate(candidate, monster_shape)
             });
         if let Some(beneficiary_id) = beneficiary_id {
-            let (hit_base_level, _, _, _) = self.globe_setup.monster_continuous_kill_parameters();
-            if i32::from(self.find_player(beneficiary_id).map_or(0, CPlayer::level))
-                - hit_base_level
-                <= monster_property.level as i32
-            {
-                let _ = self.increase_player_continuous_kill(beneficiary_id, runtime);
-            }
             self.award_monster_experience(
                 beneficiary_id,
                 first_attacker,

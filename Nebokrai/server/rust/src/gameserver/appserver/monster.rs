@@ -1969,20 +1969,6 @@ impl CMonster {
 //
 
 // ============================================================================
-// FUNCTION: CMonster::GetExp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.h:166
-// RVA: 0x000E7D30
-// ADDRESS: 004e7d30
-// PROTOTYPE: ulong __thiscall GetExp(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CMonster::GetHP
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
