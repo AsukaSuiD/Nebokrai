@@ -306,11 +306,17 @@ impl CServerWarRegion {
         let Some(player) = player else {
             return false;
         };
-        self.contenders
-            .retain(|contender| contender.player_id != player.player_id);
+        self.remove_contenders_for_player(player.player_id);
         context.set_known_player_contend_state(player.player_id, false);
         context.send_contend_time(player.player_id, 0);
         true
+    }
+
+    /// Удаляет только owned contender-записи. Player-state и `0xBFF29`
+    /// остаются у вызывающего runtime-owner-а и применяются после mutation.
+    pub(crate) fn remove_contenders_for_player(&mut self, player_id: i32) {
+        self.contenders
+            .retain(|contender| contender.player_id != player_id);
     }
 
     pub(crate) fn add_contend<Context: WarContendEntryContext>(

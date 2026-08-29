@@ -629,7 +629,8 @@ use crate::gameserver::appserver::message::organsysmessage::{
 use crate::gameserver::appserver::message::othermessage::dispatch_game_other_message;
 use crate::gameserver::appserver::message::petmessage::dispatch_game_pet_message;
 use crate::gameserver::appserver::message::playermessage::{
-    GamePlayerMessageRuntime, dispatch_game_player_message, equipment_state_elapsed_seconds,
+    GamePlayerMessageRuntime, PlayerItemContendCancel, dispatch_game_player_message,
+    equipment_state_elapsed_seconds,
 };
 use crate::gameserver::appserver::message::playershopmessage::dispatch_player_shop_message;
 use crate::gameserver::appserver::message::regionmessage::dispatch_game_region_message;
@@ -11867,6 +11868,70 @@ impl CGame {
             "обработан вход в захват войны наций"
         );
         Some(())
+    }
+
+    /// Выполняет virtual `CancelContendByPlayerID`, который `CPlayer::UseItem`
+    /// вызывает до разбора свойства предмета. Subtype mutation идёт раньше
+    /// возможного `GS0147`; неопределённый legacy `AL` не подменяется.
+    pub(crate) fn cancel_player_contend_for_item(
+        &mut self,
+        player_id: i32,
+    ) -> PlayerItemContendCancel {
+        let Some(region_id) = self.find_player(player_id).and_then(CPlayer::server_region_id) else {
+            return PlayerItemContendCancel::NotCancelled;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return PlayerItemContendCancel::NotCancelled;
+        };
+
+        let outcome = match &mut owner {
+            ServerRegionOwner::Village(region) => {
+                region.war.remove_contenders_for_player(player_id);
+                let base = region.war.base.clone();
+                let _ = self.publish_war_player_contend_state(&base, player_id, false);
+                let _ = self.send_nation_contend_time(player_id, 0);
+                PlayerItemContendCancel::CancelledNotify
+            }
+            ServerRegionOwner::City(region) => {
+                region.war.remove_contenders_for_player(player_id);
+                let base = region.war.base.clone();
+                let _ = self.publish_war_player_contend_state(&base, player_id, false);
+                let _ = self.send_nation_contend_time(player_id, 0);
+                PlayerItemContendCancel::CancelledNotify
+            }
+            ServerRegionOwner::Country(_) | ServerRegionOwner::Base(_) => {
+                PlayerItemContendCancel::NotCancelled
+            }
+            ServerRegionOwner::Nation(region) => match region.cancel_contend_by_player_id(player_id) {
+                NationContendCancelOutcome::MissingReset => {
+                    let _ = self.set_nation_player_contend_state(&region.war.base, player_id, false);
+                    let _ = self.send_nation_contend_time(player_id, 0);
+                    PlayerItemContendCancel::CancelledNotify
+                }
+                NationContendCancelOutcome::Removed { .. } => {
+                    PlayerItemContendCancel::CancelledLegacyNoticeIndeterminate
+                }
+            },
+            ServerRegionOwner::GodsBattle(region) => {
+                match region.cancel_contend_by_player_id(player_id) {
+                    GodsBattleCancelByPlayer::MissingReset => {
+                        let _ = self.set_gods_battle_player_contend_state(
+                            &region.war.base,
+                            player_id,
+                            false,
+                        );
+                        let _ = self.send_gods_battle_contend_time(player_id, 0);
+                        PlayerItemContendCancel::CancelledNotify
+                    }
+                    GodsBattleCancelByPlayer::RemovedWithoutPlayerReset => {
+                        PlayerItemContendCancel::CancelledLegacyNoticeIndeterminate
+                    }
+                }
+            }
+        };
+
+        self.restore_region_owner(owner);
+        outcome
     }
 
     pub(crate) fn nation_cancel_contend_by_player_id(

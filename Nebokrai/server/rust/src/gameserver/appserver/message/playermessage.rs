@@ -86,14 +86,6 @@ pub(crate) trait GamePlayerMessageRuntime:
     /// каноническому player owner-у и проверяются непосредственно.
     fn player_has_unmaterialized_strike_state(&mut self, game: &CGame, player_id: i32) -> bool;
 
-    /// Виртуальный region-policy, запрещающий предметы в contend-состоянии.
-    /// Он остаётся на runtime-границе до восстановления конкретных subtype-ов.
-    fn region_forbids_item_use_while_contending(
-        &mut self,
-        game: &CGame,
-        player_id: i32,
-    ) -> bool;
-
     /// Исполняет только ещё не owned concrete state/skill/relocation
     /// owner; container/player scalars и wire хвост остаются у dispatcher-а.
     fn apply_player_item_runtime_effect(
@@ -109,9 +101,18 @@ pub(crate) struct PlayerItemUseFacts {
     pub(crate) blocking_skill_state: bool,
     pub(crate) fight_state_count: i32,
     pub(crate) mount_state_exists: bool,
-    pub(crate) contend_use_forbidden: bool,
     pub(crate) forbid_return_level: i32,
     pub(crate) tick_ms: u32,
+}
+
+/// Наблюдаемый результат virtual `CancelContendByPlayerID`, вызываемого перед
+/// item-specific ветвями. У Nation/GodsBattle найденная запись возвращается с
+/// неопределённым `AL`; mutation сохраняется, но текст не выдумывается.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerItemContendCancel {
+    NotCancelled,
+    CancelledNotify,
+    CancelledLegacyNoticeIndeterminate,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -578,8 +579,6 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             let tick_ms = runtime.now_milliseconds();
             let unmaterialized_strike_state =
                 runtime.player_has_unmaterialized_strike_state(game, player_id);
-            let contend_use_forbidden =
-                runtime.region_forbids_item_use_while_contending(game, player_id);
             let facts = game
                 .find_player(player_id)
                 .map(|player| PlayerItemUseFacts {
@@ -591,7 +590,6 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                             .any(|state_id| player.has_state_by_skill_id(state_id)),
                     fight_state_count: player.fight_state_count(),
                     mount_state_exists: player.is_rider(),
-                    contend_use_forbidden,
                     forbid_return_level: game.globe_setup().forbid_return_level(),
                     tick_ms,
                 })
@@ -729,12 +727,19 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
                 return Some(Ok(()));
             }
-            if game
-                .find_player(player_id)
-                .is_some_and(|player| player.contend_state())
-                && facts.contend_use_forbidden
-            {
-                let _ = send_item_notice(game, player_id, b"GS0147", &[], 0xffff_0000);
+            if game.find_player(player_id).is_some_and(|player| player.contend_state()) {
+                match game.cancel_player_contend_for_item(player_id) {
+                    PlayerItemContendCancel::CancelledNotify => {
+                        let _ = send_item_notice(game, player_id, b"GS0147", &[], 0xffff_0000);
+                    }
+                    PlayerItemContendCancel::CancelledLegacyNoticeIndeterminate => {
+                        tracing::warn!(
+                            player_id,
+                            "захват отменён, но исходный AL для GS0147 не определён"
+                        );
+                    }
+                    PlayerItemContendCancel::NotCancelled => {}
+                }
             }
 
             let mut consume = true;
