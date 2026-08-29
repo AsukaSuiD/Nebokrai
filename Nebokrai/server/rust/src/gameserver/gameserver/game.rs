@@ -505,7 +505,6 @@ mod thunder;
 mod snowstorm;
 mod leiming2;
 mod tianhuo;
-mod spidermist;
 mod weak;
 mod yinyang;
 mod godbless;
@@ -41276,7 +41275,7 @@ impl CGame {
             SummonedSkillShape::SpiderMist(spider_mist),
         ) = (tick, &phalanx)
         {
-            let candidates = self.spider_mist_targets(region_id, spider_mist);
+            let candidates = crate::gameserver::appserver::skills::spidermistphalanx::spider_mist_targets(self, region_id, spider_mist);
             if let Some(mut owner) = self.take_region_owner(region_id) {
                 let applied = crate::gameserver::appserver::skills::spidermistphalanx::apply_spider_mist_targets(
                     self,

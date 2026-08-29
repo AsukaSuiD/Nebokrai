@@ -10,6 +10,7 @@ use super::poisonfogstate::PoisonFogState;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +23,19 @@ pub(crate) struct CPoisonFogPhalanx {
     defense_loss_coefficient: u32, dodge_loss: u32, element_resistance_loss: u32,
     element_resistance_loss_coefficient: u32, weapon_damage_level: u32,
     scope_active: bool,
+}
+
+pub(crate) fn poison_fog_targets(game: &CGame, region_id: i32, phalanx: &CPoisonFogPhalanx) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (Ok(x), Ok(y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
+    let (width, height) = game.area_dimensions();
+    let mut shapes = Vec::new();
+    if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new() }
+    shapes.into_iter().map(|shape| shape.identity).filter(|identity| {
+        *identity != phalanx.shape().identity()
+            && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
+            && matches!(identity.object_type, 400 | 600)
+    }).collect()
 }
 
 impl CPoisonFogPhalanx {

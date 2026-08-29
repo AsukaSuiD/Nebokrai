@@ -1,19 +1,17 @@
 //! Межвладельческая координация ядовитого тумана.
 //!
 //! Применение навыка, формулы состояния и жизненный цикл области принадлежат
-//! владельцам навыка. Здесь остаются упорядоченный `GetShape`, проверки PK и
-//! региона, каноническая замена состояния, пересчёт свойств и фактическая
-//! доставка вокруг объекта.
+//! владельцам навыка. Здесь остаются проверки PK и региона, каноническая
+//! замена состояния, пересчёт свойств и фактическая доставка вокруг объекта.
 
 use super::*;
 use crate::gameserver::appserver::skills::curestate::CURE_STATE_SKILL_ID;
-use crate::gameserver::appserver::skills::poisonfogphalanx::CPoisonFogPhalanx;
+use crate::gameserver::appserver::skills::poisonfogphalanx::{poison_fog_targets, CPoisonFogPhalanx};
 use crate::gameserver::appserver::skills::poisonfogstate::send_poison_fog_state_visual;
 
 impl CGame {
     pub(crate) fn add_poison_fog_phalanx<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, phalanx: CPoisonFogPhalanx, x: i32, y: i32, now_ms: u32, runtime: &mut Runtime) -> Option<Result<i32, RegionMembershipBlock>> { let mut owner = self.take_region_owner(region_id)?; let result = owner.base_mut().add_poison_fog_phalanx(phalanx, x, y, self.area_width, self.area_height, now_ms, runtime); self.restore_region_owner(owner); Some(result) }
     pub(crate) fn send_poison_fog_phalanx_entry(&mut self, region_id: i32, id: i32) -> Option<()> { let phalanx = self.find_region(region_id)?.base().find_skill_phalanx(id)?; let SummonedSkillShape::PoisonFog(phalanx) = phalanx else { return None }; let identity = phalanx.shape().identity(); let x = phalanx.shape().get_tile_x().ok()?; let y = phalanx.shape().get_tile_y().ok()?; let payload = phalanx.encode_client_snapshot()?; let mut message = CMessage::new(0x000b_f502); message.add_long(identity.object_type); message.add_long(identity.id); message.base_mut().add_guid(identity.ex_id); message.add_long(i32::try_from(payload.len()).ok()?); message.base_mut().add(&payload); message.base_mut().add_char(0); let _ = self.send_shape_position_around(region_id, x, y, &message); Some(()) }
-    pub(super) fn poison_fog_targets(&self, region_id: i32, phalanx: &CPoisonFogPhalanx) -> Vec<ShapeIdentity> { let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else { return Vec::new() }; let (Ok(x), Ok(y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() }; let mut shapes = Vec::new(); if region.get_shapes(x, y, self.area_width, self.area_height, self, &mut shapes).is_err() { return Vec::new() } shapes.into_iter().map(|shape| shape.identity).filter(|identity| *identity != phalanx.shape().identity() && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id) && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)).collect() }
     fn poison_fog_target_attackable(&self, region_id: i32, phalanx: &CPoisonFogPhalanx, target: ShapeIdentity) -> bool {
         let master = phalanx.master();
         let Some(master_player) = self.find_player(master.master_id) else { return false };
@@ -40,7 +38,7 @@ impl CGame {
     }
     pub(super) fn apply_poison_fog_phalanx<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, phalanx: &CPoisonFogPhalanx, runtime: &mut Runtime) -> usize {
         let mut applied = 0usize;
-        for target in self.poison_fog_targets(region_id, phalanx) {
+        for target in poison_fog_targets(self, region_id, phalanx) {
             if !self.poison_fog_target_attackable(region_id, phalanx, target) { continue }
             let now = runtime.now_milliseconds(); let state = phalanx.state(now);
             match target.object_type {

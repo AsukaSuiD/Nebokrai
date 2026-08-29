@@ -48,6 +48,18 @@ pub(crate) struct CSpiderMistPhalanx {
     scope: [[u8; SCOPE_SIDE]; SCOPE_SIDE],
 }
 
+pub(crate) fn spider_mist_targets(game: &CGame, region_id: i32, phalanx: &CSpiderMistPhalanx) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (width, height) = game.area_dimensions();
+    let mut targets = Vec::new();
+    for (tile_x, tile_y) in phalanx.active_cells() {
+        let mut shapes = Vec::new();
+        if region.get_shapes(tile_x, tile_y, width, height, game, &mut shapes).is_err() { break }
+        targets.extend(shapes.into_iter().map(|shape| shape.identity));
+    }
+    targets
+}
+
 impl CSpiderMistPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(

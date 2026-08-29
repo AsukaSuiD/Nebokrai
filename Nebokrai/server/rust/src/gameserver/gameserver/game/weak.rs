@@ -1,12 +1,12 @@
 //! Межвладельческая координация области ослабления.
 //!
 //! Условия cast, формула срока, прямоугольник и изменение атаки принадлежат
-//! `weak.rs`, `weakphalanx.rs` и `weakstate.rs`. Здесь остаются ordered
-//! `GetShape`, временное извлечение региона, каноническая установка состояния,
-//! перерасчёт player owner-а и фактическая around-доставка.
+//! `weak.rs`, `weakphalanx.rs` и `weakstate.rs`. Здесь остаются временное
+//! извлечение региона, каноническая установка состояния, перерасчёт player
+//! owner-а и фактическая around-доставка.
 
 use super::*;
-use crate::gameserver::appserver::skills::weakphalanx::CWeakPhalanx;
+use crate::gameserver::appserver::skills::weakphalanx::{weak_targets, CWeakPhalanx};
 use crate::gameserver::appserver::skills::weakstate::{WeakState, send_weak_state_visual};
 use crate::gameserver::appserver::skills::weak::WEAK_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -35,23 +35,6 @@ impl CGame {
         message.base_mut().add_char(0);
         let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &message);
         Some(())
-    }
-
-    pub(super) fn weak_targets(&self, region_id: i32, phalanx: &CWeakPhalanx) -> Vec<ShapeIdentity> {
-        let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else { return Vec::new() };
-        let mut targets = Vec::new();
-        for (tile_x, tile_y) in phalanx.active_cells() {
-            let mut shapes = Vec::new();
-            if region.get_shapes(tile_x, tile_y, self.area_width, self.area_height, self, &mut shapes).is_err() { break; }
-            for shape in shapes {
-                if shape.identity == phalanx.shape().identity()
-                    || (shape.identity.object_type == phalanx.master().master_type && shape.identity.id == phalanx.master().master_id)
-                    || !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                { continue; }
-                targets.push(shape.identity);
-            }
-        }
-        targets
     }
 
     fn weak_target_attackable(&self, region_id: i32, master: MasterInfo, target: ShapeIdentity) -> bool {
@@ -84,7 +67,7 @@ impl CGame {
         let center_y = phalanx.shape().get_tile_y().unwrap_or_default();
         let state = WeakState::new(phalanx.attack_loss(), center_x, center_y, phalanx.length(), phalanx.height());
         let mut applied = 0usize;
-        for target in self.weak_targets(region_id, phalanx) {
+        for target in weak_targets(self, region_id, phalanx) {
             if !self.weak_target_attackable(region_id, phalanx.master(), target) { continue; }
             match target.object_type {
                 PLAYER_TYPE => {
@@ -124,7 +107,7 @@ impl CGame {
 
     pub(super) fn finish_weak_phalanx_targets<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, phalanx: &CWeakPhalanx, runtime: &mut Runtime) -> usize {
         let mut ended = 0usize;
-        for target in self.weak_targets(region_id, phalanx) {
+        for target in weak_targets(self, region_id, phalanx) {
             match target.object_type {
                 PLAYER_TYPE => {
                     let removed = self.find_player_mut(target.id).and_then(|player| {

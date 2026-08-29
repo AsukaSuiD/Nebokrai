@@ -10,6 +10,7 @@ use super::weak::WEAK_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +26,24 @@ pub(crate) struct CWeakPhalanx {
     length: i32,
     height: i32,
     attack_loss: u32,
+}
+
+pub(crate) fn weak_targets(game: &CGame, region_id: i32, phalanx: &CWeakPhalanx) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (width, height) = game.area_dimensions();
+    let mut targets = Vec::new();
+    for (tile_x, tile_y) in phalanx.active_cells() {
+        let mut shapes = Vec::new();
+        if region.get_shapes(tile_x, tile_y, width, height, game, &mut shapes).is_err() { break }
+        for shape in shapes {
+            if shape.identity == phalanx.shape().identity()
+                || (shape.identity.object_type == phalanx.master().master_type && shape.identity.id == phalanx.master().master_id)
+                || !matches!(shape.identity.object_type, 400 | 600)
+            { continue }
+            targets.push(shape.identity);
+        }
+    }
+    targets
 }
 
 impl CWeakPhalanx {
