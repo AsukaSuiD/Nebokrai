@@ -203,13 +203,17 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
+use super::baseattack::{
+    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
+    time_reached,
+};
 use super::bossbluequakestate::{BossBlueQuakeState, send_boss_blue_quake_state_visual};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
@@ -409,6 +413,17 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if cast.is_none() {
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            target_x,
+            target_y,
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+            now_ms,
+        ) {
+            return true;
+        }
         if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME)) { return true; }
         let direction = get_line_direction(source.get_tile_x().unwrap_or_default(), source.get_tile_y().unwrap_or_default(), target_x, target_y);
         let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);

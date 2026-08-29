@@ -242,6 +242,7 @@ use super::monsterattack::{
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -523,6 +524,17 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
 
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if cast.is_none() {
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            destination.0,
+            destination.1,
+            maximum_distance,
+            now_ms,
+        ) {
+            return true;
+        }
         if last_used_ms != 0
             && !time_reached(
                 now_ms,

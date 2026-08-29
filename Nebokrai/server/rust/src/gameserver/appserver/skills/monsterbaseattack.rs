@@ -1042,6 +1042,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             game,
             region,
             monster_id,
+            target,
             skill.level,
             &skill_properties,
             now_ms,

@@ -148,11 +148,16 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use super::baseattack::{
+    SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
+    time_reached,
+};
 use super::bossbluefurystate::{
     BossBlueFuryState, send_boss_blue_fury_state_visual,
 };
+use super::monsterattack::resolve_owned_monster_attack_target;
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -219,6 +224,7 @@ pub(crate) fn execute_owned_boss_blue_fury(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
+    target_identity: ShapeIdentity,
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
@@ -237,6 +243,29 @@ pub(crate) fn execute_owned_boss_blue_fury(
     };
 
     if cast.is_none() {
+        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
+        else {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.clear_ai_target();
+            }
+            return true;
+        };
+        let (Ok(target_x), Ok(target_y)) =
+            (target.shape.get_tile_x(), target.shape.get_tile_y())
+        else {
+            return true;
+        };
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            target_x,
+            target_y,
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+            now_ms,
+        ) {
+            return true;
+        }
         if last_used_ms != 0
             && !time_reached(
                 now_ms,
