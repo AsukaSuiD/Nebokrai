@@ -4751,6 +4751,30 @@ impl CPlayer {
         self.move_shape.activate_loaded_leaf_cut_state(now_ms)
     }
 
+    pub(crate) fn replace_leaf_cut_2_state(
+        &mut self,
+        state: super::skills::leafcutstate2::LeafCutState2,
+    ) -> Option<super::skills::leafcutstate2::LeafCutState2> {
+        self.move_shape.replace_leaf_cut_2_state(state)
+    }
+
+    pub(crate) fn take_leaf_cut_2_state_for_ai(
+        &mut self,
+    ) -> Option<super::skills::leafcutstate2::LeafCutState2> {
+        self.move_shape.take_leaf_cut_2_state_for_ai()
+    }
+
+    pub(crate) fn restore_leaf_cut_2_state_after_ai(
+        &mut self,
+        state: super::skills::leafcutstate2::LeafCutState2,
+    ) {
+        self.move_shape.restore_leaf_cut_2_state_after_ai(state);
+    }
+
+    pub(crate) fn finish_leaf_cut_2_state(&mut self) {
+        self.move_shape.finish_leaf_cut_2_state();
+    }
+
     pub(crate) fn replace_leaf_cut_3_state(
         &mut self,
         state: super::skills::leafcutstate3::LeafCutState3,

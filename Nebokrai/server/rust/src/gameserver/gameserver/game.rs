@@ -484,6 +484,7 @@
 
 mod bloodloss;
 mod leafcut;
+mod leafcut2;
 mod leafcut3;
 mod kerosene;
 mod fatalblow;
@@ -926,6 +927,7 @@ use crate::gameserver::appserver::skills::ragebreak::{execute_player_rage_break,
 use crate::gameserver::appserver::skills::flash::{execute_player_flash, is_flash_dispatch};
 use crate::gameserver::appserver::skills::swallow::{execute_player_swallow, is_swallow_dispatch};
 use crate::gameserver::appserver::skills::leafcut::{execute_player_leaf_cut, is_leaf_cut_dispatch};
+use crate::gameserver::appserver::skills::leafcut2::{execute_player_leaf_cut_2, is_leaf_cut_2_dispatch};
 use crate::gameserver::appserver::skills::leafcut3::{execute_player_leaf_cut_3, is_leaf_cut_3_dispatch};
 use crate::gameserver::appserver::skills::jucut::{execute_player_ju_cut, is_ju_cut_dispatch};
 use crate::gameserver::appserver::skills::lightningsword::{
@@ -1075,6 +1077,9 @@ use crate::gameserver::appserver::skills::bloodlossstate::{
 };
 use crate::gameserver::appserver::skills::leafcutstate::{
     LeafCutState, LeafCutStateTick, send_leaf_cut_state_visual,
+};
+use crate::gameserver::appserver::skills::leafcutstate2::{
+    LeafCutState2, LEAF_CUT_2_STATE_ID, send_leaf_cut_2_state_visual,
 };
 use crate::gameserver::appserver::skills::leafcutstate3::{
     LeafCutState3, LEAF_CUT_3_STATE_ID, send_leaf_cut_3_state_visual,
@@ -26492,6 +26497,7 @@ impl CGame {
                 crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
                     self.update_player_leaf_cut_state(player_id, runtime)
                 }
+                LEAF_CUT_2_STATE_ID => self.update_player_leaf_cut_2_state(player_id, runtime),
                 LEAF_CUT_3_STATE_ID => self.update_player_leaf_cut_3_state(player_id, runtime),
                 crate::gameserver::appserver::skills::kerosenestate::KEROSENE_STATE_ID => self.update_player_kerosene_state(player_id, runtime),
                 _ => false,
@@ -37166,6 +37172,37 @@ impl CGame {
         }
     }
 
+    pub(crate) fn replace_leaf_cut_2_state(
+        &mut self,
+        region_id: i32,
+        target: ShapeIdentity,
+        state: LeafCutState2,
+    ) -> Option<(Option<LeafCutState2>, ShapeIdentity, i32, i32)> {
+        match target.object_type {
+            PLAYER_TYPE => {
+                let player = self.find_player_mut(target.id)?;
+                let identity = player.shape().identity();
+                let x = player.shape().get_tile_x().ok()?;
+                let y = player.shape().get_tile_y().ok()?;
+                let previous = player.replace_leaf_cut_2_state(state);
+                Some((previous, identity, x, y))
+            }
+            MONSTER_TYPE => {
+                let mut owner = self.take_region_owner(region_id)?;
+                let result = owner.base_mut().find_monster_by_id_mut(target.id).and_then(|monster| {
+                    let identity = monster.move_shape().shape().identity();
+                    let x = monster.move_shape().shape().get_tile_x().ok()?;
+                    let y = monster.move_shape().shape().get_tile_y().ok()?;
+                    let previous = monster.move_shape_mut().replace_leaf_cut_2_state(state);
+                    Some((previous, identity, x, y))
+                });
+                self.restore_region_owner(owner);
+                result
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn replace_leaf_cut_3_state(
         &mut self,
         region_id: i32,
@@ -37244,6 +37281,7 @@ impl CGame {
             let concrete_flash = is_flash_dispatch(dispatch);
             let concrete_swallow = is_swallow_dispatch(dispatch);
             let concrete_leaf_cut = is_leaf_cut_dispatch(dispatch);
+            let concrete_leaf_cut_2 = is_leaf_cut_2_dispatch(dispatch);
             let concrete_leaf_cut_3 = is_leaf_cut_3_dispatch(dispatch);
             let concrete_ju_cut = is_ju_cut_dispatch(dispatch);
             let concrete_lightning_sword = is_lightning_sword_dispatch(dispatch);
@@ -37485,6 +37523,8 @@ impl CGame {
                 execute_player_swallow(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_leaf_cut {
                 execute_player_leaf_cut(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_leaf_cut_2 {
+                execute_player_leaf_cut_2(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_leaf_cut_3 {
                 execute_player_leaf_cut_3(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_ju_cut {
@@ -42421,6 +42461,9 @@ impl CGame {
                         }
                         crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
                             let _ = self.update_monster_leaf_cut_state(region_id, monster_id, runtime);
+                        }
+                        LEAF_CUT_2_STATE_ID => {
+                            let _ = self.update_monster_leaf_cut_2_state(region_id, monster_id, runtime);
                         }
                         LEAF_CUT_3_STATE_ID => {
                             let _ = self.update_monster_leaf_cut_3_state(region_id, monster_id, runtime);

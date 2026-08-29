@@ -88,6 +88,7 @@ use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
 use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
+use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_ID};
 use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::bossbluefurystate::{
@@ -549,6 +550,7 @@ pub(crate) struct CanonicalStateStorage {
     blind_state_order: IndexSet<u32>,
     blood_loss_state: Option<BloodLossState>,
     leaf_cut_state: Option<LeafCutState>,
+    leaf_cut_2_state: Option<LeafCutState2>,
     leaf_cut_3_state: Option<LeafCutState3>,
     kerosene_state: Option<KeroseneState>,
     swordship_states: Vec<SwordshipState>,
@@ -817,6 +819,7 @@ impl CMoveShape {
         self.blind_state_order.clear();
         self.blood_loss_state = None;
         self.leaf_cut_state = None;
+        self.leaf_cut_2_state = None;
         self.leaf_cut_3_state = None;
         self.kerosene_state = None;
         self.wuxing_states.clear();
@@ -872,6 +875,7 @@ impl CMoveShape {
             || self.state_storage.blood_loss_state.is_some()
             || self.state_storage.kerosene_state.is_some()
             || self.state_storage.leaf_cut_state.is_some()
+            || self.state_storage.leaf_cut_2_state.is_some()
             || self.state_storage.leaf_cut_3_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
@@ -1073,6 +1077,10 @@ impl CMoveShape {
             self.leaf_cut_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let leaf_cut_2 = usize::from(
+            self.leaf_cut_2_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let leaf_cut_3 = usize::from(
             self.leaf_cut_3_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -1123,6 +1131,7 @@ impl CMoveShape {
             .saturating_add(knight_cut)
             .saturating_add(blood_loss)
             .saturating_add(leaf_cut)
+            .saturating_add(leaf_cut_2)
             .saturating_add(leaf_cut_3)
             .saturating_add(kerosene)
             .saturating_add(battle_fairy_attributes)
@@ -1222,6 +1231,9 @@ impl CMoveShape {
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .leaf_cut_state
+                .is_some_and(|state| state.skill_id() == state_id)
+            || self
+                .leaf_cut_2_state
                 .is_some_and(|state| state.skill_id() == state_id)
             || self
                 .leaf_cut_3_state
@@ -2009,6 +2021,29 @@ impl CMoveShape {
         state.update_serialized_runtime(&mut self.ex_states, now_ms);
         self.leaf_cut_state = Some(state);
         Some(state)
+    }
+
+    pub(crate) fn replace_leaf_cut_2_state(
+        &mut self,
+        state: LeafCutState2,
+    ) -> Option<LeafCutState2> {
+        self.periodic_attack_order.insert(LEAF_CUT_2_STATE_ID);
+        self.leaf_cut_2_state.replace(state)
+    }
+
+    pub(crate) fn take_leaf_cut_2_state_for_ai(&mut self) -> Option<LeafCutState2> {
+        self.leaf_cut_2_state.take()
+    }
+
+    pub(crate) fn restore_leaf_cut_2_state_after_ai(&mut self, state: LeafCutState2) {
+        debug_assert!(self.leaf_cut_2_state.is_none());
+        self.leaf_cut_2_state = Some(state);
+    }
+
+    pub(crate) fn finish_leaf_cut_2_state(&mut self) {
+        self.leaf_cut_2_state = None;
+        self.periodic_attack_order.shift_remove(&LEAF_CUT_2_STATE_ID);
+        self.curable_state_order.shift_remove(&LEAF_CUT_2_STATE_ID);
     }
 
     pub(crate) fn replace_leaf_cut_3_state(

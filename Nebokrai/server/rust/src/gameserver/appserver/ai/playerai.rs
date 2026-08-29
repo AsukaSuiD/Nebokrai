@@ -192,6 +192,8 @@ pub(crate) struct CPlayerAI {
     swallow_last_used_ms: u32,
     leaf_cut: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     leaf_cut_last_used_ms: u32,
+    leaf_cut_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    leaf_cut_2_last_used_ms: u32,
     leaf_cut_3: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     leaf_cut_3_last_used_ms: u32,
     kerosene: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -385,6 +387,7 @@ impl CPlayerAI {
         self.flash = None;
         self.swallow = None;
         self.leaf_cut = None;
+        self.leaf_cut_2 = None;
         self.leaf_cut_3 = None;
         self.kerosene = None;
         self.ignition = None;
@@ -648,6 +651,10 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение периодического удара завершено");
         }
+        if let Some(mut execution) = self.leaf_cut_2.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение второго периодического удара завершено");
+        }
         if let Some(mut execution) = self.leaf_cut_3.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение третьего периодического удара завершено");
@@ -859,6 +866,7 @@ impl CPlayerAI {
         self.flash = None;
         self.swallow = None;
         self.leaf_cut = None;
+        self.leaf_cut_2 = None;
         self.leaf_cut_3 = None;
         self.kerosene = None;
         self.ignition = None;
@@ -1278,6 +1286,11 @@ impl CPlayerAI {
     pub(crate) fn leaf_cut_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut.as_mut() }
     pub(crate) const fn leaf_cut_last_used_ms(&self) -> u32 { self.leaf_cut_last_used_ms }
     pub(crate) const fn mark_leaf_cut_used(&mut self, now_ms: u32) { self.leaf_cut_last_used_ms = now_ms; }
+    pub(crate) const fn leaf_cut_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_2 }
+    pub(crate) const fn begin_leaf_cut_2(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.leaf_cut_2 = Some(state); }
+    pub(crate) fn leaf_cut_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_2.as_mut() }
+    pub(crate) const fn leaf_cut_2_last_used_ms(&self) -> u32 { self.leaf_cut_2_last_used_ms }
+    pub(crate) const fn mark_leaf_cut_2_used(&mut self, now_ms: u32) { self.leaf_cut_2_last_used_ms = now_ms; }
     pub(crate) const fn leaf_cut_3(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_3 }
     pub(crate) const fn begin_leaf_cut_3(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.leaf_cut_3 = Some(state); }
     pub(crate) fn leaf_cut_3_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_3.as_mut() }

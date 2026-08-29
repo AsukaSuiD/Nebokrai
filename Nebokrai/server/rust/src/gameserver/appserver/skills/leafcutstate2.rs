@@ -1,143 +1,94 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое периодическое состояние `CLeafCutState2` (`0x80`).
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/skills/leafcutstate2.cpp`. Формула, два чтения часов и два
+//! вызова MSVCRT RNG совпадают с подтверждённой основой `CLeafCutState`, но
+//! состояние имеет отдельную идентичность и lifecycle. В этом классе не
+//! подтверждён собственный DB-кодек, поэтому runtime-состояние не выдумывает
+//! сериализацию и хранится отдельным каноническим slot-ом.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp
+use super::leafcutstate::{LeafCutState, LeafCutStateTick};
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
-// ============================================================================
-// FUNCTION: CLeafCutState2::CLeafCutState2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:19
-// RVA: 0x001F04E0
-// ADDRESS: 005f04e0
-// PROTOTYPE: undefined __thiscall CLeafCutState2(tagMasterInfo * param_1, ulong param_2, ulong param_3, float param_4, float param_5, ushort param_6, ushort param_7, ushort param_8, ushort param_9)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+pub(crate) const LEAF_CUT_2_STATE_ID: u32 = 0x80;
+const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
-// ============================================================================
-// FUNCTION: CLeafCutState2::CLeafCutState2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:37
-// RVA: 0x001F05C0
-// ADDRESS: 005f05c0
-// PROTOTYPE: undefined __thiscall CLeafCutState2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LeafCutState2(LeafCutState);
 
-// ============================================================================
-// FUNCTION: CLeafCutState2::~CLeafCutState2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:54
-// RVA: 0x001F0660
-// ADDRESS: 005f0660
-// PROTOTYPE: void __thiscall ~CLeafCutState2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl LeafCutState2 {
+    #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют состоянию EXE")]
+    pub(crate) const fn new(
+        master: MasterInfo,
+        started_at_ms: u32,
+        keep_time_ms: u32,
+        frequency_ms: u32,
+        damage_factor: f32,
+        damage_modifier: f32,
+        minimum_attack: u16,
+        maximum_attack: u16,
+        element_attack: u16,
+        soul_attack: u16,
+    ) -> Self {
+        Self(LeafCutState::new_with_id(
+            LEAF_CUT_2_STATE_ID,
+            master,
+            started_at_ms,
+            keep_time_ms,
+            frequency_ms,
+            damage_factor,
+            damage_modifier,
+            minimum_attack,
+            maximum_attack,
+            element_attack,
+            soul_attack,
+        ))
+    }
 
-// ============================================================================
-// FUNCTION: CLeafCutState2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:80
-// RVA: 0x001F06D0
-// ADDRESS: 005f06d0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+    pub(crate) const fn skill_id(self) -> u32 { LEAF_CUT_2_STATE_ID }
+    pub(crate) const fn master(self) -> MasterInfo { self.0.master() }
+    pub(crate) const fn client_time(self, now_ms: u32) -> i32 { self.0.client_time(now_ms) }
+    pub(crate) fn tick(
+        &mut self,
+        lifetime_now_ms: u32,
+        frequency_now_ms: u32,
+        target_dead: bool,
+        critical_chance: u16,
+        critical_rate: f32,
+        random: &mut dyn FnMut(i32) -> i32,
+    ) -> LeafCutStateTick {
+        self.0.tick(
+            lifetime_now_ms,
+            frequency_now_ms,
+            target_dead,
+            critical_chance,
+            critical_rate,
+            random,
+        )
+    }
+}
 
-// ============================================================================
-// FUNCTION: CLeafCutState2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:94
-// RVA: 0x001F0770
-// ADDRESS: 005f0770
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLeafCutState2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:66
-// RVA: 0x001F08D0
-// ADDRESS: 005f08d0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLeafCutState2VisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:308
-// RVA: 0x001F0970
-// ADDRESS: 005f0970
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLeafCutState2::CalculateAttackPower
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:174
-// RVA: 0x001F0AB0
-// ADDRESS: 005f0ab0
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, tagAttackInformation * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLeafCutState2::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\leafcutstate2.cpp:124
-// RVA: 0x001F0CC0
-// ADDRESS: 005f0cc0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+pub(crate) fn send_leaf_cut_2_state_visual(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: LeafCutState2,
+    begin: bool,
+    now_ms: u32,
+) {
+    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_ms));
+        message.add_long(0);
+    }
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
