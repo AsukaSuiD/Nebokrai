@@ -589,7 +589,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_BF_MODULE, GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_STRENGH, GAP_CIQING_PROPERTY1,
     GAP_DAKONG_1, GAP_EQUIP_ACTIVE, GAP_EQUIP_STATE, GAP_GOODS_AUCTION_SCALE, GAP_GOODS_BIND,
     GAP_GOODS_PACKAGE_EXTENTION, GAP_ITEM_QUALITY, GAP_PARTICULAR_ATTRIBUTE,
-    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_DAMAGE_LEVEL, GAP_BF_SPRITE, GOODS_TYPE_CONSUMABLE,
+    GAP_ROLE_MINIMUM_LEVEL_LIMIT, GAP_WEAPON_DAMAGE_LEVEL, GOODS_TYPE_CONSUMABLE,
     GOODS_TYPE_EQUIPMENT, GOODS_TYPE_USELESS,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
@@ -1132,16 +1132,18 @@ use crate::gameserver::appserver::skills::thunderphalanx::{
     calculate_owned_thunder_attack, thunder_targets, CThunderPhalanx, ThunderPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunder2::{
-    LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY, execute_battle_fairy_leiming2,
+    LEIMING2_SKILL_ID, execute_battle_fairy_leiming2,
 };
 use crate::gameserver::appserver::skills::thunder2phalanx::{
-    CLeimingPhalanx2, Leiming2PhalanxTick,
+    calculate_owned_leiming2_attack, leiming2_targets, CLeimingPhalanx2,
+    Leiming2PhalanxTick,
 };
 use crate::gameserver::appserver::skills::tianhuo::{
-    TIANHUO_SKILL_ID, TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY, execute_battle_fairy_tianhuo,
+    TIANHUO_SKILL_ID, execute_battle_fairy_tianhuo,
 };
 use crate::gameserver::appserver::skills::tianhuophalanx::{
-    CTianhuoPhalanx, TianhuoPhalanxTick,
+    calculate_owned_tianhuo_attack, tianhuo_targets, CTianhuoPhalanx,
+    TianhuoPhalanxTick,
 };
 use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
@@ -40372,8 +40374,8 @@ impl CGame {
             SummonedSkillShape::SnowStorm(phalanx) => {
                 calculate_owned_snow_storm_attack(self, phalanx)
             }
-            SummonedSkillShape::Leiming2(phalanx) => self.calculate_leiming2_attack(phalanx),
-            SummonedSkillShape::Tianhuo(phalanx) => self.calculate_tianhuo_attack(phalanx),
+            SummonedSkillShape::Leiming2(phalanx) => calculate_owned_leiming2_attack(self, phalanx),
+            SummonedSkillShape::Tianhuo(phalanx) => calculate_owned_tianhuo_attack(self, phalanx),
             SummonedSkillShape::SpiderMist(_) => None,
             SummonedSkillShape::Weak(_) => None,
             SummonedSkillShape::YinYang(phalanx) => {
@@ -41440,7 +41442,7 @@ impl CGame {
             SummonedSkillShape::Leiming2(leiming2),
         ) = (tick, &phalanx)
         {
-            for target in self.leiming2_targets(region_id, leiming2) {
+            for target in leiming2_targets(self, region_id, leiming2) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
                         &phalanx,
@@ -41469,7 +41471,7 @@ impl CGame {
             SummonedSkillShape::Tianhuo(tianhuo),
         ) = (tick, &phalanx)
         {
-            for target in self.tianhuo_targets(region_id, tianhuo) {
+            for target in tianhuo_targets(self, region_id, tianhuo) {
                 let applied = match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
                         &phalanx,

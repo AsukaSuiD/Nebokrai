@@ -10,7 +10,8 @@
 //! областей, но его реальный вызывающий владелец пока не достигнут, поэтому
 //! этот неподключённый путь здесь не подменён придуманным вызовом.
 
-use super::thunder2::LEIMING2_SKILL_ID;
+use super::thunder2::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY};
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -19,7 +20,11 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
+
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Leiming2PhalanxTick {
@@ -52,6 +57,36 @@ pub(crate) struct CLeimingPhalanx2 {
     maximum_attack: i32,
     _element_modifier: i32,
     _cch: i32,
+}
+
+pub(crate) fn leiming2_targets(game: &CGame, region_id: i32, phalanx: &CLeimingPhalanx2) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (Ok(tile_x), Ok(tile_y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
+    let (area_width, area_height) = game.area_dimensions();
+    let mut shapes = Vec::new();
+    if region.get_shapes(tile_x, tile_y, area_width, area_height, game, &mut shapes).is_err() { return Vec::new() }
+    let mut targets = Vec::new();
+    for shape in shapes {
+        if shape.identity == phalanx.shape().identity()
+            || (shape.identity.object_type == phalanx.master().master_type && shape.identity.id == phalanx.master().master_id)
+            || !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
+            || targets.contains(&shape.identity)
+        { continue }
+        targets.push(shape.identity);
+    }
+    targets
+}
+
+pub(crate) fn calculate_owned_leiming2_attack(game: &mut CGame, phalanx: &CLeimingPhalanx2) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+    let master = phalanx.master();
+    if master.master_type != PLAYER_TYPE || master.master_id == 0 { return None }
+    let player = game.find_player(master.master_id)?;
+    let sprite = player.war_soul_goods(game.goods_factory())?.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1);
+    let combat = player.combat_properties();
+    let occupation = player.occupation();
+    let attacker_level = player.level();
+    let target_damage_factor = game.skill_base_properties(LEIMING2_SKILL_ID, phalanx.skill_level())?.query_property(LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY);
+    Some(phalanx.calculate_attack(sprite, combat, occupation, attacker_level, target_damage_factor, &mut |maximum| game.skill_random_below(maximum)))
 }
 
 impl CLeimingPhalanx2 {
