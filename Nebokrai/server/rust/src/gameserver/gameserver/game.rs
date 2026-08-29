@@ -39913,14 +39913,23 @@ impl CGame {
     }
 
     /// Разрешает подтверждённый виртуальный клиентский сериализатор формы у
-    /// канонического владельца региона. Сейчас полностью достигнута часть
-    /// семейства `SummonedSkillShape`; остальные категории не имитируются.
+    /// канонического владельца региона. Достигнуты `CNpc` и семейство
+    /// `SummonedSkillShape`; остальные категории не имитируются.
     pub(crate) fn serialize_owned_shape_snapshot(
         &self,
         region_id: i32,
         identity: ShapeIdentity,
         now_milliseconds: impl FnMut() -> u32,
     ) -> Option<(ShapeIdentity, Vec<u8>)> {
+        if identity.object_type == NPC_TYPE {
+            let npc = self.find_region(region_id)?.base().find_npc_by_id(identity.id)?;
+            let canonical_identity = npc.move_shape().shape().identity();
+            if canonical_identity != identity {
+                return None;
+            }
+            let payload = npc.encode_client_snapshot(true)?;
+            return Some((canonical_identity, payload));
+        }
         if identity.object_type != SUMMON_SHAPE_TYPE {
             return None;
         }

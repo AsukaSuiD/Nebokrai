@@ -12,10 +12,12 @@
 //! owner-а в `baseobject.rs`. `Vec<u8>` сохраняет legacy script без UTF-8.
 //! Player interaction использует owned script path и immutable shape-view;
 //! NPC virtual figure для distance остаётся нулевой, как достигнутый base shape.
+//! Клиентский снимок `CNpc::AddToByteArray` точно совпадает с базовым shape-
+//! префиксом и формируется здесь, у владельца конкретной категории.
 //! `AI` lifetime predicate вызывается из row-major active-shape scan; `CGame`
 //! публикует `0xBF504(type,id,0)` и сразу удаляет NPC из region owner-а, как
 //! virtual `DeleteChildObject` исходника. Полная shape serialization и Talk
-//! остаются RAW ниже до подключения соответствующих owner-цепочек.
+//! для остальных категорий и Talk остаются RAW до подключения их цепочек.
 
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{ShapeFigure, ShapeView};
@@ -84,6 +86,18 @@ impl CNpc {
             pos_y_bits: shape.get_pos_y().to_bits(),
             figure: ShapeFigure::default(),
         })
+    }
+
+    /// Точный виртуальный `CNpc::AddToByteArray`: NPC не добавляет полей к
+    /// базовому shape-префиксу. Параметр дочерних данных сохраняется для
+    /// контракта виртуальной цепочки, хотя достигнутые базовые owners его не
+    /// используют.
+    pub(crate) fn encode_client_snapshot(&self, include_child: bool) -> Option<Vec<u8>> {
+        let mut payload = Vec::new();
+        self.move_shape
+            .shape()
+            .encode_to_byte_array(&mut payload, include_child)
+            .then_some(payload)
     }
 
     /// Факты для виртуального `CMoveShape::SetTileXY`: NPC всегда занимает
@@ -155,20 +169,6 @@ impl CNpc {
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.h
-
-// ============================================================================
-// FUNCTION: CNpc::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:27
-// RVA: 0x001D3DC0
-// ADDRESS: 005d3dc0
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CNpc::AI

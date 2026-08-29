@@ -15,9 +15,9 @@
 //! payload сохранён. Полиморфный `SetTileXY` достигнутых игроков, монстров, NPC
 //! и призванных форм применяется их каноническими владельцами региона после
 //! wire. Внешний resolve не сохраняется: все production-вызовы `add_object`
-//! принадлежат достигнутым owner-ам; виртуальные сериализаторы несуммонных
-//! фигур остаются узкой границей исполнения.
-//! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы всех
+//! принадлежат достигнутым owner-ам; виртуальные сериализаторы недостигнутых
+//! категорий фигур остаются узкой границей исполнения.
+//! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы NPC и всех
 //! достигнутых призванных форм и не уводит их в параллельный runtime callback.
 //! Синхронные отправки не
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
@@ -41,6 +41,7 @@ const QUEST_MOVE_STEP: u32 = 0x0008_f903;
 const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
+const NPC_TYPE: i32 = 500;
 const SUMMON_SHAPE_TYPE: i32 = 1000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -308,13 +309,13 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             };
             let snapshot = match game.find_shape_in_region(region_id, identity) {
                 Some(shape) => {
-                    if identity.object_type == SUMMON_SHAPE_TYPE {
+                    if matches!(identity.object_type, NPC_TYPE | SUMMON_SHAPE_TYPE) {
                         let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
                             region_id,
                             identity,
                             || runtime.now_milliseconds(),
                         ) else {
-                            trace!(player_id, region_id, target_id = identity.id, "снимок призванной формы не сериализован владельцем");
+                            trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок формы не сериализован владельцем");
                             return Some(Ok(()));
                         };
                         ShapeSnapshot { identity, payload }
