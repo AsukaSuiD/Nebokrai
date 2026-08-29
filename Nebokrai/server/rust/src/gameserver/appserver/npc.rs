@@ -14,6 +14,8 @@
 //! NPC virtual figure для distance остаётся нулевой, как достигнутый base shape.
 //! Клиентский снимок `CNpc::AddToByteArray` точно совпадает с базовым shape-
 //! префиксом и формируется здесь, у владельца конкретной категории.
+//! Сценарный `NpcTalk` также формирует свой точный `0xBF801` здесь; `CGame`
+//! оставляет за собой только spatial delivery вокруг принадлежащего региону NPC.
 //! `AI` lifetime predicate вызывается из row-major active-shape scan; `CGame`
 //! публикует `0xBF504(type,id,0)` и сразу удаляет NPC из region owner-а, как
 //! virtual `DeleteChildObject` исходника. Полная shape serialization и Talk
@@ -21,6 +23,7 @@
 
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{ShapeFigure, ShapeView};
+use crate::nets::netserver::message::CMessage;
 
 const NPC_TYPE: i32 = 500;
 
@@ -86,6 +89,22 @@ impl CNpc {
             pos_y_bits: shape.get_pos_y().to_bits(),
             figure: ShapeFigure::default(),
         })
+    }
+
+    /// Формирует точный кадр сценарной функции `3301 / NpcTalk`. Переданное
+    /// сценарием имя является частью wire и намеренно не заменяется именем
+    /// объекта из region storage.
+    pub(crate) fn build_script_talk_message(&self, name: &[u8], text: &[u8]) -> CMessage {
+        let identity = self.move_shape.shape().identity();
+        let mut message = CMessage::new(0x000b_f801);
+        message.add_long(0);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.base_mut().add(name);
+        message.add_byte(0);
+        message.base_mut().add(text);
+        message.add_byte(0);
+        message
     }
 
     /// Точный виртуальный `CNpc::AddToByteArray`: NPC не добавляет полей к

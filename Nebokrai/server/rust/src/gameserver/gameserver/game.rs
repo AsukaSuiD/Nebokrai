@@ -32229,9 +32229,8 @@ impl CGame {
         self.restore_region_owner(owner);
     }
 
-    /// `3301 / NpcTalk` сохраняет переданное вызывающей стороной отображаемое
-    /// имя и публикует один кадр локального чата через обычную рассылку вокруг
-    /// игрового объекта.
+    /// `3301 / NpcTalk` получает принадлежащего региону NPC и доставляет
+    /// сформированный его владельцем кадр через обычную рассылку вокруг формы.
     pub(crate) fn script_npc_talk(
         &mut self,
         region_id: i32,
@@ -32243,14 +32242,7 @@ impl CGame {
         let result = (|| {
             let npc = owner.base().find_npc_by_id(npc_id)?;
             let shape = npc.move_shape().shape();
-            let mut message = CMessage::new(0x000b_f801);
-            message.add_long(0);
-            message.add_long(shape.identity().object_type);
-            message.add_long(shape.identity().id);
-            message.base_mut().add(name);
-            message.add_byte(0);
-            message.base_mut().add(text);
-            message.add_byte(0);
+            let message = npc.build_script_talk_message(name, text);
             let runtime = GameServerAroundRuntime::new(
                 self,
                 &self.session_factory,
