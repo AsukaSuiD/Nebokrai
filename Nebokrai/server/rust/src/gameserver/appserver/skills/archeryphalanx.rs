@@ -10,6 +10,7 @@
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{
@@ -72,6 +73,35 @@ impl CArcheryPhalanx {
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
     pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
+
+    /// Точный клиентский `AddToByteArray`: параметры снаряда предшествуют
+    /// общему префиксу `CShape`, а вычисление оставшегося времени сохраняет
+    /// два независимых чтения часов в незавершённой ветви.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        let first_now = now_milliseconds();
+        let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first_now {
+            0
+        } else {
+            self.lifetime_ms
+                .wrapping_sub(now_milliseconds())
+                .wrapping_add(self.started_at_ms)
+        };
+        let mut payload = Vec::new();
+        {
+            let mut writer = LegacyWriter::new(&mut payload);
+            writer.write_i32(super::archery::ARCHERY_SKILL_ID as i32);
+            writer.write_i32(self.skill_level);
+            writer.write_i32(self.target.object_type);
+            writer.write_i32(self.target.id);
+            writer.write_u32(remained);
+        }
+        self.shape
+            .encode_to_byte_array(&mut payload, true)
+            .then_some(payload)
+    }
 
     pub(crate) fn tick(
         &mut self,
@@ -228,28 +258,13 @@ pub(crate) fn calculate_archery_attack(
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сохранён только не подключённый legacy byte codec снаряда.
+// Сохранён только не подключённый декодер снаряда.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\archeryphalanx.cpp
-
-// ============================================================================
-// FUNCTION: CArcheryPhalanx::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\archeryphalanx.cpp:270
-// RVA: 0x001E47A0
-// ADDRESS: 005e47a0
-// PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // ============================================================================
 // FUNCTION: CArcheryPhalanx::DecordFromByteArray

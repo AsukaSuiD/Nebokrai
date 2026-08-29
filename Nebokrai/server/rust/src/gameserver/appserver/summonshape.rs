@@ -139,11 +139,11 @@ impl SummonedSkillShape {
         mut now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         match self {
-            Self::Archery(_)
-            | Self::BaseMagic(_)
+            Self::BaseMagic(_)
             | Self::BattleFairyBaseMagic(_)
             | Self::FireBolt(_)
             | Self::HeartlessArrow(_) => None,
+            Self::Archery(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::LightingArrow(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)
             }
