@@ -816,6 +816,14 @@ impl CMonster {
         self.base_ai.active_attack_pending()
     }
 
+    pub(crate) fn begin_active_ai_move(&mut self, delay_ms: u32, now_ms: u32) {
+        self.base_ai.begin_active_move(delay_ms, now_ms);
+    }
+
+    pub(crate) fn advance_active_ai_move(&mut self, now_ms: u32) -> bool {
+        self.base_ai.advance_active_move(now_ms)
+    }
+
     pub(crate) fn finish_active_ai_attack(&mut self, now_ms: u32) {
         self.base_ai.finish_active_attack(now_ms);
     }

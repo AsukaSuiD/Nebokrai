@@ -9,10 +9,11 @@
 //! war-soul.
 //!
 //! `VecDeque` заменяет внутренности `std::queue<std::deque<...>>`, сохраняя
-//! FIFO и `push_back`. Runtime-clock передаётся точным `now_ms` в момент
-//! вызова: так Linux-owner не копирует `timeGetTime`, а `u32` сохраняет его
-//! wrapping. `STIFFEN/DIED/OPEN/DEFENSE` всегда идут в passive, остальные —
-//! в war-soul при любом ненулевом флаге и иначе в active.
+//! FIFO и `push_back`. Время среды выполнения передаётся точным `now_ms` в
+//! момент вызова: так владелец Linux не копирует `timeGetTime`, а `u32`
+//! сохраняет исходное переполнение. `STIFFEN/DIED/OPEN/DEFENSE` всегда идут
+//! в `passive_actions`, остальные — в `active_war_soul_actions` при любом
+//! ненулевом флаге и иначе в `active_actions`.
 //!
 //! Состояние сна также принадлежит этому владельцу: `Hibernate` запоминает
 //! оборачивающийся счётчик времени, а `WakeUp` один раз вычисляет интервал сна.
@@ -167,6 +168,33 @@ impl CBaseAI {
         self.active_actions.front().is_some_and(|event| {
             event.action == AiShapeAction::Attack && event.handling == 0
         })
+    }
+
+    /// Ставит завершённый пространственный шаг в ту же FIFO-очередь, через
+    /// которую исходный `MoveTo` удерживал дальнейшее расписание.
+    pub(crate) fn begin_active_move(&mut self, delay_ms: u32, now_ms: u32) {
+        self.add_ai_event(AiShapeAction::Move, delay_ms, 0, now_ms);
+    }
+
+    /// Выполняет общий `OnMoving`, который возвращает единицу, и сохраняет
+    /// исходную границу задержки уже совершённого шага. Производные реакции
+    /// лучника, охранника и питомца остаются отдельными проходами владельцев.
+    pub(crate) fn advance_active_move(&mut self, now_ms: u32) -> bool {
+        let Some(event) = self.active_actions.front_mut() else {
+            return false;
+        };
+        if event.action != AiShapeAction::Move {
+            return false;
+        }
+        if event.handling == 0 {
+            event.handling = 1;
+        }
+        if event.handling == 1
+            && now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms
+        {
+            self.active_actions.pop_front();
+        }
+        true
     }
 
     /// Снимает завершённый `ASA_ATTACK` после того, как владелец навыка уже
@@ -493,7 +521,8 @@ impl CBaseAI {
 // FUNCTION: CBaseAI::ProcessActiveAction
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `CBaseAI::advance_active_stand` сохраняет достигнутую ветвь
-// `ASA_STAND`, `active_attack_pending` — продолжение `ASA_ATTACK`, а
+// `ASA_STAND`, `advance_active_move` — задержку `ASA_MOVE`,
+// `active_attack_pending` — продолжение `ASA_ATTACK`, а
 // `finish_active_change_skill` — отдельный такт `ASA_CHANGE_SKILL`, их
 // FIFO-позицию, handling и границу задержки.
 // COMPONENT: GameServer
@@ -509,7 +538,10 @@ impl CBaseAI {
 
 // ============================================================================
 // FUNCTION: CBaseAI::ProcessActiveActionWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: общий `CMonsterAI::Tracing` выполняет пространственный шаг и
+// ставит `ASA_MOVE` с подтверждённой длительностью в каноническую FIFO-очередь.
+// Остались другие виртуальные варианты движения и реакции производных `OnMoving`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:612

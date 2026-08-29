@@ -16,7 +16,7 @@
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
-use crate::gameserver::appserver::skills::baseattack::{real_distance, time_reached};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
@@ -153,7 +153,6 @@ pub(crate) fn approach_attack_range(
         tamed,
         pet_action,
         moveable,
-        trace_move_delay,
         speed,
         stop_frame,
     )) = region.find_monster_by_id(monster_id).and_then(|monster| {
@@ -170,7 +169,6 @@ pub(crate) fn approach_attack_range(
             monster.is_tamed(),
             monster.pet_action(),
             monster.move_shape().is_moveable(),
-            monster.trace_move_delay(),
             pet.map_or(monster.move_shape().shape().get_speed(), |pet| {
                 f32::from_bits(pet.speed_bits)
             }),
@@ -186,9 +184,6 @@ pub(crate) fn approach_attack_range(
         .iter()
         .any(|cell| cell.2 == 2);
     if (maximum_distance == 0 || distance <= maximum_distance as i32) && !path_blocked {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_trace_move_delay();
-        }
         return true;
     }
     if tamed && pet_action == 2 {
@@ -208,10 +203,7 @@ pub(crate) fn approach_attack_range(
         }
         return false;
     }
-    if !moveable
-        || trace_move_delay
-            .is_some_and(|delay| !time_reached(now_ms, delay.started_at_ms, delay.delay_ms))
-    {
+    if !moveable {
         return false;
     }
 
@@ -273,7 +265,7 @@ pub(crate) fn approach_attack_range(
             0
         };
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.begin_trace_move_delay(now_ms, delay_ms);
+            monster.begin_active_ai_move(delay_ms, now_ms);
         }
     }
     false
