@@ -989,8 +989,14 @@ use crate::gameserver::appserver::skills::swallow::{
 use crate::gameserver::appserver::skills::leafcut::{
     cancel_player_leaf_cut, execute_player_leaf_cut, is_leaf_cut_dispatch, LEAF_CUT_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::leafcut2::{execute_player_leaf_cut_2, is_leaf_cut_2_dispatch};
-use crate::gameserver::appserver::skills::leafcut3::{execute_player_leaf_cut_3, is_leaf_cut_3_dispatch};
+use crate::gameserver::appserver::skills::leafcut2::{
+    cancel_player_leaf_cut_2, execute_player_leaf_cut_2, is_leaf_cut_2_dispatch,
+    LEAF_CUT_2_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::leafcut3::{
+    cancel_player_leaf_cut_3, execute_player_leaf_cut_3, is_leaf_cut_3_dispatch,
+    LEAF_CUT_3_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::jucut::{execute_player_ju_cut, is_ju_cut_dispatch};
 use crate::gameserver::appserver::skills::lightningsword::{
     execute_player_lightning_sword, is_lightning_sword_dispatch,
@@ -37448,6 +37454,8 @@ impl CGame {
                 | FLASH_SKILL_ID
                 | SWALLOW_SKILL_ID
                 | LEAF_CUT_SKILL_ID
+                | LEAF_CUT_2_SKILL_ID
+                | LEAF_CUT_3_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37489,6 +37497,8 @@ impl CGame {
             FLASH_SKILL_ID => player_ai.flash().is_some(),
             SWALLOW_SKILL_ID => player_ai.swallow().is_some(),
             LEAF_CUT_SKILL_ID => player_ai.leaf_cut().is_some(),
+            LEAF_CUT_2_SKILL_ID => player_ai.leaf_cut_2().is_some(),
+            LEAF_CUT_3_SKILL_ID => player_ai.leaf_cut_3().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37566,6 +37576,12 @@ impl CGame {
             FLASH_SKILL_ID => cancel_player_flash(self, player_id, &mut player_ai, runtime),
             SWALLOW_SKILL_ID => cancel_player_swallow(self, player_id, &mut player_ai, runtime),
             LEAF_CUT_SKILL_ID => cancel_player_leaf_cut(self, player_id, &mut player_ai, runtime),
+            LEAF_CUT_2_SKILL_ID => {
+                cancel_player_leaf_cut_2(self, player_id, &mut player_ai, runtime)
+            }
+            LEAF_CUT_3_SKILL_ID => {
+                cancel_player_leaf_cut_3(self, player_id, &mut player_ai, runtime)
+            }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
