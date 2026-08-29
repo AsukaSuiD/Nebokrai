@@ -172,7 +172,9 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
     let summon_started_at_ms = runtime.now_milliseconds();
     let mut phalanx = CSnowStormPhalanx::new(summon_id, master, summon_started_at_ms, lifetime_ms, skill_level, frequency_ms, minimum_attack, maximum_attack, element_modifier, target_count);
     phalanx.shape_mut().set_region_id(region_id);
-    let summoned = game.add_snow_storm_phalanx(region_id, phalanx, target_x, target_y, summon_started_at_ms, runtime).is_some_and(|result| result.is_ok());
+    let initialized = phalanx.initialize(target_x, target_y, &mut |maximum| game.skill_random_below(maximum));
+    let summoned = initialized
+        && game.add_snow_storm_phalanx(region_id, phalanx, target_x, target_y, summon_started_at_ms, runtime).is_some_and(|result| result.is_ok());
     if summoned { let _ = game.send_snow_storm_phalanx_entry(region_id, summon_id, runtime); }
     if let Some(execution) = player_ai.snow_storm_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);

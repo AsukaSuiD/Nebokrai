@@ -14,10 +14,13 @@ use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 const SCOPE_SIDE: i32 = 5;
 const SCOPE_AREA: u32 = 25;
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SnowStormPhalanxTick { Pending, Attack { sampled_at_ms: u32 }, Expired }
@@ -37,6 +40,55 @@ pub(crate) struct CSnowStormPhalanx {
     last_attack_ms: u32,
     attack_count: u32,
     cells: Vec<(i32, i32)>,
+}
+
+pub(crate) fn snow_storm_targets(
+    game: &CGame,
+    region_id: i32,
+    phalanx: &CSnowStormPhalanx,
+) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else {
+        return Vec::new();
+    };
+    let (area_width, area_height) = game.area_dimensions();
+    let mut targets = Vec::new();
+    for (x, y) in phalanx.current_cells() {
+        let mut shapes = Vec::new();
+        if region
+            .get_shapes(x, y, area_width, area_height, game, &mut shapes)
+            .is_err()
+        {
+            continue;
+        }
+        for shape in shapes {
+            if shape.identity == phalanx.shape().identity()
+                || (shape.identity.object_type == phalanx.master().master_type
+                    && shape.identity.id == phalanx.master().master_id)
+                || !matches!(shape.identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
+            {
+                continue;
+            }
+            targets.push(shape.identity);
+        }
+    }
+    targets
+}
+
+pub(crate) fn calculate_owned_snow_storm_attack(
+    game: &mut CGame,
+    phalanx: &CSnowStormPhalanx,
+) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+    let master = phalanx.master();
+    let (combat, occupation, level) = game.find_player(master.master_id).map(|player| {
+        (
+            player.combat_properties(),
+            player.occupation(),
+            player.level(),
+        )
+    })?;
+    Some(phalanx.calculate_attack(combat, occupation, level, &mut |maximum| {
+        game.skill_random_below(maximum)
+    }))
 }
 
 impl CSnowStormPhalanx {

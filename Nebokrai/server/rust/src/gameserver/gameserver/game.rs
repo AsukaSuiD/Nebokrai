@@ -1032,7 +1032,8 @@ use crate::gameserver::appserver::skills::snowstorm::{
     execute_player_snow_storm, is_snow_storm_target,
 };
 use crate::gameserver::appserver::skills::snowstormphalanx::{
-    CSnowStormPhalanx, SnowStormPhalanxTick,
+    calculate_owned_snow_storm_attack, snow_storm_targets, CSnowStormPhalanx,
+    SnowStormPhalanxTick,
 };
 use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
@@ -40362,7 +40363,7 @@ impl CGame {
                 calculate_owned_thunder_slash_attack(self, phalanx)
             }
             SummonedSkillShape::SnowStorm(phalanx) => {
-                self.calculate_snow_storm_attack(phalanx)
+                calculate_owned_snow_storm_attack(self, phalanx)
             }
             SummonedSkillShape::Leiming2(phalanx) => self.calculate_leiming2_attack(phalanx),
             SummonedSkillShape::Tianhuo(phalanx) => self.calculate_tianhuo_attack(phalanx),
@@ -41406,7 +41407,7 @@ impl CGame {
             SummonedSkillShape::SnowStorm(snow_storm),
         ) = (tick, &phalanx)
         {
-            for target in self.snow_storm_targets(region_id, snow_storm) {
+            for target in snow_storm_targets(self, region_id, snow_storm) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
                         &phalanx,
