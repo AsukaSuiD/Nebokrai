@@ -108,7 +108,9 @@ use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::strikestate::{
     STRIKE_STATE_BYTES, STRIKE_STATE_ID, StrikeState,
 };
-use crate::gameserver::appserver::skills::bloodlossstate::BloodLossState;
+use crate::gameserver::appserver::skills::bloodlossstate::{
+    BloodLossState, BLOOD_LOSS_STATE_BYTES,
+};
 use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
 use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_ID};
 use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
@@ -726,6 +728,9 @@ impl CMoveShape {
         if let Some(state) = self.agility_state_2 {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
+        if let Some(state) = self.blood_loss_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+        }
         for state in &self.defense_shields {
             match state {
                 DefenseShieldState::Mana(state) => {
@@ -859,6 +864,16 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::agility2::AGILITY_2_SKILL_ID))
             .and_then(|offset| AgilityState2::decode(&states, offset, 0).ok());
+        self.periodic_attack_order
+            .shift_remove(&super::skills::bloodloss::BLOOD_LOSS_SKILL_ID);
+        self.blood_loss_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(super::skills::bloodloss::BLOOD_LOSS_SKILL_ID))
+            .and_then(|offset| BloodLossState::decode(&states, offset, 0).ok());
+        if self.blood_loss_state.is_some() {
+            self.periodic_attack_order.insert(super::skills::bloodloss::BLOOD_LOSS_SKILL_ID);
+        }
         self.defense_shields.clear();
         self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
             match read_u32(&states, offset) {
@@ -2442,7 +2457,26 @@ impl CMoveShape {
         state: BloodLossState,
     ) -> Option<BloodLossState> {
         self.periodic_attack_order.insert(state.skill_id());
-        self.blood_loss_state.replace(state)
+        let previous = self.blood_loss_state.replace(state);
+        let serialized_exists = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state.skill_id()))
+            .is_some();
+        if previous.is_some() && serialized_exists {
+            update_known_state_record(
+                &mut self.ex_states,
+                state.skill_id(),
+                &state.encoded_for_install(),
+            );
+        } else if !serialized_exists {
+            self.append_serialized_state_record(&state.encoded_for_install());
+        }
+        previous
+    }
+
+    pub(crate) fn finish_blood_loss_state(&mut self, state: BloodLossState) {
+        self.periodic_attack_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), BLOOD_LOSS_STATE_BYTES);
     }
 
     pub(crate) fn replace_leaf_cut_state(
@@ -2655,6 +2689,13 @@ impl CMoveShape {
 
     pub(crate) fn take_blood_loss_state_for_ai(&mut self) -> Option<BloodLossState> {
         self.blood_loss_state.take()
+    }
+
+    pub(crate) fn activate_loaded_blood_loss_state(&mut self, now_ms: u32) -> Option<BloodLossState> {
+        let mut state = self.blood_loss_state?;
+        state.activate_loaded(now_ms);
+        self.blood_loss_state = Some(state);
+        Some(state)
     }
 
     pub(crate) fn periodic_attack_state_ids(&self) -> Vec<u32> {
@@ -3758,6 +3799,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             | super::skills::natural::NATURAL_SKILL_ID
             | super::skills::rapture::RAPTURE_SKILL_ID => PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
             super::skills::agility2::AGILITY_2_SKILL_ID => AGILITY_STATE_2_BYTES,
+            super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

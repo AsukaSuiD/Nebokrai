@@ -4945,6 +4945,20 @@ impl CPlayer {
         self.move_shape.take_blood_loss_state_for_ai()
     }
 
+    pub(crate) fn finish_blood_loss_state(
+        &mut self,
+        state: super::skills::bloodlossstate::BloodLossState,
+    ) {
+        self.move_shape.finish_blood_loss_state(state);
+    }
+
+    pub(crate) fn activate_loaded_blood_loss_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::bloodlossstate::BloodLossState> {
+        self.move_shape.activate_loaded_blood_loss_state(now_ms)
+    }
+
     pub(crate) fn periodic_attack_state_ids(&self) -> Vec<u32> {
         self.move_shape.periodic_attack_state_ids()
     }

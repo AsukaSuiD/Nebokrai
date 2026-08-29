@@ -28824,6 +28824,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_agility_states(login_tick_ms);
+        let loaded_blood_loss_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_blood_loss_state(login_tick_ms);
         let loaded_defense_shields = self
             .players
             .get_mut(&expected_player_id)
@@ -28923,6 +28928,26 @@ impl CGame {
                 state.skill_id(),
                 true,
                 state.client_time(first_now_ms, second_now_ms),
+            );
+        }
+        if let Some(state) = loaded_blood_loss_state
+            && let Some((identity, tile_x, tile_y)) = self.find_player(expected_player_id).and_then(|player| {
+                Some((
+                    player.shape().identity(),
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                ))
+            })
+        {
+            crate::gameserver::appserver::skills::bloodlossstate::send_blood_loss_state_visual(
+                self,
+                region_id,
+                identity,
+                tile_x,
+                tile_y,
+                state,
+                true,
+                login_tick_ms,
             );
         }
         for state in loaded_defense_shields {
