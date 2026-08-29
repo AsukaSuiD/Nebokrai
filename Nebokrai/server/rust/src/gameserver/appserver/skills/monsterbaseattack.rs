@@ -120,7 +120,9 @@ use crate::gameserver::appserver::ai::jiumai::{
     assign_jiumai_target, ensure_jiumai_twin, maintain_jiumai_twin, select_jiumai_enemy,
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
-use crate::gameserver::appserver::ai::monsterai::{approach_attack_range, select_attack_skill};
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, hibernates_without_nearby_players, select_attack_skill,
+};
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
 use crate::gameserver::appserver::ai::smartgladiator::select_smart_gladiator_enemy;
@@ -336,33 +338,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && (matches!(
+        && hibernates_without_nearby_players(
             property.ai,
-            0 | 3
-                | 4
-                | 5
-                | 6
-                | 8
-                | 9
-                | 10
-                | 11
-                | 13
-                | 14
-                | 15
-                | 16
-                | 19
-                | 20
-                | 23
-                | 0x64
-                | 0x65
-                | 0x67
-                | 0x68
+            region
+                .find_monster_by_id(monster_id)
+                .and_then(CMonster::smart_gladiator_ai)
+                .is_some_and(|state| !state.has_queued_steps()),
         )
-            || (property.ai == 2
-                && region
-                    .find_monster_by_id(monster_id)
-                    .and_then(CMonster::smart_gladiator_ai)
-                    .is_some_and(|state| !state.has_queued_steps())))
         && let Some(area_index) = area_index
         && region.player_ids_around_area(area_index).is_empty()
     {

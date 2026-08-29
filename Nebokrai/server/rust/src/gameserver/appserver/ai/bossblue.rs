@@ -10,9 +10,10 @@
 //!
 //! `OnSearchEnemy` подключён к реальному ходу монстра и сохраняет общий проход
 //! игроков, затем питомцев с заменой цели при равной дистанции. `Run`,
-//! `OnIdle` подключён целиком: после выбора навыка общий владелец бездействия сохраняет
-//! исходный случайный шаг либо ожидание перед поиском цели, а при отсутствии
-//! игроков переводит владельца в сон. `Run` и `OnSchedule` ниже остаются RAW.
+//! `OnIdle` подключён целиком: после выбора навыка общий владелец бездействия
+//! сохраняет исходный случайный шаг либо ожидание перед поиском цели, а при
+//! отсутствии игроков переводит владельца в сон через общий `CMonsterAI`.
+//! `Run` и `OnSchedule` ниже остаются RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -29,20 +30,6 @@
 // RVA: 0x00209340
 // ADDRESS: 00609340
 // PROTOTYPE: AI_EXEC_STATE __thiscall Run(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlue::Hibernate
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp:513
-// RVA: 0x002093B0
-// ADDRESS: 006093b0
-// PROTOTYPE: void __thiscall Hibernate(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

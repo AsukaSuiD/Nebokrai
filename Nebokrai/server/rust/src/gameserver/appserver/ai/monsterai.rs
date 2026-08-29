@@ -51,6 +51,38 @@ pub(crate) const fn accepts_hurt_target(
             || (attacker.object_type == 600 && attacker_is_tamed))
 }
 
+/// Определяет достигнутые `OnIdle`, которые при отсутствии игроков переводят
+/// владельца в sleeping-индекс области. Умный гладиатор сначала обязан
+/// исчерпать сохранённые шаги отхода; приручение, цель, cast и фактическую
+/// пустоту соседних областей проверяет непосредственный runtime caller.
+pub(crate) const fn hibernates_without_nearby_players(
+    ai_type: u32,
+    smart_gladiator_ready_to_idle: bool,
+) -> bool {
+    matches!(
+        ai_type,
+        0 | 3
+            | 4
+            | 5
+            | 6
+            | 8
+            | 9
+            | 10
+            | 11
+            | 13
+            | 14
+            | 15
+            | 16
+            | 19
+            | 20
+            | 23
+            | 0x64
+            | 0x65
+            | 0x67
+            | 0x68
+    ) || (ai_type == 2 && smart_gladiator_ready_to_idle)
+}
+
 /// Общая длительность одного шага `CBaseAI::MoveTo`: диагональ длиннее
 /// осевого шага, после чего прибавляется время остановочного кадра монстра.
 pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32) -> u32 {
