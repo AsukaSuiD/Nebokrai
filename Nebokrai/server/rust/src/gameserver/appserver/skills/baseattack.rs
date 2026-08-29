@@ -11,6 +11,9 @@
 //! восстановление движения, `AfterUseSkill`, время восстановления и очистку
 //! текущего навыка; конкретный владелец явно выбирает задержанный или
 //! немедленный вариант и передаёт свой cooldown.
+//! При входе в другой регион исходный `OnChangeRegion` выполняет `End(false)`:
+//! движение и текущий навык освобождаются без износа оружия и фиксации
+//! времени восстановления.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -115,6 +118,21 @@ pub(crate) fn cancel_player_base_attack<Runtime: GameMainLoopRuntime>(
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
+pub(crate) fn abort_player_base_attack_on_region_change(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+) -> bool {
+    let Some(dispatch) = player_ai.base_attack().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -130,20 +148,6 @@ pub(crate) fn cancel_player_base_attack<Runtime: GameMainLoopRuntime>(
 // RVA: 0x00113E00
 // ADDRESS: 00513e00
 // PROTOTYPE: void __thiscall Restart(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::OnChangeRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:243
-// RVA: 0x0016A370
-// ADDRESS: 0056a370
-// PROTOTYPE: void __thiscall OnChangeRegion(long param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

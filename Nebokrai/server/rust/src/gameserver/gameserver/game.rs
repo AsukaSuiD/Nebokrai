@@ -781,8 +781,9 @@ use crate::gameserver::appserver::shape::{
     ShapeFigure, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
-    cancel_player_base_attack, finish_player_base_attack, BASE_ATTACK_SKILL_ID,
-    BaseAttackExecutionState, SKILL_USAGE_DELAY_TIME,
+    abort_player_base_attack_on_region_change, cancel_player_base_attack,
+    finish_player_base_attack, BASE_ATTACK_SKILL_ID, BaseAttackExecutionState,
+    SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     real_distance, time_reached,
 };
@@ -980,7 +981,7 @@ use crate::gameserver::appserver::skills::directprojectile::{
     cancel_player_direct_projectile, is_player_direct_projectile_dispatch,
 };
 use crate::gameserver::appserver::skills::chuckstone::{
-    execute_player_chuck_stone, CHUCK_STONE_SKILL_ID,
+    execute_player_chuck_stone, on_player_chuck_stone_change_region, CHUCK_STONE_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::skeletonarchery::{
     execute_player_skeleton_archery, SKELETON_ARCHERY_SKILL_ID,
@@ -17741,9 +17742,10 @@ impl CGame {
         );
     }
 
-    /// Client `8F801` acknowledgement completes a deferred local change. The
-    /// player is added to the destination registry before snapshots/weather
-    /// and state callbacks, matching `CServerRegion::OnMessage`.
+    /// Подтверждение клиента `8F801` завершает отложенную локальную смену.
+    /// Игрок добавляется в реестр назначения до `OnChangeRegion` навыков,
+    /// снимков, погоды и обратных вызовов состояний, как в
+    /// `CServerRegion::OnMessage`.
     pub(crate) fn enter_changed_player_region<Context: GameRegionEnterContext>(
         &mut self,
         player_id: i32,
@@ -17822,6 +17824,7 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         if membership.is_ok() {
+            let skill_interrupted = self.on_player_skill_change_region(player_id);
             let _ = self.enter_gods_battle_player(region_id, player_id);
             context.publish_changed_player_region_entry(
                 self,
@@ -17829,6 +17832,12 @@ impl CGame {
                 region_id,
                 entry_token,
                 socket_id,
+            );
+            tracing::trace!(
+                player_id,
+                region_id,
+                skill_interrupted,
+                "навыки игрока получили вход в другой регион"
             );
         }
         tracing::debug!(
@@ -17841,6 +17850,32 @@ impl CGame {
             "завершена попытка входа игрока в сменённый регион"
         );
         true
+    }
+
+    /// Координирует заимствование `CPlayerAI`, а конкретный `End(false)`
+    /// оставляет владельцам навыков. Базовый `CSkill::OnChangeRegion` пуст,
+    /// поэтому сюда входят только доказанные переопределения.
+    fn on_player_skill_change_region(&mut self, player_id: i32) -> bool {
+        let Some(skill_id) = self.find_player(player_id).and_then(CPlayer::current_skill_id) else {
+            return false;
+        };
+        let Some(mut player_ai) = self.find_player_mut(player_id).map(CPlayer::take_player_ai)
+        else {
+            return false;
+        };
+        let interrupted = match skill_id {
+            BASE_ATTACK_SKILL_ID => {
+                abort_player_base_attack_on_region_change(self, player_id, &mut player_ai)
+            }
+            CHUCK_STONE_SKILL_ID => {
+                on_player_chuck_stone_change_region(self, player_id, &mut player_ai)
+            }
+            _ => false,
+        };
+        self.find_player_mut(player_id)
+            .expect("игрок сохраняется во время OnChangeRegion навыка")
+            .restore_player_ai(player_ai);
+        interrupted
     }
 
     /// Очищает и декодирует language table, пишет exact log и лишь затем

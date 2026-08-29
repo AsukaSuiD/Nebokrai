@@ -7,10 +7,14 @@
 //! порядке региона. Monster/pet-путь использует `monsterprojectile`. Формулы,
 //! два RNG-вызова, пакеты и задержки принадлежат этим skill-owner-ам; `CGame`
 //! только разрешает владельцев, применяет удар и выполняет доставку.
-//! Не достигнуты вызов минимальной дальности, региональная отмена и режим
-//! `m_bAutoRestart`; их точные фрагменты сохранены ниже.
+//! Минимальная дальность сохраняет нижнюю границу `1`, а вход в другой регион
+//! завершает активный снаряд через `End(false)`, не фиксируя время
+//! восстановления. Не достигнут только режим `m_bAutoRestart`; его точный
+//! фрагмент сохранён ниже.
 
-use super::directprojectile::execute_player_direct_projectile;
+use super::directprojectile::{
+    abort_player_direct_projectile_on_region_change, execute_player_direct_projectile,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome};
@@ -27,16 +31,19 @@ pub(crate) fn execute_player_chuck_stone<Runtime: GameMainLoopRuntime>(
     execute_player_direct_projectile(game, player_id, dispatch, player_ai, runtime)
 }
 
-// FUNCTION: CChuckStone::GetAffectRangeMin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:187
-// RVA: 0x001387A0
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+pub(crate) fn on_player_chuck_stone_change_region(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+) -> bool {
+    abort_player_direct_projectile_on_region_change(
+        game,
+        player_id,
+        player_ai,
+        CHUCK_STONE_SKILL_ID,
+    )
+}
 
-// FUNCTION: CChuckStone::OnChangeRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\chuckstone.cpp:573
-// RVA: 0x0013CF10
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// Недостигнутая ветвь `CChuckStone::AI` после удара:
+// При ненулевом m_bAutoRestart вызывается виртуальный метод со смещением
+// 0x20, затем функция завершается. Основание: локальный декомпилят; INFERRED.

@@ -120,6 +120,25 @@ fn finish<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_
 
 fn abort(game: &mut CGame, player_id: i32) { restore_movement(game, player_id); abort_skill(game, player_id); }
 
+pub(super) fn abort_player_direct_projectile_on_region_change(
+    game: &mut CGame,
+    player_id: i32,
+    ai: &mut CPlayerAI,
+    expected_skill_id: u32,
+) -> bool {
+    let Some((dispatch, skill_id)) = ai
+        .direct_projectile()
+        .map(|state| (state.kernel().dispatch(), state.skill_id()))
+    else {
+        return false;
+    };
+    if skill_id != expected_skill_id {
+        return false;
+    }
+    abort(game, player_id);
+    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
 pub(crate) fn cancel_player_direct_projectile<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
     let Some((dispatch, skill_id)) = ai.direct_projectile().map(|state| (state.kernel().dispatch(), state.skill_id())) else { return false };
     finish(game, player_id, skill_id, ai, runtime);
