@@ -64,7 +64,7 @@ use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
 use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
-use crate::gameserver::appserver::skills::enlargefullmissstate::EnlargeFullMissState;
+use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::HeartenState;
@@ -787,6 +787,11 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(CURE_STATE_SKILL_ID))
             .and_then(|offset| CureState::decode(&states, offset).ok());
+        self.enlarge_full_miss_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID))
+            .and_then(|offset| EnlargeFullMissState::decode(&states, offset).ok());
         self.ex_states.replace(states);
     }
 
@@ -1502,6 +1507,23 @@ impl CMoveShape {
         &mut self,
         state: EnlargeFullMissState,
     ) -> Option<EnlargeFullMissState> {
+        let state_id = state.skill_id();
+        let offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state_id));
+        if let Some(offset) = offset {
+            if let Some(destination) = self.ex_states.get_mut(offset..offset + ENLARGE_FULL_MISS_STATE_BYTES) {
+                destination.copy_from_slice(&state.encoded());
+            }
+        } else {
+            if self.ex_states.len() < 4 {
+                self.ex_states.clear();
+                LegacyWriter::new(&mut self.ex_states).write_u32(0);
+            }
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
+            self.ex_states.extend_from_slice(&state.encoded());
+        }
         self.enlarge_full_miss_state.replace(state)
     }
 
@@ -3502,6 +3524,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             BLIND_STATE_ID => BLIND_STATE_BYTES,
             CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
+            super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {
