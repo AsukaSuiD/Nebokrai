@@ -8,8 +8,8 @@
 //! урона, затем критический удар. `CGame` только разрешает владельцев цели и
 //! применяет рассчитанную атаку через общую защиту. Координатные перегрузки
 //! `Begin` остаются ниже недостигнутыми.
-//! `End` сбрасывает execution-состояние и завершает `CAttackSkill::End(1)`;
-//! отмена проходит через тот же владеющий путь.
+//! `End(1)` сбрасывает execution-состояние и завершает успешную атаку;
+//! `End(0)` очищает отменённую команду без обновления свойств и cooldown.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -25,7 +25,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -163,16 +163,23 @@ fn finish_player_lightning<Runtime: GameMainLoopRuntime>(
     });
 }
 
+fn abort_player_lightning(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    abort_skill(game, player_id);
+}
+
 pub(crate) fn cancel_player_lightning<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai.lightning().map(|state| state.kernel().dispatch()) else {
         return false;
     };
-    finish_player_lightning(game, player_id, player_ai, runtime);
+    abort_player_lightning(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
@@ -306,7 +313,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
     };
     let Some(properties) = game.skill_base_properties(LIGHTNING_SKILL_ID, level) else {
         if player_ai.lightning().is_some() {
-            finish_player_lightning(game, player_id, player_ai, runtime);
+            abort_player_lightning(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -381,11 +388,11 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_player_lightning(game, player_id, player_ai, runtime);
+            abort_player_lightning(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            finish_player_lightning(game, player_id, player_ai, runtime);
+            abort_player_lightning(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -422,12 +429,12 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_failure(game, player_id, 10);
-            finish_player_lightning(game, player_id, player_ai, runtime);
+            abort_player_lightning(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if target_dead(game, region_id, target) {
             send_failure(game, player_id, 10);
-            finish_player_lightning(game, player_id, player_ai, runtime);
+            abort_player_lightning(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((current_source_x, current_source_y)) =
@@ -438,7 +445,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
                 ))
             })
         else {
-            finish_player_lightning(game, player_id, player_ai, runtime);
+            abort_player_lightning(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let path = game.base_magic_path(
@@ -452,7 +459,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             send_failure(game, player_id, 0x0b);
             game.send_skill_system_info(player_id, b"GS0290");
-            finish_player_lightning(game, player_id, player_ai, runtime);
+            abort_player_lightning(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         send_fire(
@@ -472,14 +479,14 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(master) = game.find_player(player_id).map(master_info) else {
-        finish_player_lightning(game, player_id, player_ai, runtime);
+        abort_player_lightning(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target_dead(game, region_id, target)
         || !game.owned_player_skill_target_attackable(master, target, region_id)
     {
         send_cancel(game, player_id, level);
-        finish_player_lightning(game, player_id, player_ai, runtime);
+        abort_player_lightning(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((master, attack)) = calculate_attack(
@@ -492,7 +499,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         hit_modifier,
         damage_modifier,
     ) else {
-        finish_player_lightning(game, player_id, player_ai, runtime);
+        abort_player_lightning(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     match target.object_type {

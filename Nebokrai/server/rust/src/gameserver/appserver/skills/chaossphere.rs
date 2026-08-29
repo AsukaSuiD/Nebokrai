@@ -6,8 +6,8 @@
 //! визуальные пакеты и построение движущегося `CChaosSpherePhalanx`.
 //! `CGame` предоставляет только разрешение владельцев, регион, регистрацию и
 //! фактическую доставку.
-//! `End` возвращает движение и завершает общий `CSummonSkill::End` после
-//! построения сферы либо при отмене текущей команды.
+//! `End(1)` возвращает движение и завершает общий `CSummonSkill::End` после
+//! построения сферы; отмена использует `End(0)` без cooldown.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -21,7 +21,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -75,11 +75,18 @@ fn finish_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     });
 }
 
+fn abort_player_chaos_sphere(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    abort_skill(game, player_id);
+}
+
 pub(crate) fn cancel_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
         .chaos_sphere()
@@ -87,7 +94,7 @@ pub(crate) fn cancel_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    finish_player_chaos_sphere(game, player_id, player_ai, runtime);
+    abort_player_chaos_sphere(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
@@ -162,7 +169,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(CHAOS_SPHERE_SKILL_ID, level) else {
         if player_ai.chaos_sphere().is_some() {
-            finish_player_chaos_sphere(game, player_id, player_ai, runtime);
+            abort_player_chaos_sphere(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected)
     };
@@ -209,7 +216,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     let Some((target_x, target_y)) = target_position(game, region_id, dispatch) else {
         send_failure(game, player_id, 10);
         if matches!(dispatch, PlayerSkillDispatch::Object { .. }) { game.send_skill_system_info(player_id, b"GS0285"); }
-        finish_player_chaos_sphere(game, player_id, player_ai, runtime);
+        abort_player_chaos_sphere(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if player_ai.chaos_sphere().is_some_and(|state| !state.condition_checked()) {
@@ -217,7 +224,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_player_chaos_sphere(game, player_id, player_ai, runtime);
+            abort_player_chaos_sphere(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {

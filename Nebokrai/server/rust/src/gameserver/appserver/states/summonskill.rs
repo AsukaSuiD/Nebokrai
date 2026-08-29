@@ -6,9 +6,17 @@
 //! очищает текущий навык и фиксирует время восстановления. В достигнутых
 //! владельцах виртуальный `Summon` является синхронным обновлением свойств
 //! игрока; skill-specific состояние и движение остаются у конкретного owner-а.
+//! При `End(0)` обновление свойств и cooldown не выполняются: общий хвост
+//! только очищает текущий навык, а конкретный owner завершает свои флаги.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+
+pub(crate) fn abort_skill(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+}
 
 pub(crate) fn finish_summon_skill<Runtime, MarkUsed>(
     game: &mut CGame,

@@ -9,7 +9,8 @@
 //! `CGame` только разрешает владельцев, применяет рассчитанную атаку и доставляет
 //! пакеты. Координатные перегрузки `Begin` остаются ниже недостигнутыми.
 //! Player `End` сбрасывает execution-флаги, возвращает движение и завершает
-//! `CAttackSkill::End(1)` после второго удара либо при отмене.
+//! `CAttackSkill::End(1)` после второго удара; отмена использует `End(0)` без
+//! обновления свойств и cooldown.
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::Begin
@@ -53,7 +54,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -157,11 +158,18 @@ fn finish_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     });
 }
 
+fn abort_player_lord_fast_attack(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    abort_skill(game, player_id);
+}
+
 pub(crate) fn cancel_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
         .lord_fast_attack()
@@ -169,7 +177,7 @@ pub(crate) fn cancel_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+    abort_player_lord_fast_attack(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
@@ -331,7 +339,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     };
     let Some(properties) = game.skill_base_properties(LORD_FAST_ATTACK_SKILL_ID, level) else {
         if player_ai.lord_fast_attack().is_some() {
-            finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+            abort_player_lord_fast_attack(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -399,14 +407,14 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
 
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
         send_failure(game, player_id, 10);
-        finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+        abort_player_lord_fast_attack(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target_dead(game, region_id, target)
         || (target.object_type == PLAYER_TYPE && target.id == player_id)
     {
         send_failure(game, player_id, 10);
-        finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+        abort_player_lord_fast_attack(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai
@@ -417,7 +425,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             .find_player(player_id)
             .and_then(|player| player.shape_view())
         else {
-            finish_player_lord_fast_attack(game, player_id, player_ai, runtime);
+            abort_player_lord_fast_attack(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {

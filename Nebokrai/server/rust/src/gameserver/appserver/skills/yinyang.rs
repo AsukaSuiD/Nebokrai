@@ -6,8 +6,8 @@
 //! MP, направление, `SkillExecutionKernel`, точный визуальный пакет и
 //! построение `CYinYangPhalanx`. `CGame` только разрешает владельцев,
 //! регистрирует область и выполняет фактическую доставку.
-//! Общий для двух вариантов `End` возвращает движение и выполняет
-//! `CSummonSkill::End(1)` после регистрации области либо при отмене команды.
+//! Общий для двух вариантов `End(1)` возвращает движение и завершает
+//! зарегистрированную область; отмена использует `End(0)` без cooldown.
 
 use super::baseattack::time_reached;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -16,7 +16,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -92,17 +92,24 @@ fn finish_player_yin_yang<Runtime: GameMainLoopRuntime>(
     });
 }
 
+fn abort_player_yin_yang(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    abort_skill(game, player_id);
+}
+
 pub(crate) fn cancel_player_yin_yang_family<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
     second: bool,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = execution(player_ai, second).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    finish_player_yin_yang(game, player_id, player_ai, second, runtime);
+    abort_player_yin_yang(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
@@ -118,7 +125,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     let Some(region_id) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected); };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
         if execution(player_ai, second).is_some() {
-            finish_player_yin_yang(game, player_id, player_ai, second, runtime);
+            abort_player_yin_yang(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -149,10 +156,10 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     } else if execution(player_ai, second).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
 
     if execution(player_ai, second).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
-        let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { finish_player_yin_yang(game, player_id, player_ai, second, runtime); return terminal(QueuedSkillExecutionState::Rejected); };
-        if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) { send_error(game, player_id, 10, mp_loss); finish_player_yin_yang(game, player_id, player_ai, second, runtime); return terminal(QueuedSkillExecutionState::Rejected); }
+        let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
+        if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) { send_error(game, player_id, 10, mp_loss); abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if current_mana < mp_loss { send_error(game, player_id, 7, mp_loss); finish_player_yin_yang(game, player_id, player_ai, second, runtime); return terminal(QueuedSkillExecutionState::Rejected); }
+        if current_mana < mp_loss { send_error(game, player_id, 7, mp_loss); abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_mana(current_mana.wrapping_sub(mp_loss));
             if let Some(source) = player.shape_view() { player.movement_shape_mut().set_direction(get_line_direction(source.tile_x, source.tile_y, target_x, target_y)); }
@@ -165,10 +172,10 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
 
     let started_at_ms = execution(player_ai, second).map(SkillExecutionKernel::started_at_ms).expect("выполнение инь-ян создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending); }
-    let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { finish_player_yin_yang(game, player_id, player_ai, second, runtime); return terminal(QueuedSkillExecutionState::Rejected); };
-    if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) { send_error(game, player_id, 10, mp_loss); finish_player_yin_yang(game, player_id, player_ai, second, runtime); return terminal(QueuedSkillExecutionState::Rejected); }
+    let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
+    if target.is_some_and(|identity| game.periodic_state_target_dead(region_id, identity)) { send_error(game, player_id, 10, mp_loss); abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
     send_visual(game, player_id, skill_id, skill_level, 2, Some((target_x, target_y)));
-    let Some(player) = game.find_player(player_id) else { finish_player_yin_yang(game, player_id, player_ai, second, runtime); return terminal(QueuedSkillExecutionState::Rejected); };
+    let Some(player) = game.find_player(player_id) else { abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
     let master = MasterInfo { master_type: PLAYER_TYPE, master_id: player_id, master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(player.pk_permissions().player), permitted_to_kill_teammate: i32::from(player.pk_permissions().teammate), permitted_to_kill_guild_member: i32::from(player.pk_permissions().guild_member), permitted_to_kill_criminal: i32::from(player.pk_permissions().criminal) };
     let combat = player.combat_properties();
     let scaled_element = (element_scale * 0.01 * combat.element_modify as f32).round_ties_even() as i32;
