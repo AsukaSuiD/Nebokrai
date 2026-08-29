@@ -9,12 +9,15 @@
 //! обновления общего fight-state и фактической around-доставки. Три исходные
 //! перегрузки `Begin` имели одинаковую семантику состояния владельца и сведены
 //! к одному типизированному `PlayerSkillDispatch` без параллельного пути.
+//! `End(1)` фиксирует применение и cooldown, а `End(0)` очищает отказ или
+//! смену команды без повторного применения состояния.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::soulcollectstate::{SoulCollectState, send_soul_collect_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -66,11 +69,26 @@ fn send_cast_visual(game: &mut CGame, player_id: i32, level: i32, apply: bool) {
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    restore_player_movement(game, player_id);
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_soul_collect_used(now_ms));
+}
+
+fn abort_player_soul_collect(game: &mut CGame, player_id: i32) {
+    restore_player_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn cancel_player_soul_collect<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.soul_collect().map(SkillExecutionKernel::dispatch) else { return false };
+    abort_player_soul_collect(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn add_soul(game: &mut CGame, player_id: i32, variable_percent: u32, level: i32) -> bool {
@@ -117,7 +135,10 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
     if !is_soul_collect_skill(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let level = player.learned_skill_level(SOUL_COLLECT_SKILL_ID);
-    let Some(properties) = game.skill_base_properties(SOUL_COLLECT_SKILL_ID, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(SOUL_COLLECT_SKILL_ID, level) else {
+        if player_ai.soul_collect().is_some() { abort_player_soul_collect(game, player_id); }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay = properties.query_property(DELAY_TIME);
     let cooldown = properties.query_property(REUSE_DELAY_TIME);
@@ -149,7 +170,7 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if !has_mana(mana, mp_loss) {
             send_failure(game, player_id, 7, mp_loss);
-            finish(game, player_id);
+            abort_player_soul_collect(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
@@ -167,8 +188,7 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_soul_collect_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_soul_collect(game, player_id, player_ai, runtime);
     terminal(if applied { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
 
