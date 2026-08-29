@@ -122,8 +122,8 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, hibernates_without_nearby_players, one_step_move_delay_ms,
-    queue_monster_idle, schedule_attack_interval, select_attack_skill,
+    approach_attack_range, has_owned_search_enemy, hibernates_without_nearby_players,
+    one_step_move_delay_ms, queue_monster_idle, schedule_attack_interval, select_attack_skill,
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
@@ -191,15 +191,6 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
     )
-}
-
-const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
-    tamed
-        || matches!(
-            ai_type,
-            0 | 1 | 2 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 13 | 14 | 17 | 18 | 20 | 21 | 24
-                | 100 | 0x65 | 0x67 | 0x68
-        )
 }
 
 /// Rust-владелец выбирает навык только когда любой результат броска уже имеет

@@ -117,6 +117,15 @@ pub(crate) const fn hibernates_without_nearby_players(
     ) || (ai_type == 2 && smart_gladiator_ready_to_idle)
 }
 
+pub(crate) const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
+    tamed
+        || matches!(
+            ai_type,
+            0 | 1 | 2 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 13 | 14 | 17 | 18 | 20 | 21 | 24
+                | 100 | 0x65 | 0x67 | 0x68
+        )
+}
+
 /// Общая длительность одного шага `CBaseAI::MoveTo`: диагональ длиннее
 /// осевого шага, после чего прибавляется время остановочного кадра монстра.
 pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32) -> u32 {
@@ -256,7 +265,11 @@ pub(crate) fn approach_attack_range(
     };
     if distance > chase_range as i32 {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.clear_ai_target();
+            if has_owned_search_enemy(property.ai, tamed) {
+                monster.lose_ai_target_and_search(now_ms);
+            } else {
+                monster.clear_ai_target();
+            }
         }
         return false;
     }
