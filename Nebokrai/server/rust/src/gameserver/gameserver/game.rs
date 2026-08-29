@@ -35421,6 +35421,50 @@ impl CGame {
         }
     }
 
+    /// Материализует `OnBeenKilled → OnLoseTarget` перед уже достигнутым
+    /// синхронным `CPlayer::OnDied`. Завершается только начатый обычный навык:
+    /// ожидающая команда остаётся в FIFO до оживления, а независимая очередь
+    /// боевой феи принадлежит отдельной war-soul ветви ИИ.
+    fn interrupt_active_player_skill_after_death<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(current_skill_id) = self
+            .find_player(player_id)
+            .and_then(CPlayer::current_skill_id)
+        else {
+            return false;
+        };
+        let materialized_end = self.end_materialized_player_skill(
+            player_id,
+            current_skill_id,
+            MaterializedSkillEndCause::Interruption,
+            runtime,
+        );
+        let interrupted = if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
+            true
+        } else {
+            self.find_player_mut(player_id).is_some_and(|player| {
+                let Some(dispatch) = player.player_ai().next_player_skill() else {
+                    return false;
+                };
+                let interrupted = player
+                    .player_ai_mut()
+                    .finish_player_skill(dispatch, SkillTermination::Cancelled);
+                if interrupted {
+                    player.set_skill_moveable(true);
+                    player.set_current_skill_id(None);
+                }
+                interrupted
+            })
+        };
+        if interrupted {
+            let _ = self.send_base_attack_failure(player_id, 2);
+        }
+        interrupted
+    }
+
     pub(crate) fn append_base_attack_tail(
         message: &mut CMessage,
         attack: &AttackInformation,
@@ -40251,6 +40295,8 @@ impl CGame {
         blow: PlayerKillingBlow,
         runtime: &mut Runtime,
     ) -> Option<()> {
+        let interrupted_skill =
+            self.interrupt_active_player_skill_after_death(blow.victim_id, runtime);
         self.player_on_been_murdered(blow, runtime)?;
         let mut world_deliveries = 0usize;
         let mut drops = 0usize;
@@ -40688,6 +40734,7 @@ impl CGame {
             world_deliveries,
             ?property_delivery,
             ?around_delivery,
+            interrupted_skill,
             "обработана смерть игрока"
         );
         Some(())
