@@ -6,14 +6,17 @@
 //! атакует уникальные фигуры до первого блока `2`. Навык завершается только
 //! после строгой границы `SKILL_USAGE_ACTION_INTERVAL`; формула сохраняет два
 //! вызова генератора MSVCRT на каждую рассчитанную атаку. `CGame` разрешает
-//! независимых владельцев и применяет уже рассчитанные результаты.
+//! независимых владельцев и применяет уже рассчитанные результаты. Собственный
+//! `End` очищает накопленный путь, возвращает движение и фиксирует время
+//! восстановления без оружейного `AfterUseSkill`; тот же хвост используется
+//! при отказе после `Begin` и клиентской отмене.
 
 use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
     SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
     SKILL_USAGE_REUSE_DELAY_TIME,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -61,11 +64,33 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish_player_chain_lightning<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
+    player_ai.mark_chain_lightning_used(runtime.now_milliseconds());
+}
+
+pub(crate) fn cancel_player_chain_lightning<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .chain_lightning()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    finish_player_chain_lightning(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -267,13 +292,13 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
         while maximum_distance < path.len() as u32 { path.pop(); }
         if path.is_empty() {
             send_failure(game, player_id, 2, mp_loss);
-            finish(game, player_id);
+            finish_player_chain_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss);
-            finish(game, player_id);
+            finish_player_chain_lightning(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
@@ -328,7 +353,6 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
     if let Some(state) = player_ai.chain_lightning_mut() {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_chain_lightning_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_chain_lightning(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

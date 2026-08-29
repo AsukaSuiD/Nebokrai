@@ -931,7 +931,8 @@ use crate::gameserver::appserver::skills::chaossphere::{
     execute_player_chaos_sphere, is_chaos_sphere_dispatch,
 };
 use crate::gameserver::appserver::skills::chainlightning::{
-    execute_player_chain_lightning, is_chain_lightning_dispatch,
+    cancel_player_chain_lightning, execute_player_chain_lightning, is_chain_lightning_dispatch,
+    CHAIN_LIGHTNING_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::thunderblow2::{
     execute_player_thunder_blow_2, is_thunder_blow_2_dispatch,
@@ -37381,6 +37382,7 @@ impl CGame {
                 | FIRE_BOLT_SKILL_ID
                 | FIRE_BALL_SKILL_ID
                 | THUNDER_SLASH_SKILL_ID
+                | CHAIN_LIGHTNING_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37400,6 +37402,7 @@ impl CGame {
             FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
             FIRE_BALL_SKILL_ID => player_ai.fire_ball().is_some(),
             THUNDER_SLASH_SKILL_ID => player_ai.thunder_slash().is_some(),
+            CHAIN_LIGHTNING_SKILL_ID => player_ai.chain_lightning().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37432,6 +37435,9 @@ impl CGame {
             }
             THUNDER_SLASH_SKILL_ID => {
                 cancel_player_thunder_slash(self, player_id, &mut player_ai, runtime)
+            }
+            CHAIN_LIGHTNING_SKILL_ID => {
+                cancel_player_chain_lightning(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
