@@ -70,7 +70,10 @@ use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
 use crate::gameserver::appserver::skills::heartenstate::{
     HeartenState, HEARTEN_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::healstate::HealState;
+use crate::gameserver::appserver::skills::heal::{HEAL_SKILL_ID, is_heal_skill};
+use crate::gameserver::appserver::skills::healstate::{
+    HEAL_STATE_BYTES, HealState,
+};
 use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::rushstate::RushState;
@@ -730,6 +733,13 @@ impl CMoveShape {
                 &state.encoded(now_ms),
             );
         }
+        for state in &self.heal_states {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(now_ms),
+            );
+        }
         if let Some(state) = self.agility_state_2 {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
@@ -782,6 +792,7 @@ impl CMoveShape {
 
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>, skill_factory: &CSkillFactory) {
         let known_offsets = known_state_record_offsets(&states);
+        let state_owner = self.shape.identity();
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
         self.change_body_states.retain(|state| {
             state
@@ -852,6 +863,12 @@ impl CMoveShape {
             .iter()
             .copied()
             .filter_map(|offset| WuXingState::decode(&states, offset).ok())
+            .collect();
+        self.heal_states = known_offsets
+            .iter()
+            .copied()
+            .filter(|offset| read_u32(&states, *offset).is_some_and(is_heal_skill))
+            .filter_map(|offset| HealState::decode(&states, offset, state_owner).ok())
             .collect();
         self.cure_state = known_offsets
             .iter()
@@ -1732,6 +1749,8 @@ impl CMoveShape {
         removed_skill_id: u32,
         state: HealState,
     ) -> Option<HealState> {
+        self.remove_serialized_state_record(removed_skill_id, HEAL_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         let previous = self
             .heal_states
             .iter()
@@ -1739,6 +1758,19 @@ impl CMoveShape {
             .map(|position| self.heal_states.remove(position));
         self.heal_states.push(state);
         previous
+    }
+
+    pub(crate) fn remove_serialized_heal_states(&mut self, skill_ids: &[u32]) {
+        for skill_id in skill_ids {
+            self.remove_serialized_state_record(*skill_id, HEAL_STATE_BYTES);
+        }
+    }
+
+    pub(crate) fn activate_loaded_heal_states(&mut self, now_ms: u32) -> Vec<HealState> {
+        for state in &mut self.heal_states {
+            state.activate_loaded(now_ms);
+        }
+        self.heal_states.clone()
     }
 
     pub(crate) fn take_heal_states(&mut self) -> Vec<HealState> {
@@ -3870,6 +3902,10 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             BLIND_STATE_ID => BLIND_STATE_BYTES,
+            HEAL_SKILL_ID
+            | super::skills::heal2::HEAL_2_SKILL_ID
+            | super::skills::superheal::SUPER_HEAL_SKILL_ID
+            | super::skills::superheal2::SUPER_HEAL_2_SKILL_ID => HEAL_STATE_BYTES,
             CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
             super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
             super::skills::machineshield::MACHINE_SHIELD_SKILL_ID => MACHINE_SHIELD_STATE_BYTES,

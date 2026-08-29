@@ -4391,6 +4391,17 @@ impl CPlayer {
         self.move_shape.restore_heal_states(states);
     }
 
+    pub(crate) fn remove_serialized_heal_states(&mut self, skill_ids: &[u32]) {
+        self.move_shape.remove_serialized_heal_states(skill_ids);
+    }
+
+    pub(crate) fn activate_loaded_heal_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::healstate::HealState> {
+        self.move_shape.activate_loaded_heal_states(now_ms)
+    }
+
     pub(crate) fn replace_boss_blue_quake_state(
         &mut self,
         state: super::skills::bossbluequakestate::BossBlueQuakeState,

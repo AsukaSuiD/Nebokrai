@@ -7,8 +7,10 @@
 //! `Promotion` считывается заново при каждом проходе. Визуальные пакеты
 //! `0xBFE03/0xBFE04` формируются в модуле-владельце состояния. Фактическая
 //! цель эффекта хранится отдельно от владельца записи только ради подтверждённой
-//! ветви `CSuperHeal2`; отдельного параллельного хранилища это не создаёт.
+//! ветви `CSuperHeal2`; DB-запись её не сохраняет, поэтому после загрузки
+//! целью снова становится владелец записи, как в исходном `Unserialize`.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -17,6 +19,7 @@ use crate::nets::netserver::message::CMessage;
 
 pub(crate) const HEAL_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const HEAL_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+pub(crate) const HEAL_STATE_BYTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HealState {
@@ -62,6 +65,49 @@ impl HealState {
 
     pub(crate) const fn effect_target(self) -> ShapeIdentity {
         self.effect_target
+    }
+
+    pub(crate) fn decode(
+        payload: &[u8],
+        offset: usize,
+        effect_target: ShapeIdentity,
+    ) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let skill_id = reader.read_u32()?;
+        let keep_time_ms = reader.read_u32()?;
+        let frequency_ms = reader.read_u32()?;
+        let hp_gain = reader.read_u32()?;
+        Ok(Self::new(
+            skill_id,
+            effect_target,
+            0,
+            keep_time_ms,
+            frequency_ms,
+            hp_gain,
+        ))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; HEAL_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_time(now_ms).max(0) as u32)
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; HEAL_STATE_BYTES] {
+        self.encoded_with_remaining(self.keep_time_ms)
+    }
+
+    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; HEAL_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(HEAL_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(self.skill_id);
+        writer.write_u32(remaining_time_ms);
+        writer.write_u32(self.frequency_ms);
+        writer.write_u32(self.hp_gain);
+        bytes.try_into().expect("размер состояния лечения фиксирован")
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
+        self.heal_count = 0;
     }
 
     pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
@@ -295,33 +341,37 @@ pub(crate) fn update_stored_heal_states(
         return;
     };
     let mut active = Vec::with_capacity(states.len());
+    let mut removed_skill_ids = Vec::new();
     for mut state in states {
         let target = state.effect_target();
         match advance_effect(game, region_id, &mut state, now_ms) {
-            Some((true, tile_x, tile_y)) => send_heal_state_visual(
-                game, region_id, target, tile_x, tile_y, state, false, now_ms,
-            ),
+            Some((true, tile_x, tile_y)) => {
+                removed_skill_ids.push(state.skill_id());
+                send_heal_state_visual(
+                    game, region_id, target, tile_x, tile_y, state, false, now_ms,
+                );
+            }
             Some((false, _, _)) => active.push(state),
-            None => {}
+            None => removed_skill_ids.push(state.skill_id()),
         }
     }
     restore_stored_states(game, region_id, storage, active);
+    match storage.object_type {
+        400 => {
+            if let Some(player) = game.find_player_mut(storage.id) {
+                player.remove_serialized_heal_states(&removed_skill_ids);
+            }
+        }
+        600 => {
+            if let Some(mut owner) = game.take_region_owner(region_id) {
+                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(storage.id) {
+                    monster
+                        .move_shape_mut()
+                        .remove_serialized_heal_states(&removed_skill_ids);
+                }
+                game.restore_region_owner(owner);
+            }
+        }
+        _ => {}
+    }
 }
-
-// ============================================================================
-// FUNCTION: CHealState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\healstate.cpp:177
-// RVA: 0x001EEC70
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-// ============================================================================
-// FUNCTION: CHealState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\healstate.cpp:160
-// RVA: 0x001F65F0
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.

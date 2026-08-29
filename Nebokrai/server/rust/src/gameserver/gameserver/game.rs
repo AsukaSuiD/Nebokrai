@@ -28815,6 +28815,11 @@ impl CGame {
             .get(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .cure_state();
+        let loaded_heal_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_heal_states(login_tick_ms);
         self.players
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
@@ -28920,6 +28925,30 @@ impl CGame {
         }
         if let Some(state) = loaded_cure_state {
             send_cure_state_visual(self, expected_player_id, state, true);
+        }
+        let loaded_heal_position = self.find_player(expected_player_id).and_then(|player| {
+            Some((
+                player.shape().get_tile_x().ok()?,
+                player.shape().get_tile_y().ok()?,
+            ))
+        });
+        if let Some((x, y)) = loaded_heal_position {
+            for state in loaded_heal_states {
+                crate::gameserver::appserver::skills::healstate::send_heal_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: expected_player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
+                );
+            }
         }
         if let Some(state) = loaded_persistent_agility {
             crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
