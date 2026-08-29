@@ -19,7 +19,7 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::summonshape::{
-    SUMMON_SHAPE_TYPE, encode_targeted_phalanx_snapshot,
+    SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
 };
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
@@ -119,11 +119,12 @@ impl CBaseMagicPhalanx {
         &self,
         now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        encode_targeted_phalanx_snapshot(
+        encode_related_phalanx_snapshot(
             &self.shape,
             super::basemagic::BASE_MAGIC_SKILL_ID as i32,
             self.skill_level,
-            self.target,
+            self.target.object_type,
+            self.target.id,
             self.started_at_ms,
             self.lifetime_ms,
             now_milliseconds,

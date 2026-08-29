@@ -9,12 +9,13 @@
 
 use super::fireball::FIRE_BALL_SKILL_ID;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{
+    SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
@@ -129,21 +130,17 @@ impl CFireBallPhalanx {
         }))
     }
 
-    pub(crate) fn encode_client_snapshot(&self, mut now_milliseconds: impl FnMut() -> u32) -> Option<Vec<u8>> {
-        let first_now = now_milliseconds();
-        let remained = if self.started_at_ms.wrapping_add(self.lifetime_ms) <= first_now { 0 } else {
-            self.lifetime_ms.wrapping_sub(now_milliseconds()).wrapping_add(self.started_at_ms)
-        };
-        let mut payload = Vec::new();
-        {
-            let mut writer = LegacyWriter::new(&mut payload);
-            writer.write_i32(FIRE_BALL_SKILL_ID as i32);
-            writer.write_i32(self.skill_level);
-            writer.write_i32(self.master.master_type);
-            writer.write_i32(self.master.master_id);
-            writer.write_u32(remained);
-        }
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+    pub(crate) fn encode_client_snapshot(&self, now_milliseconds: impl FnMut() -> u32) -> Option<Vec<u8>> {
+        encode_related_phalanx_snapshot(
+            &self.shape,
+            FIRE_BALL_SKILL_ID as i32,
+            self.skill_level,
+            self.master.master_type,
+            self.master.master_id,
+            self.started_at_ms,
+            self.lifetime_ms,
+            now_milliseconds,
+        )
     }
 }
 

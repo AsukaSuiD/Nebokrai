@@ -16,7 +16,9 @@ use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIden
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
+use crate::gameserver::appserver::summonshape::{
+    SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
@@ -84,6 +86,25 @@ impl CFireBoltPhalanx {
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
+
+    /// Точный клиентский `AddToByteArray` сведён в EXE по адресу `0x005fbd20`
+    /// с тем же машинным телом, что у огненного шара; пара `long` здесь
+    /// остаётся идентичностью цели, а параметры душ в снимок не входят.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        encode_related_phalanx_snapshot(
+            &self.shape,
+            FIRE_BOLT_SKILL_ID as i32,
+            self.skill_level,
+            self.target.object_type,
+            self.target.id,
+            self.started_at_ms,
+            self.lifetime_ms,
+            now_milliseconds,
+        )
+    }
 
     pub(crate) fn tick(
         &mut self,

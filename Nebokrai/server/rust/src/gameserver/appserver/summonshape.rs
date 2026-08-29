@@ -36,7 +36,7 @@ use crate::gameserver::appserver::skills::godthunderphalanx::CGodThunderPhalanx;
 use crate::gameserver::appserver::skills::godthunderphalanx2::CGodThunderPhalanx2;
 use crate::gameserver::appserver::skills::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -70,13 +70,16 @@ pub(crate) enum SummonedSkillShape {
 }
 
 /// Общий точный wire-префикс снарядов, чьи `AddToByteArray` сведены линкером
-/// в одну машинную функцию: skill, level, target и оставшееся время перед
-/// базовым `CShape`. Незавершённая ветвь сохраняет два чтения часов.
-pub(crate) fn encode_targeted_phalanx_snapshot(
+/// в одну машинную функцию: идентификатор и уровень навыка, два зависящих от
+/// владельца `long` и оставшееся время перед базовым `CShape`. Значение пары
+/// определяет конкретный владелец; незавершённая ветвь сохраняет два чтения
+/// часов.
+pub(crate) fn encode_related_phalanx_snapshot(
     shape: &CShape,
     skill_id: i32,
     skill_level: i32,
-    target: ShapeIdentity,
+    related_type: i32,
+    related_id: i32,
     started_at_ms: u32,
     lifetime_ms: u32,
     mut now_milliseconds: impl FnMut() -> u32,
@@ -94,8 +97,8 @@ pub(crate) fn encode_targeted_phalanx_snapshot(
         let mut writer = LegacyWriter::new(&mut payload);
         writer.write_i32(skill_id);
         writer.write_i32(skill_level);
-        writer.write_i32(target.object_type);
-        writer.write_i32(target.id);
+        writer.write_i32(related_type);
+        writer.write_i32(related_id);
         writer.write_u32(remained);
     }
     shape
@@ -178,7 +181,8 @@ impl SummonedSkillShape {
             Self::BattleFairyBaseMagic(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)
             }
-            Self::FireBolt(_) | Self::HeartlessArrow(_) => None,
+            Self::FireBolt(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
+            Self::HeartlessArrow(_) => None,
             Self::Archery(shape) => shape.encode_client_snapshot(&mut now_milliseconds),
             Self::LightingArrow(shape) => {
                 shape.encode_client_snapshot(&mut now_milliseconds)
