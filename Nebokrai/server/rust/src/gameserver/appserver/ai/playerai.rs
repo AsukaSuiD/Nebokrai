@@ -53,7 +53,8 @@
 //! следующий навык продвигается только после завершения текущего. Выбранный
 //! ID при этом переживает `End`, как исходный `m_tgCurrentWarSoulSkill`, и
 //! отдельно связывает восстановление завершённого навыка с периодическим
-//! следованием.
+//! следованием. Обычная очередь действий игрока и очередь боевой феи
+//! исполняются независимо: движение игрока не приостанавливает стадии феи.
 
 use std::collections::VecDeque;
 
@@ -401,10 +402,8 @@ impl CPlayerAI {
         self.base_ai.advance_active_move(now_ms)
     }
 
-    pub(crate) fn has_queued_skill(&self) -> bool {
+    pub(crate) fn has_queued_player_skill(&self) -> bool {
         !self.player_skills.is_empty()
-            || self.current_battle_fairy_skill.is_some()
-            || !self.battle_fairy_skills.is_empty()
     }
 
     pub(crate) fn next_destination(&self) -> Option<PlayerAiDestination> {

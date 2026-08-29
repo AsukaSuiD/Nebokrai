@@ -38876,14 +38876,22 @@ impl CGame {
         }
     }
 
+    /// Исполняет независимые обычную и war-soul очереди одного игрока. Уже
+    /// начатый `ASA_MOVE` удерживает только обычную очередь; навык боевой феи
+    /// продолжает свой `SkillExecutionKernel` в том же такте.
     fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         player_ai: &mut CPlayerAI,
+        execute_player_skill: bool,
         runtime: &mut Runtime,
-    ) -> usize {
+    ) -> (usize, usize) {
         let mut execution_count = 0;
-        if let Some(dispatch) = player_ai.next_player_skill() {
+        let mut player_execution_count = 0;
+        if execute_player_skill
+            && let Some(dispatch) = player_ai.next_player_skill()
+        {
+            player_execution_count = 1;
             let concrete_base_attack = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
@@ -39532,7 +39540,7 @@ impl CGame {
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка боевой феи");
         }
-        execution_count
+        (execution_count, player_execution_count)
     }
 
     /// Замыкает достигнутую ветвь очереди назначений `CPlayerAI::OnSchedule`.
@@ -39545,7 +39553,7 @@ impl CGame {
         player_ai: &mut CPlayerAI,
         runtime: &mut Runtime,
     ) -> bool {
-        if player_ai.has_queued_skill() {
+        if player_ai.has_queued_player_skill() {
             return false;
         }
         let Some(destination) = player_ai.next_destination() else {
@@ -44173,18 +44181,16 @@ impl CGame {
                                 .take_player_ai();
                             let active_move_handled =
                                 player_ai.advance_active_move(runtime.now_milliseconds());
-                            let executed_skills = if active_move_handled {
-                                0
-                            } else {
-                                self.execute_queued_player_skills(
+                            let (executed_skills, executed_player_skills) = self
+                                .execute_queued_player_skills(
                                     player_id,
                                     &mut player_ai,
+                                    !active_move_handled,
                                     runtime,
-                                )
-                            };
+                                );
                             player_skill_executions += executed_skills;
                             let destination_handled = active_move_handled
-                                || (executed_skills == 0
+                                || (executed_player_skills == 0
                                     && self.find_player(player_id).is_some()
                                     && self.run_player_ai_destination(
                                         player_id,
