@@ -71,7 +71,7 @@ use super::ai::carriage::{
 use super::ai::guardtarget::GuardStationState;
 use super::ai::jiumai::JiuMaiAiState;
 use super::ai::passivegladiator::PassiveGladiatorState;
-use super::ai::pet::{PetLifecycleFacts, PetLifecycleOutcome, PetLifecycleState};
+use super::ai::pet::{PetBehaviorState, PetLifecycleFacts, PetLifecycleOutcome};
 use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
@@ -112,10 +112,7 @@ pub(crate) struct CMonster {
     tame_attempt_count: u32,
     pet_level: u32,
     pet_experience: u32,
-    pet_mode: i32,
-    pet_action: i32,
-    pet_target: Option<ShapeIdentity>,
-    pet_lifecycle: PetLifecycleState,
+    pet_behavior: PetBehaviorState,
     carriage_lifecycle: CarriageLifecycleState,
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
@@ -231,10 +228,7 @@ impl CMonster {
             tame_attempt_count: 0,
             pet_level: 0,
             pet_experience: 0,
-            pet_mode: 0,
-            pet_action: 1,
-            pet_target: None,
-            pet_lifecycle: PetLifecycleState::default(),
+            pet_behavior: PetBehaviorState::default(),
             carriage_lifecycle: CarriageLifecycleState::default(),
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
@@ -331,7 +325,7 @@ impl CMonster {
         self.clear_ai_target();
         self.tamed = true;
         self.master_info = master;
-        self.pet_mode = pet_mode;
+        self.pet_behavior.set_mode(pet_mode);
         if let Some(factors) = factors {
             self.adjust_pet_factors(factors);
         }
@@ -406,17 +400,15 @@ impl CMonster {
     }
 
     pub(crate) const fn set_pet_mode(&mut self, mode: i32) {
-        self.pet_mode = mode;
+        self.pet_behavior.set_mode(mode);
     }
 
     pub(crate) const fn pet_mode(&self) -> i32 {
-        self.pet_mode
+        self.pet_behavior.mode()
     }
 
     pub(crate) fn set_pet_action(&mut self, action: i32) {
-        self.pet_action = action;
-        if action != 0 {
-            self.pet_target = None;
+        if self.pet_behavior.set_action(action) {
             self.ai_target = None;
             self.cancel_base_attack_cast();
             self.trace_move_delay = None;
@@ -424,7 +416,7 @@ impl CMonster {
     }
 
     pub(crate) const fn pet_action(&self) -> i32 {
-        self.pet_action
+        self.pet_behavior.action()
     }
 
     /// Состояние точного `CPet::OnSchedule`; поиск хозяина, региона и навыка,
@@ -433,35 +425,26 @@ impl CMonster {
         if !self.tamed {
             return PetLifecycleOutcome::default();
         }
-        let outcome = self
-            .pet_lifecycle
-            .tick(facts, self.pet_mode, self.ai_target.is_some());
+        let outcome = self.pet_behavior.tick(facts, self.ai_target.is_some());
         if outcome.clear_target {
             self.clear_ai_target();
-        }
-        if let Some(mode) = outcome.mode {
-            self.pet_mode = mode;
-        }
-        if let Some(action) = outcome.action {
-            self.pet_action = action;
         }
         outcome
     }
 
     pub(crate) fn set_pet_target(&mut self, target: ShapeIdentity) {
-        self.pet_action = 0;
-        self.pet_target = Some(target);
+        self.pet_behavior.begin_target();
         self.ai_target = Some(target);
         self.cancel_base_attack_cast();
         self.trace_move_delay = None;
     }
 
     pub(crate) fn retarget_passive_pet(&mut self, target: ShapeIdentity) -> bool {
-        if !self.tamed || self.pet_mode != 1 || self.ai_target.is_some() {
+        if !self
+            .pet_behavior
+            .retarget_passive(self.tamed, self.ai_target.is_some())
+        {
             return false;
-        }
-        if self.pet_action == 1 {
-            self.pet_action = 0;
         }
         self.ai_target = Some(target);
         true
@@ -790,14 +773,7 @@ impl CMonster {
 
     pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
         self.base_ai.when_been_hurted(now_ms);
-        if self.ai_target.is_none()
-            || self
-                .ai_target
-                .is_some_and(|target| target.object_type != 400 && attacker.object_type == 400)
-        {
-            if self.pet_action == 1 {
-                self.pet_action = 0;
-            }
+        if self.pet_behavior.on_hurt(self.ai_target, attacker) {
             self.ai_target = Some(attacker);
         }
     }
@@ -822,9 +798,7 @@ impl CMonster {
     }
 
     pub(crate) fn set_ai_target(&mut self, target: ShapeIdentity) {
-        if self.tamed && self.pet_action == 1 {
-            self.pet_action = 0;
-        }
+        self.pet_behavior.begin_ai_target(self.tamed);
         self.ai_target = Some(target);
     }
 
@@ -967,9 +941,7 @@ impl CMonster {
         self.ai_target = None;
         self.cancel_base_attack_cast();
         self.trace_move_delay = None;
-        if self.tamed && self.pet_action == 0 {
-            self.pet_action = 1;
-        }
+        self.pet_behavior.target_cleared(self.tamed);
     }
 
     pub(crate) fn cancel_base_attack_cast(&mut self) {

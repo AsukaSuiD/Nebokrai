@@ -13,7 +13,7 @@
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates};
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
@@ -24,7 +24,7 @@ const SEEK_MASTER_INTERVAL_MS: u32 = 1_000;
 const LIFE_CYCLE_INTERVAL_MS: u32 = 21_600_000;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PetLifecycleState {
+struct PetLifecycleState {
     seek_master_ms: u32,
     life_cycle_ms: u32,
     life_cycle_counter: u32,
@@ -54,9 +54,114 @@ pub(crate) struct PetLifecycleOutcome {
     pub(crate) notice: Option<PetLifecycleNotice>,
     pub(crate) reclaim: bool,
     pub(crate) vanish: bool,
-    pub(crate) action: Option<i32>,
-    pub(crate) mode: Option<i32>,
     pub(crate) clear_target: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PetLifecycleTransition {
+    notice: Option<PetLifecycleNotice>,
+    reclaim: bool,
+    vanish: bool,
+    action: Option<i32>,
+    mode: Option<i32>,
+    clear_target: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PetBehaviorState {
+    mode: i32,
+    action: i32,
+    lifecycle: PetLifecycleState,
+}
+
+impl Default for PetBehaviorState {
+    fn default() -> Self {
+        Self {
+            mode: 0,
+            action: 1,
+            lifecycle: PetLifecycleState::default(),
+        }
+    }
+}
+
+impl PetBehaviorState {
+    pub(crate) const fn mode(self) -> i32 {
+        self.mode
+    }
+
+    pub(crate) const fn set_mode(&mut self, mode: i32) {
+        self.mode = mode;
+    }
+
+    pub(crate) const fn action(self) -> i32 {
+        self.action
+    }
+
+    pub(crate) const fn set_action(&mut self, action: i32) -> bool {
+        self.action = action;
+        action != 0
+    }
+
+    pub(crate) const fn begin_target(&mut self) {
+        self.action = 0;
+    }
+
+    pub(crate) fn retarget_passive(&mut self, tamed: bool, has_target: bool) -> bool {
+        if !tamed || self.mode != 1 || has_target {
+            return false;
+        }
+        if self.action == 1 {
+            self.action = 0;
+        }
+        true
+    }
+
+    pub(crate) fn on_hurt(
+        &mut self,
+        current_target: Option<ShapeIdentity>,
+        attacker: ShapeIdentity,
+    ) -> bool {
+        let replace = current_target.is_none()
+            || current_target.is_some_and(|target| {
+                target.object_type != PLAYER_TYPE && attacker.object_type == PLAYER_TYPE
+            });
+        if replace && self.action == 1 {
+            self.action = 0;
+        }
+        replace
+    }
+
+    pub(crate) fn begin_ai_target(&mut self, tamed: bool) {
+        if tamed && self.action == 1 {
+            self.action = 0;
+        }
+    }
+
+    pub(crate) fn target_cleared(&mut self, tamed: bool) {
+        if tamed && self.action == 0 {
+            self.action = 1;
+        }
+    }
+
+    pub(crate) fn tick(
+        &mut self,
+        facts: PetLifecycleFacts,
+        has_target: bool,
+    ) -> PetLifecycleOutcome {
+        let transition = self.lifecycle.tick(facts, self.mode, has_target);
+        if let Some(mode) = transition.mode {
+            self.mode = mode;
+        }
+        if let Some(action) = transition.action {
+            self.action = action;
+        }
+        PetLifecycleOutcome {
+            notice: transition.notice,
+            reclaim: transition.reclaim,
+            vanish: transition.vanish,
+            clear_target: transition.clear_target,
+        }
+    }
 }
 
 impl PetLifecycleState {
@@ -65,8 +170,8 @@ impl PetLifecycleState {
         facts: PetLifecycleFacts,
         current_mode: i32,
         has_target: bool,
-    ) -> PetLifecycleOutcome {
-        let mut outcome = PetLifecycleOutcome::default();
+    ) -> PetLifecycleTransition {
+        let mut outcome = PetLifecycleTransition::default();
         if self.seek_master_ms != 0
             && facts.now_ms.wrapping_sub(self.seek_master_ms) < SEEK_MASTER_INTERVAL_MS
         {
