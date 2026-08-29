@@ -28,6 +28,7 @@
 //! трупный яд с локальной областью,
 //! шипастая одноцелевая атака,
 //! паучий туман с призываемой областью,
+//! паутина с отложенным состоянием,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -95,6 +96,7 @@ use crate::gameserver::appserver::skills::directprojectile::PlayerDirectProjecti
 use crate::gameserver::appserver::skills::yunshenglightning::PlayerYunShengLightningExecutionState;
 use crate::gameserver::appserver::skills::monsterthorn::PlayerMonsterThornExecutionState;
 use crate::gameserver::appserver::skills::spidermist::PlayerSpiderMistExecutionState;
+use crate::gameserver::appserver::skills::spiderweb::PlayerSpiderWebExecutionState;
 use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
@@ -240,6 +242,8 @@ pub(crate) struct CPlayerAI {
     monster_thorn_last_used_ms: u32,
     spider_mist: Option<PlayerSpiderMistExecutionState>,
     spider_mist_last_used_ms: u32,
+    spider_web: Option<PlayerSpiderWebExecutionState>,
+    spider_web_last_used_ms: u32,
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -426,6 +430,7 @@ impl CPlayerAI {
         self.corpse_ptomaine = None;
         self.monster_thorn = None;
         self.spider_mist = None;
+        self.spider_web = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -733,6 +738,7 @@ impl CPlayerAI {
         }
         if let Some(mut execution) = self.monster_thorn.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение шипастой атаки завершено"); }
         if let Some(mut execution) = self.spider_mist.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паучьего тумана завершено"); }
+        if let Some(mut execution) = self.spider_web.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паутины завершено"); }
         if let Some(mut execution) = self.sprite_burn.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
@@ -924,6 +930,7 @@ impl CPlayerAI {
         self.corpse_ptomaine = None;
         self.monster_thorn = None;
         self.spider_mist = None;
+        self.spider_web = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -1561,6 +1568,11 @@ impl CPlayerAI {
     pub(crate) fn spider_mist_mut(&mut self) -> Option<&mut PlayerSpiderMistExecutionState> { self.spider_mist.as_mut() }
     pub(crate) const fn spider_mist_last_used_ms(&self) -> u32 { self.spider_mist_last_used_ms }
     pub(crate) const fn mark_spider_mist_used(&mut self, now_ms: u32) { self.spider_mist_last_used_ms = now_ms; }
+    pub(crate) const fn spider_web(&self) -> Option<&PlayerSpiderWebExecutionState> { self.spider_web.as_ref() }
+    pub(crate) const fn begin_spider_web(&mut self, state: PlayerSpiderWebExecutionState) { self.spider_web = Some(state); }
+    pub(crate) fn spider_web_mut(&mut self) -> Option<&mut PlayerSpiderWebExecutionState> { self.spider_web.as_mut() }
+    pub(crate) const fn spider_web_last_used_ms(&self) -> u32 { self.spider_web_last_used_ms }
+    pub(crate) const fn mark_spider_web_used(&mut self, now_ms: u32) { self.spider_web_last_used_ms = now_ms; }
 
     pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
         self.sprite_burn.as_ref()
