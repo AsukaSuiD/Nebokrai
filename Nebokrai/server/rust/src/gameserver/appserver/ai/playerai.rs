@@ -29,6 +29,7 @@
 //! шипастая одноцелевая атака,
 //! паучий туман с призываемой областью,
 //! паутина с отложенным состоянием,
+//! ядовитая атака паука с периодическим состоянием,
 //! семейство призыва трупной свечи, скелета и споры,
 //! ярость синего босса с отложенным self-состоянием,
 //! землетрясение синего босса с фронтальным состоянием и отбрасыванием,
@@ -251,6 +252,8 @@ pub(crate) struct CPlayerAI {
     spider_mist_last_used_ms: u32,
     spider_web: Option<PlayerSpiderWebExecutionState>,
     spider_web_last_used_ms: u32,
+    spider_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    spider_poison_last_used_ms: u32,
     summon_creature: Option<PlayerSummonCreatureExecutionState>,
     summon_creature_last_used_ms: [u32; 3],
     boss_blue_fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -446,6 +449,7 @@ impl CPlayerAI {
         self.monster_thorn = None;
         self.spider_mist = None;
         self.spider_web = None;
+        self.spider_poison = None;
         self.summon_creature = None;
         self.boss_blue_fury = None;
         self.boss_blue_quake = None;
@@ -758,6 +762,7 @@ impl CPlayerAI {
         if let Some(mut execution) = self.monster_thorn.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение шипастой атаки завершено"); }
         if let Some(mut execution) = self.spider_mist.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паучьего тумана завершено"); }
         if let Some(mut execution) = self.spider_web.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паутины завершено"); }
+        if let Some(mut execution) = self.spider_poison.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ядовитой атаки паука завершено"); }
         if let Some(mut execution) = self.summon_creature.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
         if let Some(mut execution) = self.boss_blue_fury.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ярости синего босса завершено"); }
         if let Some(mut execution) = self.boss_blue_quake.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение землетрясения синего босса завершено"); }
@@ -954,6 +959,7 @@ impl CPlayerAI {
         self.monster_thorn = None;
         self.spider_mist = None;
         self.spider_web = None;
+        self.spider_poison = None;
         self.summon_creature = None;
         self.boss_blue_fury = None;
         self.boss_blue_quake = None;
@@ -1600,6 +1606,11 @@ impl CPlayerAI {
     pub(crate) fn spider_web_mut(&mut self) -> Option<&mut PlayerSpiderWebExecutionState> { self.spider_web.as_mut() }
     pub(crate) const fn spider_web_last_used_ms(&self) -> u32 { self.spider_web_last_used_ms }
     pub(crate) const fn mark_spider_web_used(&mut self, now_ms: u32) { self.spider_web_last_used_ms = now_ms; }
+    pub(crate) const fn spider_poison(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.spider_poison }
+    pub(crate) const fn begin_spider_poison(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.spider_poison = Some(state); }
+    pub(crate) fn spider_poison_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.spider_poison.as_mut() }
+    pub(crate) const fn spider_poison_last_used_ms(&self) -> u32 { self.spider_poison_last_used_ms }
+    pub(crate) const fn mark_spider_poison_used(&mut self, now_ms: u32) { self.spider_poison_last_used_ms = now_ms; }
     pub(crate) const fn summon_creature(&self) -> Option<&PlayerSummonCreatureExecutionState> { self.summon_creature.as_ref() }
     pub(crate) const fn begin_summon_creature(&mut self, state: PlayerSummonCreatureExecutionState) { self.summon_creature = Some(state); }
     pub(crate) fn summon_creature_mut(&mut self) -> Option<&mut PlayerSummonCreatureExecutionState> { self.summon_creature.as_mut() }
