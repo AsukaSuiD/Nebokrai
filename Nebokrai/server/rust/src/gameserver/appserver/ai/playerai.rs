@@ -29,6 +29,7 @@
 //! шипастая одноцелевая атака,
 //! паучий туман с призываемой областью,
 //! паутина с отложенным состоянием,
+//! семейство призыва трупной свечи, скелета и споры,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -97,6 +98,7 @@ use crate::gameserver::appserver::skills::yunshenglightning::PlayerYunShengLight
 use crate::gameserver::appserver::skills::monsterthorn::PlayerMonsterThornExecutionState;
 use crate::gameserver::appserver::skills::spidermist::PlayerSpiderMistExecutionState;
 use crate::gameserver::appserver::skills::spiderweb::PlayerSpiderWebExecutionState;
+use crate::gameserver::appserver::skills::summoncreatureskill::PlayerSummonCreatureExecutionState;
 use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
@@ -244,6 +246,8 @@ pub(crate) struct CPlayerAI {
     spider_mist_last_used_ms: u32,
     spider_web: Option<PlayerSpiderWebExecutionState>,
     spider_web_last_used_ms: u32,
+    summon_creature: Option<PlayerSummonCreatureExecutionState>,
+    summon_creature_last_used_ms: [u32; 3],
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -431,6 +435,7 @@ impl CPlayerAI {
         self.monster_thorn = None;
         self.spider_mist = None;
         self.spider_web = None;
+        self.summon_creature = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -739,6 +744,7 @@ impl CPlayerAI {
         if let Some(mut execution) = self.monster_thorn.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение шипастой атаки завершено"); }
         if let Some(mut execution) = self.spider_mist.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паучьего тумана завершено"); }
         if let Some(mut execution) = self.spider_web.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паутины завершено"); }
+        if let Some(mut execution) = self.summon_creature.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
         if let Some(mut execution) = self.sprite_burn.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
@@ -931,6 +937,7 @@ impl CPlayerAI {
         self.monster_thorn = None;
         self.spider_mist = None;
         self.spider_web = None;
+        self.summon_creature = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -1573,6 +1580,11 @@ impl CPlayerAI {
     pub(crate) fn spider_web_mut(&mut self) -> Option<&mut PlayerSpiderWebExecutionState> { self.spider_web.as_mut() }
     pub(crate) const fn spider_web_last_used_ms(&self) -> u32 { self.spider_web_last_used_ms }
     pub(crate) const fn mark_spider_web_used(&mut self, now_ms: u32) { self.spider_web_last_used_ms = now_ms; }
+    pub(crate) const fn summon_creature(&self) -> Option<&PlayerSummonCreatureExecutionState> { self.summon_creature.as_ref() }
+    pub(crate) const fn begin_summon_creature(&mut self, state: PlayerSummonCreatureExecutionState) { self.summon_creature = Some(state); }
+    pub(crate) fn summon_creature_mut(&mut self) -> Option<&mut PlayerSummonCreatureExecutionState> { self.summon_creature.as_mut() }
+    pub(crate) const fn summon_creature_last_used_ms(&self, index: usize) -> u32 { self.summon_creature_last_used_ms[index] }
+    pub(crate) const fn mark_summon_creature_used(&mut self, index: usize, now_ms: u32) { self.summon_creature_last_used_ms[index] = now_ms; }
 
     pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
         self.sprite_burn.as_ref()

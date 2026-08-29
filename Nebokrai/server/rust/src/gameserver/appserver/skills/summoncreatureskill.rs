@@ -3,26 +3,34 @@
 //! `CSummonCorpseCandle`, `CSummonSkeleton` и `CSummonSpore` различаются
 //! только идентификатором навыка. `CBossFiendSummon` дополнительно выбирает
 //! одну из трёх разновидностей ровно одним исходным броском на всё применение.
-//! Модуль сохраняет общий объектный путь,
-//! задержку повторного применения, задержку исполнения, пакеты `0xBFE01` и
-//! последовательность вызовов создания.
+//! Модуль сохраняет объектный, точечный и self-входы игрока и общий объектный
+//! путь monster/pet, задержку повторного применения, задержку исполнения,
+//! пакеты `0xBFE01` и последовательность вызовов создания.
 //! Поиск владельцев и around-доставка остаются у `CGame`; создаваемая сущность
 //! сразу публикуется через `CServerRegion::add_summoned_creature`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
+use super::flash::master_info;
+use super::summoncorpsecandle::SUMMON_CORPSE_CANDLE_SKILL_ID;
+use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
+use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::skills::kernel::SkillStage;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
 const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
 const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
@@ -34,6 +42,145 @@ const SKILL_USAGE_SUMMONED_CREATURE_ID: u32 = 30_003;
 pub(crate) struct SummonCreatureProgress {
     destination_x: i32,
     destination_y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerSummonCreatureExecutionState {
+    kernel: SkillExecutionKernel<PlayerSkillDispatch>,
+    destination: (i32, i32),
+    variant_index: usize,
+}
+
+impl PlayerSummonCreatureExecutionState {
+    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), variant_index: usize, now_ms: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination, variant_index }
+    }
+    pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
+    pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
+}
+
+fn player_skill_id(dispatch: PlayerSkillDispatch) -> u32 {
+    match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+    }
+}
+
+fn player_variant_index(skill_id: u32) -> Option<usize> {
+    match skill_id {
+        SUMMON_CORPSE_CANDLE_SKILL_ID => Some(0),
+        SUMMON_SKELETON_SKILL_ID => Some(1),
+        SUMMON_SPORE_SKILL_ID => Some(2),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_player_summon_creature_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    player_variant_index(player_skill_id(dispatch)).is_some()
+}
+
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
+
+fn player_destination(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch, source: (i32, i32)) -> Option<(i32, i32)> {
+    match dispatch {
+        PlayerSkillDispatch::SelfTarget { .. } => Some(source),
+        PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)),
+        PlayerSkillDispatch::Object { target, .. } => game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y)),
+    }
+}
+
+fn send_player_visual(game: &mut CGame, player_id: i32, skill_id: u32, skill_level: i32, action: u8, destination: (i32, i32)) {
+    let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return };
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(action);
+    message.add_long(skill_id as i32);
+    message.add_short(skill_level as i16);
+    message.add_long(PLAYER_TYPE);
+    message.add_long(player_id);
+    if action == 1 {
+        message.add_long(direction);
+    } else {
+        message.add_long(0);
+        message.add_long(0);
+        message.add_long(destination.0);
+        message.add_long(destination.1);
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
+}
+
+fn finish_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, variant_index: usize, runtime: &mut Runtime) {
+    restore_player_movement(game, player_id);
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_summon_creature_used(variant_index, now_ms));
+}
+
+fn abort_player_summon_creature(game: &mut CGame, player_id: i32) {
+    restore_player_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some((dispatch, _)) = player_ai.summon_creature().map(|state| (state.kernel().dispatch(), state.variant_index)) else { return false };
+    abort_player_summon_creature(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
+pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    let skill_id = player_skill_id(dispatch);
+    let Some(variant_index) = player_variant_index(skill_id) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, source_x, source_y, skill_level, master)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id), master_info(player)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else { if player_ai.summon_creature().is_some() { abort_player_summon_creature(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let amount = properties.query_property(SKILL_USAGE_CONST);
+    let lifetime_ms = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME);
+    let picture_id = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_ID);
+    let _maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    let now_ms = runtime.now_milliseconds();
+    if player_ai.summon_creature().is_none() {
+        if player_ai.summon_creature_last_used_ms(variant_index) != 0 && !time_reached(now_ms, player_ai.summon_creature_last_used_ms(variant_index), reuse_delay_ms) {
+            game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0d);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(destination) = player_destination(game, region_id, dispatch, (source_x, source_y)) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+        if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
+        player_ai.begin_summon_creature(PlayerSummonCreatureExecutionState::begin(dispatch, destination, variant_index, now_ms));
+    } else if player_ai.summon_creature().is_none_or(|state| state.kernel().dispatch() != dispatch) {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let destination = player_ai.summon_creature().map(|state| state.destination).expect("выполнение призыва хранит координаты эффекта");
+    if player_ai.summon_creature().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+        send_player_visual(game, player_id, skill_id, skill_level, 1, destination);
+        if let Some(state) = player_ai.summon_creature_mut() { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+    }
+    let started_at_ms = player_ai.summon_creature().map(|state| state.kernel().started_at_ms()).expect("выполнение призыва хранит время начала");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return player_terminal(QueuedSkillExecutionState::Pending) }
+    restore_player_movement(game, player_id);
+    send_player_visual(game, player_id, skill_id, skill_level, 2, destination);
+    let property = game.find_monster_property_by_picture_id(picture_id).cloned();
+    let (area_width, area_height) = game.area_dimensions();
+    if let Some(mut owner) = game.take_region_owner(region_id) {
+        for _ in 0..amount {
+            let mut tile_x = 0;
+            let mut tile_y = 0;
+            if let Ok(position) = owner.base_mut().region.get_random_pos_in_range(source_x.wrapping_sub(4), source_y.wrapping_sub(4), 8, 8, runtime) && position.found { tile_x = position.x; tile_y = position.y; }
+            if let Some(property) = property.as_ref() {
+                let _ = owner.base_mut().add_summoned_creature(property, master, tile_x, tile_y, -1, lifetime_ms, area_width, area_height, runtime, |runtime| runtime.now_milliseconds());
+            }
+        }
+        game.restore_region_owner(owner);
+    }
+    if let Some(state) = player_ai.summon_creature_mut() { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
+    finish_player_summon_creature(game, player_id, player_ai, variant_index, runtime);
+    player_terminal(QueuedSkillExecutionState::Completed)
 }
 
 fn target_coordinates(
