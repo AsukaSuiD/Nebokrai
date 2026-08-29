@@ -58,13 +58,14 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
 use std::io;
 
 use chrono::NaiveDateTime;
 use encoding_rs::WINDOWS_1251;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel};
 use tokio::net::TcpStream;
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::{Handle, TryCurrentError};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 pub(crate) type TdsClient = Client<Compat<TcpStream>>;
@@ -129,13 +130,13 @@ pub(crate) enum RsCdKeyNotice {
 
 /// Ошибка создания синхронного Linux/TDS-владельца.
 #[derive(Debug)]
-pub(crate) struct RsCdKeyInitializationError(io::Error);
+pub(crate) struct RsCdKeyInitializationError(TryCurrentError);
 
 impl fmt::Display for RsCdKeyInitializationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "не создан синхронный runtime Login DB: {}",
+            "не найден runtime Login DB: {}",
             self.0
         )
     }
@@ -259,23 +260,27 @@ pub(crate) trait RsCdKeyOwner {
 /// Linux/TDS-замена одного исходного `CRsCDKey` LoginServer.
 pub(crate) struct TiberiusRsCdKey {
     config: Config,
-    runtime: Runtime,
+    runtime: Handle,
     notices: VecDeque<RsCdKeyNotice>,
 }
 
 impl TiberiusRsCdKey {
     /// Создаёт owner без соединения; как ADO, соединяется внутри каждой операции.
     pub(crate) fn new(settings: LoginDatabaseSettings) -> Result<Self, RsCdKeyInitializationError> {
-        let runtime = Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()
-            .map_err(RsCdKeyInitializationError)?;
+        let runtime = Handle::try_current().map_err(RsCdKeyInitializationError)?;
         Ok(Self {
             config: create_tds_config(settings),
             runtime,
             notices: VecDeque::new(),
         })
+    }
+
+    /// Сохраняет синхронную owner-границу поверх process-level Tokio runtime.
+    fn block_on_database<F>(&self, future: F) -> F::Output
+    where
+        F: Future,
+    {
+        tokio::task::block_in_place(|| self.runtime.block_on(future))
     }
 
     async fn connect(config: Config) -> Result<TdsClient, RsCdKeyDatabaseError> {
@@ -557,8 +562,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
         }
         let account_text = decode_ansi(account);
         match self
-            .runtime
-            .block_on(Self::apply_ban(self.config.clone(), account_text, minutes))
+            .block_on_database(Self::apply_ban(self.config.clone(), account_text, minutes))
         {
             Ok(inserted) => {
                 self.notices.push_back(RsCdKeyNotice::BanApplied {
@@ -581,8 +585,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
         }
         let account_text = decode_ansi(account);
         match self
-            .runtime
-            .block_on(Self::read_fixed_account(self.config.clone(), account_text))
+            .block_on_database(Self::read_fixed_account(self.config.clone(), account_text))
         {
             Ok(Some(user_id)) => user_id,
             Ok(None) => account.to_vec(),
@@ -596,8 +599,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
     fn get_ban_time(&mut self, account: &[u8]) -> Option<NaiveDateTime> {
         let account = decode_ansi(account);
         match self
-            .runtime
-            .block_on(Self::read_ban_time(self.config.clone(), account))
+            .block_on_database(Self::read_ban_time(self.config.clone(), account))
         {
             Ok(ban_time) => ban_time,
             Err(error) => {
@@ -609,8 +611,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
 
     fn list_active_bans(&mut self) -> Option<ActiveBanList> {
         match self
-            .runtime
-            .block_on(Self::read_active_bans(self.config.clone()))
+            .block_on_database(Self::read_active_bans(self.config.clone()))
         {
             Ok(result) => Some(result),
             Err(error) => {
@@ -624,7 +625,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
         if !check_enabled {
             return true;
         }
-        let result = self.runtime.block_on(Self::count_ip_ranges(
+        let result = self.block_on_database(Self::count_ip_ranges(
             self.config.clone(),
             "SELECT count(*) AS exp1 FROM ip_allow \
              WHERE @P1 >= int_begin AND @P1 <= int_end",
@@ -643,7 +644,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
         if !check_enabled {
             return false;
         }
-        let result = self.runtime.block_on(Self::count_ip_ranges(
+        let result = self.block_on_database(Self::count_ip_ranges(
             self.config.clone(),
             "SELECT count(*) AS exp1 FROM ip_forbid \
              WHERE @P1 >= int_begin AND @P1 <= int_end",
@@ -664,8 +665,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
         }
         let account = decode_ansi(account);
         match self
-            .runtime
-            .block_on(Self::read_ip_list(self.config.clone(), account, raw_ipv4))
+            .block_on_database(Self::read_ip_list(self.config.clone(), account, raw_ipv4))
         {
             // И EOF, и найденный диапазон возвращают true; false остаётся
             // только результатом ошибки запроса.
@@ -680,8 +680,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
     fn matrix_used(&mut self, account: &[u8]) -> bool {
         let account = decode_ansi(account);
         match self
-            .runtime
-            .block_on(Self::has_current_matrix(self.config.clone(), account))
+            .block_on_database(Self::has_current_matrix(self.config.clone(), account))
         {
             Ok(used) => used,
             Err(error) => {
@@ -699,8 +698,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
     ) -> MatrixValidation {
         let account = decode_ansi(account);
         let matrix_card = match self
-            .runtime
-            .block_on(Self::read_matrix_card(self.config.clone(), account))
+            .block_on_database(Self::read_matrix_card(self.config.clone(), account))
         {
             Ok(Some(matrix_card)) => matrix_card,
             Ok(None) => return MatrixValidation::Compared(false),
@@ -733,7 +731,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
         let account_text = decode_ansi(account);
         let password_text = decode_ansi(password);
         let numeric_account = is_numeric_account(account);
-        match self.runtime.block_on(Self::validate_password(
+        match self.block_on_database(Self::validate_password(
             self.config.clone(),
             account_text,
             original_account,
@@ -754,7 +752,7 @@ impl RsCdKeyOwner for TiberiusRsCdKey {
         user_ip: &[u8],
         user_password: &[u8],
     ) -> bool {
-        let result = self.runtime.block_on(Self::execute_gas_procedure(
+        let result = self.block_on_database(Self::execute_gas_procedure(
             self.config.clone(),
             decode_ansi(user_id),
             decode_ansi(user_ip),
