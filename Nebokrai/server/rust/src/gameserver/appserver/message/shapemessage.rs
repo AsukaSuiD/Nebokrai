@@ -15,10 +15,16 @@
 //! payload сохранён. Полиморфный `SetTileXY` не-игрока и полные сериализаторы
 //! player/goods/shape остаются границами исполнения. Синхронные отправки не
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
+//! Эмоция `0x8F905` сохраняет странность EXE: наличие `ChangeBody` сначала
+//! публикует `GS1038`, но не прерывает последующую проверку цели и
+//! `PerformEmotion`. Внешней остаётся только ещё не восстановленная ссылка
+//! `CBaseAI::GetTarget`.
 
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
+use crate::gameserver::gameserver::game::{
+    CGame, GameClockContext, colored_player_notice_message,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 use tracing::{debug, trace};
@@ -30,21 +36,13 @@ const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ShapeEmotionFacts {
-    pub(crate) blocked_state: bool,
-    pub(crate) ai_available: bool,
-    pub(crate) ai_has_target: bool,
-    pub(crate) now_ms: u32,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShapeSnapshot {
     pub(crate) identity: ShapeIdentity,
     pub(crate) payload: Vec<u8>,
 }
 
-pub(crate) trait GameShapeMessageRuntime {
+pub(crate) trait GameShapeMessageRuntime: GameClockContext {
     fn resolve_external_shape_view(
         &mut self,
         game: &CGame,
@@ -71,13 +69,14 @@ pub(crate) trait GameShapeMessageRuntime {
         region_id: i32,
         identity: ShapeIdentity,
     ) -> Option<ShapeSnapshot>;
-    fn shape_emotion_facts(
+    /// Возвращает только ещё не материализованный указатель
+    /// `CBaseAI::GetTarget`; сам `CPlayerAI`, часы и состояния принадлежат
+    /// каноническим владельцам.
+    fn player_ai_has_unmaterialized_target(
         &mut self,
         game: &CGame,
         player_id: i32,
-        region_id: i32,
-        emotion_id: i32,
-    ) -> ShapeEmotionFacts;
+    ) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -389,8 +388,10 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             else {
                 return Some(Ok(()));
             };
-            let facts = runtime.shape_emotion_facts(game, player_id, region_id, fields.2);
-            if facts.blocked_state {
+            let blocked_state = game
+                .find_player(player_id)
+                .is_some_and(|player| player.script_move_state_count(0x37) != 0);
+            if blocked_state {
                 let _ =
                     colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS1038"))
                         .send_to_player(game.net_server(), player_id);
@@ -400,15 +401,17 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 return Some(Ok(()));
             }
             let repeated = game.emotion_repeated(fields.2);
+            let ai_has_target = runtime.player_ai_has_unmaterialized_target(game, player_id);
+            let now_ms = runtime.now_milliseconds();
             let publish = game
                 .find_player_mut(player_id)
                 .expect("emotion player сохранён после identity lookup")
                 .perform_emotion_state(
                     fields.2,
                     repeated,
-                    facts.now_ms,
-                    facts.ai_available,
-                    facts.ai_has_target,
+                    now_ms,
+                    true,
+                    ai_has_target,
                 );
             if !publish {
                 trace!(player_id, region_id, emotion_id = fields.2, "эмоция отклонена состоянием игрока");
