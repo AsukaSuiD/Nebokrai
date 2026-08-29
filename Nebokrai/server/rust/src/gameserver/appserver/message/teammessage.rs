@@ -11,7 +11,9 @@
 use crate::gameserver::appserver::session::csessionfactory::{
     TeamMemberSnapshot, TeamSessionSnapshot,
 };
-use crate::gameserver::appserver::teamstate::CTeamState;
+use crate::gameserver::appserver::teamstate::{
+    CTeamState, team_state_begin_message, team_state_end_message,
+};
 use crate::gameserver::gameserver::game::{
     CGame, GameTeamChatResult, GameTeamJoinResult, colored_player_notice_message,
     game_tick_milliseconds,
@@ -531,14 +533,11 @@ pub(crate) fn dispatch_game_team_message(
             .find_player(player_id)
             .and_then(|player| player.first_team_recruitment_state())
             .cloned();
-        let Some(state) = state else {
+        let Some(_state) = state else {
             trace!(player_id, "Набор в группу уже выключен");
             return Some(Ok(()));
         };
-        let mut ended = CMessage::new(0x000b_fe04);
-        ended.add_long(400);
-        ended.add_long(player_id);
-        ended.add_long(state.state_id());
+        let ended = team_state_end_message(player_id);
         let delivery = game.send_player_shape_around(player_id, None, &ended);
         let _ended = game
             .find_player_mut(player_id)
@@ -568,14 +567,7 @@ pub(crate) fn dispatch_game_team_message(
     }
 
     let state = CTeamState::new(team_name, team_password);
-    let mut begun = CMessage::new(0x000b_fe03);
-    begun.add_long(400);
-    begun.add_long(player_id);
-    begun.add_long(state.state_id());
-    begun.add_long(state.client_state_time());
-    begun.add_ulong(state.initial_additional_data());
-    begun.base_mut().add(state.team_name());
-    begun.add_byte(0);
+    let begun = team_state_begin_message(player_id, &state);
     let delivery = game.send_player_shape_around(player_id, None, &begun);
     game.find_player_mut(player_id)
         .expect("team message player разрешён до state attach")

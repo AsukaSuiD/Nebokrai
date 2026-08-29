@@ -48,6 +48,7 @@ use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
+use super::teamstate::CTeamState;
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
@@ -558,6 +559,7 @@ pub(crate) struct CanonicalStateStorage {
     wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
     automatic_restore_states: Vec<AutomaticRestoreState>,
     particular_states: Vec<ParticularState>,
+    team_recruitment_states: Vec<CTeamState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
@@ -827,6 +829,7 @@ impl CMoveShape {
         self.wuxing_states.clear();
         self.automatic_restore_states.clear();
         self.particular_states.clear();
+        self.team_recruitment_states.clear();
         self.battle_fairy_attribute_states.clear();
         self.periodic_attack_order.clear();
         self.defense_shields.clear();
@@ -882,6 +885,7 @@ impl CMoveShape {
             || self.state_storage.leaf_cut_3_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.particular_states.is_empty()
+            || !self.state_storage.team_recruitment_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
             || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
@@ -924,6 +928,29 @@ impl CMoveShape {
         index: usize,
     ) -> Option<ParticularState> {
         (index < self.particular_states.len()).then(|| self.particular_states.remove(index))
+    }
+
+    pub(crate) fn team_recruitment_states(&self) -> &[CTeamState] {
+        &self.team_recruitment_states
+    }
+
+    pub(crate) fn team_recruitment_state_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut CTeamState> {
+        self.team_recruitment_states.get_mut(index)
+    }
+
+    pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
+        self.team_recruitment_states.push(state);
+    }
+
+    pub(crate) fn remove_team_recruitment_state_at(
+        &mut self,
+        index: usize,
+    ) -> Option<CTeamState> {
+        (index < self.team_recruitment_states.len())
+            .then(|| self.team_recruitment_states.remove(index))
     }
 
     pub(crate) fn automatic_restore_state(&self, index: usize) -> Option<AutomaticRestoreState> {

@@ -738,6 +738,9 @@ use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, SymbolCaptureLog, WarContendContext, WarContendEntryContext,
     WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError, WarRegionOwnership,
 };
+use crate::gameserver::appserver::teamstate::{
+    CTeamState, team_state_end_message, team_state_update_message,
+};
 use crate::gameserver::appserver::session::cequipmentcompose::{
     CEquipmentCompose, COMPOSE_CONSUME_REASON, COMPOSE_CREATE_REASON, COMPOSE_STONE_GOODS_INDEX,
     EquipmentComposeAuditLog, EquipmentComposeSourceSnapshot,
@@ -26433,6 +26436,69 @@ impl CGame {
         ended
     }
 
+    fn update_player_team_recruitment_states<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        first_sampled_at_ms: u32,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let initial_count = self
+            .find_player(player_id)
+            .map(CPlayer::team_recruitment_state_count)
+            .unwrap_or_default();
+        let mut ended = 0usize;
+        for index in 0..initial_count {
+            let sampled_at_ms = if index == 0 {
+                first_sampled_at_ms
+            } else {
+                runtime.now_milliseconds()
+            };
+            let due = self
+                .find_player(player_id)
+                .and_then(|player| player.team_recruitment_state(index))
+                .is_some_and(|state| state.check_due(sampled_at_ms));
+            if !due {
+                continue;
+            }
+            let recorded_at_ms = runtime.now_milliseconds();
+            let Some(player) = self.find_player_mut(player_id) else {
+                break;
+            };
+            let Some(state) = player.team_recruitment_state_mut(index) else {
+                break;
+            };
+            state.record_check(recorded_at_ms);
+
+            let team_id = self
+                .find_player(player_id)
+                .map(CPlayer::team_id)
+                .unwrap_or_default();
+            let team_leader_id = (team_id != 0)
+                .then(|| self.get_team_session_id(team_id as u32))
+                .and_then(|session_id| self.session_factory.query_team(session_id))
+                .map(|team| team.leader_id());
+            if !CTeamState::ends_for_team(player_id, team_id, team_leader_id) {
+                continue;
+            }
+            let removed = self
+                .find_player_mut(player_id)
+                .and_then(|player| player.remove_team_recruitment_state_at(index));
+            if removed.is_none() {
+                break;
+            }
+            let message = team_state_end_message(player_id);
+            let delivery = self.send_player_shape_around(player_id, None, &message);
+            tracing::trace!(
+                player_id,
+                team_id,
+                ?delivery,
+                "набор в группу завершён после смены лидера"
+            );
+            ended = ended.wrapping_add(1);
+        }
+        ended
+    }
+
     fn update_player_particular_states(&mut self, player_id: i32, now_ms: u32) -> usize {
         let mut ended = 0usize;
         let mut index = 0usize;
@@ -26488,6 +26554,8 @@ impl CGame {
         };
         let particular_states_ended =
             self.update_player_particular_states(player_id, now_ms);
+        let team_recruitment_states_ended =
+            self.update_player_team_recruitment_states(player_id, now_ms, runtime);
         let _ = expire_player_pillar_state(self, player_id, now_ms);
         let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_rush_2_state(self, player_id, now_ms);
@@ -26594,6 +26662,7 @@ impl CGame {
             defense_shields_ended,
             battle_fairy_attribute_states_ended,
             particular_states_ended,
+            team_recruitment_states_ended,
             "обновлены временные состояния игрока"
         );
         Some(())
@@ -29085,11 +29154,7 @@ impl CGame {
         else {
             return;
         };
-        let mut message = CMessage::new(0x000b_fe05);
-        message.add_long(leader_id);
-        message.add_long(leader_id);
-        message.add_long(state.state_id());
-        message.add_ulong(state.additional_data(teammate_count));
+        let message = team_state_update_message(leader_id, state, teammate_count);
         let delivery = self.send_player_shape_around(leader_id, None, &message);
         tracing::trace!(
             leader_id,

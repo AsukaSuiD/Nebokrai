@@ -1801,7 +1801,6 @@ pub(crate) struct CPlayer {
     heart_request_sent: i32,
     heart_received: bool,
     friends: Vec<PlayerFriend>,
-    team_recruitment_states: Vec<CTeamState>,
     quest_states: BTreeMap<u16, u8>,
     lei_ting_things: VecDeque<PlayerLeiTingThing>,
     uncreated_pets: Vec<PlayerUncreatedPet>,
@@ -2154,7 +2153,6 @@ impl CPlayer {
             heart_request_sent: 0,
             heart_received: false,
             friends: Vec::new(),
-            team_recruitment_states: Vec::new(),
             quest_states: BTreeMap::new(),
             lei_ting_things: VecDeque::new(),
             uncreated_pets: Vec::new(),
@@ -3207,25 +3205,43 @@ impl CPlayer {
     }
 
     pub(crate) fn has_team_recruitment_state(&self) -> bool {
-        !self.team_recruitment_states.is_empty()
+        !self.move_shape.team_recruitment_states().is_empty()
     }
 
     pub(crate) fn team_recruitment_state_count(&self) -> usize {
-        self.team_recruitment_states.len()
+        self.move_shape.team_recruitment_states().len()
     }
 
     pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
-        self.team_recruitment_states.push(state);
+        self.move_shape.attach_team_recruitment_state(state);
     }
 
     pub(crate) fn first_team_recruitment_state(&self) -> Option<&CTeamState> {
-        self.team_recruitment_states.first()
+        self.move_shape.team_recruitment_states().first()
+    }
+
+    pub(crate) fn team_recruitment_state(&self, index: usize) -> Option<&CTeamState> {
+        self.move_shape.team_recruitment_states().get(index)
+    }
+
+    pub(crate) fn team_recruitment_state_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut CTeamState> {
+        self.move_shape.team_recruitment_state_mut(index)
+    }
+
+    pub(crate) fn remove_team_recruitment_state_at(
+        &mut self,
+        index: usize,
+    ) -> Option<CTeamState> {
+        self.move_shape.remove_team_recruitment_state_at(index)
     }
 
     /// `0x8FF08 / disabled` завершает первый найденный state ID, как линейный
     /// native `m_vStates` lookup, и не удаляет возможные более поздние дубли.
     pub(crate) fn end_first_team_recruitment_state(&mut self) -> Option<CTeamState> {
-        (!self.team_recruitment_states.is_empty()).then(|| self.team_recruitment_states.remove(0))
+        self.remove_team_recruitment_state_at(0)
     }
 
     /// Exact `GetQuestState`: отсутствующий ushort ID имеет state `2`,
@@ -4868,7 +4884,7 @@ impl CPlayer {
     pub(crate) fn script_move_state_count(&self, state_id: i32) -> u32 {
         self.move_shape.script_state_count(state_id).saturating_add(
             (state_id == TEAM_STATE_ID)
-                .then_some(self.team_recruitment_states.len())
+                .then_some(self.move_shape.team_recruitment_states().len())
                 .unwrap_or(0)
                 .min(u32::MAX as usize) as u32,
         )

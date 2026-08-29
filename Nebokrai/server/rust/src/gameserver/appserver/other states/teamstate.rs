@@ -4,11 +4,20 @@
 //! `appserver/other states/teamstate.cpp`. Материализован достигнутый через
 //! client `0x8FF08` lifecycle: имя/пароль, state ID `100006`, бессрочное
 //! client-time и additional-data с password bit и исходным количеством один.
-//! Общий polymorphic `CState` storage заменён typed player-owned списком;
-//! begin/end visual wire публикует message owner. Team-session AI и
-//! сериализация остальных способов создания state остаются в RAW ниже.
+//! Общий полиморфный список `CState` заменён каноническим типизированным
+//! хранилищем игрока. Владелец состояния строит пакеты начала, завершения и
+//! изменения числа участников; AI раз в пять секунд двумя отдельными чтениями
+//! часов проверяет, остался ли игрок лидером найденной team-session.
+//! Координатные overload-ы `Begin`, базовая сериализация и восстановление из
+//! старого хранилища пока не достигнуты и сохранены в RAW ниже.
+
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const TEAM_STATE_ID: i32 = 0x0001_86a6;
+const TEAM_STATE_CHECK_INTERVAL_MS: u32 = 5_000;
+const TEAM_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const TEAM_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+const TEAM_STATE_UPDATE_MESSAGE: i32 = 0x000b_fe05;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeamState {
@@ -54,9 +63,56 @@ impl CTeamState {
         &self.team_password
     }
 
-    pub(crate) const fn last_check_timestamp_ms(&self) -> u32 {
+    pub(crate) const fn check_due(&self, sampled_at_ms: u32) -> bool {
         self.last_check_timestamp_ms
+            .wrapping_add(TEAM_STATE_CHECK_INTERVAL_MS)
+            <= sampled_at_ms
     }
+
+    pub(crate) const fn record_check(&mut self, sampled_at_ms: u32) {
+        self.last_check_timestamp_ms = sampled_at_ms;
+    }
+
+    pub(crate) const fn ends_for_team(
+        player_id: i32,
+        team_id: i32,
+        team_leader_id: Option<i32>,
+    ) -> bool {
+        team_id != 0 && matches!(team_leader_id, Some(leader_id) if leader_id != player_id)
+    }
+}
+
+pub(crate) fn team_state_begin_message(player_id: i32, state: &CTeamState) -> CMessage {
+    let mut message = CMessage::new(TEAM_STATE_BEGIN_MESSAGE);
+    message.add_long(400);
+    message.add_long(player_id);
+    message.add_long(state.state_id());
+    message.add_long(state.client_state_time());
+    message.add_ulong(state.initial_additional_data());
+    message.base_mut().add(state.team_name());
+    message.add_byte(0);
+    message
+}
+
+pub(crate) fn team_state_end_message(player_id: i32) -> CMessage {
+    let mut message = CMessage::new(TEAM_STATE_END_MESSAGE);
+    message.add_long(400);
+    message.add_long(player_id);
+    message.add_long(TEAM_STATE_ID);
+    message
+}
+
+pub(crate) fn team_state_update_message(
+    player_id: i32,
+    state: &CTeamState,
+    teammate_count: usize,
+) -> CMessage {
+    let mut message = CMessage::new(TEAM_STATE_UPDATE_MESSAGE);
+    message.add_long(player_id);
+    message.add_long(player_id);
+    message.add_long(state.state_id());
+    message.add_ulong(state.additional_data(teammate_count));
+    message
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -94,20 +150,6 @@ impl CTeamState {
 //
 
 // ============================================================================
-// FUNCTION: CTeamState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:44
-// RVA: 0x001BF9A0
-// ADDRESS: 005bf9a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CTeamState::Serialize
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -116,48 +158,6 @@ impl CTeamState {
 // RVA: 0x001BFA50
 // ADDRESS: 005bfa50
 // PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTeamState::GetTeamName
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:162
-// RVA: 0x001BFAB0
-// ADDRESS: 005bfab0
-// PROTOTYPE: char * __thiscall GetTeamName(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTeamState::GetTeamPassword
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:167
-// RVA: 0x001BFAC0
-// ADDRESS: 005bfac0
-// PROTOTYPE: char * __thiscall GetTeamPassword(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTeamStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:205
-// RVA: 0x001BFAD0
-// ADDRESS: 005bfad0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -186,48 +186,6 @@ impl CTeamState {
 // RVA: 0x001BFCA0
 // ADDRESS: 005bfca0
 // PROTOTYPE: void __thiscall ~CTeamState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTeamState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:111
-// RVA: 0x001BFD20
-// ADDRESS: 005bfd20
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTeamState::GetAdditionalData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:172
-// RVA: 0x001BFDD0
-// ADDRESS: 005bfdd0
-// PROTOTYPE: ulong __thiscall GetAdditionalData(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CTeamState::CTeamState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\teamstate.cpp:17
-// RVA: 0x001BFE60
-// ADDRESS: 005bfe60
-// PROTOTYPE: undefined __thiscall CTeamState(char * param_1, char * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
