@@ -37,7 +37,10 @@
 
 // ============================================================================
 // FUNCTION: CBossBlue::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `execute_owned_monster_base_attack` и
+// `bossidle::schedule_attack_interval` сохраняют достигнутые target/current
+// skill, `Tracing`, `CheckCast` и отсутствие обычного attack-speed gate.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp:93

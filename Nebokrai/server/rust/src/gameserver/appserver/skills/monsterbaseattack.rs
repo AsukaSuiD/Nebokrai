@@ -106,7 +106,9 @@ use crate::gameserver::appserver::ai::bossblue::{
 use crate::gameserver::appserver::ai::bossfiend::{
     choose_boss_fiend_attack_skill, select_boss_fiend_enemy,
 };
-use crate::gameserver::appserver::ai::bossidle::{BossIdleProgress, advance_boss_idle};
+use crate::gameserver::appserver::ai::bossidle::{
+    BossIdleProgress, advance_boss_idle, schedule_attack_interval,
+};
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
@@ -1564,8 +1566,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     ) {
         return true;
     }
-    let attack_interval =
-        pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval);
+    let attack_interval = schedule_attack_interval(
+        property.ai,
+        pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
+    );
     if last_attack_ms != 0
         && (now_ms.wrapping_sub(last_attack_ms) < attack_interval
             || now_ms.wrapping_sub(last_attack_ms) < reuse_delay_ms)

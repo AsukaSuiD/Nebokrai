@@ -12,7 +12,10 @@
 //! выбора от минимальной дистанции текущего навыка. `OnIdle` подключён
 //! целиком: общий владелец бездействия выполняет исходный случайный шаг либо ожидание
 //! перед поиском, а отсутствие игроков переводит владельца в сон.
-//! `OnSchedule` и `OnMoving` ниже остаются RAW.
+//! `OnSchedule` достигнут через общий боевой caller без обычного
+//! attack-speed gate. `OnMoving` замкнут общим владельцем бездействия: поиск
+//! начинается после завершения поставленного перед ним шага. Не достигнутые
+//! части `OnSchedule` ниже остаются RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -22,7 +25,10 @@
 
 // ============================================================================
 // FUNCTION: CBossFiend::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `execute_owned_monster_base_attack` и
+// `bossidle::schedule_attack_interval` сохраняют достигнутые target/current
+// skill, `Tracing`, `CheckCast` и отсутствие обычного attack-speed gate.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp:98
@@ -33,21 +39,6 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CBossFiend::OnMoving
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp:35
-// RVA: 0x0020C4F0
-// ADDRESS: 0060c4f0
-// PROTOTYPE: int __thiscall OnMoving(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // COMPONENT_VARIANT_END: GameServer
 
