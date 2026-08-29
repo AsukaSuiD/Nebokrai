@@ -8,11 +8,12 @@
 //! `0xC0201`; `CGame` используется только для доступа к владельцам и доставки.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -103,9 +104,13 @@ fn send_cast(
 fn finish_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
 }
+
+fn abort_player_monster_taming(game: &mut CGame, player_id: i32) { finish_movement(game, player_id); abort_skill(game, player_id); }
+fn finish_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_monster_taming_used(now_ms)); }
+pub(crate) fn complete_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.monster_taming().map(SkillExecutionKernel::dispatch) else { return false }; finish_movement(game, player_id); finish_player_monster_taming(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Completed) }
+pub(crate) fn cancel_player_monster_taming<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.monster_taming().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_monster_taming(game, player_id); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
 fn add_legacy_c_string(message: &mut crate::nets::basemessage::CBaseMessage, value: &[u8]) {
     let visible = value.iter().position(|byte| *byte == 0).map_or(value, |end| &value[..end]);
@@ -291,13 +296,13 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
     }
 
     let Some(current_target) = target_snapshot(game, region_id, monster_id) else {
-        finish_movement(game, player_id);
+        abort_player_monster_taming(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if current_target.hit_points == 0 {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
-        finish_movement(game, player_id);
+        abort_player_monster_taming(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai.monster_taming().is_some_and(|state| state.stage() == SkillStage::Begin) {
@@ -305,7 +310,7 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_movement(game, player_id);
+            abort_player_monster_taming(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((source_x, source_y)) = game.find_player(player_id).and_then(|player| {
@@ -314,7 +319,7 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
                 player.shape().get_tile_y().ok()?,
             ))
         }) else {
-            finish_movement(game, player_id);
+            abort_player_monster_taming(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -339,9 +344,9 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
-    finish_movement(game, player_id);
+    abort_player_monster_taming(game, player_id);
     let Some(target) = target_snapshot(game, region_id, monster_id) else {
-        player_ai.mark_monster_taming_used(runtime.now_milliseconds());
+        finish_player_monster_taming(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Completed);
     };
     let Some((source_x, source_y, player_level, weapon_level, pet_count)) = game
@@ -356,7 +361,7 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
             ))
         })
     else {
-        player_ai.mark_monster_taming_used(runtime.now_milliseconds());
+        finish_player_monster_taming(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Completed);
     };
     let current_path = game.base_magic_path(region_id, source_x, source_y, target.tile_x, target.tile_y, None);
@@ -371,7 +376,7 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
     }
     if !target.tamable || !increase_attempt(game, region_id, monster_id) {
-        player_ai.mark_monster_taming_used(runtime.now_milliseconds());
+        finish_player_monster_taming(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Completed);
     }
     let safe_cell = game.find_region(region_id).is_none_or(|region| {
@@ -395,6 +400,6 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
     if let Some(state) = player_ai.monster_taming_mut() {
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_monster_taming_used(runtime.now_milliseconds());
+    finish_player_monster_taming(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

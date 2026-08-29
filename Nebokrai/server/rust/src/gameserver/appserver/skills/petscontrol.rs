@@ -7,10 +7,11 @@
 //! регионального владельца и передаёт цель всем принадлежащим игроку питомцам.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -73,9 +74,13 @@ fn send_cast(
 fn finish_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
 }
+
+fn abort_player_pets_control(game: &mut CGame, player_id: i32) { finish_movement(game, player_id); abort_skill(game, player_id); }
+fn finish_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_pets_control_used(now_ms)); }
+pub(crate) fn complete_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.pets_control().map(SkillExecutionKernel::dispatch) else { return false }; finish_movement(game, player_id); finish_player_pets_control(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Completed) }
+pub(crate) fn cancel_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.pets_control().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_pets_control(game, player_id); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
 pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -169,7 +174,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
     if game.periodic_state_target_dead(region_id, target) {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
-        finish_movement(game, player_id);
+        abort_player_pets_control(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -178,7 +183,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
         if current_mana < mp_loss {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_movement(game, player_id);
+            abort_player_pets_control(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -205,7 +210,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Pending);
     }
 
-    finish_movement(game, player_id);
+    abort_player_pets_control(game, player_id);
     send_cast(game, player_id, target, skill_level, 2);
     let _ = game.set_player_pets_target(player_id, target.object_type, target.id);
     if let Some(state) = player_ai.pets_control_mut() {
@@ -213,6 +218,6 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_pets_control_used(runtime.now_milliseconds());
+    finish_player_pets_control(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

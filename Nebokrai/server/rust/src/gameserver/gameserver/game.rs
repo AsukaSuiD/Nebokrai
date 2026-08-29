@@ -1234,9 +1234,11 @@ use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::petscontrol::{
-    execute_player_pets_control, PETS_CONTROL_SKILL_ID,
+    cancel_player_pets_control, complete_player_pets_control, execute_player_pets_control,
+    PETS_CONTROL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::monstertaming::{
+    cancel_player_monster_taming, complete_player_monster_taming,
     execute_player_monster_taming, MONSTER_TAMING_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::poisonarrow::{
@@ -37612,6 +37614,8 @@ impl CGame {
                 | GOD_BLESS_2_SKILL_ID
                 | CURE_SKILL_ID
                 | PROMOTION_SKILL_ID
+                | PETS_CONTROL_SKILL_ID
+                | MONSTER_TAMING_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
             && !is_heal_skill(skill_id)
         {
@@ -37711,6 +37715,8 @@ impl CGame {
             GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => player_ai.god_bless().is_some(),
             CURE_SKILL_ID => player_ai.cure().is_some(),
             PROMOTION_SKILL_ID => player_ai.promotion().is_some(),
+            PETS_CONTROL_SKILL_ID => player_ai.pets_control().is_some(),
+            MONSTER_TAMING_SKILL_ID => player_ai.monster_taming().is_some(),
             _ if is_heal_skill(skill_id) => (0..4).any(|index| player_ai.heal_family(index).is_some()),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(&player_ai, skill_id)
@@ -37874,6 +37880,18 @@ impl CGame {
                     runtime,
                 )),
                 PROMOTION_SKILL_ID => Some(complete_player_promotion(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                PETS_CONTROL_SKILL_ID => Some(complete_player_pets_control(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                MONSTER_TAMING_SKILL_ID => Some(complete_player_monster_taming(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38181,6 +38199,12 @@ impl CGame {
             CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, runtime),
             PROMOTION_SKILL_ID => {
                 cancel_player_promotion(self, player_id, &mut player_ai, runtime)
+            }
+            PETS_CONTROL_SKILL_ID => {
+                cancel_player_pets_control(self, player_id, &mut player_ai, runtime)
+            }
+            MONSTER_TAMING_SKILL_ID => {
+                cancel_player_monster_taming(self, player_id, &mut player_ai, runtime)
             }
             _ if is_heal_skill(skill_id) => {
                 cancel_player_heal(self, player_id, &mut player_ai, runtime)
