@@ -21,6 +21,9 @@ use super::monsterattack::{
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -474,14 +477,31 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     deaths: &mut Vec<MonsterAttackDeath>,
 ) -> bool {
-    let Some((source, property, master, tamed, cast, progress, last_used_ms)) = region
+    let Some((
+        source,
+        property,
+        master,
+        tamed,
+        attack_interval_ms,
+        cast,
+        progress,
+        last_used_ms,
+    )) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            let attack_interval_ms = monster
+                .is_tamed()
+                .then(|| monster.pet_attack_properties(&property))
+                .map_or(property.attack_speed, |pet| pet.attack_interval);
             Some((
                 monster.move_shape().shape().clone(),
-                game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
+                property,
                 monster.master_info(),
                 monster.is_tamed(),
+                attack_interval_ms,
                 monster.base_attack_cast(),
                 monster.little_star_progress().cloned(),
                 monster.skill_last_used_ms(LITTLE_STAR_SKILL_ID),
@@ -524,6 +544,28 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     let (target_x, target_y) = target_position.unwrap_or((source_x, source_y));
 
     if cast.is_none() {
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            target_x,
+            target_y,
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+            now_ms,
+        ) {
+            return true;
+        }
+        if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
+        {
+            let attack_started = region
+                .find_monster_by_id_mut(monster_id)
+                .is_some_and(|monster| {
+                    monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
+                });
+            if !attack_started {
+                return true;
+            }
+        }
         if last_used_ms != 0
             && !time_reached(now_ms, last_used_ms, properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME))
         {
