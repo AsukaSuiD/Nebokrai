@@ -9,6 +9,8 @@
 //! заменяет их канонический `SpiderPoisonState` (`0x191`). Состояние создаётся
 //! с отдельным чтением часов для каждой цели. `CGame` только разрешает
 //! независимых владельцев региона и цели и выполняет фактическую доставку.
+//! Player `End` возвращает движение и выполняет `CSummonSkill::End(1)`;
+//! установленное состояние цели живёт независимо от завершённого cast.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
@@ -29,7 +31,10 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::skills::kernel::{
+    SkillExecutionKernel, SkillStage, SkillTermination,
+};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -108,11 +113,34 @@ fn send_player_fire(game: &mut CGame, player_id: i32, level: i32, tile_x: i32, t
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish_player(game: &mut CGame, player_id: i32) {
+fn finish_player_sprite_burn<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_sprite_burn_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_sprite_burn<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .sprite_burn()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    finish_player_sprite_burn(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn apply_player_scope<Runtime: GameMainLoopRuntime>(
@@ -172,6 +200,9 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
         ))
     }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(SPRITE_BURN_SKILL_ID, level) else {
+        if player_ai.sprite_burn().is_some() {
+            finish_player_sprite_burn(game, player_id, player_ai, runtime);
+        }
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
@@ -207,7 +238,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_player_failure(game, player_id, 7);
-            finish_player(game, player_id);
+            finish_player_sprite_burn(game, player_id, player_ai, runtime);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -229,7 +260,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     let Some((center_x, center_y)) = game.find_player(player_id).and_then(|player| {
         Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
     }) else {
-        finish_player(game, player_id);
+        finish_player_sprite_burn(game, player_id, player_ai, runtime);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     send_player_fire(game, player_id, level, center_x, center_y);
@@ -243,8 +274,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
     if let Some(state) = player_ai.sprite_burn_mut() {
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_sprite_burn_used(runtime.now_milliseconds());
-    finish_player(game, player_id);
+    finish_player_sprite_burn(game, player_id, player_ai, runtime);
     player_terminal(QueuedSkillExecutionState::Completed)
 }
 

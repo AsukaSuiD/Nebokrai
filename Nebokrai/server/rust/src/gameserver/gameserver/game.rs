@@ -936,7 +936,8 @@ use crate::gameserver::appserver::skills::zombieclaw::{
     ZOMBIE_CLAW_SKILL_ID, execute_player_zombie_claw,
 };
 use crate::gameserver::appserver::skills::spriteburn::{
-    execute_player_sprite_burn, is_sprite_burn_dispatch,
+    cancel_player_sprite_burn, execute_player_sprite_burn, is_sprite_burn_dispatch,
+    SPRITE_BURN_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_player_machinery_stomp, is_machinery_stomp_dispatch,
@@ -37451,6 +37452,7 @@ impl CGame {
                 | ENERGY_BOLT_SKILL_ID
                 | ZOMBIE_CLAW_SKILL_ID
                 | SNAKE_BOLT_SKILL_ID
+                | SPRITE_BURN_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37507,6 +37509,7 @@ impl CGame {
             ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
                 player_ai.path_projectile().is_some()
             }
+            SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37606,6 +37609,9 @@ impl CGame {
             }
             ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
                 cancel_player_path_projectile(self, player_id, &mut player_ai, runtime)
+            }
+            SPRITE_BURN_SKILL_ID => {
+                cancel_player_sprite_burn(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
