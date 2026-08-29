@@ -55,10 +55,10 @@ fn finish_base_attack_owner<Runtime, MarkUsed>(
         player.set_skill_moveable(true);
     }
     game.damage_player_weapon(player_id, runtime);
-    mark_used(player_ai, runtime.now_milliseconds());
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
+    mark_used(player_ai, runtime.now_milliseconds());
 }
 
 pub(crate) fn finish_delayed_base_attack<Runtime, MarkUsed>(

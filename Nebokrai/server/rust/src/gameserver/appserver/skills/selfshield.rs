@@ -1,11 +1,12 @@
 //! Общий execution-owner самонакладываемых `CManaShield` и `CMachineShield`.
 //!
 //! Здесь объединён только подтверждённый одинаковый контракт двух навыков:
-//! двойная проверка MP, cooldown, стадии каста и wire-layout. Конкретный набор
-//! параметров и создание канонического состояния остаются у skill-owner-а.
+//! двойная проверка MP, время восстановления, стадии каста, клиентская отмена
+//! и точный порядок полей пакета. Конкретный набор параметров и создание
+//! канонического состояния остаются у владельца навыка.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::machineshield::{MACHINE_SHIELD_SKILL_ID, MachineShieldOwner};
 use super::manashield::{MANA_SHIELD_SKILL_ID, ManaShieldOwner};
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -66,6 +67,55 @@ pub(crate) trait SelfShieldOwner {
 
 pub(crate) const fn is_self_shield_skill(skill_id: u32) -> bool {
     matches!(skill_id, MANA_SHIELD_SKILL_ID | MACHINE_SHIELD_SKILL_ID)
+}
+
+pub(crate) fn materialized_self_shield_active(player_ai: &CPlayerAI, skill_id: u32) -> bool {
+    match skill_id {
+        MANA_SHIELD_SKILL_ID => ManaShieldOwner::execution(player_ai).is_some(),
+        MACHINE_SHIELD_SKILL_ID => MachineShieldOwner::execution(player_ai).is_some(),
+        _ => false,
+    }
+}
+
+fn finish_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    game.finish_self_shield_movement(player_id);
+    Owner::mark_used(player_ai, runtime.now_milliseconds());
+}
+
+fn cancel_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = Owner::execution(player_ai).map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_self_shield::<Owner, Runtime>(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
+pub(crate) fn cancel_player_self_shield_dispatch<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    match skill_id {
+        MANA_SHIELD_SKILL_ID => cancel_player_self_shield::<ManaShieldOwner, Runtime>(
+            game, player_id, player_ai, runtime,
+        ),
+        MACHINE_SHIELD_SKILL_ID => cancel_player_self_shield::<MachineShieldOwner, Runtime>(
+            game, player_id, player_ai, runtime,
+        ),
+        _ => false,
+    }
 }
 
 pub(crate) fn execute_player_self_shield_dispatch<Runtime: GameMainLoopRuntime>(
@@ -247,7 +297,6 @@ where
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    Owner::mark_used(player_ai, runtime.now_milliseconds());
-    game.finish_self_shield_movement(player_id);
+    finish_player_self_shield::<Owner, Runtime>(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

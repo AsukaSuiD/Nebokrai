@@ -1161,7 +1161,8 @@ use crate::gameserver::appserver::skills::lingzhishu::{
     execute_battle_fairy_lingzhishu, LINGZHISHU_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::selfshield::{
-    execute_player_self_shield_dispatch, is_self_shield_skill,
+    cancel_player_self_shield_dispatch, execute_player_self_shield_dispatch,
+    is_self_shield_skill, materialized_self_shield_active,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::expire_player_defense_shields;
@@ -37330,7 +37331,8 @@ impl CGame {
         if !matches!(
             skill_id,
             BASE_ATTACK_SKILL_ID | BASE_MAGIC_SKILL_ID | ARCHERY_SKILL_ID
-        ) {
+        ) && !is_self_shield_skill(skill_id)
+        {
             return None;
         }
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
@@ -37338,6 +37340,9 @@ impl CGame {
             BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
+            _ if is_self_shield_skill(skill_id) => {
+                materialized_self_shield_active(&player_ai, skill_id)
+            }
             _ => unreachable!("фильтр ограничивает materialized end владельцами"),
         };
         if !materialized {
@@ -37354,6 +37359,13 @@ impl CGame {
                 cancel_player_base_magic(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
+            _ if is_self_shield_skill(skill_id) => cancel_player_self_shield_dispatch(
+                self,
+                player_id,
+                skill_id,
+                &mut player_ai,
+                runtime,
+            ),
             _ => unreachable!("фильтр ограничивает materialized end владельцами"),
         };
         if let Some(player) = self.find_player_mut(player_id) {
