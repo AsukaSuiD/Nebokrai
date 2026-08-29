@@ -837,7 +837,10 @@ use crate::gameserver::appserver::skills::rainarrow::{
     is_rain_arrow_dispatch,
 };
 use crate::gameserver::appserver::skills::rainarrowphalanx::RAIN_ARROW_SKILL_ID;
-use crate::gameserver::appserver::skills::poisonmoth::{execute_player_poison_moth, is_poison_moth_dispatch};
+use crate::gameserver::appserver::skills::poisonmoth::{
+    cancel_player_poison_moth, complete_player_poison_moth, execute_player_poison_moth,
+    is_poison_moth_dispatch, POISON_MOTH_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::bloodrose::{execute_player_blood_rose, is_blood_rose_dispatch};
 use crate::gameserver::appserver::skills::scorpion::{execute_player_scorpion, is_scorpion_dispatch};
 use crate::gameserver::appserver::skills::boalock::{execute_player_boa_lock, is_boa_lock_dispatch};
@@ -1237,7 +1240,10 @@ use crate::gameserver::appserver::skills::kerosene::{execute_player_kerosene, is
 use crate::gameserver::appserver::skills::kerosenestate::{
     update_monster_kerosene_state, update_player_kerosene_state,
 };
-use crate::gameserver::appserver::skills::ignition::{execute_player_ignition, is_ignition_dispatch};
+use crate::gameserver::appserver::skills::ignition::{
+    cancel_player_ignition, complete_player_ignition, execute_player_ignition,
+    is_ignition_dispatch, IGNITION_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::blind::{execute_player_blind, is_blind_dispatch};
 use crate::gameserver::appserver::skills::fatalblow::{
     FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
@@ -37533,6 +37539,8 @@ impl CGame {
                 | METEOR_ARROW_MASS_SKILL_ID
                 | METEOR_ARROW_SKILL_ID
                 | RAIN_ARROW_SKILL_ID
+                | POISON_MOTH_SKILL_ID
+                | IGNITION_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
                 | AGILITY_SKILL_ID
@@ -37613,6 +37621,8 @@ impl CGame {
             METEOR_ARROW_MASS_SKILL_ID => player_ai.meteor_arrow_mass().is_some(),
             METEOR_ARROW_SKILL_ID => player_ai.meteor_arrow().is_some(),
             RAIN_ARROW_SKILL_ID => player_ai.rain_arrow().is_some(),
+            POISON_MOTH_SKILL_ID => player_ai.poison_moth().is_some(),
+            IGNITION_SKILL_ID => player_ai.ignition().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
@@ -37670,6 +37680,18 @@ impl CGame {
                     runtime,
                 )),
                 RAIN_ARROW_SKILL_ID => Some(complete_player_rain_arrow(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                POISON_MOTH_SKILL_ID => Some(complete_player_poison_moth(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                IGNITION_SKILL_ID => Some(complete_player_ignition(
                     self,
                     player_id,
                     &mut player_ai,
@@ -37910,6 +37932,12 @@ impl CGame {
             }
             RAIN_ARROW_SKILL_ID => {
                 cancel_player_rain_arrow(self, player_id, &mut player_ai, runtime)
+            }
+            POISON_MOTH_SKILL_ID => {
+                cancel_player_poison_moth(self, player_id, &mut player_ai, runtime)
+            }
+            IGNITION_SKILL_ID => {
+                cancel_player_ignition(self, player_id, &mut player_ai, runtime)
             }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
