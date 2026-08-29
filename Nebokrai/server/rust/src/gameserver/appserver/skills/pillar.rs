@@ -5,11 +5,14 @@
 //! постановке, списывает MP на первом проходе, после задержки заменяет
 //! канонический `PillarState` и обновляет свойства. Состояние и поздний
 //! коэффициент защиты принадлежат `pillarstate` и `fightdefense`; `CGame`
-//! выполняет только доставку и координацию владельца игрока.
+//! выполняет только доставку и координацию владельца игрока. Подтверждённый
+//! `CSummonSkill::End(1)` после replacement возвращает движение, обновляет
+//! свойства игрока и фиксирует cooldown; отказ после `Begin` и клиентская
+//! отмена используют тот же хвост без создания нового состояния.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::pillarstate::{PillarState, replace_player_pillar_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -29,7 +32,34 @@ fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch {
 } }
 pub(crate) fn is_pillar_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == PILLAR_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
+fn finish_player_pillar<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    let _ = game.update_player_properties(player_id, runtime);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    player_ai.mark_pillar_used(runtime.now_milliseconds());
+}
+
+pub(crate) fn cancel_player_pillar<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.pillar().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_pillar(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
 
 fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
@@ -52,7 +82,7 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     if !is_pillar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(PILLAR_SKILL_ID)) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(PILLAR_SKILL_ID, level) else { if ai.pillar().is_some() { finish(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(PILLAR_SKILL_ID, level) else { if ai.pillar().is_some() { finish_player_pillar(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let keep = properties.query_property(STATE_PERSIST_TIME);
     let damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR) as f32 * 0.001;
@@ -63,10 +93,10 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(PILLAR_SKILL_ID)); }
         ai.begin_pillar(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if ai.pillar().is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    if game.find_player(player_id).is_some_and(CPlayer::is_dead) { failure(game, player_id, 2, mp_loss); ai.mark_pillar_used(runtime.now_milliseconds()); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    if game.find_player(player_id).is_some_and(CPlayer::is_dead) { failure(game, player_id, 2, mp_loss); finish_player_pillar(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
     if ai.pillar().is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if u64::from(mana) < u64::from(mp_loss) { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        if u64::from(mana) < u64::from(mp_loss) { failure(game, player_id, 7, mp_loss); finish_player_pillar(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, false);
@@ -76,8 +106,7 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, level, true); let now_ms = runtime.now_milliseconds();
     let state = PillarState::new(now_ms, keep, damage_factor); let _ = replace_player_pillar_state(game, player_id, state, now_ms);
-    let _ = game.update_player_properties(player_id, runtime);
     if let Some(state) = ai.pillar_mut() { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
-    ai.mark_pillar_used(runtime.now_milliseconds()); finish(game, player_id);
+    finish_player_pillar(game, player_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

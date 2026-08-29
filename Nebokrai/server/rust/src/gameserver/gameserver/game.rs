@@ -877,7 +877,9 @@ use crate::gameserver::appserver::skills::thunderslash::{
 use crate::gameserver::appserver::skills::thunderslashphalanx::{
     calculate_owned_thunder_slash_attack, thunder_slash_target, ThunderSlashPhalanxTick,
 };
-use crate::gameserver::appserver::skills::pillar::{execute_player_pillar, is_pillar_dispatch};
+use crate::gameserver::appserver::skills::pillar::{
+    cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::pillarstate::expire_player_pillar_state;
 use crate::gameserver::appserver::skills::rush::{execute_player_rush, is_rush_dispatch};
 use crate::gameserver::appserver::skills::rushstate::{
@@ -37389,6 +37391,7 @@ impl CGame {
                 | CHAIN_LIGHTNING_SKILL_ID
                 | THUNDER_BLOW_SKILL_ID
                 | ITEM_SKILL_2_ID
+                | PILLAR_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37411,6 +37414,7 @@ impl CGame {
             CHAIN_LIGHTNING_SKILL_ID => player_ai.chain_lightning().is_some(),
             THUNDER_BLOW_SKILL_ID => player_ai.thunder_blow().is_some(),
             ITEM_SKILL_2_ID => player_ai.item_skill_2().is_some(),
+            PILLAR_SKILL_ID => player_ai.pillar().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37452,6 +37456,9 @@ impl CGame {
             }
             ITEM_SKILL_2_ID => {
                 cancel_player_item_skill_2(self, player_id, &mut player_ai, runtime)
+            }
+            PILLAR_SKILL_ID => {
+                cancel_player_pillar(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
