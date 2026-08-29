@@ -122,8 +122,8 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, hibernates_without_nearby_players, schedule_attack_interval,
-    queue_monster_idle, select_attack_skill,
+    approach_attack_range, hibernates_without_nearby_players, one_step_move_delay_ms,
+    queue_monster_idle, schedule_attack_interval, select_attack_skill,
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
@@ -338,8 +338,9 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 }
 
 /// Выполняет только подтверждённый `OnSearchEnemy` обычного агрессивного
-/// монстра, слабого существа, двух лучников, военного монстра, участника битвы
-/// богов, городского охранника, владыки, близнецов JiuMai и двух боссов.
+/// монстра, умного и пассивного гладиаторов, слабого существа, двух лучников,
+/// военного монстра, участника битвы богов, городского охранника, владыки,
+/// близнецов JiuMai и двух боссов.
 /// Предшествующее событие уже обработано владельцем FIFO, поэтому здесь не
 /// начинается атака в том же такте.
 pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
@@ -428,6 +429,27 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
         ) {
             let _ = assign_jiumai_target(region, monster_id, selected);
+        }
+        return true;
+    }
+    if property.ai == 2 {
+        let selection = select_smart_gladiator_enemy(
+            game,
+            region,
+            owner,
+            area_index,
+            property.guard_range as i32,
+        );
+        if let Some(selected) = selection.vulnerable_target() {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected);
+            }
+        } else if let Some(destination) = selection.retreat_step(owner)
+            && let Some(state) = region
+                .find_monster_by_id_mut(monster_id)
+                .and_then(CMonster::smart_gladiator_ai_mut)
+        {
+            state.queue_step(destination);
         }
         return true;
     }
@@ -669,28 +691,46 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             return true;
         }
     }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && matches!(property.ai, 0 | 1 | 3 | 4 | 6 | 8 | 9 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
-    {
-        return queue_monster_idle(game, region, monster_id, &property, runtime);
-    }
     if target.is_none() && cast.is_none() && !tamed && property.ai == 2 {
         let destination = region
             .find_monster_by_id_mut(monster_id)
             .and_then(CMonster::smart_gladiator_ai_mut)
             .and_then(|state| state.take_step());
         if let Some(destination) = destination {
-            let _ = game.move_owned_monster_step(
+            let moved = game.move_owned_monster_step(
                 region,
                 monster_id,
                 destination.x,
                 destination.y,
                 CMonster::figure(&property),
             );
+            if moved {
+                let direction = get_line_direction(
+                    monster_view.tile_x,
+                    monster_view.tile_y,
+                    destination.x,
+                    destination.y,
+                );
+                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                    monster.begin_active_ai_move(
+                        one_step_move_delay_ms(
+                            direction,
+                            monster_shape.get_speed(),
+                            property.stop_frame,
+                        ),
+                        runtime.now_milliseconds(),
+                    );
+                }
+            }
             return true;
         }
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
+    {
+        return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
     let selected_skill_id = if let Some(cast) = cast {
         cast.dispatch().skill_id as u16
@@ -728,34 +768,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 2
-        && let Some(area_index) = area_index
-    {
-        let selection = select_smart_gladiator_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-        );
-        if let Some(selected) = selection.vulnerable_target() {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
-        } else if let Some(destination) = selection.retreat_step(monster_view) {
-            if let Some(state) = region
-                .find_monster_by_id_mut(monster_id)
-                .and_then(CMonster::smart_gladiator_ai_mut)
-            {
-                state.queue_step(destination);
-            }
-            return true;
-        }
-    }
     if target.is_none()
         && cast.is_none()
         && !tamed
