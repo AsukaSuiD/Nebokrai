@@ -1,54 +1,74 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Состояние предмета `CParticularState`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/other states/particularstate.cpp`. Один экземпляр соответствует
+//! уникальному ненулевому значению `GAP_EXCEPTION_STATE` из packet/equipment.
+//! Успешный container add создаёт состояние немедленно, `RestoreHpMp` завершает
+//! все экземпляры, а AI после исходной двухсекундной границы проверяет наличие
+//! предмета. Нулевая отметка проверки намеренно не продвигается: после первой
+//! границы оригинал обходит оба контейнера на каждом вызове AI.
+//!
+//! Состояниями владеет `CanonicalStateStorage`; `CGame` только доставляет
+//! точные `0xBFE03/0xBFE04`. Координатный и object-identity overload-ы `Begin`
+//! пока не достигнуты и сохранены ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+
+use crate::gameserver::appserver::shape::CShape;
+use crate::nets::netserver::message::CMessage;
+
+pub(crate) const PARTICULAR_STATE_ID: u32 = 0x186a5;
+const PARTICULAR_STATE_CHECK_INTERVAL_MS: u32 = 2_000;
+const PARTICULAR_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const PARTICULAR_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ParticularState {
+    additional_data: u32,
+}
+
+impl ParticularState {
+    pub(crate) const fn new(additional_data: u32) -> Option<Self> {
+        if additional_data == 0 {
+            None
+        } else {
+            Some(Self { additional_data })
+        }
+    }
+
+    pub(crate) const fn additional_data(self) -> u32 {
+        self.additional_data
+    }
+
+    pub(crate) const fn due(self, now_ms: u32) -> bool {
+        PARTICULAR_STATE_CHECK_INTERVAL_MS <= now_ms
+    }
+}
+
+pub(crate) fn particular_state_visual_message(
+    player: &CShape,
+    state: ParticularState,
+    begin: bool,
+) -> CMessage {
+    let identity = player.identity();
+    let mut message = CMessage::new(if begin {
+        PARTICULAR_STATE_BEGIN_MESSAGE
+    } else {
+        PARTICULAR_STATE_END_MESSAGE
+    });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(PARTICULAR_STATE_ID as i32);
+    if begin {
+        message.add_long(0);
+        message.add_long(state.additional_data() as i32);
+    }
+    message
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\particularstate.cpp
-
-// ============================================================================
-// FUNCTION: CParticularState::CParticularState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\particularstate.cpp:16
-// RVA: 0x000F9440
-// ADDRESS: 004f9440
-// PROTOTYPE: undefined __thiscall CParticularState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CParticularState::CParticularState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\particularstate.cpp:27
-// RVA: 0x000F94C0
-// ADDRESS: 004f94c0
-// PROTOTYPE: undefined __thiscall CParticularState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CParticularState::~CParticularState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\particularstate.cpp:37
-// RVA: 0x000F9530
-// ADDRESS: 004f9530
-// PROTOTYPE: void __thiscall ~CParticularState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CParticularState::Begin
@@ -77,48 +97,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-// ============================================================================
-// FUNCTION: CParticularState::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\particularstate.cpp:41
-// RVA: 0x000F9710
-// ADDRESS: 004f9710
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CParticularStateVisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\particularstate.cpp:208
-// RVA: 0x000F97C0
-// ADDRESS: 004f97c0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CParticularState::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\particularstate.cpp:113
-// RVA: 0x000F9900
-// ADDRESS: 004f9900
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 
 // COMPONENT_VARIANT_END: GameServer

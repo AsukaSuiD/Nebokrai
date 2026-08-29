@@ -26,7 +26,8 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
     BattleFairyEquipmentMutationReport, CPlayer, EnhancementSelectionReport,
-    PlayerEquipmentAddReport, PlayerEquipmentRemoveReport, PlayerProgress,
+    PlayerEquipmentAddReport, PlayerEquipmentRemoveReport, PlayerPacketAddOutcome,
+    PlayerProgress,
 };
 use crate::gameserver::appserver::session::csessionfactory::{
     EquipmentSessionShadowAddBlock, EquipmentSessionShadowAdded, PersonalShopShadowAddBlock,
@@ -223,7 +224,7 @@ pub(crate) enum EnhancementTransferRemoval {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EnhancementTransferAddition {
-    Packet(VolumeGoodsAddOutcome),
+    Packet(PlayerPacketAddOutcome),
     Equipment(PlayerEquipmentAddReport),
 }
 

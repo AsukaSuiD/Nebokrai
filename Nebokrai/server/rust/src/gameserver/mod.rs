@@ -44,6 +44,8 @@ pub(crate) mod appserver {
     pub(crate) mod citygate;
     #[path = "other states/exstate.rs"]
     pub(crate) mod exstate;
+    #[path = "other states/particularstate.rs"]
+    pub(crate) mod particularstate;
     #[path = "other states/ridestate.rs"]
     pub(crate) mod ridestate;
     #[path = "other states/teamstate.rs"]

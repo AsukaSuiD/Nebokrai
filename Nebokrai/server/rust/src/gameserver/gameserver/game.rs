@@ -662,6 +662,9 @@ use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver,
     STATE_AUTO_PROTECT, ScriptMoveState, UndeadState,
 };
+use crate::gameserver::appserver::particularstate::{
+    ParticularState, particular_state_visual_message,
+};
 use crate::gameserver::appserver::organizingsystem::attackcitysys::{
     AttackCityMembershipBlock, CAttackCitySys,
 };
@@ -690,9 +693,9 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGoodsAiDeletion,
-    PlayerLoginGoodsLocation, PlayerProgress, PlayerSkillDispatch, PlayerSkillRequest,
-    PlayerSkillRequestFacts, PlayerTalkChannel, PlayerUncreatedCarriage, PlayerUncreatedPet,
-    PlayerYuanBaoChange,
+    PlayerLoginGoodsLocation, PlayerPacketAddOutcome, PlayerProgress, PlayerSkillDispatch,
+    PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel, PlayerUncreatedCarriage,
+    PlayerUncreatedPet, PlayerYuanBaoChange,
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
@@ -3908,11 +3911,6 @@ pub(crate) trait GameMainLoopRuntime:
     + ServerRegionAreaTransitionContext
 {
     fn exit_requested(&self) -> bool;
-    /// Завершает только пока не материализованный владелец состояния предмета
-    /// `CParticularState` с ID `0x186a5` перед `CPlayer::RestoreHpMp`.
-    /// Четырьмя автоматическими состояниями HP/MP владеет
-    /// `CanonicalStateStorage`.
-    fn end_player_particular_states_for_restore(&mut self, game: &mut CGame, player_id: i32);
     /// Исполняет только ещё не материализованные state-классы из
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
@@ -4719,7 +4717,7 @@ impl CGame {
         );
 
         let original = removed.clone();
-        let (additions, rejected) = {
+        let (additions, rejected, begun_states) = {
             let buyer_player = self
                 .players
                 .get_mut(&buyer.owner_id())
@@ -4727,6 +4725,7 @@ impl CGame {
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             buyer_player.add_traded_goods_to_packet(vec![removed], &self.goods_factory, &mut encode)
         };
+        self.deliver_particular_state_begins(buyer.owner_id(), begun_states);
         for addition in &additions {
             let deliveries = self.send_player_packet_addition(addition);
             tracing::trace!(
@@ -4747,7 +4746,7 @@ impl CGame {
                 .get_mut(&seller_id)
                 .expect("seller остаётся online для legacy packet rollback");
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
-            let (rollback, _) = seller_player.add_traded_goods_to_packet(
+            let (rollback, _, begun_states) = seller_player.add_traded_goods_to_packet(
                 if rejected.is_empty() {
                     vec![original]
                 } else {
@@ -4756,6 +4755,7 @@ impl CGame {
                 &self.goods_factory,
                 &mut encode,
             );
+            self.deliver_particular_state_begins(seller_id, begun_states);
             for addition in &rollback {
                 let deliveries = self.send_player_packet_addition(addition);
                 tracing::trace!(
@@ -6785,7 +6785,7 @@ impl CGame {
 
         let (actual_destination_position, destination_goods, destination_amount) = match &addition {
             DepotStorageTransferAddition::Player(EnhancementTransferAddition::Packet(outcome)) => {
-                match outcome {
+                match &outcome.outcome {
                     VolumeGoodsAddOutcome::Added(added) => {
                         let position = added.position.unwrap_or(destination_position);
                         let goods = player
@@ -9588,7 +9588,7 @@ impl CGame {
     ) -> (u32, ShapeIdentity, u32) {
         match addition {
             DepotStorageTransferAddition::Player(EnhancementTransferAddition::Packet(outcome)) => {
-                match outcome {
+                match &outcome.outcome {
                     VolumeGoodsAddOutcome::Added(added) => {
                         let position = added.position.unwrap_or(requested_position);
                         let goods = player
@@ -9806,18 +9806,17 @@ impl CGame {
             return DepotStorageTransferAddition::Depot(outcome);
         }
         if extend_id == 1 {
-            let outcome = if position == u32::MAX {
-                player
-                    .packet_mut()
-                    .add_goods(incoming, &self.goods_factory, owner_progress_allows)
+            let mut outcome = if position == u32::MAX {
+                player.add_packet_goods(incoming, &self.goods_factory, owner_progress_allows)
             } else {
-                player.packet_mut().add_goods_at(
+                player.add_packet_goods_at(
                     position,
                     incoming,
                     &self.goods_factory,
                     owner_progress_allows,
                 )
             };
+            self.publish_player_packet_add(player, &mut outcome);
             return DepotStorageTransferAddition::Player(EnhancementTransferAddition::Packet(
                 outcome,
             ));
@@ -10210,11 +10209,16 @@ impl CGame {
             context,
         ) {
             let mut incoming = Some(detached);
-            let (rollback, hand_rollback, currency_rollback, depot_rollback, fairy_rollback) =
-                match source_extend_id {
+            let (
+                mut rollback,
+                hand_rollback,
+                currency_rollback,
+                mut depot_rollback,
+                fairy_rollback,
+            ) = match source_extend_id {
                     1 => (
                         Some(EnhancementTransferAddition::Packet(
-                            player.packet_mut().add_goods_at(
+                            player.add_packet_goods_at(
                                 source_position,
                                 &mut incoming,
                                 &self.goods_factory,
@@ -10293,6 +10297,12 @@ impl CGame {
                 };
             self.players.insert(player_id, player);
             self.restore_region_owner(owner);
+            if let Some(addition) = rollback.as_mut() {
+                self.publish_enhancement_transfer_addition(player_id, addition);
+            }
+            if let Some(addition) = depot_rollback.as_mut() {
+                self.publish_depot_transfer_addition(player_id, addition);
+            }
             if let Some(goods) = incoming {
                 return Err(GroundGoodsMoveBlock::RollbackFailed {
                     goods,
@@ -10552,18 +10562,16 @@ impl CGame {
             .expect("player проверен непосредственно перед synchronous container add");
         let mut incoming = Some(detached);
         let (
-            destination_mutation,
+            mut destination_mutation,
             destination_hand_mutation,
             destination_currency_mutation,
-            destination_depot_mutation,
+            mut destination_depot_mutation,
             destination_fairy_mutation,
         ) = if destination_extend_id == 1 {
             let addition = if destination_position == u32::MAX {
-                player
-                    .packet_mut()
-                    .add_goods(&mut incoming, &self.goods_factory, true)
+                player.add_packet_goods(&mut incoming, &self.goods_factory, true)
             } else {
-                player.packet_mut().add_goods_at(
+                player.add_packet_goods_at(
                     destination_position,
                     &mut incoming,
                     &self.goods_factory,
@@ -10661,6 +10669,12 @@ impl CGame {
             );
             self.players.insert(player_id, player);
             self.restore_region_owner(owner);
+            if let Some(addition) = destination_mutation.as_mut() {
+                self.publish_enhancement_transfer_addition(player_id, addition);
+            }
+            if let Some(addition) = destination_depot_mutation.as_mut() {
+                self.publish_depot_transfer_addition(player_id, addition);
+            }
             if let Err((error, goods)) = rollback {
                 return Err(GroundGoodsMoveBlock::RollbackFailed {
                     goods,
@@ -10712,30 +10726,34 @@ impl CGame {
             &destination_depot_mutation,
             &destination_fairy_mutation,
         ) {
-            (Some(EnhancementTransferAddition::Packet(addition)), _, _, _, _) => match addition {
-                VolumeGoodsAddOutcome::Added(added) => {
-                    let position = added.position.unwrap_or(destination_position);
-                    let stored = player
-                        .packet()
-                        .get_goods(position)
-                        .expect("успешный packet add публикует destination goods");
-                    (position, stored.identity(), stored.amount())
+            (Some(EnhancementTransferAddition::Packet(addition)), _, _, _, _) => {
+                match &addition.outcome {
+                    VolumeGoodsAddOutcome::Added(added) => {
+                        let position = added.position.unwrap_or(destination_position);
+                        let stored = player
+                            .packet()
+                            .get_goods(position)
+                            .expect("успешный packet add публикует destination goods");
+                        (position, stored.identity(), stored.amount())
+                    }
+                    VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged {
+                        target, ..
+                    }) => {
+                        let position = player
+                            .packet()
+                            .query_goods_position(target.ex_id)
+                            .expect("успешный stack сохраняет destination cell");
+                        let stored = player
+                            .packet()
+                            .get_goods(position)
+                            .expect("успешный stack сохраняет destination goods");
+                        (position, stored.identity(), stored.amount())
+                    }
+                    VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {
+                        unreachable!("успешный packet add обязан забрать incoming goods")
+                    }
                 }
-                VolumeGoodsAddOutcome::Stack(GoodsStackMergeOutcome::Merged { target, .. }) => {
-                    let position = player
-                        .packet()
-                        .query_goods_position(target.ex_id)
-                        .expect("успешный stack сохраняет destination cell");
-                    let stored = player
-                        .packet()
-                        .get_goods(position)
-                        .expect("успешный stack сохраняет destination goods");
-                    (position, stored.identity(), stored.amount())
-                }
-                VolumeGoodsAddOutcome::Stack(_) | VolumeGoodsAddOutcome::Rejected(_) => {
-                    unreachable!("успешный packet add обязан забрать incoming goods")
-                }
-            },
+            }
             (Some(EnhancementTransferAddition::Equipment(report)), _, _, _, _) => {
                 match &report.outcome {
                     EquipmentAddOutcome::Added(added) => {
@@ -10792,6 +10810,12 @@ impl CGame {
         };
         self.players.insert(player_id, player);
         self.restore_region_owner(owner);
+        if let Some(addition) = destination_mutation.as_mut() {
+            self.publish_enhancement_transfer_addition(player_id, addition);
+        }
+        if let Some(addition) = destination_depot_mutation.as_mut() {
+            self.publish_depot_transfer_addition(player_id, addition);
+        }
 
         if self.log_system.goods_get_from_region_log_enabled()
             && self.log_system.is_log_item(audit_base_index as i32)
@@ -11181,12 +11205,14 @@ impl CGame {
     ) -> EnhancementTransferAddition {
         if extend_id == 1 {
             let owner_progress_allows = player.current_progress() == PlayerProgress::None;
-            return EnhancementTransferAddition::Packet(player.packet_mut().add_goods_at(
+            let mut outcome = player.add_packet_goods_at(
                 position,
                 incoming,
                 &self.goods_factory,
                 owner_progress_allows,
-            ));
+            );
+            self.publish_player_packet_add(player, &mut outcome);
+            return EnhancementTransferAddition::Packet(outcome);
         }
         let add_facts = context.enhancement_equipment_add_facts(
             player,
@@ -11219,7 +11245,7 @@ impl CGame {
         for goods_id in goods_ai_ids {
             Self::register_player_goods_ai(player, &self.goods_factory, goods_id);
         }
-        self.publish_player_equipment_add_report(&mut report);
+        self.publish_player_equipment_add_report(Some(player), &mut report);
         EnhancementTransferAddition::Equipment(report)
     }
 
@@ -14232,8 +14258,9 @@ impl CGame {
             };
             let originals = goods.clone();
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
-            let (additions, rejected) =
+            let (additions, rejected, begun_states) =
                 player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
+            self.deliver_particular_state_begins(receiver.owner_id, begun_states);
             for addition in &additions {
                 let deliveries = self.send_player_packet_addition(addition);
                 tracing::trace!(player_id = receiver.owner_id, goods = ?addition.source, ?deliveries, "предмет обмена добавлен получателю");
@@ -14471,8 +14498,9 @@ impl CGame {
                 continue;
             };
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
-            let (additions, unrecoverable) =
+            let (additions, unrecoverable, begun_states) =
                 player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
+            self.deliver_particular_state_begins(party.owner_id, begun_states);
             for addition in &additions {
                 let deliveries = self.send_player_packet_addition(addition);
                 tracing::trace!(player_id = party.owner_id, goods = ?addition.source, ?deliveries, "отделённый предмет обмена возвращён");
@@ -18884,18 +18912,20 @@ impl CGame {
             required_level,
         );
         let result_identity = result.identity();
-        let (addition, rejected_result) = {
+        let (addition, rejected_result, particular_state) = {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
             let player = players
                 .get_mut(&player_id)
                 .expect("compose owner проверен до packet add");
             let mut incoming = Some(result);
-            let outcome = player.packet_mut().add_goods_at(
+            let packet_add = player.add_packet_goods_at(
                 packet_position,
                 &mut incoming,
                 goods_factory,
                 true,
             );
+            let outcome = packet_add.outcome;
+            let particular_state = packet_add.particular_state;
             let (old_client_payload, resulting_amount) = match &outcome {
                 VolumeGoodsAddOutcome::Added(added) => {
                     let stored = player
@@ -18930,8 +18960,10 @@ impl CGame {
                     resulting_amount,
                 },
                 incoming.map(|goods| goods.identity()),
+                particular_state,
             )
         };
+        self.deliver_particular_state_begins(player_id, particular_state.into_iter().collect());
         if let Some(rejected_result) = rejected_result {
             tracing::trace!(player_id, session_id, ?rejected_result, ?addition.outcome, "инвентарь отклонил результат соединения после расхода источников");
             return;
@@ -21674,7 +21706,7 @@ impl CGame {
                 |equip_level, level| battle_fairy_exp_config.dw_exp_up(equip_level, level),
             )
         };
-        let (additions, rejected) = {
+        let (additions, rejected, begun_states) = {
             let goods_factory = &self.goods_factory;
             let player = self
                 .players
@@ -21683,6 +21715,7 @@ impl CGame {
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.add_goods_to_packet(created, goods_factory, &mut encode)
         };
+        self.deliver_particular_state_begins(player_id, begun_states);
         for addition in additions {
             if addition.resulting_amount.is_some() {
                 let deliveries = self.send_player_packet_addition(&addition);
@@ -24117,7 +24150,7 @@ impl CGame {
                 });
             }
         }
-        let (additions, _rejected) = {
+        let (additions, _rejected, begun_states) = {
             let (players, factory) = (&mut self.players, &self.goods_factory);
             let player = players
                 .get_mut(&player_id)
@@ -24125,6 +24158,7 @@ impl CGame {
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.add_precious_box_goods_to_packet(created, factory, &mut encode)
         };
+        self.deliver_particular_state_begins(player_id, begun_states);
         let mut result_position = -1;
         for addition in additions {
             if addition.resulting_amount.is_some() {
@@ -24238,7 +24272,7 @@ impl CGame {
                         .packet_adds
                         .iter()
                         .rev()
-                        .find_map(|outcome| match outcome {
+                        .find_map(|packet_add| match &packet_add.outcome {
                             VolumeGoodsAddOutcome::Added(added) => {
                                 let position = added.position?;
                                 let stored = player.packet().base().find(added.identity.ex_id)?;
@@ -24360,6 +24394,14 @@ impl CGame {
                 .return_hotkey_hand_goods(factory)
         };
         let assigned = transfer.outcome == HotkeyHandTransferOutcome::Moved;
+        self.deliver_particular_state_begins(
+            player_id,
+            transfer
+                .packet_adds
+                .iter()
+                .filter_map(|addition| addition.particular_state)
+                .collect(),
+        );
         let response_delivery = if assigned {
             self.find_player_mut(player_id)?.set_hotkey(slot, value);
             Some(send_hotkey_response(
@@ -25278,12 +25320,13 @@ impl CGame {
             );
             return Some(());
         }
-        let (additions, rejected) = {
+        let (additions, rejected, begun_states) = {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
             let player = players.get_mut(&player_id)?;
             let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
             player.add_goods_to_packet(created, goods_factory, &mut encode)
         };
+        self.deliver_particular_state_begins(player_id, begun_states);
         for addition in additions {
             let deliveries = self.send_player_packet_addition(&addition);
             tracing::trace!(
@@ -26390,6 +26433,43 @@ impl CGame {
         ended
     }
 
+    fn update_player_particular_states(&mut self, player_id: i32, now_ms: u32) -> usize {
+        let mut ended = 0usize;
+        let mut index = 0usize;
+        loop {
+            let Some(state) = self
+                .find_player(player_id)
+                .and_then(|player| player.particular_state(index))
+            else {
+                break;
+            };
+            if !state.due(now_ms) {
+                index = index.wrapping_add(1);
+                continue;
+            }
+            let present = self.find_player(player_id).is_some_and(|player| {
+                player.particular_state_goods_present(
+                    state.additional_data(),
+                    &self.goods_factory,
+                )
+            });
+            if present {
+                index = index.wrapping_add(1);
+                continue;
+            }
+            let removed = self
+                .find_player_mut(player_id)
+                .and_then(|player| player.remove_particular_state_at(index));
+            if let (Some(removed), Some(player)) = (removed, self.find_player(player_id)) {
+                let _ = self.send_particular_state_visual_for_player(player, removed, false);
+                ended = ended.wrapping_add(1);
+            } else {
+                break;
+            }
+        }
+        ended
+    }
+
     /// Материализованная часть `CMoveShape::UpdateAbnormality` для player:
     /// завершение состояний, периодический расход предметов, визуальные эффекты
     /// и эффекты свойств, а также проверка ездового снаряжения выполняются из
@@ -26406,6 +26486,8 @@ impl CGame {
         let Some(now_ms) = sampled_at_ms else {
             return self.find_player(player_id).map(|_| ());
         };
+        let particular_states_ended =
+            self.update_player_particular_states(player_id, now_ms);
         let _ = expire_player_pillar_state(self, player_id, now_ms);
         let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_rush_2_state(self, player_id, now_ms);
@@ -26511,6 +26593,7 @@ impl CGame {
             periodic_attacks_updated,
             defense_shields_ended,
             battle_fairy_attribute_states_ended,
+            particular_states_ended,
             "обновлены временные состояния игрока"
         );
         Some(())
@@ -30190,9 +30273,11 @@ impl CGame {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> Option<(Vec<CiQingPacketAddition>, Vec<CGoods>)> {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-        players.get_mut(&player_id).map(|player| {
-            player.add_increment_shop_goods_to_packet(goods, goods_factory, encode_old_client)
-        })
+        let (additions, remaining, states) = players
+            .get_mut(&player_id)?
+            .add_increment_shop_goods_to_packet(goods, goods_factory, encode_old_client);
+        self.deliver_particular_state_begins(player_id, states);
+        Some((additions, remaining))
     }
 
     pub(crate) fn add_npc_shop_goods_to_packet<Context: OldClientGoodsCodec>(
@@ -30204,7 +30289,10 @@ impl CGame {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let player = players.get_mut(&player_id)?;
         let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
-        Some(player.add_shop_goods_to_packet(goods, goods_factory, &mut encode))
+        let (additions, remaining, states) =
+            player.add_shop_goods_to_packet(goods, goods_factory, &mut encode);
+        self.deliver_particular_state_begins(player_id, states);
+        Some((additions, remaining))
     }
 
     pub(crate) fn increase_player_money<Context: OldClientGoodsCodec>(
@@ -30675,9 +30763,80 @@ impl CGame {
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
     ) -> Option<(Vec<CiQingPacketAddition>, Vec<CGoods>)> {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-        players
-            .get_mut(&player_id)
-            .map(|player| player.add_goods_to_packet(goods, goods_factory, encode_old_client))
+        let (additions, remaining, states) = players
+            .get_mut(&player_id)?
+            .add_goods_to_packet(goods, goods_factory, encode_old_client);
+        self.deliver_particular_state_begins(player_id, states);
+        Some((additions, remaining))
+    }
+
+    fn deliver_particular_state_begins(
+        &self,
+        player_id: i32,
+        states: Vec<ParticularState>,
+    ) {
+        let Some(player) = self.find_player(player_id) else {
+            return;
+        };
+        for state in states {
+            let _ = self.send_particular_state_visual_for_player(player, state, true);
+        }
+    }
+
+    fn publish_player_packet_add(
+        &self,
+        player: &CPlayer,
+        outcome: &mut PlayerPacketAddOutcome,
+    ) {
+        if outcome.particular_state.is_some_and(|state| {
+            self.send_particular_state_visual_for_player(player, state, true)
+        }) {
+            outcome.particular_state = None;
+        }
+    }
+
+    fn publish_enhancement_transfer_addition(
+        &self,
+        player_id: i32,
+        addition: &mut EnhancementTransferAddition,
+    ) {
+        match addition {
+            EnhancementTransferAddition::Packet(outcome) => {
+                if let Some(player) = self.find_player(player_id) {
+                    self.publish_player_packet_add(player, outcome);
+                }
+            }
+            EnhancementTransferAddition::Equipment(report) => {
+                self.publish_player_equipment_add_report(None, report);
+            }
+        }
+    }
+
+    fn publish_depot_transfer_addition(
+        &self,
+        player_id: i32,
+        addition: &mut DepotStorageTransferAddition,
+    ) {
+        if let DepotStorageTransferAddition::Player(addition) = addition {
+            self.publish_enhancement_transfer_addition(player_id, addition);
+        }
+    }
+
+    fn send_particular_state_visual_for_player(
+        &self,
+        player: &CPlayer,
+        state: ParticularState,
+        begin: bool,
+    ) -> bool {
+        let Some(region) = player
+            .server_region_id()
+            .and_then(|region_id| self.find_region(region_id))
+        else {
+            return false;
+        };
+        let message = particular_state_visual_message(player.shape(), state, begin);
+        let _ = self.send_game_shape_around(region.base(), player.shape(), None, &message);
+        true
     }
 
     /// Точный `CGame::KickPlayer`: команда отключения ставится в очередь,
@@ -31861,15 +32020,15 @@ impl CGame {
         Some((property_delivery, tao_zhuang_ran))
     }
 
-    /// Точная граница владельцев `CPlayer::RestoreHpMp`: внешнее состояние
-    /// предмета завершается до атомарной замены четырёх канонических
-    /// автоматических состояний.
-    pub(crate) fn restore_player_hp_mp_states<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        runtime: &mut Runtime,
-    ) -> Option<()> {
-        runtime.end_player_particular_states_for_restore(self, player_id);
+    /// Точный `CPlayer::RestoreHpMp`: все состояния предметов завершаются и
+    /// публикуются до атомарной замены четырёх автоматических состояний.
+    pub(crate) fn restore_player_hp_mp_states(&mut self, player_id: i32) -> Option<()> {
+        let ended = self.find_player_mut(player_id)?.take_particular_states();
+        if let Some(player) = self.find_player(player_id) {
+            for state in ended {
+                let _ = self.send_particular_state_visual_for_player(player, state, false);
+            }
+        }
         self.find_player_mut(player_id)?.restore_automatic_hp_mp_states();
         Some(())
     }
@@ -32083,20 +32242,41 @@ impl CGame {
                 recompute_properties,
             )
         })?;
-        self.publish_player_equipment_add_report(&mut report);
+        self.publish_player_equipment_add_report(None, &mut report);
         if self.globe_setup.tao_zhuang_modify_enabled() {
             let _ = self.done_player_tao_zhuang(player_id);
         }
         Some(report)
     }
 
-    fn publish_player_equipment_add_report(&self, report: &mut PlayerEquipmentAddReport) {
+    fn publish_player_equipment_add_report(
+        &self,
+        detached_player: Option<&CPlayer>,
+        report: &mut PlayerEquipmentAddReport,
+    ) {
+        if detached_player.is_some_and(|player| {
+            player
+                .server_region_id()
+                .is_some_and(|region_id| self.find_region(region_id).is_none())
+        }) {
+            return;
+        }
         for effect in report.effects.take_all() {
             let GameEffect::PlayerEquipmentAdd(effect) = effect else {
                 tracing::error!("журнал надевания экипировки содержит чужой эффект");
                 continue;
             };
             match effect {
+                PlayerEquipmentAddEffect::ParticularStateBegun(state) => {
+                    let player = detached_player.or_else(|| self.find_player(report.player_id));
+                    if !player.is_some_and(|player| {
+                        self.send_particular_state_visual_for_player(player, state, true)
+                    }) {
+                        report
+                            .effects
+                            .push(PlayerEquipmentAddEffect::ParticularStateBegun(state));
+                    }
+                }
                 PlayerEquipmentAddEffect::WarSoulSkillAttached { .. } => {}
                 PlayerEquipmentAddEffect::SkillAdded(skill) => {
                     if let Some(message) = player_skill_learned_message(
@@ -33116,7 +33296,7 @@ impl CGame {
 
         let _ = player.enhancement_remove_shadow(goods_id);
         let _ = self.send_container_object_delete(player_id, &source, old_identity, old_amount);
-        let (additions, _rejected) = player.add_script_fairy_goods_to_packet(
+        let (additions, _rejected, begun_states) = player.add_script_fairy_goods_to_packet(
             vec![replacement],
             &self.goods_factory,
             &mut |goods| context.encode_goods_for_old_client(goods),
@@ -33134,6 +33314,7 @@ impl CGame {
             Self::register_player_goods_ai(&mut player, &self.goods_factory, goods_id);
         }
         self.players.insert(player_id, player);
+        self.deliver_particular_state_begins(player_id, begun_states);
         for addition in &additions {
             let _ = self.send_player_packet_addition(addition);
         }

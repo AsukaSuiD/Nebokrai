@@ -92,6 +92,7 @@ pub(crate) const GAP_MOUNT_TYPE: i32 = 84;
 pub(crate) const GAP_MOUNT_LEVEL: i32 = 85;
 pub(crate) const GAP_MOUNT_PLAYER_ROLE_LIMIT: i32 = 86;
 pub(crate) const GAP_UNLIMITED_ACCESS: i32 = 87;
+pub(crate) const GAP_EXCEPTION_STATE: i32 = 89;
 pub(crate) const GAP_WEAPON_DAMAGE_LEVEL: i32 = 90;
 pub(crate) const GAP_ATTACK_AVOID: i32 = 91;
 pub(crate) const GAP_ELEMENT_AVOID: i32 = 92;

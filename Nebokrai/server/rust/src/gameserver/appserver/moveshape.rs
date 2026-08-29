@@ -44,6 +44,7 @@ use super::exstate::{
     EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind, ExtendedStateMutation,
 };
 use super::legacycodec::{LegacyReader, LegacyWriter};
+use super::particularstate::ParticularState;
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
@@ -556,6 +557,7 @@ pub(crate) struct CanonicalStateStorage {
     swordship_states: Vec<SwordshipState>,
     wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
     automatic_restore_states: Vec<AutomaticRestoreState>,
+    particular_states: Vec<ParticularState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
@@ -824,6 +826,7 @@ impl CMoveShape {
         self.kerosene_state = None;
         self.wuxing_states.clear();
         self.automatic_restore_states.clear();
+        self.particular_states.clear();
         self.battle_fairy_attribute_states.clear();
         self.periodic_attack_order.clear();
         self.defense_shields.clear();
@@ -878,6 +881,7 @@ impl CMoveShape {
             || self.state_storage.leaf_cut_2_state.is_some()
             || self.state_storage.leaf_cut_3_state.is_some()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
+            || !self.state_storage.particular_states.is_empty()
             || !self.state_storage.defense_shields.is_empty()
             || !self.state_storage.change_body_states.is_empty()
             || !self.state_storage.extended_states.is_empty()
@@ -890,6 +894,36 @@ impl CMoveShape {
         properties: super::player::PlayerCombatProperties,
     ) {
         self.automatic_restore_states = AutomaticRestoreState::restored(properties).into();
+    }
+
+    pub(crate) fn particular_states(&self) -> &[ParticularState] {
+        &self.particular_states
+    }
+
+    pub(crate) fn add_particular_state(
+        &mut self,
+        state: ParticularState,
+    ) -> Option<ParticularState> {
+        if self
+            .particular_states
+            .iter()
+            .any(|stored| stored.additional_data() == state.additional_data())
+        {
+            return None;
+        }
+        self.particular_states.push(state);
+        Some(state)
+    }
+
+    pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
+        std::mem::take(&mut self.particular_states)
+    }
+
+    pub(crate) fn remove_particular_state_at(
+        &mut self,
+        index: usize,
+    ) -> Option<ParticularState> {
+        (index < self.particular_states.len()).then(|| self.particular_states.remove(index))
     }
 
     pub(crate) fn automatic_restore_state(&self, index: usize) -> Option<AutomaticRestoreState> {

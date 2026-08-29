@@ -307,8 +307,9 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BURDEN_UPPER_LIMIT_CORRECTION, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
-    GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND, GAP_GOODS_EQUIMENT_FLASH,
-    GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY, GAP_GOODS_PACKAGE_EXTENTION,
+    GAP_EXCEPTION_STATE, GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND,
+    GAP_GOODS_EQUIMENT_FLASH, GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY,
+    GAP_GOODS_PACKAGE_EXTENTION,
     GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION,
     GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_CORRECTION, GAP_MOUNT_LEVEL, GAP_MOUNT_TYPE,
     GAP_MP_RESTORE_SPEED_CORRECTION, GAP_MP_UPPER_LIMIT_CORRECTION, GAP_PARTICULAR_ATTRIBUTE,
@@ -324,6 +325,7 @@ use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
     MoveShapeSkill,
 };
+use super::particularstate::ParticularState;
 use super::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
@@ -655,6 +657,7 @@ pub(crate) struct PlayerEquipmentAddRuntimeFacts {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlayerEquipmentAddEffect {
+    ParticularStateBegun(ParticularState),
     WarSoulSkillAttached {
         skill_id: u32,
         level: i32,
@@ -1352,10 +1355,17 @@ pub(crate) struct HotkeyHandTransferReport {
     pub(crate) source_position: u32,
     pub(crate) goods: Option<ShapeIdentity>,
     pub(crate) hand_removal: Option<HotkeyHandOwnershipEvent>,
-    pub(crate) packet_adds: Vec<VolumeGoodsAddOutcome>,
+    pub(crate) packet_adds: Vec<PlayerPacketAddOutcome>,
     pub(crate) currency_adds: Vec<CurrencyGoodsAddOutcome>,
     pub(crate) hand_rollback: Option<AmountLimitGoodsAdded>,
     pub(crate) outcome: HotkeyHandTransferOutcome,
+}
+
+#[must_use = "packet add содержит немедленное состояние предмета для доставки owner-ом"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerPacketAddOutcome {
+    pub(crate) outcome: VolumeGoodsAddOutcome,
+    pub(crate) particular_state: Option<ParticularState>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7052,6 +7062,55 @@ impl CPlayer {
         })
     }
 
+    pub(crate) fn add_packet_goods_at(
+        &mut self,
+        position: u32,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> PlayerPacketAddOutcome {
+        let outcome =
+            self.packet
+                .add_goods_at(position, incoming, factory, owner_progress_allows);
+        let particular_state = match &outcome {
+            VolumeGoodsAddOutcome::Added(added) => self
+                .packet
+                .base()
+                .find(added.identity.ex_id)
+                .and_then(|goods| Self::particular_state_from_goods(goods, factory))
+                .and_then(|state| self.move_shape.add_particular_state(state)),
+            _ => None,
+        };
+        PlayerPacketAddOutcome {
+            outcome,
+            particular_state,
+        }
+    }
+
+    pub(crate) fn add_packet_goods(
+        &mut self,
+        incoming: &mut Option<CGoods>,
+        factory: &CGoodsFactory,
+        owner_progress_allows: bool,
+    ) -> PlayerPacketAddOutcome {
+        let outcome = self
+            .packet
+            .add_goods(incoming, factory, owner_progress_allows);
+        let particular_state = match &outcome {
+            VolumeGoodsAddOutcome::Added(added) => self
+                .packet
+                .base()
+                .find(added.identity.ex_id)
+                .and_then(|goods| Self::particular_state_from_goods(goods, factory))
+                .and_then(|state| self.move_shape.add_particular_state(state)),
+            _ => None,
+        };
+        PlayerPacketAddOutcome {
+            outcome,
+            particular_state,
+        }
+    }
+
     /// Player-side `AddGoodsToPacket`: успешный add забирает ownership из
     /// входного vector, rejected/несовместимый stack остаётся у caller-а.
     pub(crate) fn add_goods_to_packet(
@@ -7059,7 +7118,7 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
         let owner_progress_allows = self.current_progress == PlayerProgress::None;
         self.add_goods_to_packet_with_progress(
             goods,
@@ -7077,7 +7136,7 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
     }
 
@@ -7088,7 +7147,7 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
     }
 
@@ -7099,7 +7158,7 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
     }
 
@@ -7111,7 +7170,7 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
     }
 
@@ -7121,7 +7180,7 @@ impl CPlayer {
         goods: Vec<CGoods>,
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
         self.add_goods_to_packet_with_progress(goods, factory, encode_old_client, true)
     }
 
@@ -7186,16 +7245,20 @@ impl CPlayer {
         factory: &CGoodsFactory,
         encode_old_client: &mut dyn FnMut(&CGoods) -> Vec<u8>,
         owner_progress_allows: bool,
-    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>) {
+    ) -> (Vec<CiQingPacketAddition>, Vec<CGoods>, Vec<ParticularState>) {
         let player_id = self.player_id();
         let mut additions = Vec::new();
         let mut remaining = Vec::new();
+        let mut begun_states = Vec::new();
         for goods in goods {
             let source = goods.identity();
             let mut incoming = Some(goods);
-            let outcome = self
-                .packet
-                .add_goods(&mut incoming, factory, owner_progress_allows);
+            let packet_add =
+                self.add_packet_goods(&mut incoming, factory, owner_progress_allows);
+            if let Some(state) = packet_add.particular_state {
+                begun_states.push(state);
+            }
+            let outcome = packet_add.outcome;
             let (old_client_payload, resulting_amount) = match &outcome {
                 VolumeGoodsAddOutcome::Added(added) => {
                     let stored = self
@@ -7203,7 +7266,9 @@ impl CPlayer {
                         .base()
                         .find(added.identity.ex_id)
                         .expect("успешный packet add сохранил новый goods");
-                    (Some(encode_old_client(stored)), Some(stored.amount()))
+                    let payload = Some(encode_old_client(stored));
+                    let amount = Some(stored.amount());
+                    (payload, amount)
                 }
                 VolumeGoodsAddOutcome::Stack(stack) => {
                     let target = match stack {
@@ -7239,7 +7304,7 @@ impl CPlayer {
                 remaining.push(goods);
             }
         }
-        (additions, remaining)
+        (additions, remaining, begun_states)
     }
 
     pub(crate) fn ci_qing_compose_goods(&self, position: u32) -> Option<&CGoods> {
@@ -7528,14 +7593,14 @@ impl CPlayer {
         let mut incoming = Some(removed.goods);
         if source_container_extend_id == 1 {
             let owner_progress_allows = self.current_progress == PlayerProgress::None;
-            report.packet_adds.push(self.packet.add_goods_at(
+            report.packet_adds.push(self.add_packet_goods_at(
                 source_position,
                 &mut incoming,
                 factory,
                 owner_progress_allows,
             ));
             if incoming.is_some() {
-                report.packet_adds.push(self.packet.add_goods(
+                report.packet_adds.push(self.add_packet_goods(
                     &mut incoming,
                     factory,
                     owner_progress_allows,
@@ -9480,6 +9545,17 @@ impl CPlayer {
         let mut effects = Vec::new();
         if matches!(&outcome, EquipmentAddOutcome::Added(_)) {
             self.equipment_changed = true;
+        }
+        if let EquipmentAddOutcome::Added(added) = &outcome {
+            let state = self
+                .equipment
+                .get_goods(added.column.position())
+                .and_then(|goods| Self::particular_state_from_goods(goods, factory));
+            if let Some(state) =
+                state.and_then(|state| self.move_shape.add_particular_state(state))
+            {
+                effects.push(PlayerEquipmentAddEffect::ParticularStateBegun(state));
+            }
         }
         if let EquipmentAddOutcome::Added(added) = &outcome
             && let Some(player_effects) = added.player_effects
@@ -12164,6 +12240,47 @@ impl CPlayer {
     pub(crate) fn restore_automatic_hp_mp_states(&mut self) {
         self.move_shape
             .restore_automatic_hp_mp_states(self.combat_properties);
+    }
+
+    pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
+        self.move_shape.take_particular_states()
+    }
+
+    pub(crate) fn particular_state(&self, index: usize) -> Option<ParticularState> {
+        self.move_shape.particular_states().get(index).copied()
+    }
+
+    pub(crate) fn remove_particular_state_at(&mut self, index: usize) -> Option<ParticularState> {
+        self.move_shape.remove_particular_state_at(index)
+    }
+
+    pub(crate) fn particular_state_goods_present(
+        &self,
+        additional_data: u32,
+        factory: &CGoodsFactory,
+    ) -> bool {
+        self.packet
+            .base()
+            .traversing_goods()
+            .chain(
+                self.equipment
+                    .traversing_goods()
+                    .into_iter()
+                    .map(|(_, goods)| goods),
+            )
+            .any(|goods| {
+                goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32
+                    == additional_data
+            })
+    }
+
+    fn particular_state_from_goods(
+        goods: &CGoods,
+        factory: &CGoodsFactory,
+    ) -> Option<ParticularState> {
+        let additional_data =
+            goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32;
+        ParticularState::new(additional_data)
     }
 
     pub(crate) const fn automatic_restore_state_count(&self) -> usize {
