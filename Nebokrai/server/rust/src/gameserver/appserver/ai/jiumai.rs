@@ -1,8 +1,9 @@
 //! Владелец достигнутой семантики AI101: создание и связывание пары Цзюмай,
 //! выбор цели с минимальным текущим HP и передача цели свободному близнецу.
-//! `WhenBeenHurted` ниже сохранён как RAW. У `OnSchedule` достигнуто сближение
-//! близнецов перед общим боевым расписанием; RAW оставлен только как источник
-//! ещё не замкнутой очереди боевых событий.
+//! У `WhenBeenHurted` достигнуты прямые цели игрока и приручённого
+//! монстра либо повозки; пространственное отступление при исчезнувшем игроке
+//! остаётся RAW. У `OnSchedule` достигнуто сближение близнецов перед общим
+//! боевым расписанием, а очередь боевых событий ещё не замкнута.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -12,7 +13,10 @@
 
 // ============================================================================
 // FUNCTION: CJiuMai::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `retarget_jiumai_after_hurt` вызывается всеми достигнутыми
+// владельцами нанесения урона и сохраняет базовую защиту и прямые допустимые цели.
+// REMAINS: пространственное отступление при отсутствующем игроке остаётся RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\jiumai.cpp:191
@@ -299,6 +303,46 @@ pub(crate) fn synchronize_jiumai_target_loss(
         && twin.ai_target().is_some()
     {
         twin.clear_ai_target();
+    }
+    true
+}
+
+/// Выполняет достигнутые прямые ветви `WhenBeenHurted` AI101 после
+/// освобождения изменяемого заимствования цели. Событие защиты ставится всегда;
+/// свободная пара принимает существующего игрока либо приручённого монстра или
+/// повозку. Отступление при исчезнувшем игроке пока остаётся RAW.
+pub(crate) fn retarget_jiumai_after_hurt(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    attacker: ShapeIdentity,
+    now_ms: u32,
+) -> bool {
+    let Some(fighting) = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+        monster.jiu_mai_ai()?;
+        monster.when_been_hurted(now_ms);
+        Some(monster.ai_target().is_some())
+    }) else {
+        return false;
+    };
+    if fighting {
+        return true;
+    }
+    let eligible = match attacker.object_type {
+        PLAYER_TYPE => game
+            .find_player(attacker.id)
+            .is_some_and(|player| player.server_region_id() == Some(region.id)),
+        MONSTER_TYPE => region.find_monster_by_id(attacker.id).is_some_and(|monster| {
+            monster.is_tamed()
+                || monster
+                    .base_property_key()
+                    .and_then(|key| game.find_monster_property_by_origin_name(key))
+                    .is_some_and(|property| monster.is_carriage(property))
+        }),
+        _ => false,
+    };
+    if eligible {
+        let _ = assign_jiumai_target(region, monster_id, attacker);
     }
     true
 }

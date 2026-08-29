@@ -975,7 +975,9 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
 use crate::gameserver::appserver::skills::knightcutstate::{
     expire_monster_knight_cut_state, expire_player_knight_cut_state,
 };
-use crate::gameserver::appserver::ai::jiumai::synchronize_jiumai_target_loss;
+use crate::gameserver::appserver::ai::jiumai::{
+    retarget_jiumai_after_hurt, synchronize_jiumai_target_loss,
+};
 use crate::gameserver::appserver::skills::monsterbaseattack::execute_owned_monster_base_attack;
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
@@ -36728,6 +36730,9 @@ impl CGame {
                     } else if monster_property.ai == 11 {
                         // Поиск AI11 выполняется после освобождения изменяемого
                         // заимствования монстра.
+                    } else if monster_property.ai == 0x65 {
+                        // AI101 разрешает игрока и связывает близнеца после
+                        // освобождения изменяемого заимствования монстра.
                     } else if matches!(monster_property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -36789,6 +36794,23 @@ impl CGame {
                     owner.base_mut(),
                     target_id,
                     &monster_property,
+                    now_ms,
+                );
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && monster_property.ai == 0x65
+            {
+                let _ = retarget_jiumai_after_hurt(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
                     now_ms,
                 );
             }
@@ -40768,6 +40790,9 @@ impl CGame {
                     } else if property.ai == 11 {
                         // Поиск AI11 выполняется после освобождения изменяемого
                         // заимствования монстра.
+                    } else if property.ai == 0x65 {
+                        // AI101 разрешает владельца призыва и связывает
+                        // близнеца после освобождения изменяемого заимствования.
                     } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -40834,6 +40859,23 @@ impl CGame {
                     owner.base_mut(),
                     target_id,
                     &property,
+                    now_ms,
+                );
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && property.ai == 0x65
+            {
+                let _ = retarget_jiumai_after_hurt(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    ShapeIdentity {
+                        object_type: master.master_type,
+                        id: master.master_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
                     now_ms,
                 );
             }

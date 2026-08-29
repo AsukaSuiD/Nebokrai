@@ -664,6 +664,9 @@ impl CGame {
                     } else if property.ai == 11 {
                         // Поиск AI11 выполняется после освобождения изменяемого
                         // заимствования монстра.
+                    } else if property.ai == 0x65 {
+                        // AI101 разрешает владельца периодического эффекта и
+                        // связывает близнеца после освобождения заимствования.
                     } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -730,6 +733,23 @@ impl CGame {
                     owner.base_mut(),
                     target_id,
                     &property,
+                    now_ms,
+                );
+            }
+            if attack.full_miss == 0
+                && damage != 0
+                && current_health != 0
+                && property.ai == 0x65
+            {
+                let _ = retarget_jiumai_after_hurt(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    ShapeIdentity {
+                        object_type: master.master_type,
+                        id: master.master_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
                     now_ms,
                 );
             }
