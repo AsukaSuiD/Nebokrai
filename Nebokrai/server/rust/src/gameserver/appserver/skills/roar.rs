@@ -5,16 +5,19 @@
 //! единственный расход MP, обход окна 5×5 сначала по X через одиночный
 //! `CServerRegion::GetShape`, PK-контакт от клетки заклинателя и замену
 //! `RoarState`. `CGame` только связывает владельцев, свойства и доставку.
+//! Успех, отказ после `Begin` и клиентская отмена используют подтверждённый
+//! `CSummonSkill::End(1)`: возврат движения, обновление свойств, очистку и cooldown.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::roarstate::RoarState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::region::RegionSecurity;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
@@ -66,8 +69,31 @@ fn send_visual(game: &mut CGame, player_id: i32, level: i32, apply: bool) {
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); }
+fn finish_player_roar<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_roar_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_roar<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.roar().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_roar(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn reached_targets(game: &CGame, region_id: i32, source_x: i32, source_y: i32) -> Vec<ShapeIdentity> {
@@ -113,7 +139,7 @@ fn apply_targets<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32,
 pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_roar_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, level, source_x, source_y, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(ROAR_SKILL_ID), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(ROAR_SKILL_ID, level) else { if ai.roar().is_some() { finish(game, player_id) } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(ROAR_SKILL_ID, level) else { if ai.roar().is_some() { finish_player_roar(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -135,14 +161,13 @@ pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(game: &mut CGame
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
         failure(game, player_id, 2, mp_loss);
-        ai.mark_roar_used(runtime.now_milliseconds());
-        finish(game, player_id);
+        finish_player_roar(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     if ai.roar().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish_player_roar(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, false);
@@ -157,7 +182,6 @@ pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(game: &mut CGame
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    ai.mark_roar_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_roar(game, player_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -19,6 +19,7 @@ use super::rushstate::RushState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
@@ -67,11 +68,7 @@ pub(super) fn finish_rush_owner<Runtime, MarkUsed>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    let _ = game.update_player_properties(player_id, runtime);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
-    mark_used(player_ai, runtime.now_milliseconds());
+    finish_summon_skill(game, player_id, player_ai, runtime, mark_used);
 }
 
 fn finish_player_rush<Runtime: GameMainLoopRuntime>(

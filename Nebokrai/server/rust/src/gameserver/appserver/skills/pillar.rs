@@ -16,6 +16,7 @@ use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::pillarstate::{PillarState, replace_player_pillar_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
@@ -41,11 +42,9 @@ fn finish_player_pillar<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    let _ = game.update_player_properties(player_id, runtime);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
-    player_ai.mark_pillar_used(runtime.now_milliseconds());
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_pillar_used(now_ms);
+    });
 }
 
 pub(crate) fn cancel_player_pillar<Runtime: GameMainLoopRuntime>(
