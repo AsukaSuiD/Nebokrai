@@ -49,7 +49,7 @@
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
+    SKILL_USAGE_USER_HIT_MODIFIER, real_distance, time_reached,
 };
 use super::monsterfastattack::{
     MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME,
@@ -1414,6 +1414,15 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
+    if tamed && pet_action == 2 && cast.is_none() {
+        let distance = real_distance(monster_x, monster_y, target_x, target_y);
+        let minimum_distance = skill_properties.query_property(5_004) as i32;
+        if distance < minimum_distance || distance > maximum_distance as i32 {
+            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            return true;
+        }
+    }
+
     if let Some(cast) = cast {
         if !time_reached(now_ms, cast.started_at_ms(), delay_ms) {
             return true;
@@ -1631,6 +1640,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         maximum_distance,
         now_ms,
     ) {
+        if tamed && pet_action == 2 {
+            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+        }
         return true;
     }
     let attack_interval = schedule_attack_interval(

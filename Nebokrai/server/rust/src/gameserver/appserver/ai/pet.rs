@@ -532,7 +532,10 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 
 // ============================================================================
 // FUNCTION: CPet::OnStayingSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: target-loss, выбор навыка, точный диапазон без движения,
+// `Begin` и FIFO `ATTACK/SEARCH_ENEMY` проходят через monsterbaseattack.
+// UNKNOWN: особая ветвь goods/team target-а до общего target-loss.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:399
@@ -546,7 +549,11 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 
 // ============================================================================
 // FUNCTION: CPet::OnAttackingSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: master-centered tracing limit, target-loss, attackability,
+// выбор навыка, `Begin` и FIFO `ATTACK/SEARCH_ENEMY` проходят через
+// monsterbaseattack.
+// UNKNOWN: особая ветвь goods/team target-а до общего target-loss.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:235
