@@ -500,7 +500,6 @@ mod mosou;
 mod rush;
 mod boalock;
 mod roar;
-mod energyholding;
 mod seal;
 mod thunder;
 mod snowstorm;

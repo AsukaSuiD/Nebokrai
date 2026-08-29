@@ -9,6 +9,7 @@
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::energyholdingstate::take_player_energy_holding;
 use super::flash::cell_views;
 use super::frontcellsword::{FrontCellSwordDefinition, MONSTER_TYPE, PLAYER_TYPE, calculate_attack_with_multiplier, destination, finish, master_info, send_failure, send_visual, target_level, weapon_is_compatible};
 use super::kernel::{SkillExecutionKernel, SkillStage};
@@ -74,7 +75,7 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
     for target in front_targets(game, region_id, player_id) {
         if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || (target.object_type == PLAYER_TYPE && target.id == player_id) || game.periodic_state_target_dead(region_id, target) || !game.owned_player_skill_target_attackable(owner, target, region_id) { continue }
         let Some(target_level) = target_level(game, region_id, target) else { continue };
-        let energy = game.take_player_energy_holding(player_id);
+        let energy = take_player_energy_holding(game, player_id);
         let multiplier = energy.map_or(1.0, |state| 1.0 + f64::from(state.energy_count()) * f64::from(state.parameter_percent()) * 0.01);
         let Some((master, attack)) = calculate_attack_with_multiplier(game, player_id, DEFINITION, target_level, level, hit_modifier, target_damage_factor, multiplier) else { continue };
         match target.object_type {
@@ -84,7 +85,7 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
         }
         game.damage_player_weapon(player_id, runtime);
     }
-    let _ = game.take_player_energy_holding(player_id);
+    let _ = take_player_energy_holding(game, player_id);
     if let Some(execution) = ai.inverse_chopped_mut() { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
     ai.mark_inverse_chopped_used(runtime.now_milliseconds());
     finish(game, player_id);

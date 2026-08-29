@@ -8,6 +8,7 @@
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::energyholdingstate::add_player_energy_holding;
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -105,7 +106,7 @@ pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: 
     let started_at_ms = ai.energy_holding().map(SkillExecutionKernel::started_at_ms).expect("выполнение накопления энергии создано выше");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, level, true);
-    let installed = u32::try_from(level).is_ok_and(|level| game.add_player_energy_holding(player_id, level, parameter_percent));
+    let installed = u32::try_from(level).is_ok_and(|level| add_player_energy_holding(game, player_id, level, parameter_percent));
     if let Some(execution) = ai.energy_holding_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
