@@ -8,14 +8,16 @@
 //! и один бросок критического удара только для фактически атакуемой цели.
 //! `CGame` используется только для разрешения независимого владельца цели,
 //! применения рассчитанной атаки, износа оружия и доставки.
+//! `End` возвращает движение и выполняет `CSummonSkill::End(1)`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::frontcellsword::{
-    FrontCellSwordDefinition, MONSTER_TYPE, PLAYER_TYPE, calculate_attack, destination, finish,
-    front_shape, master_info, send_failure, send_visual, target_level, weapon_is_compatible,
+    FrontCellSwordDefinition, MONSTER_TYPE, PLAYER_TYPE, calculate_attack, destination,
+    finish_front_cell_sword, front_shape, master_info, send_failure, send_visual, target_level,
+    weapon_is_compatible,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::gameserver::game::{
@@ -47,6 +49,30 @@ pub(crate) const fn is_ju_cut_dispatch(dispatch: PlayerSkillDispatch) -> bool {
         | PlayerSkillDispatch::Point { skill_id, .. }
         | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == JU_CUT_SKILL_ID,
     }
+}
+
+fn finish_player_ju_cut<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_front_cell_sword(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_ju_cut_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_ju_cut<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.ju_cut().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_ju_cut(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
@@ -124,7 +150,7 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, DEFINITION, 7, mp_loss);
-            finish(game, player_id);
+            finish_player_ju_cut(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -136,7 +162,7 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
             .is_none_or(|player| !weapon_is_compatible(game, player, DEFINITION))
         {
             send_failure(game, player_id, DEFINITION, 0x0e, mp_loss);
-            finish(game, player_id);
+            finish_player_ju_cut(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some((_, target_x, target_y)) = destination(game, region_id, player_id, dispatch)
@@ -203,7 +229,6 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
     if let Some(execution) = player_ai.ju_cut_mut() {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_ju_cut_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_ju_cut(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

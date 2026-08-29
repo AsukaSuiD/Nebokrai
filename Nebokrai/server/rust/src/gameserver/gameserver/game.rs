@@ -997,10 +997,16 @@ use crate::gameserver::appserver::skills::leafcut3::{
     cancel_player_leaf_cut_3, execute_player_leaf_cut_3, is_leaf_cut_3_dispatch,
     LEAF_CUT_3_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::jucut::{execute_player_ju_cut, is_ju_cut_dispatch};
-use crate::gameserver::appserver::skills::lightningsword::{
-    execute_player_lightning_sword, is_lightning_sword_dispatch,
+use crate::gameserver::appserver::skills::jucut::{
+    cancel_player_ju_cut, execute_player_ju_cut, is_ju_cut_dispatch, JU_CUT_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::lightningsword::{
+    cancel_player_lightning_sword, execute_player_lightning_sword, is_lightning_sword_dispatch,
+    LIGHTNING_SWORD_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::lightningsword2::LIGHTNING_SWORD_2_SKILL_ID;
+use crate::gameserver::appserver::skills::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID;
+use crate::gameserver::appserver::skills::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash::{
     execute_player_little_flash, is_little_flash_dispatch,
 };
@@ -37456,6 +37462,11 @@ impl CGame {
                 | LEAF_CUT_SKILL_ID
                 | LEAF_CUT_2_SKILL_ID
                 | LEAF_CUT_3_SKILL_ID
+                | JU_CUT_SKILL_ID
+                | LIGHTNING_SWORD_SKILL_ID
+                | LIGHTNING_SWORD_2_SKILL_ID
+                | LIGHTNING_SWORD_3_SKILL_ID
+                | LIGHTNING_SWORD_4_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37499,6 +37510,11 @@ impl CGame {
             LEAF_CUT_SKILL_ID => player_ai.leaf_cut().is_some(),
             LEAF_CUT_2_SKILL_ID => player_ai.leaf_cut_2().is_some(),
             LEAF_CUT_3_SKILL_ID => player_ai.leaf_cut_3().is_some(),
+            JU_CUT_SKILL_ID => player_ai.ju_cut().is_some(),
+            LIGHTNING_SWORD_SKILL_ID
+            | LIGHTNING_SWORD_2_SKILL_ID
+            | LIGHTNING_SWORD_3_SKILL_ID
+            | LIGHTNING_SWORD_4_SKILL_ID => player_ai.lightning_sword().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37581,6 +37597,13 @@ impl CGame {
             }
             LEAF_CUT_3_SKILL_ID => {
                 cancel_player_leaf_cut_3(self, player_id, &mut player_ai, runtime)
+            }
+            JU_CUT_SKILL_ID => cancel_player_ju_cut(self, player_id, &mut player_ai, runtime),
+            LIGHTNING_SWORD_SKILL_ID
+            | LIGHTNING_SWORD_2_SKILL_ID
+            | LIGHTNING_SWORD_3_SKILL_ID
+            | LIGHTNING_SWORD_4_SKILL_ID => {
+                cancel_player_lightning_sword(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {

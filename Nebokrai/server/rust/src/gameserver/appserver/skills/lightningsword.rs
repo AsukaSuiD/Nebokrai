@@ -7,14 +7,17 @@
 //! layout находятся в `frontcellsword`; lifecycle и ошибка категории оружия
 //! остаются здесь. Варианты `2` и `4` сохраняют категорию `1` и `GS0287`, а
 //! вариант `3` переопределяет их на категорию `2` и `GS0292`.
+//! Все четыре варианта используют общий `End`: возврат движения и
+//! `CSummonSkill::End(1)` с отдельной cooldown-ячейкой варианта.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::frontcellsword::{
-    FrontCellSwordDefinition, MONSTER_TYPE, PLAYER_TYPE, calculate_attack, destination, finish,
-    front_shape, master_info, send_failure, send_visual, target_level, weapon_is_compatible,
+    FrontCellSwordDefinition, MONSTER_TYPE, PLAYER_TYPE, calculate_attack, destination,
+    finish_front_cell_sword, front_shape, master_info, send_failure, send_visual, target_level,
+    weapon_is_compatible,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::lightningsword2::LIGHTNING_SWORD_2_SKILL_ID;
 use super::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID;
 use super::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
@@ -53,6 +56,48 @@ pub(crate) const fn is_lightning_sword_dispatch(dispatch: PlayerSkillDispatch) -
     }
 }
 
+const fn dispatch_skill_id(dispatch: PlayerSkillDispatch) -> u32 {
+    match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
+    }
+}
+
+fn finish_player_lightning_sword<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_front_cell_sword(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_lightning_sword_used(skill_id, now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_lightning_sword<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .lightning_sword()
+        .map(SkillExecutionKernel::dispatch)
+    else {
+        return false;
+    };
+    finish_player_lightning_sword(
+        game,
+        player_id,
+        dispatch_skill_id(dispatch),
+        player_ai,
+        runtime,
+    );
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
 pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -63,7 +108,7 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     if !is_lightning_sword_dispatch(dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let skill_id = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id };
+    let skill_id = dispatch_skill_id(dispatch);
     let definition = definition(skill_id);
     let Some((region_id, level, source_x, source_y, initial_mana)) = game
         .find_player(player_id)
@@ -134,7 +179,7 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, definition, 7, mp_loss);
-            finish(game, player_id);
+            finish_player_lightning_sword(game, player_id, skill_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -146,7 +191,7 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
             .is_none_or(|player| !weapon_is_compatible(game, player, definition))
         {
             send_failure(game, player_id, definition, 0x0e, mp_loss);
-            finish(game, player_id);
+            finish_player_lightning_sword(game, player_id, skill_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some((_, target_x, target_y)) = destination(game, region_id, player_id, dispatch)
@@ -213,7 +258,6 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     if let Some(execution) = player_ai.lightning_sword_mut() {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_lightning_sword_used(skill_id, runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_lightning_sword(game, player_id, skill_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

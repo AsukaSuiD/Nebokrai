@@ -4,7 +4,9 @@
 //! лицевой клетки, packet layout и физико-элементно-духовной формуле. Этот
 //! owner не хранит execution-state и не выбирает момент списания ресурсов:
 //! различающиеся lifecycle и ошибки остаются в конкретных skill-owner-ах.
+//! Общий `End` возвращает движение и выполняет `CSummonSkill::End(1)`.
 
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -12,7 +14,8 @@ use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -28,11 +31,20 @@ pub(crate) struct FrontCellSwordDefinition {
     pub(crate) weapon_failure_string: &'static [u8],
 }
 
-pub(crate) fn finish(game: &mut CGame, player_id: i32) {
+pub(crate) fn finish_front_cell_sword<Runtime, MarkUsed>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+    mark_used: MarkUsed,
+) where
+    Runtime: GameMainLoopRuntime,
+    MarkUsed: FnOnce(&mut CPlayerAI, u32),
+{
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, mark_used);
 }
 
 pub(crate) fn master_info(player: &CPlayer) -> MasterInfo {
