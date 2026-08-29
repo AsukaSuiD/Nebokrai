@@ -6,10 +6,11 @@
 //! и необычное предпочтение цели вне минимальной дистанции текущего навыка.
 //! Реальный путь `monsterbaseattack` выполняет выбор навыка и поиск цели, а
 //! достигнутый владелец навыка не использует произвольный порядок хранилища
-//! сущностей.
-//!
-//! Полные очереди `OnChangeSkill`, `OnFighting` и `OnIdle` ниже остаются RAW;
-//! достигнутые части их выбора и сна выполняются общим циклом монстра.
+//! сущностей. `OnIdle` ставит строгую очередь
+//! `ChangeSkill → Stand → SearchEnemy`, а завершённая атака сохраняет навык и
+//! снова ставит поиск. В `OnChangeSkill` достигнута постановка задержки
+//! выбранного навыка; неизвестный точный смысл его виртуальной проверки
+//! сохранён в RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -19,8 +20,9 @@
 
 // FUNCTION: CFixedPositionArcher::OnChangeSkill
 // STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: общий цикл монстра назначает текущий навык до поиска цели;
-// точные события `CHANGE_SKILL/STAND` остаются ниже.
+// IMPLEMENTED: общий цикл монстра назначает текущий навык, а этот owner
+// добавляет `STAND` с его задержкой в хвост FIFO.
+// UNKNOWN: точный смысл виртуальной проверки навыка перед постановкой `STAND`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\fixedpositionarcher.cpp:26
@@ -32,48 +34,81 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CFixedPositionArcher::OnFighting
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\fixedpositionarcher.cpp:184
-// RVA: 0x0020FA70
-// ADDRESS: 0060fa70
-// PROTOTYPE: int __thiscall OnFighting(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFixedPositionArcher::OnIdle
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: `execute_owned_monster_base_attack` сохраняет проверку игроков
-// в девяти соседних областях и спящий переход; точная очередь событий остаётся ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\fixedpositionarcher.cpp:116
-// RVA: 0x0020FAA0
-// ADDRESS: 0060faa0
-// PROTOTYPE: void __thiscall OnIdle(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // COMPONENT_VARIANT_END: GameServer
 
 use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::ai::baseai::AiShapeAction;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::skills::baseattack::{
+    SKILL_USAGE_REUSE_DELAY_TIME, real_distance,
+};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::setup::monsterlist::MonsterProperties;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FixedArcherTarget {
     pub(crate) identity: ShapeIdentity,
     pub(crate) distance: i32,
+}
+
+/// Стационарные лучники и охранники завершают атаку новым поиском, не сбрасывая
+/// текущий навык. Остальные monster-owner-ы сохраняют общий `ChangeSkill`.
+pub(crate) const fn attack_completion_action(ai_type: u32) -> AiShapeAction {
+    if matches!(ai_type, 5 | 11 | 23) {
+        AiShapeAction::SearchEnemy
+    } else {
+        AiShapeAction::ChangeSkill
+    }
+}
+
+/// Ставит общую точную очередь стационарного `OnIdle`. Каждый исходный
+/// `AddAIEvent` получает отдельный замер часов.
+pub(crate) fn queue_stationary_guard_idle<Runtime: GameMainLoopRuntime>(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    stop_frame: u32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+        return false;
+    };
+    monster.begin_active_ai_change_skill(runtime.now_milliseconds());
+    monster.begin_active_ai_stand(stop_frame, runtime.now_milliseconds());
+    monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+    true
+}
+
+/// Дополняет `OnChangeSkill` AI5 и наследующего его AI23 задержкой выбранного
+/// навыка. Событие добавляется в хвост уже существующей FIFO-очереди.
+pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    selected_skill_id: u16,
+    runtime: &mut Runtime,
+) {
+    if !matches!(property.ai, 5 | 23) {
+        return;
+    }
+    let Some(skill) = property
+        .skills
+        .iter()
+        .filter(|skill| skill.id == selected_skill_id)
+        .max_by_key(|skill| skill.level)
+    else {
+        return;
+    };
+    let Some(skill_properties) =
+        game.skill_base_properties(u32::from(skill.id), i32::from(skill.level))
+    else {
+        return;
+    };
+    let delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_stand(delay_ms, runtime.now_milliseconds());
+    }
 }
 
 /// Повторяет необычное правило `OnSearchEnemy`: выбирается ближайшая цель не

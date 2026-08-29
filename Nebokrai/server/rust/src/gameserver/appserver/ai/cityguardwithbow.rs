@@ -46,37 +46,9 @@
 // COMPONENT_VARIANT_END: GameServer
 
 use super::cityguardwithsword::select_city_guard_enemy;
-use crate::gameserver::appserver::ai::baseai::AiShapeAction;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
-
-/// Действие после завершённой атаки принадлежит только городскому лучнику:
-/// его `OnFighting` не сбрасывает текущий навык и ставит новый поиск цели.
-pub(crate) const fn attack_completion_action(ai_type: u32) -> AiShapeAction {
-    if ai_type == 11 {
-        AiShapeAction::SearchEnemy
-    } else {
-        AiShapeAction::ChangeSkill
-    }
-}
-
-/// Ставит точную очередь `OnIdle` стационарных городского и окружного
-/// лучников. Каждый исходный `AddAIEvent` получает отдельный замер часов.
-pub(crate) fn queue_stationary_bow_guard_idle<Runtime: GameMainLoopRuntime>(
-    region: &mut CServerRegion,
-    monster_id: i32,
-    stop_frame: u32,
-    runtime: &mut Runtime,
-) -> bool {
-    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
-        return false;
-    };
-    monster.begin_active_ai_change_skill(runtime.now_milliseconds());
-    monster.begin_active_ai_stand(stop_frame, runtime.now_milliseconds());
-    monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
-    true
-}
 
 /// `WhenBeenHurted` AI11 не принимает атакующего напрямую: вне боя он заново
 /// выполняет общий городской поиск игроков и питомцев текущим навыком.

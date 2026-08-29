@@ -111,8 +111,10 @@ use crate::gameserver::appserver::ai::bossidle::queue_boss_idle;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
-use crate::gameserver::appserver::ai::cityguardwithbow::queue_stationary_bow_guard_idle;
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
+use crate::gameserver::appserver::ai::fixedpositionarcher::{
+    queue_fixed_archer_skill_delay, queue_stationary_guard_idle,
+};
 use crate::gameserver::appserver::ai::gladiator::select_gladiator_enemy;
 use crate::gameserver::appserver::ai::godsbattlemonster::select_gods_battle_enemy;
 use crate::gameserver::appserver::ai::godsbattleguardwithsword::select_gods_battle_guard_enemy;
@@ -327,15 +329,25 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     if !owns_complete_skill_selection(&property.skills, property.ai) {
         return false;
     }
-    select_and_store_monster_attack_skill(
+    let selected = select_and_store_monster_attack_skill(
         game,
         region,
         monster_id,
         &property,
         monster_health,
         runtime,
-    )
-    .is_some()
+    );
+    if let Some(selected_skill_id) = selected {
+        queue_fixed_archer_skill_delay(
+            game,
+            region,
+            monster_id,
+            &property,
+            selected_skill_id,
+            runtime,
+        );
+    }
+    selected.is_some()
 }
 
 /// Выполняет только подтверждённый `OnSearchEnemy` обычного агрессивного
@@ -471,6 +483,19 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             area_index,
             property.guard_range as i32,
         ),
+        5 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            select_fixed_archer_enemy(
+                game,
+                region,
+                owner,
+                area_index,
+                property.guard_range as i32,
+                minimum_skill_distance,
+            )
+        }
         6 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
@@ -571,6 +596,20 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
             property.race,
         ),
+        23 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            select_gods_battle_guard_enemy(
+                game,
+                region,
+                owner,
+                area_index,
+                property.guard_range as i32,
+                minimum_skill_distance,
+                property.race,
+            )
+        }
         24 => select_gods_battle_enemy(
             game,
             region,
@@ -758,9 +797,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 11 | 16)
+        && matches!(property.ai, 5 | 11 | 16 | 23)
     {
-        return queue_stationary_bow_guard_idle(
+        return queue_stationary_guard_idle(
             region,
             monster_id,
             property.stop_frame,
@@ -852,53 +891,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             StupidArcherSearch::NoTarget => {}
             StupidArcherSearch::Target(selected) => target = Some(selected),
             StupidArcherSearch::Handled => return true,
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 5
-        && let Some(area_index) = area_index
-    {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        if let Some(selected) = select_fixed_archer_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-            minimum_skill_distance,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 23
-        && let Some(area_index) = area_index
-    {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        if let Some(selected) = select_gods_battle_guard_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-            minimum_skill_distance,
-            property.race,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
         }
     }
     let target = cast.map(|cast| cast.dispatch().target).or(target);

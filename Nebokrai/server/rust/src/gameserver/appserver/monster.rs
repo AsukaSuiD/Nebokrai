@@ -558,7 +558,7 @@ impl CMonster {
         self.attack_completion_action = if ai_type == 6 {
             AiShapeAction::SearchEnemy
         } else {
-            crate::gameserver::appserver::ai::cityguardwithbow::attack_completion_action(ai_type)
+            crate::gameserver::appserver::ai::fixedpositionarcher::attack_completion_action(ai_type)
         };
         self.boss_fiend_ai = (ai_type == 0x68).then(|| BossFiendAiState::new(now_ms));
         self.passive_gladiator_ai = (ai_type == 1).then(PassiveGladiatorState::default);
