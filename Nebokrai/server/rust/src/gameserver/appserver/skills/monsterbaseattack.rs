@@ -448,6 +448,14 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.ai,
             property.guard_range as i32,
         ),
+        21 => select_nation_gladiator_enemy(
+            game,
+            region,
+            owner,
+            area_index,
+            property.guard_range as i32,
+            property.race,
+        ),
         24 => select_gods_battle_enemy(
             game,
             region,
@@ -601,7 +609,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 6 | 17 | 18 | 24 | 100 | 0x65)
+        && matches!(property.ai, 0 | 3 | 4 | 6 | 17 | 18 | 21 | 24 | 100 | 0x65)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
@@ -828,26 +836,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             area_index,
             property.guard_range as i32,
             minimum_skill_distance,
-            property.race,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected);
-            }
-            target = Some(selected);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 21
-        && let Some(area_index) = area_index
-    {
-        if let Some(selected) = select_nation_gladiator_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
             property.race,
         ) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {

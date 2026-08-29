@@ -453,7 +453,7 @@ pub(crate) fn approach_attack_range(
 // `execute_owned_monster_base_attack` сохраняют проверку соседних игроков и
 // спящий переход. `queue_monster_idle` проводит `ChangeSkill`, точный RNG
 // случайного шага либо `Stand`, а затем `SearchEnemy` для достигнутых AI0,
-// AI3, AI4, AI6, AI7, AI17, AI18, AI24, AI100, AI101 и двух боссов.
+// AI3, AI4, AI6, AI7, AI17, AI18, AI21, AI24, AI100, AI101 и двух боссов.
 // Остальные виртуальные владельцы остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
