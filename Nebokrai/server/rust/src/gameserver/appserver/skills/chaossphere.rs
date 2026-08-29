@@ -6,6 +6,8 @@
 //! визуальные пакеты и построение движущегося `CChaosSpherePhalanx`.
 //! `CGame` предоставляет только разрешение владельцев, регион, регистрацию и
 //! фактическую доставку.
+//! `End` возвращает движение и завершает общий `CSummonSkill::End` после
+//! построения сферы либо при отмене текущей команды.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -14,11 +16,12 @@ use super::basemagic::{
     SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED,
 };
 use super::chaosspherephalanx::CChaosSpherePhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -58,11 +61,34 @@ fn send_failure(game: &CGame, player_id: i32, code: u8) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_chaos_sphere_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .chaos_sphere()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    finish_player_chaos_sphere(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn target_position(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<(i32, i32)> {
@@ -135,6 +161,9 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(CHAOS_SPHERE_SKILL_ID), player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(CHAOS_SPHERE_SKILL_ID, level) else {
+        if player_ai.chaos_sphere().is_some() {
+            finish_player_chaos_sphere(game, player_id, player_ai, runtime);
+        }
         return terminal(QueuedSkillExecutionState::Rejected)
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -180,7 +209,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     let Some((target_x, target_y)) = target_position(game, region_id, dispatch) else {
         send_failure(game, player_id, 10);
         if matches!(dispatch, PlayerSkillDispatch::Object { .. }) { game.send_skill_system_info(player_id, b"GS0285"); }
-        finish(game, player_id);
+        finish_player_chaos_sphere(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if player_ai.chaos_sphere().is_some_and(|state| !state.condition_checked()) {
@@ -188,7 +217,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            finish_player_chaos_sphere(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -250,7 +279,6 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_chaos_sphere_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_chaos_sphere(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
