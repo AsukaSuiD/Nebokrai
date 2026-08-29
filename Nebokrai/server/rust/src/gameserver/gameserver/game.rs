@@ -21756,6 +21756,10 @@ impl CGame {
         self.globe_setup.allow_client_change_position()
     }
 
+    pub(crate) const fn quest_move_rotation(&self) -> u8 {
+        self.globe_setup.rotation()
+    }
+
     /// Полный `CPlayer::MakeCiQingNode` и его `goodsmessage 0x8FC31` tail.
     /// Resource logs предшествуют каждому DeleteGoods-effect; финальный
     /// positive log сохраняет странный native count оставшихся в vector-е

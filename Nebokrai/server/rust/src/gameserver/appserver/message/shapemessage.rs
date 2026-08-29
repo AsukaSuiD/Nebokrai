@@ -17,6 +17,7 @@
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::skills::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -28,12 +29,6 @@ const QUEST_MOVE_STEP: u32 = 0x0008_f903;
 const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ShapeQuestMoveFacts {
-    pub(crate) blocked_by_breakable_attack: bool,
-    pub(crate) server_rotation: u8,
-}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ShapeEmotionFacts {
@@ -64,12 +59,6 @@ pub(crate) trait GameShapeMessageRuntime {
         tile_x: i32,
         tile_y: i32,
     );
-    fn shape_quest_move_facts(
-        &mut self,
-        game: &CGame,
-        player_id: i32,
-        region_id: i32,
-    ) -> ShapeQuestMoveFacts;
     fn serialize_shape_snapshot(
         &mut self,
         game: &CGame,
@@ -295,8 +284,17 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                     return Some(Err(error));
                 }
             };
-            let facts = runtime.shape_quest_move_facts(game, player_id, region_id);
-            if facts.blocked_by_breakable_attack {
+            let blocked_by_breakable_attack = game
+                .find_player(player_id)
+                .and_then(|player| {
+                    let skill_id = player.current_skill_id()?;
+                    let level = player.learned_skill_level(skill_id);
+                    game.skill_base_properties(skill_id, level)
+                })
+                .is_some_and(|properties| {
+                    properties.query_property(SKILL_USAGE_CAN_BE_BREAKED) == 1
+                });
+            if blocked_by_breakable_attack {
                 match send_player_cannot_move(game, player_id) {
                     Ok(()) => {}
                     Err(error) => return Some(Err(error)),
@@ -304,9 +302,10 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 trace!(player_id, region_id, "шаг движения заблокирован атакой");
                 return Some(Ok(()));
             }
-            if client_rotation != facts.server_rotation {
+            let server_rotation = game.quest_move_rotation();
+            if client_rotation != server_rotation {
                 let mut response = CMessage::new(0x000b_f738);
-                response.add_byte(facts.server_rotation);
+                response.add_byte(server_rotation);
                 let _ = response.send_to_player(game.net_server(), player_id);
             }
             if game

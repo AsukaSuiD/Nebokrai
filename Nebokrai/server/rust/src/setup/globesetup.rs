@@ -27,8 +27,10 @@
 //! pet lifecycle/tracing/follow используют raw `m_dwPetWildTime +0x728`,
 //! `m_dwMaxPetTracingDistance +0x72C` и `m_fTranslateDistance +0x73C`;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
-//! `bAllowClientChangePos +0x50D` загружается Game-side positional
-//! projection и напрямую gate-ит runtime `shapemessage 0x8F902`.
+//! `bAllowClientChangePos +0x50D` загружается позиционной проекцией GameServer
+//! и напрямую разрешает `shapemessage 0x8F902`. Поле `bRotation +0xC48`,
+//! подтверждённое PDB непосредственно перед `bGoodsAi +0xC4C`, задаёт
+//! серверный байт поворота для квестового шага `0x8F903`.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
@@ -59,6 +61,7 @@ const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
 const ALLOW_CLIENT_CHANGE_POSITION_OFFSET: usize = 0x50D;
+const ROTATION_OFFSET: usize = 0xC48;
 const SAVE_POINT_TIME_OFFSET: usize = 0x510;
 const CRIMINAL_TIME_OFFSET: usize = 0x4E8;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
@@ -761,6 +764,11 @@ impl GlobeSetupSnapshot {
     /// накладывает его из второй boolean-записи `gamesetup.ini`.
     pub(crate) const fn allow_client_change_position(&self) -> bool {
         self.bytes[ALLOW_CLIENT_CHANGE_POSITION_OFFSET] != 0
+    }
+
+    /// Точный байт `tagSetup::bRotation +0xC48` для ответа `0xBF738`.
+    pub(crate) const fn rotation(&self) -> u8 {
+        self.bytes[ROTATION_OFFSET]
     }
 
     /// Возвращает точное поле `dwSavePointTime` по PDB-смещению `+0x510`.
