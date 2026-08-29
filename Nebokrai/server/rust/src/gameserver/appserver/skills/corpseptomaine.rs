@@ -174,6 +174,9 @@ use super::monsterattack::{
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoison::{install_spider_poison_state, target_has_cure};
 use super::spiderpoisonstate::SpiderPoisonState;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::CShape;
@@ -183,6 +186,7 @@ use crate::nets::netserver::message::CMessage;
 
 const MONSTER_TYPE: i32 = 600;
 const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
+const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const SKILL_USAGE_CONST: u32 = 20_010;
@@ -236,17 +240,22 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
     now_ms: u32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((source, property, master, tamed, cast, last_used_ms)) = region
+    let Some((source, property, master, tamed, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
                 .find_monster_property_by_origin_name(monster.base_property_key()?)?
                 .clone();
+            let attack_interval_ms = monster
+                .is_tamed()
+                .then(|| monster.pet_attack_properties(&property))
+                .map_or(property.attack_speed, |pet| pet.attack_interval);
             Some((
                 monster.move_shape().shape().clone(),
                 property,
                 monster.master_info(),
                 monster.is_tamed(),
+                attack_interval_ms,
                 monster.base_attack_cast(),
                 monster.skill_last_used_ms(CORPSE_PTOMAINE_SKILL_ID),
             ))
@@ -256,6 +265,40 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
     };
 
     if cast.is_none() {
+        let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity)
+        else {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.clear_ai_target();
+            }
+            return true;
+        };
+        let (Ok(target_x), Ok(target_y)) =
+            (target.shape.get_tile_x(), target.shape.get_tile_y())
+        else {
+            return true;
+        };
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            target_x,
+            target_y,
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+            now_ms,
+        ) {
+            return true;
+        }
+        if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms)
+        {
+            let attack_started = region
+                .find_monster_by_id_mut(monster_id)
+                .is_some_and(|monster| {
+                    monster.begin_ai_attack_attempt(now_ms, attack_interval_ms)
+                });
+            if !attack_started {
+                return true;
+            }
+        }
         if last_used_ms != 0
             && !time_reached(
                 now_ms,
