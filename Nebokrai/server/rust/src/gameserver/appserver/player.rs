@@ -4506,6 +4506,14 @@ impl CPlayer {
             .take_expired_defense_shields(now_ms, mana, dead, war_soul_mana)
     }
 
+    pub(crate) fn activate_loaded_persisted_defense_shields(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::shieldstate::DefenseShieldState> {
+        self.move_shape
+            .activate_loaded_persisted_defense_shields(now_ms)
+    }
+
     pub(crate) fn take_defense_shields(
         &mut self,
     ) -> Vec<super::skills::shieldstate::DefenseShieldState> {

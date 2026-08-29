@@ -1385,7 +1385,9 @@ use crate::gameserver::appserver::skills::selfshield::{
     is_self_shield_skill, materialized_self_shield_active,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
-use crate::gameserver::appserver::skills::shieldstate::expire_player_defense_shields;
+use crate::gameserver::appserver::skills::shieldstate::{
+    expire_player_defense_shields, DefenseShieldState,
+};
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -28813,6 +28815,11 @@ impl CGame {
             .get(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .cure_state();
+        let loaded_defense_shields = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_persisted_defense_shields(login_tick_ms);
         for state in &loaded_appellation_states {
             self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
         }
@@ -28884,6 +28891,31 @@ impl CGame {
         }
         if let Some(state) = loaded_cure_state {
             send_cure_state_visual(self, expected_player_id, state, true);
+        }
+        for state in loaded_defense_shields {
+            match state {
+                DefenseShieldState::Mana(state) => {
+                    crate::gameserver::appserver::skills::manashieldstate::send_mana_shield_state_visual(
+                        self,
+                        expected_player_id,
+                        state,
+                        true,
+                        login_tick_ms,
+                    );
+                }
+                DefenseShieldState::Machine(state) => {
+                    crate::gameserver::appserver::skills::machineshieldstate::send_machine_shield_state_visual(
+                        self,
+                        expected_player_id,
+                        state,
+                        true,
+                        login_tick_ms,
+                    );
+                }
+                DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {
+                    unreachable!("из DB активируются только сохранённые щиты")
+                }
+            }
         }
         self.restore_player_login_pets(expected_player_id, region_id, context);
         self.restore_player_login_carriage(expected_player_id, region_id, context);

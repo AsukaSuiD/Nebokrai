@@ -3,16 +3,19 @@
 //! Состояние хранится в общей упорядоченной ветви щитов и исполняется в
 //! исходной точке `CFightDefense::PreDefense`. Формула не подменяет MP игрока:
 //! рассчитанный `lMPDamage` применяется позднее обычным владельцем атаки.
-//! Не достигнуты только восстановление временного состояния из DB/wire-формата
-//! и его конструктор по умолчанию; соответствующий RAW сохранён ниже.
+//! DB-запись хранит остаток срока, прочность и два WORD-фактора;
+//! после загрузки отсчёт начинается от текущих часов.
 
 use super::machineshield::MACHINE_SHIELD_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::manashieldstate::{
     MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
 use crate::gameserver::appserver::states::attackpower::AttackPower;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+
+pub(crate) const MACHINE_SHIELD_STATE_BYTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MachineShieldState {
@@ -66,6 +69,33 @@ impl MachineShieldState {
         } else {
             deadline.wrapping_sub(now_ms) as i32
         }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != MACHINE_SHIELD_SKILL_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?, reader.read_u16()?, reader.read_u16()?))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; MACHINE_SHIELD_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(MACHINE_SHIELD_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(MACHINE_SHIELD_SKILL_ID);
+        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_i32(self.life);
+        writer.write_u16(self.hp_factor);
+        writer.write_u16(self.mp_factor);
+        bytes.try_into().expect("размер состояния машинного щита фиксирован")
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; MACHINE_SHIELD_STATE_BYTES] {
+        self.encoded(self.started_at_ms)
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) fn absorb_damage(
@@ -138,7 +168,7 @@ pub(crate) fn send_machine_shield_state_visual(
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Ниже сохранены только ещё не подключённые функции конструктора и сериализации.
+// Ниже сохранён только ещё не подключённый конструктор по умолчанию.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -153,26 +183,6 @@ pub(crate) fn send_machine_shield_state_visual(
 // RVA: 0x001F1CD0
 // ADDRESS: 005f1cd0
 // PROTOTYPE: undefined __thiscall CMachineShieldState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:155
-// RVA: 0x001F1EE0
-// ADDRESS: 005f1ee0
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-
-// ============================================================================
-// FUNCTION: CMachineShieldState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machineshieldstate.cpp:168
-// RVA: 0x001F2000
-// ADDRESS: 005f2000
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 

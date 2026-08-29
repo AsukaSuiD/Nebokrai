@@ -3,16 +3,18 @@
 //! Щит `321` хранит срок, остаток прочности, две защиты и WORD-факторы
 //! преобразования урона. `absorb_damage` вызывается в исходной позиции
 //! `CFightDefense::PreDefense`, до обычной защиты и итогового коэффициента
-//! `damage_factor`. Не достигнуты только конструктор по умолчанию и сохранение
-//! временного состояния; их RAW сохранён ниже без параллельного runtime-пути.
+//! `damage_factor`. DB-запись хранит остаток срока, прочность, обе
+//! защиты и WORD-факторы; после загрузки отсчёт начинается от текущих часов.
 
 use super::manashield::MANA_SHIELD_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const MANA_SHIELD_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const MANA_SHIELD_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+pub(crate) const MANA_SHIELD_STATE_BYTES: usize = 24;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ManaShieldState {
@@ -72,6 +74,35 @@ impl ManaShieldState {
         } else {
             deadline.wrapping_sub(now_ms) as i32
         }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != MANA_SHIELD_SKILL_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?, reader.read_i32()?, reader.read_i32()?, reader.read_u16()?, reader.read_u16()?))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; MANA_SHIELD_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(MANA_SHIELD_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(MANA_SHIELD_SKILL_ID);
+        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_i32(self.life);
+        writer.write_i32(self.physical_defense);
+        writer.write_i32(self.element_defense);
+        writer.write_u16(self.hp_factor);
+        writer.write_u16(self.mp_factor);
+        bytes.try_into().expect("размер состояния мана-щита фиксирован")
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; MANA_SHIELD_STATE_BYTES] {
+        self.encoded(self.started_at_ms)
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) fn absorb_damage(
@@ -155,7 +186,7 @@ pub(crate) fn send_mana_shield_state_visual(
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Ниже сохранены только ещё не подключённые функции конструктора и сериализации.
+// Ниже сохранён только ещё не подключённый конструктор по умолчанию.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -172,32 +203,6 @@ pub(crate) fn send_mana_shield_state_visual(
 // RVA: 0x001F3170
 // ADDRESS: 005f3170
 // PROTOTYPE: undefined __thiscall CManaShieldState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:165
-// RVA: 0x001F3380
-// ADDRESS: 005f3380
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-
-// ============================================================================
-// FUNCTION: CManaShieldState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\manashieldstate.cpp:180
-// RVA: 0x001F3520
-// ADDRESS: 005f3520
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

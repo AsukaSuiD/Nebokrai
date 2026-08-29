@@ -76,8 +76,12 @@ use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::RoarState;
 use crate::gameserver::appserver::skills::energyholdingstate::EnergyHoldingState;
 use crate::gameserver::appserver::skills::lifeshieldstate::LifeShieldState;
-use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState;
-use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
+use crate::gameserver::appserver::skills::machineshieldstate::{
+    MachineShieldState, MACHINE_SHIELD_STATE_BYTES,
+};
+use crate::gameserver::appserver::skills::manashieldstate::{
+    ManaShieldState, MANA_SHIELD_STATE_BYTES,
+};
 use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
 use crate::gameserver::appserver::skills::blindstate::{
@@ -706,6 +710,25 @@ impl CMoveShape {
                 write_u32(&mut payload, offset + 4, state.remaining_time(now_ms));
             }
         }
+        for state in &self.defense_shields {
+            match state {
+                DefenseShieldState::Mana(state) => {
+                    update_known_state_record(
+                        &mut payload,
+                        state.skill_id(),
+                        &state.encoded(now_ms),
+                    );
+                }
+                DefenseShieldState::Machine(state) => {
+                    update_known_state_record(
+                        &mut payload,
+                        state.skill_id(),
+                        &state.encoded(now_ms),
+                    );
+                }
+                DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {}
+            }
+        }
         payload
     }
 
@@ -792,6 +815,24 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID))
             .and_then(|offset| EnlargeFullMissState::decode(&states, offset).ok());
+        self.defense_shields.retain(|state| {
+            !matches!(state, DefenseShieldState::Mana(_) | DefenseShieldState::Machine(_))
+        });
+        self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
+            match read_u32(&states, offset) {
+                Some(super::skills::manashield::MANA_SHIELD_SKILL_ID) => {
+                    ManaShieldState::decode(&states, offset, 0)
+                        .ok()
+                        .map(DefenseShieldState::Mana)
+                }
+                Some(super::skills::machineshield::MACHINE_SHIELD_SKILL_ID) => {
+                    MachineShieldState::decode(&states, offset, 0)
+                        .ok()
+                        .map(DefenseShieldState::Machine)
+                }
+                _ => None,
+            }
+        }));
         self.ex_states.replace(states);
     }
 
@@ -1693,6 +1734,8 @@ impl CMoveShape {
                 DefenseShieldState::Machine(_) => None,
                 DefenseShieldState::Promotion(_) => None,
             });
+        self.remove_serialized_state_record(state.skill_id(), MANA_SHIELD_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.defense_shields.push(DefenseShieldState::Mana(state));
         previous
     }
@@ -1712,6 +1755,8 @@ impl CMoveShape {
                 DefenseShieldState::Mana(_) => None,
                 DefenseShieldState::Promotion(_) => None,
             });
+        self.remove_serialized_state_record(state.skill_id(), MACHINE_SHIELD_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.defense_shields
             .push(DefenseShieldState::Machine(state));
         previous
@@ -1795,12 +1840,84 @@ impl CMoveShape {
                 player_dead,
                 war_soul_mana,
             ) {
-                expired.push(self.defense_shields.remove(position));
+                let state = self.defense_shields.remove(position);
+                match state {
+                    DefenseShieldState::Mana(state) => {
+                        self.remove_serialized_state_record(
+                            state.skill_id(),
+                            MANA_SHIELD_STATE_BYTES,
+                        );
+                    }
+                    DefenseShieldState::Machine(state) => {
+                        self.remove_serialized_state_record(
+                            state.skill_id(),
+                            MACHINE_SHIELD_STATE_BYTES,
+                        );
+                    }
+                    DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {}
+                }
+                expired.push(state);
             } else {
                 position += 1;
             }
         }
         expired
+    }
+
+    pub(crate) fn activate_loaded_persisted_defense_shields(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<DefenseShieldState> {
+        let mut loaded = Vec::new();
+        for state in &mut self.defense_shields {
+            match state {
+                DefenseShieldState::Mana(state) => {
+                    state.activate_loaded(now_ms);
+                    loaded.push(DefenseShieldState::Mana(*state));
+                }
+                DefenseShieldState::Machine(state) => {
+                    state.activate_loaded(now_ms);
+                    loaded.push(DefenseShieldState::Machine(*state));
+                }
+                DefenseShieldState::Life(_) | DefenseShieldState::Promotion(_) => {}
+            }
+        }
+        loaded
+    }
+
+    fn append_serialized_state_record(&mut self, record: &[u8]) {
+        if self.ex_states.len() < 4 {
+            self.ex_states.clear();
+            LegacyWriter::new(&mut self.ex_states).write_u32(0);
+        }
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
+        self.ex_states.extend_from_slice(record);
+    }
+
+    fn remove_serialized_state_record(&mut self, state_id: u32, amount: usize) -> bool {
+        let Some(offset) = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state_id))
+        else {
+            return false;
+        };
+        let Some(end) = offset.checked_add(amount).filter(|end| *end <= self.ex_states.len()) else {
+            return false;
+        };
+        self.ex_states.drain(offset..end);
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
+        for state in &mut self.extended_states { state.shift_serialized_offset_after(offset, amount); }
+        for state in &mut self.change_body_states { state.shift_serialized_offset_after(offset, amount); }
+        for state in &mut self.undead_states { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.leaf_cut_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.leaf_cut_3_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.kerosene_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.poison_fog_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.meteor_arrow_state { state.shift_serialized_offset_after(offset, amount); }
+        if let Some(state) = &mut self.ride_state { state.shift_serialized_offset_after(offset, amount); }
+        true
     }
 
     pub(crate) fn take_defense_shields(&mut self) -> Vec<DefenseShieldState> {
@@ -3525,6 +3642,8 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             BLIND_STATE_ID => BLIND_STATE_BYTES,
             CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
             super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
+            super::skills::machineshield::MACHINE_SHIELD_SKILL_ID => MACHINE_SHIELD_STATE_BYTES,
+            super::skills::manashield::MANA_SHIELD_SKILL_ID => MANA_SHIELD_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {
@@ -3544,6 +3663,16 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
         cursor = end;
     }
     offsets
+}
+
+fn update_known_state_record(payload: &mut [u8], state_id: u32, record: &[u8]) {
+    if let Some(offset) = known_state_record_offsets(payload)
+        .into_iter()
+        .find(|offset| read_u32(payload, *offset) == Some(state_id))
+        && let Some(destination) = payload.get_mut(offset..offset + record.len())
+    {
+        destination.copy_from_slice(record);
+    }
 }
 
 fn read_u16(source: &[u8], offset: usize) -> Option<u16> {
