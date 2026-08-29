@@ -2009,6 +2009,22 @@ impl CServerRegion {
         changed
     }
 
+    /// Выполняет условный `CMonster::Evanish` ветви отзыва питомца.
+    /// Исходный диспетчер не перепроверяет владельца найденного монстра;
+    /// удаление записи из списка игрока выполняется отдельно и безусловно.
+    pub(crate) fn evanish_pet_shape(
+        &mut self,
+        pet_type: i32,
+        pet_id: i32,
+    ) -> Option<CShape> {
+        if pet_type != MONSTER_TYPE {
+            return None;
+        }
+        let pet = self.find_monster_by_id_mut(pet_id)?;
+        pet.evanish_pet();
+        Some(pet.move_shape().shape().clone())
+    }
+
     /// Snapshot для script `3313`: inclusive tile rectangle и optional exact
     /// original-name filter обходят canonical monster ID order до mutations.
     pub(crate) fn script_monster_ids_in_rect(

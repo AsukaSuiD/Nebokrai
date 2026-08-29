@@ -16770,44 +16770,36 @@ impl CGame {
         player_id: i32,
         pet_type: i32,
         pet_id: i32,
-    ) -> Option<i32> {
+    ) -> Option<Option<i32>> {
         let player = self.players.get(&player_id)?;
         if player.in_changing_server() || player.in_changing_region() {
             return None;
         }
         let region_id = player.server_region_id()?;
         let mut owner = self.take_region_owner(region_id)?;
-        let pet_shape = {
-            let Some(pet) = owner.base_mut().find_monster_by_id_mut(pet_id) else {
-                self.restore_region_owner(owner);
-                return None;
-            };
-            if pet_type != 600 || !pet.is_owned_pet(player_id) {
-                self.restore_region_owner(owner);
-                return None;
-            }
-            pet.evanish_pet();
-            pet.move_shape().shape().clone()
-        };
+        let pet_shape = owner.base_mut().evanish_pet_shape(pet_type, pet_id);
         if let Some(player) = self.players.get_mut(&player_id) {
             let _ = player.remove_active_pet(pet_type, pet_id);
         }
-        let identity = pet_shape.identity();
-        let mut message = CMessage::new(0x000b_f504);
-        message.add_long(identity.object_type);
-        message.add_long(identity.id);
-        message.add_long(0);
-        message
-            .base_mut()
-            .add(&pet_shape.get_pos_x().to_bits().to_le_bytes());
-        message
-            .base_mut()
-            .add(&pet_shape.get_pos_y().to_bits().to_le_bytes());
-        let delivery = self
-            .send_game_shape_around(owner.base(), &pet_shape, None, &message)
-            .ok();
+        let delivery = if let Some(pet_shape) = pet_shape {
+            let identity = pet_shape.identity();
+            let mut message = CMessage::new(0x000b_f504);
+            message.add_long(identity.object_type);
+            message.add_long(identity.id);
+            message.add_long(0);
+            message
+                .base_mut()
+                .add(&pet_shape.get_pos_x().to_bits().to_le_bytes());
+            message
+                .base_mut()
+                .add(&pet_shape.get_pos_y().to_bits().to_le_bytes());
+            self.send_game_shape_around(owner.base(), &pet_shape, None, &message)
+                .ok()
+        } else {
+            None
+        };
         self.restore_region_owner(owner);
-        delivery
+        Some(delivery)
     }
 
     pub(crate) fn jjc_on_world_closed(&mut self) {
@@ -39080,7 +39072,7 @@ impl CGame {
                 pet_deliveries = pet_deliveries.wrapping_add(1);
                 tracing::trace!(
                     victim_id = blow.victim_id,
-                    delivery,
+                    ?delivery,
                     "отозван питомец погибшего игрока"
                 );
             }
@@ -39365,8 +39357,8 @@ impl CGame {
     }
 
     /// Координирует виртуальный `SetTileXY` только для достигнутых владельцев
-    /// региона. Публикация `BF603` остаётся у вызывающего message-owner-а и
-    /// предшествует этой пространственной мутации, как в исходном dispatcher-е.
+    /// региона. Публикация `BF603` остаётся у вызывающего владельца сообщения и
+    /// предшествует этой пространственной мутации, как в исходном диспетчере.
     pub(crate) fn relocate_region_shape(
         &mut self,
         region_id: i32,
