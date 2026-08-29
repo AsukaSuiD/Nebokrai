@@ -338,9 +338,9 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 }
 
 /// Выполняет только подтверждённый `OnSearchEnemy` обычного агрессивного
-/// монстра, слабого существа, двух лучников, городского охранника и двух
-/// боссов. Предшествующее событие уже обработано владельцем FIFO, поэтому
-/// здесь не начинается атака в том же такте.
+/// монстра, слабого существа, двух лучников, городского охранника, владыки и
+/// двух боссов. Предшествующее событие уже обработано владельцем FIFO,
+/// поэтому здесь не начинается атака в том же такте.
 pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -427,6 +427,13 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
             .map(|selected| selected.identity)
         }
+        100 => select_lord_enemy(
+            game,
+            region,
+            owner,
+            area_index,
+            property.guard_range as i32,
+        ),
         0x67 => select_boss_blue_enemy(
             game,
             region,
@@ -565,7 +572,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 3 | 4 | 6)
+        && matches!(property.ai, 0 | 3 | 4 | 6 | 100)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
@@ -635,24 +642,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         )
     {
         let _ = assign_jiumai_target(region, monster_id, selected);
-        target = Some(selected);
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 100
-        && let Some(area_index) = area_index
-        && let Some(selected) = select_lord_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-        )
-    {
-        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.set_ai_target(selected);
-        }
         target = Some(selected);
     }
     if target.is_none()
