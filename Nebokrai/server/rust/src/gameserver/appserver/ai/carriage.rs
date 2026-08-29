@@ -10,6 +10,9 @@
 //! Декомпилятор: Ghidra 12.1.2
 //! Сохранены ещё не сопоставленные поиск хозяина и технические конструкторы.
 
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
+
 pub(crate) const CARRIAGE_FOLLOWING: i32 = 0;
 pub(crate) const CARRIAGE_STAYING: i32 = 1;
 
@@ -35,6 +38,73 @@ pub(crate) struct CarriageMasterOutcome {
     pub(crate) checked: bool,
     pub(crate) rebound: bool,
     pub(crate) vanish_reason: Option<i32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CarriageMovementPlan {
+    None,
+    Move { x: i32, y: i32 },
+    Wait,
+    Follow,
+}
+
+pub(crate) fn plan_carriage_movement(
+    action: i32,
+    moveable: bool,
+    carriage: &CShape,
+    master: Option<&CShape>,
+    stop_distance: i32,
+) -> CarriageMovementPlan {
+    if !moveable {
+        return CarriageMovementPlan::None;
+    }
+    let Some(master) = master else {
+        return CarriageMovementPlan::None;
+    };
+    let (Ok(carriage_x), Ok(carriage_y), Ok(master_x), Ok(master_y)) = (
+        carriage.get_tile_x(),
+        carriage.get_tile_y(),
+        master.get_tile_x(),
+        master.get_tile_y(),
+    ) else {
+        return CarriageMovementPlan::None;
+    };
+    if action == CARRIAGE_FOLLOWING {
+        let Ok(rear) = master.get_rear_direction() else {
+            return CarriageMovementPlan::None;
+        };
+        let distance = real_distance(carriage_x, carriage_y, master_x, master_y);
+        if distance <= 2 {
+            return CarriageMovementPlan::None;
+        }
+        if distance > stop_distance {
+            return CarriageMovementPlan::Wait;
+        }
+        let start = ShapeAreaCoordinates {
+            x: master_x,
+            y: master_y,
+        };
+        let Ok(first) = CShape::get_direction_position(rear, start) else {
+            return CarriageMovementPlan::None;
+        };
+        let Ok(destination) = CShape::get_direction_position(rear, first) else {
+            return CarriageMovementPlan::None;
+        };
+        if (carriage_x, carriage_y) == (destination.x, destination.y) {
+            CarriageMovementPlan::None
+        } else {
+            CarriageMovementPlan::Move {
+                x: destination.x,
+                y: destination.y,
+            }
+        }
+    } else if action == CARRIAGE_STAYING
+        && real_distance(carriage_x, carriage_y, master_x, master_y) <= stop_distance
+    {
+        CarriageMovementPlan::Follow
+    } else {
+        CarriageMovementPlan::None
+    }
 }
 
 impl CarriageLifecycleState {

@@ -657,7 +657,8 @@ use crate::gameserver::appserver::message::skillmessage::{
 use crate::gameserver::appserver::message::teammessage::dispatch_game_team_message;
 use crate::gameserver::appserver::message::unibillmessage::dispatch_increment_shop_billing_message;
 use crate::gameserver::appserver::ai::carriage::{
-    CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts,
+    CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts, CarriageMovementPlan,
+    plan_carriage_movement,
 };
 use crate::gameserver::appserver::ai::pet::{
     PetLifecycleFacts, PetLifecycleNotice, execute_owned_pet_active_search,
@@ -767,7 +768,7 @@ use crate::gameserver::appserver::session::ctrader::{
 };
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, SHAPE_CHANGE_AREA, SHAPE_CHANGE_DELETE, SHAPE_CHANGE_NONE,
-    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeAreaCoordinates, ShapeCoordinateBlock,
+    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeCoordinateBlock,
     ShapeFigure, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
@@ -35352,81 +35353,60 @@ impl CGame {
 
         let mut vanish_reason = CMoveShape::is_died(health).then_some(3);
         let mut vanish = vanish_reason.is_some();
-        if !vanish && moveable {
-            if action == CARRIAGE_FOLLOWING
-                && let Some((master_shape, _)) = &master_snapshot
-                && let (Ok(carriage_x), Ok(carriage_y), Ok(master_x), Ok(master_y), Ok(rear)) = (
-                    carriage_shape.get_tile_x(),
-                    carriage_shape.get_tile_y(),
-                    master_shape.get_tile_x(),
-                    master_shape.get_tile_y(),
-                    master_shape.get_rear_direction(),
-                )
-            {
-                let distance = real_distance(carriage_x, carriage_y, master_x, master_y);
-                if distance > 2 {
-                    if distance <= self.globe_setup.carriage_stop_distance() as i32 {
-                        let start = ShapeAreaCoordinates {
-                            x: master_x,
-                            y: master_y,
-                        };
-                        if let Ok(first) = CShape::get_direction_position(rear, start)
-                            && let Ok(destination) = CShape::get_direction_position(rear, first)
-                            && (carriage_x, carriage_y) != (destination.x, destination.y)
-                            && let Some(around) = GameServerAroundRuntime::new(
-                                self,
-                                &self.session_factory,
-                                self.area_width,
-                                self.area_height,
-                            )
-                        {
-                            let _ = owner.base_mut().move_owned_monster(
-                                monster_id,
-                                destination.x,
-                                destination.y,
-                                0,
-                                CMonster::figure(&property),
-                                self.area_width,
-                                self.area_height,
-                                &around,
-                            );
-                        }
-                    } else {
-                        if master_owns {
-                            let _ = colored_player_notice_message(
-                                0xffff_ffff,
-                                0,
-                                self.get_string_by_id(b"GS0008"),
-                            )
-                            .send_to_player(self.net_server(), master.master_id);
-                        }
-                        if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id)
-                        {
-                            carriage.set_carriage_action(CARRIAGE_STAYING);
-                        }
+        if !vanish {
+            let movement = plan_carriage_movement(
+                action,
+                moveable,
+                &carriage_shape,
+                master_snapshot.as_ref().map(|(shape, _)| shape),
+                self.globe_setup.carriage_stop_distance() as i32,
+            );
+            match movement {
+                CarriageMovementPlan::None => {}
+                CarriageMovementPlan::Move { x, y } => {
+                    if let Some(around) = GameServerAroundRuntime::new(
+                        self,
+                        &self.session_factory,
+                        self.area_width,
+                        self.area_height,
+                    ) {
+                        let _ = owner.base_mut().move_owned_monster(
+                            monster_id,
+                            x,
+                            y,
+                            0,
+                            CMonster::figure(&property),
+                            self.area_width,
+                            self.area_height,
+                            &around,
+                        );
                     }
                 }
-            } else if action == CARRIAGE_STAYING
-                && let Some((master_shape, _)) = &master_snapshot
-                && let (Ok(carriage_x), Ok(carriage_y), Ok(master_x), Ok(master_y)) = (
-                    carriage_shape.get_tile_x(),
-                    carriage_shape.get_tile_y(),
-                    master_shape.get_tile_x(),
-                    master_shape.get_tile_y(),
-                )
-                && real_distance(carriage_x, carriage_y, master_x, master_y)
-                    <= self.globe_setup.carriage_stop_distance() as i32
-            {
-                if master_owns {
-                    let _ = colored_player_notice_message(
-                        0xffff_ffff,
-                        0,
-                        self.get_string_by_id(b"GS0009"),
-                    )
-                    .send_to_player(self.net_server(), master.master_id);
+                CarriageMovementPlan::Wait => {
+                    if master_owns {
+                        let _ = colored_player_notice_message(
+                            0xffff_ffff,
+                            0,
+                            self.get_string_by_id(b"GS0008"),
+                        )
+                        .send_to_player(self.net_server(), master.master_id);
+                    }
+                    if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        carriage.set_carriage_action(CARRIAGE_STAYING);
+                    }
                 }
-                if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    carriage.set_carriage_action(CARRIAGE_FOLLOWING);
+                CarriageMovementPlan::Follow => {
+                    if master_owns {
+                        let _ = colored_player_notice_message(
+                            0xffff_ffff,
+                            0,
+                            self.get_string_by_id(b"GS0009"),
+                        )
+                        .send_to_player(self.net_server(), master.master_id);
+                    }
+                    if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        carriage.set_carriage_action(CARRIAGE_FOLLOWING);
+                    }
                 }
             }
         }
