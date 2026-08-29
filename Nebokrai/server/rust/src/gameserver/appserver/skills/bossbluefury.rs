@@ -1,152 +1,10 @@
-//! Ярость синего босса `CBossBlueFury` (`0x1f7`) для достигнутого пути монстра.
+//! Ярость синего босса `CBossBlueFury` (`0x1f7`) для игрока и монстра.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/bossbluefury.cpp`. Путь монстра сохраняет проверку
-//! перезарядки, действия 0/1 вокруг источника, задержку и замену собственного
-//! `BossBlueFuryState`. Расход RP и клиентские ошибки относятся только к
-//! неподключённой ветви игрока и остаются в исходном материале ниже.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.h
-
-// ============================================================================
-// FUNCTION: CBossBlueFury::CBossBlueFury
-// STATUS: PARTIALLY_IMPLEMENTED
-// Идентификатор достигнутого пути задаёт `BOSS_BLUE_FURY_SKILL_ID`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:18
-// RVA: 0x0012E250
-// ADDRESS: 0052e250
-// PROTOTYPE: undefined __thiscall CBossBlueFury(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFury::~CBossBlueFury
-// STATUS: PARTIALLY_IMPLEMENTED
-// Завершение достигнутого пути выполняет `finish_base_attack_cast`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:26
-// RVA: 0x0012E2C0
-// ADDRESS: 0052e2c0
-// PROTOTYPE: void __thiscall ~CBossBlueFury(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFury::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:123
-// RVA: 0x0012E2E0
-// ADDRESS: 0052e2e0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFury::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:139
-// RVA: 0x0012E3B0
-// ADDRESS: 0052e3b0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFury::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// Объектный путь монстра выполняется `execute_owned_boss_blue_fury`;
-// вариант игрока остаётся ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:106
-// RVA: 0x0012E4A0
-// ADDRESS: 0052e4a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFuryEffect::UpdateVisualEffect
-// STATUS: IMPLEMENTED
-// Действия 0/1 достигнутого пути выполняют `send_cast_start` и `send_cast_fire`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:294
-// RVA: 0x0012E560
-// ADDRESS: 0052e560
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFury::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// Проверка перезарядки монстра выполняется `execute_owned_boss_blue_fury`;
-// расход RP и ошибки игрока остаются ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:38
-// RVA: 0x0012E8E0
-// ADDRESS: 0052e8e0
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlueFury::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// Стадии монстра, задержка и замена состояния выполняются
-// `execute_owned_boss_blue_fury`; ветвь игрока остаётся ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefury.cpp:169
-// RVA: 0x0012EAC0
-// ADDRESS: 0052eac0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+//! `appserver/skills/bossbluefury.cpp`. Владелец сохраняет обе проверки RP
+//! игрока, необратимый расход, действия `0/1`, задержку, перезарядку и замену
+//! собственного `BossBlueFuryState`. Состояние остаётся каноническим в
+//! `CMoveShape`; `CGame` только координирует владельца и доставку.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -155,17 +13,29 @@ use super::baseattack::{
 use super::bossbluefurystate::{
     BossBlueFuryState, send_boss_blue_fury_state_visual,
 };
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::callosity::SKILL_USAGE_USER_RP_LOSE;
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::SkillStage;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::skills::kernel::{
+    SkillExecutionKernel, SkillStage, SkillTermination,
+};
+use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    QueuedSkillExecutionState,
+};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
 const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER: u32 = 10_003;
 const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
@@ -218,6 +88,242 @@ fn send_cast_fire(
     message.add_long(tile_x);
     message.add_long(tile_y);
     let _ = game.send_game_shape_around(region, source, None, &message);
+}
+
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome {
+        state,
+        first_contact: false,
+        killing_blow: None,
+    }
+}
+
+pub(crate) fn is_player_boss_blue_fury_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == BOSS_BLUE_FURY_SKILL_ID,
+    }
+}
+
+fn send_player_failure(game: &CGame, player_id: i32, action: u8, rp_loss: u32) {
+    game.send_self_state_skill_failure(0x000b_fe01, player_id, action);
+    match action {
+        8 => game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss),
+        0x0d => game.send_skill_system_info(player_id, b"GS0278"),
+        _ => {}
+    }
+}
+
+fn send_player_visual(game: &mut CGame, player_id: i32, skill_level: i32, action: u8) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(action);
+    message.add_long(BOSS_BLUE_FURY_SKILL_ID as i32);
+    message.add_short(skill_level as i16);
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    if action == 1 {
+        message.add_long(player.shape().get_direction());
+    } else {
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.add_long(player.shape().get_tile_x().unwrap_or_default());
+        message.add_long(player.shape().get_tile_y().unwrap_or_default());
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+}
+
+fn finish_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_boss_blue_fury_used(now_ms);
+    });
+}
+
+fn abort_player_boss_blue_fury(game: &mut CGame, player_id: i32) {
+    restore_player_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn cancel_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    _runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.boss_blue_fury().map(|state| state.dispatch()) else {
+        return false;
+    };
+    abort_player_boss_blue_fury(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
+pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    if !is_player_boss_blue_fury_dispatch(dispatch) {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    }
+    let Some((region_id, skill_level, initial_rp, dead)) = game
+        .find_player(player_id)
+        .and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.learned_skill_level(BOSS_BLUE_FURY_SKILL_ID),
+                player.rp(),
+                player.is_dead(),
+            ))
+        })
+    else {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(properties) = game
+        .skill_base_properties(BOSS_BLUE_FURY_SKILL_ID, skill_level)
+        .cloned()
+    else {
+        if player_ai.boss_blue_fury().is_some() {
+            abort_player_boss_blue_fury(game, player_id);
+        }
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let rp_loss = properties.query_property(SKILL_USAGE_USER_RP_LOSE);
+    let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
+    let damage_factor = properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as i32;
+    let weak_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER);
+    let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    let now_ms = runtime.now_milliseconds();
+    if player_ai.boss_blue_fury().is_none() {
+        if player_ai.boss_blue_fury_last_used_ms() != 0
+            && !time_reached(
+                now_ms,
+                player_ai.boss_blue_fury_last_used_ms(),
+                reuse_delay_ms,
+            )
+        {
+            send_player_failure(game, player_id, 0x0d, rp_loss);
+            send_player_failure(game, player_id, 2, rp_loss);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if rp_loss == 0 || (u32::from(initial_rp).wrapping_sub(rp_loss) as i32) < 0 {
+            if rp_loss != 0 {
+                send_player_failure(game, player_id, 8, rp_loss);
+            }
+            send_player_failure(game, player_id, 2, rp_loss);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_skill_moveable(false);
+            player.set_current_skill_id(Some(BOSS_BLUE_FURY_SKILL_ID));
+        }
+        player_ai.begin_boss_blue_fury(SkillExecutionKernel::begin(dispatch, now_ms));
+    }
+    if dead {
+        send_player_failure(game, player_id, 2, rp_loss);
+        restore_player_movement(game, player_id);
+        finish_player_boss_blue_fury(game, player_id, player_ai, runtime);
+        return player_terminal(QueuedSkillExecutionState::Completed);
+    }
+    if player_ai
+        .boss_blue_fury()
+        .is_some_and(|state| state.stage() == SkillStage::Begin)
+    {
+        let rp = game.find_player(player_id).map_or(0, CPlayer::rp);
+        if (u32::from(rp).wrapping_sub(rp_loss) as i32) < 0 {
+            send_player_failure(game, player_id, 8, rp_loss);
+            abort_player_boss_blue_fury(game, player_id);
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_rp(rp.wrapping_sub(rp_loss as u16));
+        }
+        let _ = game.update_player_current_state(
+            player_id,
+            GamePlayerFightStatePhase::MoveShapeAi,
+        );
+        send_player_visual(game, player_id, skill_level, 1);
+        if let Some(state) = player_ai.boss_blue_fury_mut() {
+            let _ = state.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let started_at_ms = player_ai
+        .boss_blue_fury()
+        .map(|state| state.started_at_ms())
+        .expect("выполнение ярости хранит время начала");
+    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+        return player_terminal(QueuedSkillExecutionState::Pending);
+    }
+    send_player_visual(game, player_id, skill_level, 2);
+    if let Some(state) = player_ai.boss_blue_fury_mut() {
+        let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
+        let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
+    }
+    let state_now_ms = runtime.now_milliseconds();
+    let state = BossBlueFuryState::new(state_now_ms, keep_time_ms, damage_factor, weak_time_ms);
+    let previous = game
+        .find_player_mut(player_id)
+        .and_then(CPlayer::take_boss_blue_fury_state);
+    let identity = game
+        .find_player(player_id)
+        .map(|player| player.shape().identity())
+        .unwrap_or(ShapeIdentity {
+            object_type: PLAYER_TYPE,
+            id: player_id,
+            ex_id: CGuid::GUID_INVALID,
+        });
+    let (tile_x, tile_y) = game
+        .find_player(player_id)
+        .map(|player| {
+            (
+                player.shape().get_tile_x().unwrap_or_default(),
+                player.shape().get_tile_y().unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
+    if let Some(previous) = previous {
+        send_boss_blue_fury_state_visual(
+            game, region_id, identity, tile_x, tile_y, previous, false, state_now_ms,
+        );
+        if previous.control_locked() {
+            if let Some(player) = game.find_player_mut(player_id) {
+                player.set_skill_moveable(true);
+                player.set_skill_fightable(true);
+            }
+        }
+    }
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(false);
+        player.set_skill_fightable(false);
+        player.begin_boss_blue_fury_state(state);
+    }
+    send_boss_blue_fury_state_visual(
+        game, region_id, identity, tile_x, tile_y, state, true, state_now_ms,
+    );
+    let _ = game.update_player_properties(player_id, runtime);
+    if let Some(kernel) = player_ai.boss_blue_fury_mut() {
+        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    finish_player_boss_blue_fury(game, player_id, player_ai, runtime);
+    player_terminal(QueuedSkillExecutionState::Completed)
 }
 
 pub(crate) fn execute_owned_boss_blue_fury(

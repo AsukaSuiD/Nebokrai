@@ -1,11 +1,12 @@
 //! Каноническое состояние ярости синего босса `CBossBlueFuryState` (`0x1f7`).
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
-//! `appserver/skills/bossbluefurystate.cpp`. Достигнутый путь монстра заменяет
-//! прежнее состояние до установки нового, запрещает движение и бой на слабой
-//! фазе, а затем сохраняет усиление до общего срока. Минимальная и максимальная
-//! атака заменяются указанной долей коэффициента с исходным округлением дробной части
-//! строго больше `0.5`; визуальные начало и завершение сохраняют `0xBFE03/04`.
+//! `appserver/skills/bossbluefurystate.cpp`. Достигнутые пути игрока и монстра
+//! заменяют прежнее состояние до установки нового, запрещают движение и бой на слабой
+//! фазе, а затем сохраняют состояние до общего срока. Только для монстра минимальная
+//! и максимальная атака заменяются указанной долей коэффициента с исходным округлением
+//! дробной части строго больше `0.5`; визуальные начало и завершение сохраняют
+//! `0xBFE03/04`.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -78,7 +79,8 @@
 // ============================================================================
 // FUNCTION: CBossBlueFuryState::~CBossBlueFuryState
 // STATUS: PARTIALLY_IMPLEMENTED
-// Завершение достигнутого пути выполняет `expire_monster_boss_blue_fury_state`.
+// Завершение достигнутых путей выполняют `expire_monster_boss_blue_fury_state`
+// и `expire_player_boss_blue_fury_state`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:37
@@ -121,8 +123,8 @@
 // ============================================================================
 // FUNCTION: CBossBlueFuryState::End
 // STATUS: IMPLEMENTED
-// Завершение достигнутого пути выполняет `expire_monster_boss_blue_fury_state`
-// и ветвь замены в `execute_owned_boss_blue_fury`.
+// Завершение достигнутых путей выполняют функции истечения для игрока и монстра,
+// а также ветви замены в соответствующих исполнителях навыка.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:123
@@ -153,7 +155,7 @@
 // FUNCTION: CBossBlueFuryState::OnUpdateProperties
 // STATUS: PARTIALLY_IMPLEMENTED
 // Формула монстра выполняется `BossBlueFuryState::apply_to_monster_attack`;
-// отличающаяся ветвь игрока отсутствует в достигнутом графе вызовов.
+// исходная проверка типа `600` не применяет коэффициент к игроку.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:48
@@ -168,8 +170,8 @@
 // ============================================================================
 // FUNCTION: CBossBlueFuryState::Begin
 // STATUS: PARTIALLY_IMPLEMENTED
-// Объектная ветвь монстра выполняется `BossBlueFuryState::new` и каноническим
-// владельцем в `CMoveShape`.
+// Объектные ветви игрока и монстра выполняются `BossBlueFuryState::new`
+// и каноническим владельцем в `CMoveShape`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\bossbluefurystate.cpp:75
@@ -343,6 +345,38 @@ pub(crate) fn expire_monster_boss_blue_fury_state(
         send_boss_blue_fury_state_visual(
             game, region.id, identity, tile_x, tile_y, state, false, now_ms,
         );
+    }
+    true
+}
+
+pub(crate) fn expire_player_boss_blue_fury_state<Runtime: crate::gameserver::gameserver::game::GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((region_id, identity, tile_x, tile_y, state, tick)) = game
+        .find_player_mut(player_id)
+        .and_then(|player| {
+            let region_id = player.server_region_id()?;
+            let identity = player.shape().identity();
+            let tile_x = player.shape().get_tile_x().ok()?;
+            let tile_y = player.shape().get_tile_y().ok()?;
+            let (state, tick) = player.tick_boss_blue_fury_state(now_ms)?;
+            if tick.release_control {
+                player.set_skill_moveable(true);
+                player.set_skill_fightable(true);
+            }
+            Some((region_id, identity, tile_x, tile_y, state, tick))
+        })
+    else {
+        return false;
+    };
+    if tick.expired {
+        send_boss_blue_fury_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+        );
+        let _ = game.update_player_properties(player_id, runtime);
     }
     true
 }

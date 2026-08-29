@@ -4613,6 +4613,29 @@ impl CPlayer {
     pub(crate) fn begin_energy_holding_state(&mut self, state: super::skills::energyholdingstate::EnergyHoldingState) { self.move_shape.begin_energy_holding_state(state); }
     pub(crate) fn take_energy_holding_state(&mut self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.take_energy_holding_state() }
 
+    pub(crate) fn take_boss_blue_fury_state(
+        &mut self,
+    ) -> Option<super::skills::bossbluefurystate::BossBlueFuryState> {
+        self.move_shape.take_boss_blue_fury_state()
+    }
+
+    pub(crate) fn begin_boss_blue_fury_state(
+        &mut self,
+        state: super::skills::bossbluefurystate::BossBlueFuryState,
+    ) {
+        self.move_shape.begin_boss_blue_fury_state(state);
+    }
+
+    pub(crate) fn tick_boss_blue_fury_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<(
+        super::skills::bossbluefurystate::BossBlueFuryState,
+        super::skills::bossbluefurystate::BossBlueFuryTick,
+    )> {
+        self.move_shape.tick_boss_blue_fury_state(now_ms)
+    }
+
     pub(crate) const fn soul_collect_state(&self) -> Option<super::skills::soulcollectstate::SoulCollectState> {
         self.move_shape.soul_collect_state()
     }

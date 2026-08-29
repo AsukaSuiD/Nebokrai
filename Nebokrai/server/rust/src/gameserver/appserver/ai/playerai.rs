@@ -30,6 +30,7 @@
 //! паучий туман с призываемой областью,
 //! паутина с отложенным состоянием,
 //! семейство призыва трупной свечи, скелета и споры,
+//! ярость синего босса с отложенным self-состоянием,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -248,6 +249,8 @@ pub(crate) struct CPlayerAI {
     spider_web_last_used_ms: u32,
     summon_creature: Option<PlayerSummonCreatureExecutionState>,
     summon_creature_last_used_ms: [u32; 3],
+    boss_blue_fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    boss_blue_fury_last_used_ms: u32,
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -436,6 +439,7 @@ impl CPlayerAI {
         self.spider_mist = None;
         self.spider_web = None;
         self.summon_creature = None;
+        self.boss_blue_fury = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -745,6 +749,7 @@ impl CPlayerAI {
         if let Some(mut execution) = self.spider_mist.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паучьего тумана завершено"); }
         if let Some(mut execution) = self.spider_web.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение паутины завершено"); }
         if let Some(mut execution) = self.summon_creature.take() { let _ = execution.kernel_mut().terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение призыва существа завершено"); }
+        if let Some(mut execution) = self.boss_blue_fury.take() { let _ = execution.terminate(termination); tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение ярости синего босса завершено"); }
         if let Some(mut execution) = self.sprite_burn.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
@@ -938,6 +943,7 @@ impl CPlayerAI {
         self.spider_mist = None;
         self.spider_web = None;
         self.summon_creature = None;
+        self.boss_blue_fury = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -1585,6 +1591,11 @@ impl CPlayerAI {
     pub(crate) fn summon_creature_mut(&mut self) -> Option<&mut PlayerSummonCreatureExecutionState> { self.summon_creature.as_mut() }
     pub(crate) const fn summon_creature_last_used_ms(&self, index: usize) -> u32 { self.summon_creature_last_used_ms[index] }
     pub(crate) const fn mark_summon_creature_used(&mut self, index: usize, now_ms: u32) { self.summon_creature_last_used_ms[index] = now_ms; }
+    pub(crate) const fn boss_blue_fury(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.boss_blue_fury }
+    pub(crate) const fn begin_boss_blue_fury(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.boss_blue_fury = Some(state); }
+    pub(crate) fn boss_blue_fury_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.boss_blue_fury.as_mut() }
+    pub(crate) const fn boss_blue_fury_last_used_ms(&self) -> u32 { self.boss_blue_fury_last_used_ms }
+    pub(crate) const fn mark_boss_blue_fury_used(&mut self, now_ms: u32) { self.boss_blue_fury_last_used_ms = now_ms; }
 
     pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
         self.sprite_burn.as_ref()
