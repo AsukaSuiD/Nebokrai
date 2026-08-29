@@ -4684,6 +4684,26 @@ impl CPlayer {
         self.move_shape.replace_knock_out_state(state)
     }
 
+    pub(crate) fn activate_loaded_blind_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::blindstate::BlindState> {
+        self.move_shape.activate_loaded_blind_state(now_ms)
+    }
+
+    pub(crate) fn take_expired_blind_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::blindstate::BlindState> {
+        self.move_shape.take_expired_blind_state(now_ms)
+    }
+
+    pub(crate) fn take_blind_state(
+        &mut self,
+    ) -> Option<super::skills::blindstate::BlindState> {
+        self.move_shape.take_blind_state()
+    }
+
     pub(crate) fn replace_boa_lock_state(&mut self, state: super::skills::boalockstate::BoaLockState) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.replace_boa_lock_state(state) }
     pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_expired_boa_lock_state(now_ms) }
 

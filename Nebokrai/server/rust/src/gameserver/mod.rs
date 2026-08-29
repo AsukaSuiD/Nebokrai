@@ -346,6 +346,7 @@ pub(crate) mod appserver {
         pub(crate) mod spiderwebstate;
         pub(crate) mod sporeblasting;
         pub(crate) mod spriteburn;
+        pub(crate) mod blindstate;
         pub(crate) mod swordship;
         pub(crate) mod swordshipstate;
         pub(crate) mod summoncorpsecandle;

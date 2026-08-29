@@ -23,6 +23,9 @@ use super::spiderwebstate::{
 use super::sealstate::{
     SEAL_STATE_ID, expire_monster_seal_state, finish_monster_seal_state_on_defense,
 };
+use super::blindstate::{
+    BLIND_STATE_ID, expire_player_blind_state, finish_player_blind_state_on_defense,
+};
 
 pub(crate) const KNOCK_OUT_STATE_ID: u32 = 0x192;
 
@@ -161,6 +164,7 @@ pub(crate) fn expire_player_blind_states(game: &mut CGame, player_id: i32, now_m
     let mut changed = false;
     for state_id in order {
         changed |= match state_id {
+            BLIND_STATE_ID => expire_player_blind_state(game, player_id, now_ms),
             SPIDER_WEB_SKILL_ID => expire_player_spider_web_state(game, player_id, now_ms),
             KNOCK_OUT_STATE_ID => expire_player_knock_out_state(game, player_id, now_ms),
             _ => false,
@@ -174,6 +178,7 @@ pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id:
     let mut changed = false;
     for state_id in order {
         changed |= match state_id {
+            BLIND_STATE_ID => finish_player_blind_state_on_defense(game, player_id, now_ms),
             SPIDER_WEB_SKILL_ID => finish_player_spider_web_state_on_defense(game, player_id, now_ms),
             KNOCK_OUT_STATE_ID => finish_player_knock_out_state_on_defense(game, player_id, now_ms),
             _ => false,

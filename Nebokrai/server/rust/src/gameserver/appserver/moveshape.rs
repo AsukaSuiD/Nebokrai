@@ -80,6 +80,9 @@ use crate::gameserver::appserver::skills::machineshieldstate::MachineShieldState
 use crate::gameserver::appserver::skills::manashieldstate::ManaShieldState;
 use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
+use crate::gameserver::appserver::skills::blindstate::{
+    BLIND_STATE_BYTES, BLIND_STATE_ID, BlindState,
+};
 use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
 use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES, KEROSENE_STATE_ID};
 use crate::gameserver::appserver::skills::originstate::OriginState;
@@ -515,6 +518,7 @@ pub(crate) struct CanonicalStateStorage {
     god_bless_state_order: Option<u32>,
     roar_state_order: Option<u32>,
     knock_out_state: Option<KnockOutState>,
+    blind_state: Option<BlindState>,
     boa_lock_state: Option<BoaLockState>,
     rush_state: Option<RushState>,
     rush_2_state: Option<Rush2State>,
@@ -693,6 +697,14 @@ impl CMoveShape {
         if let Some(state) = self.kerosene_state { state.update_serialized_runtime(&mut payload, now_ms); }
         if let Some(state) = self.poison_fog_state { state.update_serialized_runtime(&mut payload, now_ms); }
         if let Some(state) = self.meteor_arrow_state { state.update_serialized(&mut payload); }
+        if let Some(state) = self.blind_state {
+            if let Some(offset) = known_state_record_offsets(&payload)
+                .into_iter()
+                .find(|offset| read_u32(&payload, *offset) == Some(BLIND_STATE_ID))
+            {
+                write_u32(&mut payload, offset + 4, state.remaining_time(now_ms));
+            }
+        }
         payload
     }
 
@@ -749,6 +761,15 @@ impl CMoveShape {
         self.meteor_arrow_state = known_offsets.iter().copied()
             .find(|offset| read_u32(&states, *offset) == Some(METEOR_ARROW_MASS_SKILL_ID))
             .and_then(|offset| MeteorArrowState::decode(&states, offset).ok());
+        self.blind_state_order.shift_remove(&BLIND_STATE_ID);
+        self.blind_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(BLIND_STATE_ID))
+            .and_then(|offset| BlindState::decode(&states, offset).ok());
+        if let Some(state) = self.blind_state {
+            self.blind_state_order.insert(state.skill_id());
+        }
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -794,6 +815,7 @@ impl CMoveShape {
         self.god_bless_state_order = None;
         self.roar_state_order = None;
         self.knock_out_state = None;
+        self.blind_state = None;
         self.boa_lock_state = None;
         self.rush_state = None;
         self.rush_2_state = None;
@@ -855,6 +877,7 @@ impl CMoveShape {
             || self.state_storage.god_bless_state.is_some()
             || self.state_storage.soul_collect_state.is_some()
             || self.state_storage.knock_out_state.is_some()
+            || self.state_storage.blind_state.is_some()
             || self.state_storage.boa_lock_state.is_some()
             || self.state_storage.rush_state.is_some()
             || self.state_storage.rush_2_state.is_some()
@@ -1930,6 +1953,71 @@ impl CMoveShape {
         self.blind_state_order.insert(state.skill_id());
         self.curable_state_order.insert(state.skill_id());
         self.knock_out_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_blind_state(&mut self, now_ms: u32) -> Option<BlindState> {
+        let state = self.blind_state?.activate_loaded(now_ms);
+        self.blind_state = Some(state);
+        self.set_moveable(false);
+        self.set_fightable(false);
+        Some(state)
+    }
+
+    pub(crate) fn take_expired_blind_state(&mut self, now_ms: u32) -> Option<BlindState> {
+        self.blind_state.filter(|state| state.expired(now_ms))?;
+        self.take_blind_state()
+    }
+
+    pub(crate) fn take_blind_state(&mut self) -> Option<BlindState> {
+        let state = self.blind_state.take()?;
+        self.blind_state_order.shift_remove(&state.skill_id());
+        self.remove_blind_state_serialized();
+        Some(state)
+    }
+
+    fn remove_blind_state_serialized(&mut self) {
+        let Some(offset) = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(BLIND_STATE_ID))
+        else {
+            return;
+        };
+        let end = offset.saturating_add(BLIND_STATE_BYTES);
+        if end > self.ex_states.len() {
+            return;
+        }
+        self.ex_states.drain(offset..end);
+        if self.ex_states.len() >= 4 {
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.saturating_sub(1));
+        }
+        for state in &mut self.extended_states {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        for state in &mut self.change_body_states {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        for state in &mut self.undead_states {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        if let Some(state) = &mut self.leaf_cut_state {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        if let Some(state) = &mut self.leaf_cut_3_state {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        if let Some(state) = &mut self.kerosene_state {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        if let Some(state) = &mut self.poison_fog_state {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        if let Some(state) = &mut self.meteor_arrow_state {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
+        if let Some(state) = &mut self.ride_state {
+            state.shift_serialized_offset_after(offset, BLIND_STATE_BYTES);
+        }
     }
 
     pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> { self.boa_lock_state.replace(state) }
@@ -3342,6 +3430,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             STRIKE_STATE_ID => STRIKE_STATE_BYTES,
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
+            BLIND_STATE_ID => BLIND_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

@@ -1,6 +1,13 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническая загружаемая часть `CBlindState` (`0x76`).
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/skills/blindstate.cpp`. Достигнутый путь сохраняет восьмибайтную
+//! запись `state ID + remaining time`, строгую беззнаковую границу таймера,
+//! запреты движения и боя, завершение при `ACTION_DEFENSE` и точные сообщения
+//! `0xBFE03/0xBFE04`. Единственным владельцем состояния остаётся
+//! `CanonicalStateStorage`; неизменённый legacy payload служит его кодеком.
+//! Перегрузки `Begin`, для которых ещё нет настоящего создающего caller-а,
+//! сохранены ниже как RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -198,3 +205,132 @@
 
 
 // COMPONENT_VARIANT_END: GameServer
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
+
+pub(crate) const BLIND_STATE_ID: u32 = 0x76;
+pub(crate) const BLIND_STATE_BYTES: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BlindState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+}
+
+impl BlindState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
+        Self {
+            started_at_ms,
+            keep_time_ms,
+        }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != BLIND_STATE_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        Ok(Self::new(0, reader.read_u32()?))
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 {
+        BLIND_STATE_ID
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
+        self.started_at_ms = now_ms;
+        self
+    }
+
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+    }
+
+    pub(crate) const fn remaining_time(self, now_ms: u32) -> u32 {
+        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
+        if elapsed >= self.keep_time_ms {
+            0
+        } else {
+            self.keep_time_ms.wrapping_sub(elapsed)
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "поля задают точку фактической круговой доставки"
+)]
+pub(crate) fn send_blind_state_visual(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: BlindState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.skill_id() as i32);
+    if begin {
+        message.add_ulong(state.remaining_time(now_ms));
+        message.add_ulong(0);
+    }
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+fn finish_player_blind_state(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+    only_expired: bool,
+) -> bool {
+    let finished = game.find_player_mut(player_id).and_then(|player| {
+        let state = if only_expired {
+            player.take_expired_blind_state(now_ms)?
+        } else {
+            player.take_blind_state()?
+        };
+        player.set_skill_moveable(true);
+        player.set_skill_fightable(true);
+        Some((
+            state,
+            player.server_region_id()?,
+            player.shape().identity(),
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+        ))
+    });
+    let Some((state, region_id, identity, tile_x, tile_y)) = finished else {
+        return false;
+    };
+    send_blind_state_visual(
+        game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+    );
+    true
+}
+
+pub(crate) fn expire_player_blind_state(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+) -> bool {
+    finish_player_blind_state(game, player_id, now_ms, true)
+}
+
+pub(crate) fn finish_player_blind_state_on_defense(
+    game: &mut CGame,
+    player_id: i32,
+    now_ms: u32,
+) -> bool {
+    finish_player_blind_state(game, player_id, now_ms, false)
+}
