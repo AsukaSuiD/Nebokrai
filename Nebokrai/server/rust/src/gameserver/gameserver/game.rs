@@ -841,13 +841,19 @@ use crate::gameserver::appserver::skills::poisonmoth::{
     cancel_player_poison_moth, complete_player_poison_moth, execute_player_poison_moth,
     is_poison_moth_dispatch, POISON_MOTH_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::bloodrose::{execute_player_blood_rose, is_blood_rose_dispatch};
+use crate::gameserver::appserver::skills::bloodrose::{
+    cancel_player_blood_rose, complete_player_blood_rose, execute_player_blood_rose,
+    is_blood_rose_dispatch, BLOOD_ROSE_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::scorpion::{execute_player_scorpion, is_scorpion_dispatch};
 use crate::gameserver::appserver::skills::boalock::{execute_player_boa_lock, is_boa_lock_dispatch};
 use crate::gameserver::appserver::skills::fallingstar::{execute_player_falling_star, is_falling_star_dispatch};
 use crate::gameserver::appserver::skills::explosivearrow::{
-    execute_player_explosive_arrow, explosive_arrow_variant,
+    cancel_player_explosive_arrow, complete_player_explosive_arrow,
+    execute_player_explosive_arrow, explosive_arrow_variant, EXPLOSIVE_ARROW_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::explosivearrow2::EXPLOSIVE_ARROW_2_SKILL_ID;
+use crate::gameserver::appserver::skills::explosivearrow3::EXPLOSIVE_ARROW_3_SKILL_ID;
 use crate::gameserver::appserver::skills::strike::{execute_player_strike, is_strike_dispatch};
 use crate::gameserver::appserver::skills::yakshaslash::{execute_player_yaksha_slash, is_yaksha_slash_dispatch};
 use crate::gameserver::appserver::skills::daubpoison::{execute_player_daub_poison, is_daub_poison_dispatch};
@@ -37546,6 +37552,10 @@ impl CGame {
                 | METEOR_ARROW_SKILL_ID
                 | RAIN_ARROW_SKILL_ID
                 | POISON_MOTH_SKILL_ID
+                | BLOOD_ROSE_SKILL_ID
+                | EXPLOSIVE_ARROW_SKILL_ID
+                | EXPLOSIVE_ARROW_2_SKILL_ID
+                | EXPLOSIVE_ARROW_3_SKILL_ID
                 | IGNITION_SKILL_ID
                 | KEROSENE_SKILL_ID
                 | BLIND_SKILL_ID
@@ -37630,6 +37640,10 @@ impl CGame {
             METEOR_ARROW_SKILL_ID => player_ai.meteor_arrow().is_some(),
             RAIN_ARROW_SKILL_ID => player_ai.rain_arrow().is_some(),
             POISON_MOTH_SKILL_ID => player_ai.poison_moth().is_some(),
+            BLOOD_ROSE_SKILL_ID => player_ai.blood_rose().is_some(),
+            EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => {
+                player_ai.explosive_arrow().is_some()
+            }
             IGNITION_SKILL_ID => player_ai.ignition().is_some(),
             KEROSENE_SKILL_ID => player_ai.kerosene().is_some(),
             BLIND_SKILL_ID => player_ai.blind().is_some(),
@@ -37696,6 +37710,20 @@ impl CGame {
                     runtime,
                 )),
                 POISON_MOTH_SKILL_ID => Some(complete_player_poison_moth(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                BLOOD_ROSE_SKILL_ID => Some(complete_player_blood_rose(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                EXPLOSIVE_ARROW_SKILL_ID
+                | EXPLOSIVE_ARROW_2_SKILL_ID
+                | EXPLOSIVE_ARROW_3_SKILL_ID => Some(complete_player_explosive_arrow(
                     self,
                     player_id,
                     &mut player_ai,
@@ -37957,6 +37985,14 @@ impl CGame {
             }
             POISON_MOTH_SKILL_ID => {
                 cancel_player_poison_moth(self, player_id, &mut player_ai, runtime)
+            }
+            BLOOD_ROSE_SKILL_ID => {
+                cancel_player_blood_rose(self, player_id, &mut player_ai, runtime)
+            }
+            EXPLOSIVE_ARROW_SKILL_ID
+            | EXPLOSIVE_ARROW_2_SKILL_ID
+            | EXPLOSIVE_ARROW_3_SKILL_ID => {
+                cancel_player_explosive_arrow(self, player_id, &mut player_ai, runtime)
             }
             IGNITION_SKILL_ID => {
                 cancel_player_ignition(self, player_id, &mut player_ai, runtime)
