@@ -34,6 +34,25 @@ pub(crate) struct CLightingArrowPhalanx {
     attacked: Vec<ShapeIdentity>,
 }
 
+pub(crate) fn lighting_arrow_targets(game: &CGame, region_id: i32, phalanx: &CLightingArrowPhalanx, tile_x: i32, tile_y: i32) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (width, height) = game.area_dimensions();
+    let mut shapes = Vec::new();
+    if region.get_shapes(tile_x, tile_y, width, height, game, &mut shapes).is_err() { return Vec::new() }
+    shapes.into_iter().map(|view| view.identity).filter(|identity| {
+        *identity != phalanx.shape().identity()
+            && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
+            && matches!(identity.object_type, 400 | 600)
+            && !phalanx.was_attacked(*identity)
+            && match identity.object_type {
+                400 => game.find_player(identity.id).is_some_and(|player| !player.is_dead())
+                    && (phalanx.master().master_type != 400 || game.player_base_attackable(phalanx.master().master_id, identity.id)),
+                600 => game.lighting_arrow_monster_attackable(region_id, phalanx.master(), identity.id),
+                _ => false,
+            }
+    }).collect()
+}
+
 impl CLightingArrowPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32,

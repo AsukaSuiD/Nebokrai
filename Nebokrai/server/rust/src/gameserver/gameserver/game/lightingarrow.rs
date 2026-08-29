@@ -2,13 +2,13 @@
 //!
 //! Execution, путь, часы, порядок клеток, яд и формула принадлежат
 //! `lightingarrow.rs` и `lightingarrowphalanx.rs`. Здесь остаются региональная
-//! регистрация, `ForceMove`, разрешение identity в порядке `GetShape` и
-//! применение результата к независимому владельцу цели.
+//! регистрация, `ForceMove`, разрешение независимых владельцев и применение
+//! результата к цели.
 
 use super::*;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::skills::heartlessarrow::apply_daub_poison_with_master;
-use crate::gameserver::appserver::skills::lightingarrowphalanx::CLightingArrowPhalanx;
+use crate::gameserver::appserver::skills::lightingarrowphalanx::{lighting_arrow_targets, CLightingArrowPhalanx};
 
 impl CGame {
     pub(crate) fn add_lighting_arrow_phalanx<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32,
@@ -49,26 +49,7 @@ impl CGame {
         self.restore_region_owner(owner); true
     }
 
-    fn lighting_arrow_targets(&self, region_id: i32, phalanx: &CLightingArrowPhalanx,
-        tile_x: i32, tile_y: i32) -> Vec<ShapeIdentity> {
-        let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else { return Vec::new() };
-        let mut shapes = Vec::new();
-        if region.get_shapes(tile_x, tile_y, self.area_width, self.area_height, self, &mut shapes).is_err() { return Vec::new() }
-        shapes.into_iter().map(|view| view.identity).filter(|identity| {
-            *identity != phalanx.shape().identity()
-                && !(identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
-                && matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                && !phalanx.was_attacked(*identity)
-                && match identity.object_type {
-                    PLAYER_TYPE => self.find_player(identity.id).is_some_and(|p| !p.is_dead())
-                        && (phalanx.master().master_type != PLAYER_TYPE || self.player_base_attackable(phalanx.master().master_id, identity.id)),
-                    MONSTER_TYPE => self.lighting_arrow_monster_attackable(region_id, phalanx.master(), identity.id),
-                    _ => false,
-                }
-        }).collect()
-    }
-
-    pub(super) fn lighting_arrow_monster_attackable(&self, region_id: i32, master: MasterInfo, monster_id: i32) -> bool {
+    pub(crate) fn lighting_arrow_monster_attackable(&self, region_id: i32, master: MasterInfo, monster_id: i32) -> bool {
         let Some((property, monster)) = self.find_region(region_id).and_then(|owner| {
             let monster = owner.base().find_monster_by_id(monster_id)?;
             let property = monster.base_property_key().and_then(|key| self.find_monster_property_by_origin_name(key))?;
@@ -87,7 +68,7 @@ impl CGame {
         phalanx_id: i32, tile_x: i32, tile_y: i32, sampled_at_ms: u32, runtime: &mut Runtime) {
         let Some(phalanx) = self.find_region(region_id).and_then(|r| r.base().find_skill_phalanx(phalanx_id)).cloned() else { return };
         let SummonedSkillShape::LightingArrow(snapshot) = &phalanx else { return };
-        let targets = self.lighting_arrow_targets(region_id, snapshot, tile_x, tile_y);
+        let targets = lighting_arrow_targets(self, region_id, snapshot, tile_x, tile_y);
         for target in targets {
             let marked = if let Some(mut owner) = self.take_region_owner(region_id) {
                 let marked = match owner.base_mut().find_skill_phalanx_mut(phalanx_id) {
