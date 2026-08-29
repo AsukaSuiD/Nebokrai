@@ -3,9 +3,10 @@
 //! Точная пара gameserver.exe + GameServer.pdb и исходный владелец
 //! appserver/ai/cityguardwithbow.cpp подтверждают общий городской поиск игроков
 //! и питомцев по владельцу фракции и союза, преимущество игрока при равной
-//! дистанции и повторный поиск после урона только вне боя. Точные очереди
-//! OnSchedule/OnFighting/OnIdle и не достигнутый из OnSearch поиск повозок
-//! сохранены как RAW.
+//! дистанции и повторный поиск после урона только вне боя. `OnIdle` ставит
+//! строгую очередь `ChangeSkill → Stand → SearchEnemy`, а завершённая атака
+//! сохраняет навык и снова ставит поиск. Точный `OnSchedule` и не достигнутый
+//! из `OnSearch` поиск повозок сохранены как RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -22,34 +23,6 @@
 // RVA: 0x0020B890
 // ADDRESS: 0060b890
 // PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::OnFighting
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:183
-// RVA: 0x0020D930
-// ADDRESS: 0060d930
-// PROTOTYPE: int __thiscall OnFighting(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCityGuardWithBow::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\cityguardwithbow.cpp:93
-// RVA: 0x0020D970
-// ADDRESS: 0060d970
-// PROTOTYPE: void __thiscall OnIdle(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
@@ -73,9 +46,37 @@
 // COMPONENT_VARIANT_END: GameServer
 
 use super::cityguardwithsword::select_city_guard_enemy;
+use crate::gameserver::appserver::ai::baseai::AiShapeAction;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::setup::monsterlist::MonsterProperties;
+
+/// Действие после завершённой атаки принадлежит только городскому лучнику:
+/// его `OnFighting` не сбрасывает текущий навык и ставит новый поиск цели.
+pub(crate) const fn attack_completion_action(ai_type: u32) -> AiShapeAction {
+    if ai_type == 11 {
+        AiShapeAction::SearchEnemy
+    } else {
+        AiShapeAction::ChangeSkill
+    }
+}
+
+/// Ставит точную очередь `OnIdle` стационарных городского и окружного
+/// лучников. Каждый исходный `AddAIEvent` получает отдельный замер часов.
+pub(crate) fn queue_stationary_bow_guard_idle<Runtime: GameMainLoopRuntime>(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    stop_frame: u32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+        return false;
+    };
+    monster.begin_active_ai_change_skill(runtime.now_milliseconds());
+    monster.begin_active_ai_stand(stop_frame, runtime.now_milliseconds());
+    monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+    true
+}
 
 /// `WhenBeenHurted` AI11 не принимает атакующего напрямую: вне боя он заново
 /// выполняет общий городской поиск игроков и питомцев текущим навыком.

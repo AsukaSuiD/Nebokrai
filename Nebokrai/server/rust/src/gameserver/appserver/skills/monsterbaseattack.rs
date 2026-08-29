@@ -111,6 +111,7 @@ use crate::gameserver::appserver::ai::bossidle::queue_boss_idle;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
+use crate::gameserver::appserver::ai::cityguardwithbow::queue_stationary_bow_guard_idle;
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
 use crate::gameserver::appserver::ai::gladiator::select_gladiator_enemy;
 use crate::gameserver::appserver::ai::godsbattlemonster::select_gods_battle_enemy;
@@ -499,7 +500,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 minimum_skill_distance,
             )
         }
-        10 => {
+        10 | 11 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
                 .map_or(0, |properties| properties.query_property(5_004) as i32);
@@ -533,6 +534,20 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.ai,
             property.guard_range as i32,
         ),
+        16 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            select_village_country_guard_enemy(
+                game,
+                region,
+                owner,
+                area_index,
+                property.guard_range as i32,
+                minimum_skill_distance,
+            )
+            .map(|selected| selected.identity)
+        }
         21 => select_nation_gladiator_enemy(
             game,
             region,
@@ -728,6 +743,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
+        && matches!(property.ai, 11 | 16)
+    {
+        return queue_stationary_bow_guard_idle(
+            region,
+            monster_id,
+            property.stop_frame,
+            runtime,
+        );
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
         && matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
@@ -886,30 +913,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && property.ai == 11
-        && let Some(area_index) = area_index
-    {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        if let Some(selected) = select_city_guard_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-            minimum_skill_distance,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected.identity);
-            }
-            target = Some(selected.identity);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && matches!(property.ai, 15 | 16)
+        && property.ai == 15
         && let Some(area_index) = area_index
     {
         let minimum_skill_distance = game

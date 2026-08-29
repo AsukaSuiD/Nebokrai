@@ -121,7 +121,7 @@ pub(crate) const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
     tamed
         || matches!(
             ai_type,
-            0 | 1 | 2 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 13 | 14 | 17 | 18 | 20 | 21 | 24
+            0 | 1 | 2 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 16 | 17 | 18 | 20 | 21 | 24
                 | 100 | 0x65 | 0x67 | 0x68
         )
 }

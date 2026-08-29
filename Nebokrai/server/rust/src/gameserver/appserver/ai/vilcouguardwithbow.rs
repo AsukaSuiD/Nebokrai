@@ -3,8 +3,9 @@
 //! Точная пара gameserver.exe + GameServer.pdb и исходный владелец
 //! appserver/ai/vilcouguardwithbow.cpp подтверждают общий со стражем с мечом
 //! поиск игроков и питомцев, преимущество игрока при равной дистанции и новый
-//! поиск после урона только вне боя. Точные очереди OnIdle и не достигнутый из
-//! OnSearch поиск повозок сохранены как RAW.
+//! поиск после урона только вне боя. `OnIdle` ставит строгую очередь
+//! `ChangeSkill → Stand → SearchEnemy`; не достигнутый из `OnSearch` поиск
+//! повозок сохранён как RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -35,20 +36,6 @@
 // RVA: 0x0020C770
 // ADDRESS: 0060c770
 // PROTOTYPE: void __thiscall ~CVilCouGuardWithBow(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CVilCouGuardWithBow::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\vilcouguardwithbow.cpp:93
-// RVA: 0x0020C7A0
-// ADDRESS: 0060c7a0
-// PROTOTYPE: void __thiscall OnIdle(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
