@@ -17160,6 +17160,133 @@ impl CGame {
         }
     }
 
+    /// `DropParticularGoodsWhenRecall` выполняется до обоих видов перемещения.
+    /// Снимок сохраняет порядок контейнеров, а каждый перенос на землю остаётся
+    /// отдельным частичным изменением с немедленной публикацией в протокол.
+    fn drop_particular_goods_before_recall<Context: GameContainerMessageRuntime>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) {
+        let Some((region_id, sources)) = self.find_player(player_id).and_then(|player| {
+            Some((
+                player.server_region_id()?,
+                player.particular_goods_recall_drops(&self.goods_factory),
+            ))
+        }) else {
+            return;
+        };
+        for source in sources {
+            let result = self.drop_player_goods_to_region(
+                player_id,
+                region_id,
+                source.location.extend_id,
+                source.location.position,
+                source.goods_id,
+                source.amount,
+                context,
+            );
+            tracing::trace!(
+                player_id,
+                region_id,
+                ?source,
+                ?result,
+                "особый предмет обработан перед возвратом игрока"
+            );
+        }
+    }
+
+    /// Свойство предмета `0x2E`: после сброса особых предметов выбирает позицию
+    /// во всём текущем регионе и вызывает тот же `CPlayer::ChangeRegion` с
+    /// нулевым служебным хвостом. Направление игрока сохраняется.
+    pub(crate) fn recall_player_inside_region<Context: PlayerReliveContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> bool {
+        self.drop_particular_goods_before_recall(player_id, context);
+        let Some((region_id, direction)) = self.find_player(player_id).and_then(|player| {
+            Some((player.server_region_id()?, player.shape().get_direction()))
+        }) else {
+            return false;
+        };
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let position = owner.base().region.get_random_pos(context);
+        self.restore_region_owner(owner);
+        let Ok(position) = position else {
+            return false;
+        };
+        self.change_player_region(
+            player_id,
+            region_id,
+            position.x,
+            position.y,
+            direction,
+            0,
+            0,
+            0,
+            context,
+        )
+        .succeeded()
+    }
+
+    /// Свойство предмета `0x2D`: после расхода и сброса особых предметов
+    /// выполняет виртуальный `GetReturnPoint`, выбирает случайную позицию в
+    /// целевом прямоугольнике и вызывает обычный `CPlayer::ChangeRegion` в том
+    /// же порядке, что `BackToCity`.
+    pub(crate) fn recall_player_to_return_point<Context: PlayerReliveContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> bool {
+        self.drop_particular_goods_before_recall(player_id, context);
+        let Some((source_region_id, direction)) = self.find_player(player_id).and_then(|player| {
+            Some((player.server_region_id()?, player.shape().get_direction()))
+        }) else {
+            return false;
+        };
+        let source_is_gods_battle = self
+            .find_region(source_region_id)
+            .is_some_and(ServerRegionOwner::is_gods_battle);
+        let Ok(point) = self.select_player_return_point(
+            source_region_id,
+            player_id,
+            source_is_gods_battle,
+        ) else {
+            return false;
+        };
+        let mut x = point.left.wrapping_add(point.right.wrapping_sub(point.left) / 2);
+        let mut y = point.top.wrapping_add(point.bottom.wrapping_sub(point.top) / 2);
+        if let Some(owner) = self.take_region_owner(point.region_id) {
+            let position = owner.base().region.get_random_pos_in_range(
+                point.left,
+                point.top,
+                point.right.wrapping_sub(point.left),
+                point.bottom.wrapping_sub(point.top),
+                context,
+            );
+            self.restore_region_owner(owner);
+            if let Ok(position) = position {
+                x = position.x;
+                y = position.y;
+            }
+        }
+        self.change_player_region(
+            player_id,
+            point.region_id,
+            x,
+            y,
+            direction,
+            0,
+            0,
+            0,
+            context,
+        )
+        .succeeded()
+    }
+
     /// Достигнутый `CPlayer::OnExit`: business уже принадлежит canonical
     /// session owner-у; затем legacy silence, `0xBF504`, virtual return point
     /// и необязательный World `0x5FB02` исполняются в исходном порядке.

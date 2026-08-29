@@ -4846,23 +4846,6 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 //
 
 // ============================================================================
-// FUNCTION: CServerRegion::BackToCity
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverregion.cpp:2134
-// RVA: 0x000825C0
-// ADDRESS: 004825c0
-// PROTOTYPE: bool __thiscall BackToCity(CPlayer * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: base `KickOutAllPlayerToReturnPoint` замкнут через virtual return point,
-// destination randomization и typed `CPlayer::ChangeRegion` boundary в `CGame::AI`.
-
-// ============================================================================
 // FUNCTION: CServerRegion::KickOutAllPlayerToReturnPointExceptOwner
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

@@ -79,11 +79,14 @@
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! RP/YP сохраняют соседние WORD offsets `0xAC/0xAE` base-wire. Изменение
 //! самих max не выполняет этот clamp без конкретного caller-а.
-//! `UseItem` материализует exact requirement-коды, owned skill learning,
-//! packet consumption и четыре replaceable `tagExpendableEffect` combat
-//! mutation. Mount и ChangeBody guards/state замкнуты на canonical player/game
-//! owners; timed `CState`, recall и неподдержанные script VM selector-ы остаются
-//! у caller runtime.
+//! `UseItem` материализует точные коды требований, принадлежащее игроку
+//! изучение навыков, расход предметов в рюкзаке и четыре заменяемых боевых
+//! `tagExpendableEffect`. Проверки и состояния ездового животного и
+//! `ChangeBody` замкнуты на владельцах игрока и игры. Возврат предметами
+//! сохраняет порядок рюкзак → экипировка → рука и передаёт `CGame` только
+//! последовательное удаление предметов и смену региона; временные `CState`
+//! и неподдержанные селекторы виртуальной машины сценариев остаются внешней
+//! границей времени исполнения.
 //! Как в связном `RefreshContainerOwners`, достигнутые equipment,
 //! ordinary-fairy и battle-fairy containers принадлежат player type `400` с
 //! его numeric ID. Ordinary fairy получает exact volume 14 и persisted
@@ -10103,6 +10106,42 @@ impl CPlayer {
         drops
     }
 
+    /// Точный снимок `DropParticularGoodsWhenRecall`: рюкзак, экипировка,
+    /// затем рука; выбирается бит `0x80`. Фактическое перемещение на землю
+    /// выполняет вызывающий владелец после обхода, чтобы удаления не меняли
+    /// порядок кандидатов.
+    pub(crate) fn particular_goods_recall_drops(
+        &self,
+        factory: &CGoodsFactory,
+    ) -> Vec<PlayerParticularGoodsDrop> {
+        let mut drops = Vec::new();
+        let mut push = |extend_id: i32, position: u32, goods: &CGoods| {
+            if goods.addon_property_value(factory, GAP_PARTICULAR_ATTRIBUTE, 1) & 0x80 != 0 {
+                drops.push(PlayerParticularGoodsDrop {
+                    location: PlayerGoodsAiLocation { extend_id, position },
+                    goods_id: goods.identity().ex_id,
+                    amount: goods.amount(),
+                });
+            }
+        };
+        for position in 0..self.packet.size() {
+            if let Some(goods) = self.packet.get_goods(position) {
+                push(1, position, goods);
+            }
+        }
+        for position in 0..17 {
+            if let Some(goods) = self.equipment.get_goods(position) {
+                push(2, position, goods);
+            }
+        }
+        for goods in self.hand.traversing_goods() {
+            if let Some(position) = self.hand.query_goods_position(goods.identity().ex_id) {
+                push(3, position, goods);
+            }
+        }
+        drops
+    }
+
     pub(crate) fn script_equipment_base_index(&self, position: u32) -> Option<u32> {
         self.equipment
             .get_goods(position)
@@ -14824,20 +14863,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x0003A4D0
 // ADDRESS: 0043a4d0
 // PROTOTYPE: void __thiscall DropParticularGoodsWhenDead(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::DropParticularGoodsWhenRecall
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10818
-// RVA: 0x0003AAC0
-// ADDRESS: 0043aac0
-// PROTOTYPE: void __thiscall DropParticularGoodsWhenRecall(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

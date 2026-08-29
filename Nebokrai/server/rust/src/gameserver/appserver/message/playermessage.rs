@@ -86,14 +86,6 @@ pub(crate) trait GamePlayerMessageRuntime:
     /// каноническому player owner-у и проверяются непосредственно.
     fn player_has_unmaterialized_strike_state(&mut self, game: &CGame, player_id: i32) -> bool;
 
-    /// Исполняет только ещё не owned concrete state/skill/relocation
-    /// owner; container/player scalars и wire хвост остаются у dispatcher-а.
-    fn apply_player_item_runtime_effect(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        effect: PlayerItemRuntimeEffect,
-    ) -> PlayerItemRuntimeResult;
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -115,23 +107,12 @@ pub(crate) enum PlayerItemContendCancel {
     CancelledLegacyNoticeIndeterminate,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerItemRuntimeEffect {
-    RecallToReturnPoint,
-    RecallInsideRegion,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerItemSkillWire {
     pub(crate) value_84: u32,
     pub(crate) value_70: u16,
     pub(crate) value_74: u16,
     pub(crate) value_78: u16,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PlayerItemRuntimeResult {
-    pub(crate) applied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -946,11 +927,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 consume = false;
                                 let _ = send_item_notice(game, player_id, b"GS0153", &[], 0);
                             } else {
-                                let _recalled = runtime.apply_player_item_runtime_effect(
-                                    game,
-                                    player_id,
-                                    PlayerItemRuntimeEffect::RecallInsideRegion,
-                                );
+                                let _ = game.recall_player_inside_region(player_id, runtime);
                             }
                         }
                         0x2f => {
@@ -1069,11 +1046,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
             }
             if return_after_use {
-                let _returned = runtime.apply_player_item_runtime_effect(
-                    game,
-                    player_id,
-                    PlayerItemRuntimeEffect::RecallToReturnPoint,
-                );
+                let _ = game.recall_player_to_return_point(player_id, runtime);
             }
             trace_player_message_outcome(message_type, Some(player_id), "предмет использован");
         }
