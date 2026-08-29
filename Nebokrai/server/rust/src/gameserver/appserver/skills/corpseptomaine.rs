@@ -1,172 +1,17 @@
-//! Владелец навыка `CCorpsePtomaine` (`0x19F`). Достигнутый путь монстра
-//! сохраняет повторное применение, задержку, пакеты и обход полного квадрата
-//! 3×3 в исходном порядке X → Y. Сам яд остаётся каноническим
-//! `SpiderPoisonState`; расход MP и варианты игрока ниже остаются RAW.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.h
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::CCorpsePtomaine
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:27
-// RVA: 0x001397B0
-// ADDRESS: 005397b0
-// PROTOTYPE: undefined __thiscall CCorpsePtomaine(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::~CCorpsePtomaine
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:35
-// RVA: 0x00139820
-// ADDRESS: 00539820
-// PROTOTYPE: void __thiscall ~CCorpsePtomaine(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:112
-// RVA: 0x00139840
-// ADDRESS: 00539840
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:128
-// RVA: 0x00139910
-// ADDRESS: 00539910
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:42
-// RVA: 0x00139A00
-// ADDRESS: 00539a00
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:95
-// RVA: 0x00139AE0
-// ADDRESS: 00539ae0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaineEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:339
-// RVA: 0x00139BA0
-// ADDRESS: 00539ba0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::AddState
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:271
-// RVA: 0x00139FF0
-// ADDRESS: 00539ff0
-// PROTOTYPE: void __thiscall AddState(CMoveShape * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CCorpsePtomaine::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутый путь владельца-монстра материализован ниже;
-// отличающиеся ветви игрока и недостигнутого вызова сохранены в RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\corpseptomaine.cpp:157
-// RVA: 0x0013A230
-// ADDRESS: 0053a230
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+//! Владелец трупного яда `CCorpsePtomaine` (`0x19F`).
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/skills/corpseptomaine.cpp`. Player и monster/pet пути сохраняют
+//! cooldown, повторную проверку MP игрока, задержку и visual fire на клетке
+//! caster-а. После задержки полный квадрат 3×3 обходится сначала по X, затем
+//! по Y и в живом порядке клетки; допустимым живым целям без `CureState`
+//! централизованно заменяется канонический `SpiderPoisonState`. `CGame`
+//! временно передаёт region-owner, а формирование состояния и пакетов остаётся
+//! в skill-owner-е. Нулевой MP-loss сохраняет исходный отказ player-cast.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
+use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED};
+use super::flash::{cell_views, master_info};
 use super::monsterattack::{
     monster_attack_cell_candidates, owned_monster_attackable,
     resolve_owned_monster_attack_target,
@@ -180,11 +25,16 @@ use crate::gameserver::appserver::ai::monsterai::{
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::CShape;
-use crate::gameserver::appserver::skills::kernel::SkillStage;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 
 const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
+const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_REUSE_DELAY_TIME: u32 = 10_005;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
@@ -207,7 +57,6 @@ fn send_start(
     message.add_long(source.get_direction());
     let _ = game.send_game_shape_around(region, source, None, &message);
 }
-
 fn send_fire(
     game: &CGame,
     region: &CServerRegion,
@@ -394,4 +243,29 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
         let _ = monster.finish_base_attack_cast(now_ms);
     }
     true
+}
+
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+pub(crate) const fn is_player_corpse_ptomaine_dispatch(dispatch: PlayerSkillDispatch) -> bool { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == CORPSE_PTOMAINE_SKILL_ID } }
+fn send_player_failure(game: &CGame, player_id: i32, action: u8) { game.send_self_state_skill_failure(0x000b_fe01, player_id, action); }
+fn send_player_start(game: &mut CGame, player_id: i32, level: i32) { let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return }; let mut message = CMessage::new(0x000b_fe01); message.add_byte(1); message.add_long(CORPSE_PTOMAINE_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(direction); let _ = game.send_player_shape_around(player_id, None, &message); }
+fn send_player_fire(game: &mut CGame, player_id: i32, level: i32, center: (i32, i32)) { let mut message = CMessage::new(0x000b_fe01); message.add_byte(2); message.add_long(CORPSE_PTOMAINE_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(0); message.add_long(0); message.add_long(center.0); message.add_long(center.1); let _ = game.send_player_shape_around(player_id, None, &message); }
+fn restore_player(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
+fn finish_player<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) { restore_player(game, player_id); finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_corpse_ptomaine_used(now_ms)); }
+pub(crate) fn cancel_player_corpse_ptomaine<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.corpse_ptomaine().map(SkillExecutionKernel::dispatch) else { return false }; finish_player(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
+
+pub(crate) fn execute_player_corpse_ptomaine<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_player_corpse_ptomaine_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((region_id, center_x, center_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(CORPSE_PTOMAINE_SKILL_ID), player.mana()))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(CORPSE_PTOMAINE_SKILL_ID, level).cloned() else { if ai.corpse_ptomaine().is_some() { restore_player(game, player_id); abort_skill(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE); let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED); let now = runtime.now_milliseconds();
+    if ai.corpse_ptomaine().is_none() { if ai.corpse_ptomaine_last_used_ms() != 0 && !time_reached(now, ai.corpse_ptomaine_last_used_ms(), reuse) { send_player_failure(game, player_id, 0x0d); return player_terminal(QueuedSkillExecutionState::Rejected) } if mp_loss == 0 { return player_terminal(QueuedSkillExecutionState::Rejected) } if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(CORPSE_PTOMAINE_SKILL_ID)); } ai.begin_corpse_ptomaine(SkillExecutionKernel::begin(dispatch, now)); }
+    if ai.corpse_ptomaine().is_none_or(|state| state.dispatch() != dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
+    if ai.corpse_ptomaine().is_some_and(|state| state.stage() == SkillStage::Begin) { let current = game.find_player(player_id).map_or(0, CPlayer::mana); if (current.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_start(game, player_id, level); if let Some(state) = ai.corpse_ptomaine_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); } }
+    let started = ai.corpse_ptomaine().map(SkillExecutionKernel::started_at_ms).unwrap_or_default(); if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) }
+    send_player_fire(game, player_id, level, (center_x, center_y));
+    let Some(master) = game.find_player(player_id).map(master_info) else { restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let mut targets = Vec::new(); for offset_x in -1..=1 { for offset_y in -1..=1 { for view in cell_views(game, region_id, center_x.wrapping_add(offset_x), center_y.wrapping_add(offset_y)) { let identity = view.identity; if matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE) && game.owned_player_skill_target_attackable(master, identity, region_id) && !game.periodic_state_target_dead(region_id, identity) { targets.push(identity); } } } }
+    if let Some(mut region) = game.take_region_owner(region_id) { for identity in targets { if target_has_cure(game, region.base(), identity) { continue } let state_now = runtime.now_milliseconds(); install_spider_poison_state(game, region.base_mut(), identity, SpiderPoisonState::new(master, state_now, properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME), properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY), properties.query_property(SKILL_USAGE_CONST)), state_now); } game.restore_region_owner(region); }
+    if let Some(state) = ai.corpse_ptomaine_mut() { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); } finish_player(game, player_id, ai, runtime); player_terminal(QueuedSkillExecutionState::Completed)
 }

@@ -25,6 +25,7 @@
 //! быстрая атака владыки,
 //! прямые снаряды метателя камня и скелета-стрелка,
 //! одноцелевая молния Юньшэн,
+//! трупный яд с локальной областью,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -229,6 +230,8 @@ pub(crate) struct CPlayerAI {
     direct_projectile_last_used_ms: [u32; 2],
     yunsheng_lightning: Option<PlayerYunShengLightningExecutionState>,
     yunsheng_lightning_last_used_ms: u32,
+    corpse_ptomaine: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    corpse_ptomaine_last_used_ms: u32,
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -412,6 +415,7 @@ impl CPlayerAI {
         self.path_projectile = None;
         self.direct_projectile = None;
         self.yunsheng_lightning = None;
+        self.corpse_ptomaine = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -713,6 +717,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение молнии Юньшэн завершено");
         }
+        if let Some(mut execution) = self.corpse_ptomaine.take() {
+            let _ = execution.terminate(termination);
+            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение трупного яда завершено");
+        }
         if let Some(mut execution) = self.sprite_burn.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
@@ -901,6 +909,7 @@ impl CPlayerAI {
         self.path_projectile = None;
         self.direct_projectile = None;
         self.yunsheng_lightning = None;
+        self.corpse_ptomaine = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -1523,6 +1532,11 @@ impl CPlayerAI {
     pub(crate) fn yunsheng_lightning_mut(&mut self) -> Option<&mut PlayerYunShengLightningExecutionState> { self.yunsheng_lightning.as_mut() }
     pub(crate) const fn yunsheng_lightning_last_used_ms(&self) -> u32 { self.yunsheng_lightning_last_used_ms }
     pub(crate) const fn mark_yunsheng_lightning_used(&mut self, now_ms: u32) { self.yunsheng_lightning_last_used_ms = now_ms; }
+    pub(crate) const fn corpse_ptomaine(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.corpse_ptomaine }
+    pub(crate) const fn begin_corpse_ptomaine(&mut self, state: SkillExecutionKernel<PlayerSkillDispatch>) { self.corpse_ptomaine = Some(state); }
+    pub(crate) fn corpse_ptomaine_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.corpse_ptomaine.as_mut() }
+    pub(crate) const fn corpse_ptomaine_last_used_ms(&self) -> u32 { self.corpse_ptomaine_last_used_ms }
+    pub(crate) const fn mark_corpse_ptomaine_used(&mut self, now_ms: u32) { self.corpse_ptomaine_last_used_ms = now_ms; }
 
     pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
         self.sprite_burn.as_ref()
