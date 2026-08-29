@@ -6,8 +6,11 @@
 //! задержки он целиком снимает `CSoulCollectState`, публикует его завершение и
 //! только затем создаёт региональный `CFireBallPhalanx`. `CGame` выполняет
 //! лишь доступ к независимым владельцам, регистрацию в пространстве и доставку.
+//! Обычное, отказное и клиентское завершение после `Begin` проходят через
+//! подтверждённый общий хвост `End(1)` с возвратом движения, `AfterUseSkill`
+//! и временем восстановления.
 
-use super::baseattack::time_reached;
+use super::baseattack::{finish_delayed_base_attack, time_reached};
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -15,7 +18,7 @@ use super::basemagic::{
     SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fireballphalanx::CFireBallPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -69,11 +72,28 @@ fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
     }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
+fn finish_player_fire_ball<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_fire_ball_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_fire_ball<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.fire_ball().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_fire_ball(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn destination(
@@ -209,19 +229,19 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
     }
 
     let Some((target_x, target_y, target)) = destination(game, region_id, dispatch) else {
-        finish(game, player_id);
+        finish_player_fire_ball(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if target.is_some_and(|identity| target_dead(game, region_id, identity)) {
         send_failure(game, player_id, 10, mp_loss);
-        finish(game, player_id);
+        finish_player_fire_ball(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai.fire_ball().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if !has_mana(mana, mp_loss) {
             send_failure(game, player_id, 7, mp_loss);
-            finish(game, player_id);
+            finish_player_fire_ball(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -261,7 +281,7 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
             master_info(player),
         ))
     }) else {
-        finish(game, player_id);
+        finish_player_fire_ball(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mut path = game.base_magic_path(region_id, live_x, live_y, target_x, target_y, None);
@@ -306,7 +326,6 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_fire_ball_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_fire_ball(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

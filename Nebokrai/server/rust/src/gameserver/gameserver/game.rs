@@ -853,7 +853,7 @@ use crate::gameserver::appserver::skills::fireboltphalanx::{
     calculate_owned_fire_bolt_attack, FireBoltPhalanxTick,
 };
 use crate::gameserver::appserver::skills::fireball::{
-    execute_player_fire_ball, is_fire_ball_dispatch,
+    cancel_player_fire_ball, execute_player_fire_ball, is_fire_ball_dispatch, FIRE_BALL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::fireballphalanx::{
     calculate_owned_fire_ball_attack, fire_ball_targets, FireBallPhalanxTick,
@@ -37378,6 +37378,7 @@ impl CGame {
             BASE_ATTACK_SKILL_ID
                 | BASE_MAGIC_SKILL_ID
                 | FIRE_BOLT_SKILL_ID
+                | FIRE_BALL_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37395,6 +37396,7 @@ impl CGame {
             BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
+            FIRE_BALL_SKILL_ID => player_ai.fire_ball().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37421,6 +37423,9 @@ impl CGame {
             }
             FIRE_BOLT_SKILL_ID => {
                 cancel_player_fire_bolt(self, player_id, &mut player_ai, runtime)
+            }
+            FIRE_BALL_SKILL_ID => {
+                cancel_player_fire_ball(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
