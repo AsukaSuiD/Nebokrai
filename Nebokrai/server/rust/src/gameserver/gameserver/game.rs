@@ -860,8 +860,14 @@ use crate::gameserver::appserver::skills::explosivearrow::{
 };
 use crate::gameserver::appserver::skills::explosivearrow2::EXPLOSIVE_ARROW_2_SKILL_ID;
 use crate::gameserver::appserver::skills::explosivearrow3::EXPLOSIVE_ARROW_3_SKILL_ID;
-use crate::gameserver::appserver::skills::strike::{execute_player_strike, is_strike_dispatch};
-use crate::gameserver::appserver::skills::yakshaslash::{execute_player_yaksha_slash, is_yaksha_slash_dispatch};
+use crate::gameserver::appserver::skills::strike::{
+    cancel_player_strike, complete_player_strike, execute_player_strike, is_strike_dispatch,
+    STRIKE_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::yakshaslash::{
+    cancel_player_yaksha_slash, complete_player_yaksha_slash, execute_player_yaksha_slash,
+    is_yaksha_slash_dispatch, YAKSHA_SLASH_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::daubpoison::{execute_player_daub_poison, is_daub_poison_dispatch};
 use crate::gameserver::appserver::skills::daubpoisonstate::expire_player_daub_poison_state;
 use crate::gameserver::appserver::skills::rainarrowphalanx::{calculate_rain_arrow_attack, RainArrowPhalanxTick};
@@ -37564,6 +37570,8 @@ impl CGame {
                 | EXPLOSIVE_ARROW_SKILL_ID
                 | EXPLOSIVE_ARROW_2_SKILL_ID
                 | EXPLOSIVE_ARROW_3_SKILL_ID
+                | STRIKE_SKILL_ID
+                | YAKSHA_SLASH_SKILL_ID
                 | IGNITION_SKILL_ID
                 | KEROSENE_SKILL_ID
                 | BLIND_SKILL_ID
@@ -37654,6 +37662,8 @@ impl CGame {
             EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID => {
                 player_ai.explosive_arrow().is_some()
             }
+            STRIKE_SKILL_ID => player_ai.strike().is_some(),
+            YAKSHA_SLASH_SKILL_ID => player_ai.yaksha_slash().is_some(),
             IGNITION_SKILL_ID => player_ai.ignition().is_some(),
             KEROSENE_SKILL_ID => player_ai.kerosene().is_some(),
             BLIND_SKILL_ID => player_ai.blind().is_some(),
@@ -37746,6 +37756,18 @@ impl CGame {
                 EXPLOSIVE_ARROW_SKILL_ID
                 | EXPLOSIVE_ARROW_2_SKILL_ID
                 | EXPLOSIVE_ARROW_3_SKILL_ID => Some(complete_player_explosive_arrow(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                STRIKE_SKILL_ID => Some(complete_player_strike(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                YAKSHA_SLASH_SKILL_ID => Some(complete_player_yaksha_slash(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38021,6 +38043,12 @@ impl CGame {
             | EXPLOSIVE_ARROW_2_SKILL_ID
             | EXPLOSIVE_ARROW_3_SKILL_ID => {
                 cancel_player_explosive_arrow(self, player_id, &mut player_ai, runtime)
+            }
+            STRIKE_SKILL_ID => {
+                cancel_player_strike(self, player_id, &mut player_ai, runtime)
+            }
+            YAKSHA_SLASH_SKILL_ID => {
+                cancel_player_yaksha_slash(self, player_id, &mut player_ai, runtime)
             }
             IGNITION_SKILL_ID => {
                 cancel_player_ignition(self, player_id, &mut player_ai, runtime)
