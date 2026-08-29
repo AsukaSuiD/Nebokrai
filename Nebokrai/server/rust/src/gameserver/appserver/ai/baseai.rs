@@ -130,6 +130,12 @@ impl CBaseAI {
         &self.active_war_soul_actions
     }
 
+    /// Соответствует проверке размеров первых двух исходных очередей в
+    /// `OnSchedule`; очередь боевого духа в это условие не входит.
+    pub(crate) fn primary_queues_idle(&self) -> bool {
+        self.active_actions.is_empty() && self.passive_actions.is_empty()
+    }
+
     pub(crate) fn hibernate(&mut self, now_ms: u32) {
         self.is_dormant = true;
         self.dormancy_time_ms = now_ms;

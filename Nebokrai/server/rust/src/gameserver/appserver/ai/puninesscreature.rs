@@ -7,31 +7,12 @@
 //! существо делает один шаг от цели без RNG; только за её пределами применяется
 //! проверка дальности преследования и возможная потеря цели.
 //!
-//! `OnSchedule` ниже остаётся RAW в части точных проверок очереди событий;
-//! достигнутый `Tracing` вызывается реальным циклом региона до боевого ИИ.
+//! `OnSchedule` вызывает `Tracing` только при существующей цели и пустых
+//! основных очередях `CBaseAI`; PDB-владелец и таблица виртуальных методов
+//! подтверждают эту проверку. Прямой начальный поиск временно представляет ещё
+//! не восстановленный `ProcessActiveAction`, но использует достигнутый
+//! `OnSearchEnemy`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\puninesscreature.cpp
-
-// FUNCTION: CPuninessCreature::OnSchedule
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: реальный цикл региона вызывает достигнутый `Tracing` только для
-// AI `7`; точная проверка внутренних полей очереди остаётся ниже.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\puninesscreature.cpp:135
-// RVA: 0x0020F4B0
-// ADDRESS: 0060f4b0
-// PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
 
 use super::monsterai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
@@ -97,7 +78,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, source, source_view, target, move_delay)) = region
+    let Some((property, source, source_view, target, move_delay, schedule_idle)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -109,6 +90,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
                 monster.shape_view(&property)?,
                 monster.ai_target(),
                 monster.trace_move_delay(),
+                monster.primary_ai_queues_idle(),
             ))
         })
     else {
@@ -118,6 +100,9 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
         return false;
     }
     if let Some(target) = target {
+        if !schedule_idle {
+            return true;
+        }
         let Some(target_view) = live_target_view(game, region, target) else {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target();
