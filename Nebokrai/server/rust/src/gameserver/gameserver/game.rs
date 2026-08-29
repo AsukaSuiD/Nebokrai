@@ -841,7 +841,7 @@ use crate::gameserver::appserver::skills::fireball::{
     execute_player_fire_ball, is_fire_ball_dispatch,
 };
 use crate::gameserver::appserver::skills::fireballphalanx::{
-    calculate_owned_fire_ball_attack, FireBallPhalanxTick,
+    calculate_owned_fire_ball_attack, fire_ball_targets, FireBallPhalanxTick,
 };
 use crate::gameserver::appserver::skills::itemskill2::{execute_player_item_skill_2, is_item_skill_2_dispatch};
 use crate::gameserver::appserver::skills::thunderfirephalanx::{calculate_owned_thunder_fire_attack, ThunderFirePhalanxTick};
@@ -877,7 +877,7 @@ use crate::gameserver::appserver::skills::firewall::{
     execute_player_fire_wall, is_fire_wall_target,
 };
 use crate::gameserver::appserver::skills::firewallphalanx::{
-    calculate_owned_fire_wall_attack, FireWallPhalanxTick,
+    calculate_owned_fire_wall_attack, fire_wall_targets, FireWallPhalanxTick,
 };
 use crate::gameserver::appserver::skills::poisonfog::{execute_player_poison_fog, is_poison_fog_target};
 use crate::gameserver::appserver::skills::poisonfogphalanx::PoisonFogPhalanxTick;
@@ -41177,7 +41177,7 @@ impl CGame {
                     {
                         let mut applied = false;
                         for (target, war_soul_hit) in
-                            self.fire_ball_targets(region_id, fire_ball, center_x, center_y)
+                            fire_ball_targets(self, region_id, fire_ball, center_x, center_y)
                         {
                             applied |= match target.object_type {
                                 PLAYER_TYPE => self.apply_summoned_skill_to_player(
@@ -41322,7 +41322,7 @@ impl CGame {
             SummonedSkillShape::FireWall(fire_wall),
         ) = (tick, &phalanx)
         {
-            for target in self.fire_wall_targets(region_id, fire_wall) {
+            for target in fire_wall_targets(self, region_id, fire_wall) {
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
                         &phalanx,

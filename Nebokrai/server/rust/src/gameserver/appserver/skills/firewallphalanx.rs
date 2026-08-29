@@ -45,6 +45,26 @@ pub(crate) struct CFireWallPhalanx {
     scope: Vec<bool>,
 }
 
+pub(crate) fn fire_wall_targets(game: &CGame, region_id: i32, phalanx: &CFireWallPhalanx) -> Vec<ShapeIdentity> {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
+    let (area_width, area_height) = game.area_dimensions();
+    let mut targets = Vec::new();
+    for (tile_x, tile_y) in phalanx.active_cells() {
+        let mut shapes = Vec::new();
+        if region.get_shapes(tile_x, tile_y, area_width, area_height, game, &mut shapes).is_err() { continue }
+        for shape in shapes {
+            let identity = shape.identity;
+            if identity == phalanx.shape().identity()
+                || (identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
+                || !matches!(identity.object_type, 400 | 600)
+                || targets.contains(&identity)
+            { continue }
+            targets.push(identity);
+        }
+    }
+    targets
+}
+
 impl CFireWallPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(

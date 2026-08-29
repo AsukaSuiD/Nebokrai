@@ -1,9 +1,8 @@
 //! Межвладельческая координация огненной стены.
 //!
 //! Cast, маска, замещение, часы и формула принадлежат `firewall.rs` и
-//! `firewallphalanx.rs`. Здесь остаются регистрация в регионе, упорядоченный
-//! `GetShape`, устранение повторных целей и фактическое применение атаки к
-//! независимым владельцам игроков и монстров.
+//! `firewallphalanx.rs`. Здесь остаются регистрация в регионе и фактическое
+//! применение атаки к независимым владельцам игроков и монстров.
 
 use super::*;
 use crate::gameserver::appserver::skills::firewallphalanx::CFireWallPhalanx;
@@ -54,43 +53,4 @@ impl CGame {
         Some(())
     }
 
-    pub(super) fn fire_wall_targets(
-        &self,
-        region_id: i32,
-        phalanx: &CFireWallPhalanx,
-    ) -> Vec<ShapeIdentity> {
-        let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else {
-            return Vec::new();
-        };
-        let mut targets = Vec::new();
-        for (tile_x, tile_y) in phalanx.active_cells() {
-            let mut shapes = Vec::new();
-            if region
-                .get_shapes(
-                    tile_x,
-                    tile_y,
-                    self.area_width,
-                    self.area_height,
-                    self,
-                    &mut shapes,
-                )
-                .is_err()
-            {
-                continue;
-            }
-            for shape in shapes {
-                let identity = shape.identity;
-                if identity == phalanx.shape().identity()
-                    || (identity.object_type == phalanx.master().master_type
-                        && identity.id == phalanx.master().master_id)
-                    || !matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                    || targets.contains(&identity)
-                {
-                    continue;
-                }
-                targets.push(identity);
-            }
-        }
-        targets
-    }
 }
