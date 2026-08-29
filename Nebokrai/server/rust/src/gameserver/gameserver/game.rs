@@ -35396,23 +35396,26 @@ impl CGame {
         else {
             return;
         };
-        let materialized_ended = current_skill_id.is_some_and(|skill_id| {
+        let materialized_end = current_skill_id.and_then(|skill_id| {
             self.end_materialized_player_skill(
                 player_id,
                 skill_id,
                 MaterializedSkillEndCause::Interruption,
                 runtime,
             )
-                .is_some()
         });
-        let released = self.find_player_mut(player_id).is_some_and(|player| {
-            let released = player.player_ai_mut().release_object_target(target);
-            if released && interrupted_delayed_skill && !materialized_ended {
-                player.set_skill_moveable(true);
-                player.set_current_skill_id(None);
-            }
-            released
-        });
+        let released = if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
+            true
+        } else {
+            self.find_player_mut(player_id).is_some_and(|player| {
+                let released = player.player_ai_mut().release_object_target(target);
+                if released && interrupted_delayed_skill {
+                    player.set_skill_moveable(true);
+                    player.set_current_skill_id(None);
+                }
+                released
+            })
+        };
         if released {
             let _ = self.send_base_attack_failure(player_id, 2);
         }
