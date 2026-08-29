@@ -821,7 +821,8 @@ use crate::gameserver::appserver::skills::lightingarrowphalanx::{
     calculate_owned_lighting_arrow_attack, LightingArrowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::meteorarrow::{
-    execute_player_meteor_arrow, is_meteor_arrow_dispatch,
+    cancel_player_meteor_arrow, complete_player_meteor_arrow,
+    execute_player_meteor_arrow, is_meteor_arrow_dispatch, METEOR_ARROW_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::meteorarrowmass::{
     cancel_player_meteor_arrow_mass, complete_player_meteor_arrow_mass,
@@ -37526,6 +37527,7 @@ impl CGame {
                 | LIGHTING_ARROW_SKILL_ID
                 | LIGHTING_ARROW_2_SKILL_ID
                 | METEOR_ARROW_MASS_SKILL_ID
+                | METEOR_ARROW_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
                 | AGILITY_SKILL_ID
@@ -37604,6 +37606,7 @@ impl CGame {
             LIGHTING_ARROW_SKILL_ID => player_ai.lighting_arrow().is_some(),
             LIGHTING_ARROW_2_SKILL_ID => player_ai.lighting_arrow_2().is_some(),
             METEOR_ARROW_MASS_SKILL_ID => player_ai.meteor_arrow_mass().is_some(),
+            METEOR_ARROW_SKILL_ID => player_ai.meteor_arrow().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
@@ -37649,6 +37652,12 @@ impl CGame {
                     runtime,
                 )),
                 METEOR_ARROW_MASS_SKILL_ID => Some(complete_player_meteor_arrow_mass(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                METEOR_ARROW_SKILL_ID => Some(complete_player_meteor_arrow(
                     self,
                     player_id,
                     &mut player_ai,
@@ -37883,6 +37892,9 @@ impl CGame {
             }
             METEOR_ARROW_MASS_SKILL_ID => {
                 cancel_player_meteor_arrow_mass(self, player_id, &mut player_ai, runtime)
+            }
+            METEOR_ARROW_SKILL_ID => {
+                cancel_player_meteor_arrow(self, player_id, &mut player_ai, runtime)
             }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
