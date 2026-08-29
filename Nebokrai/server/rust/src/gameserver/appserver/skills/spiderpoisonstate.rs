@@ -3,22 +3,25 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/spiderpoisonstate.cpp`. Состояние хранит снимок
 //! `tagMasterInfo`, использует два чтения часов и строгую границу `>` для
-//! срока и периодического удара. Формула яда и wire-сообщения принадлежат
-//! этому модулю; `CGame` координирует независимых владельцев цели и смерти.
+//! срока и периодического удара. Формула яда, lifecycle и wire-сообщения
+//! принадлежат этому модулю; `CGame` координирует независимых владельцев цели
+//! и смерти.
 //! Координатные перегрузки `Begin` остаются RAW ниже.
 
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+const MONSTER_TYPE: i32 = 600;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpiderPoisonStateTick {
@@ -134,6 +137,167 @@ pub(crate) fn send_spider_poison_state_visual_in_region(
         message.add_long(0);
     }
     let _ = game.send_game_position_around(region, tile_x, tile_y, &message);
+}
+
+pub(crate) fn update_player_spider_poison_state<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(mut state) = game
+        .find_player_mut(player_id)
+        .and_then(CPlayer::take_spider_poison_state_for_ai)
+    else {
+        return false;
+    };
+    let Some((identity, x, y, region_id, dead)) = game.find_player(player_id).and_then(|player| {
+        Some((
+            player.shape().identity(),
+            player.shape().get_tile_x().ok()?,
+            player.shape().get_tile_y().ok()?,
+            player.server_region_id()?,
+            player.is_dead(),
+        ))
+    }) else {
+        return false;
+    };
+    let lifetime_now_ms = runtime.now_milliseconds();
+    let frequency_now_ms = runtime.now_milliseconds();
+    match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
+        SpiderPoisonStateTick::Pending => {
+            if let Some(player) = game.find_player_mut(player_id) {
+                let _ = player.replace_spider_poison_state(state);
+            }
+        }
+        SpiderPoisonStateTick::Attack(attack) => {
+            let master = state.master();
+            if let Some(player) = game.find_player_mut(player_id) {
+                let _ = player.replace_spider_poison_state(state);
+            }
+            if master.master_type == MONSTER_TYPE {
+                game.apply_monster_periodic_state_attack(
+                    master,
+                    identity,
+                    region_id,
+                    attack,
+                    runtime,
+                );
+            } else {
+                game.apply_owned_skill_attack_to_player(
+                    master,
+                    player_id,
+                    region_id,
+                    attack,
+                    runtime,
+                );
+            }
+        }
+        SpiderPoisonStateTick::Ended => {
+            if let Some(player) = game.find_player_mut(player_id) {
+                player.finish_periodic_attack_state(state.skill_id());
+            }
+            send_spider_poison_state_visual(
+                game,
+                region_id,
+                identity,
+                x,
+                y,
+                state,
+                false,
+                lifetime_now_ms,
+            );
+            let _ = game.publish_player_states(player_id);
+        }
+    }
+    true
+}
+
+pub(crate) fn update_monster_spider_poison_state<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region_id: i32,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(mut owner) = game.take_region_owner(region_id) else {
+        return false;
+    };
+    let state_and_target = owner
+        .base_mut()
+        .find_monster_by_id_mut(monster_id)
+        .and_then(|monster| {
+            let state = monster.move_shape_mut().take_spider_poison_state_for_ai()?;
+            let shape = monster.move_shape().shape();
+            Some((
+                state,
+                shape.identity(),
+                shape.get_tile_x().ok()?,
+                shape.get_tile_y().ok()?,
+                monster.hit_points() == 0,
+            ))
+        });
+    game.restore_region_owner(owner);
+    let Some((mut state, identity, x, y, dead)) = state_and_target else {
+        return false;
+    };
+    let lifetime_now_ms = runtime.now_milliseconds();
+    let frequency_now_ms = runtime.now_milliseconds();
+    match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
+        SpiderPoisonStateTick::Pending => {
+            if let Some(mut owner) = game.take_region_owner(region_id) {
+                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                    let _ = monster.move_shape_mut().replace_spider_poison_state(state);
+                }
+                game.restore_region_owner(owner);
+            }
+        }
+        SpiderPoisonStateTick::Attack(attack) => {
+            let master = state.master();
+            if let Some(mut owner) = game.take_region_owner(region_id) {
+                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                    let _ = monster.move_shape_mut().replace_spider_poison_state(state);
+                }
+                game.restore_region_owner(owner);
+            }
+            if master.master_type == MONSTER_TYPE {
+                game.apply_monster_periodic_state_attack(
+                    master,
+                    identity,
+                    region_id,
+                    attack,
+                    runtime,
+                );
+            } else {
+                game.apply_owned_skill_attack_to_monster(
+                    master,
+                    monster_id,
+                    region_id,
+                    attack,
+                    runtime,
+                );
+            }
+        }
+        SpiderPoisonStateTick::Ended => {
+            if let Some(mut owner) = game.take_region_owner(region_id) {
+                if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                    monster
+                        .move_shape_mut()
+                        .finish_periodic_attack_state(state.skill_id());
+                }
+                game.restore_region_owner(owner);
+            }
+            send_spider_poison_state_visual(
+                game,
+                region_id,
+                identity,
+                x,
+                y,
+                state,
+                false,
+                lifetime_now_ms,
+            );
+        }
+    }
+    true
 }
 
 pub(crate) fn finish_player_spider_poison_state_on_cure(

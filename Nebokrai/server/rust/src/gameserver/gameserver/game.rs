@@ -482,7 +482,6 @@
 //! будущего процесса GameServer. Межвладельческие действия налоговых сессий
 //! проходят через единый типизированный `GameEffectJournal` с сохранением FIFO.
 
-mod bloodloss;
 mod leafcut;
 mod leafcut2;
 mod leafcut3;
@@ -1080,7 +1079,7 @@ use crate::gameserver::appserver::skills::poisonarrow::{
     POISON_ARROW_SKILL_ID, execute_battle_fairy_poison_arrow,
 };
 use crate::gameserver::appserver::skills::poisonarrowstate::{
-    PoisonArrowState, PoisonArrowStateTick, send_poison_arrow_state_visual,
+    PoisonArrowState, update_monster_poison_arrow_state, update_player_poison_arrow_state,
 };
 use crate::gameserver::appserver::skills::promotion::{
     PROMOTION_SKILL_ID, execute_player_promotion,
@@ -1091,13 +1090,13 @@ use crate::gameserver::appserver::skills::poisonfogstate::{
 };
 use crate::gameserver::appserver::skills::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::skills::spiderpoisonstate::{
-    SpiderPoisonStateTick, send_spider_poison_state_visual,
+    update_monster_spider_poison_state, update_player_spider_poison_state,
 };
 use crate::gameserver::appserver::skills::bloodloss::{
     BLOOD_LOSS_SKILL_ID, execute_battle_fairy_blood_loss,
 };
 use crate::gameserver::appserver::skills::bloodlossstate::{
-    BloodLossState, BloodLossStateTick, send_blood_loss_state_visual,
+    BloodLossState, update_monster_blood_loss_state, update_player_blood_loss_state,
 };
 use crate::gameserver::appserver::skills::leafcutstate::{
     LeafCutState, LeafCutStateTick, send_leaf_cut_state_visual,
@@ -26441,12 +26440,12 @@ impl CGame {
         for state_id in periodic_state_ids {
             let updated = match state_id {
                 POISON_ARROW_SKILL_ID => {
-                    self.update_player_poison_arrow_state(player_id, runtime)
+                    update_player_poison_arrow_state(self, player_id, runtime)
                 }
                 SPIDER_POISON_SKILL_ID => {
-                    self.update_player_spider_poison_state(player_id, runtime)
+                    update_player_spider_poison_state(self, player_id, runtime)
                 }
-                BLOOD_LOSS_SKILL_ID => self.update_player_blood_loss_state(player_id, runtime),
+                BLOOD_LOSS_SKILL_ID => update_player_blood_loss_state(self, player_id, runtime),
                 crate::gameserver::appserver::skills::leafcutstate::LEAF_CUT_STATE_ID => {
                     self.update_player_leaf_cut_state(player_id, runtime)
                 }
@@ -42275,21 +42274,24 @@ impl CGame {
                 for state_id in periodic_state_ids {
                     match state_id {
                         POISON_ARROW_SKILL_ID => {
-                            let _ = self.update_monster_poison_arrow_state(
+                            let _ = update_monster_poison_arrow_state(
+                                self,
                                 region_id,
                                 monster_id,
                                 runtime,
                             );
                         }
                         SPIDER_POISON_SKILL_ID => {
-                            let _ = self.update_monster_spider_poison_state(
+                            let _ = update_monster_spider_poison_state(
+                                self,
                                 region_id,
                                 monster_id,
                                 runtime,
                             );
                         }
                         BLOOD_LOSS_SKILL_ID => {
-                            let _ = self.update_monster_blood_loss_state(
+                            let _ = update_monster_blood_loss_state(
+                                self,
                                 region_id,
                                 monster_id,
                                 runtime,
