@@ -337,7 +337,25 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && !tamed
         && (matches!(
             property.ai,
-            0 | 3 | 4 | 5 | 6 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 16 | 19 | 20 | 23
+            0 | 3
+                | 4
+                | 5
+                | 6
+                | 8
+                | 9
+                | 10
+                | 11
+                | 13
+                | 14
+                | 15
+                | 16
+                | 19
+                | 20
+                | 23
+                | 0x64
+                | 0x65
+                | 0x67
+                | 0x68
         )
             || (property.ai == 2
                 && region

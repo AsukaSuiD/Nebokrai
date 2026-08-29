@@ -10,8 +10,9 @@
 //!
 //! `OnSearchEnemy` подключён к реальному ходу монстра и сохраняет общий проход
 //! игроков, затем питомцев с заменой цели при равной дистанции. `Run`,
-//! `Hibernate`, `OnIdle` и `OnSchedule` ниже остаются RAW: их специальные
-//! переходы ещё не подключены к runtime.
+//! Общий путь `OnIdle → Hibernate` при отсутствии игроков подключён к runtime.
+//! `Run`, случайный шаг `OnIdle` и `OnSchedule` ниже остаются RAW: их
+//! специальные переходы ещё не подключены целиком.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -49,7 +50,10 @@
 
 // ============================================================================
 // FUNCTION: CBossBlue::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: общий runtime проверяет игроков в девяти соседних областях и
+// вызывает `CMonster::hibernate_ai`, когда их нет.
+// REMAINS: выбор шага либо ожидания и точная очередь событий остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp:302

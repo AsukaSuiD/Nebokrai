@@ -9,9 +9,9 @@
 //! `0x1f9`. Выполнение выбранного навыка остаётся у skill-owner-а.
 //!
 //! `OnSearchEnemy` подключён к реальному ходу монстра и сохраняет зависимость
-//! выбора от минимальной дистанции текущего навыка. `OnIdle`, `OnSchedule` и
-//! `OnMoving` ниже остаются RAW: их специальные переходы ещё не подключены к
-//! runtime.
+//! выбора от минимальной дистанции текущего навыка. Общий путь
+//! `OnIdle → Hibernate` при отсутствии игроков также подключён к runtime.
+//! Случайный шаг `OnIdle`, `OnSchedule` и `OnMoving` ниже остаются RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -21,7 +21,10 @@
 
 // ============================================================================
 // FUNCTION: CBossFiend::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: общий runtime проверяет игроков в девяти соседних областях и
+// вызывает `CMonster::hibernate_ai`, когда их нет.
+// REMAINS: выбор шага либо ожидания и точная очередь событий остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp:326
