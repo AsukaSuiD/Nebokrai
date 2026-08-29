@@ -5,12 +5,15 @@
 //! путь и обрабатывает не более одной клетки за проход `CPlayerAI`. Первая
 //! непролётная клетка не атакуется; уже задетая фигура повторно не выбирается.
 //! Урон использует текущие свойства стрелка и ровно два собственных RNG-вызова,
-//! а активный яд оружия применяется после основного `OnBeenAttacked`.
+//! а активный яд оружия применяется после основного `OnBeenAttacked`. Общий
+//! `End(true)` прекращает оставшиеся клетки и фиксирует cooldown, тогда как
+//! внутренний `End(false)` сохраняет уже нанесённые необратимые эффекты, но не
+//! запускает новые клетки и не фиксирует cooldown.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::heartlessarrow::apply_daub_poison;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::poisonmoth::{cell_targets, master_info, target_level, target_position};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{GAP_WEAPON_CATEGORY, GAP_WEAPON_DAMAGE_LEVEL};
@@ -19,6 +22,7 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -52,7 +56,22 @@ impl LightingArrow2ExecutionState {
 }
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
+fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
+fn finish_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    restore_player_movement(game, player_id);
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_lighting_arrow_2_used(now_ms));
+}
+fn abort_player_lighting_arrow_2(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+pub(crate) fn complete_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = ai.lighting_arrow_2().map(|state| state.kernel().dispatch()) else { return false };
+    finish_player_lighting_arrow_2(game, player_id, ai, runtime);
+    ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+pub(crate) fn cancel_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = ai.lighting_arrow_2().map(|state| state.kernel().dispatch()) else { return false };
+    abort_player_lighting_arrow_2(game, player_id);
+    ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
 fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 3) }
 fn target_is_dead(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> bool {
     match dispatch {
@@ -106,7 +125,7 @@ fn attack_cell<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, r
 pub(crate) fn execute_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_lighting_arrow_2_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(LIGHTING_ARROW_2_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(LIGHTING_ARROW_2_SKILL_ID, level) else { if ai.lighting_arrow_2().is_some() { finish(game, player_id) } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(LIGHTING_ARROW_2_SKILL_ID, level) else { if ai.lighting_arrow_2().is_some() { abort_player_lighting_arrow_2(game, player_id) } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_time = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.lighting_arrow_2().is_none() {
         let Some(destination) = target_position(game, region_id, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) }; let now = runtime.now_milliseconds();
@@ -116,15 +135,15 @@ pub(crate) fn execute_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game
         if let Some(player) = game.find_player_mut(player_id) { if mp_loss != 0 { player.set_skill_moveable(false) } player.set_current_skill_id(Some(LIGHTING_ARROW_2_SKILL_ID)); }
         ai.begin_lighting_arrow_2(LightingArrow2ExecutionState::begin(dispatch, destination, now));
     } else if ai.lighting_arrow_2().is_none_or(|state| state.kernel().dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
-    let destination = target_position(game, region_id, player_id, dispatch).unwrap_or_else(|| ai.lighting_arrow_2().map(|state| state.destination).unwrap_or_default()); if target_is_dead(game, region_id, dispatch) { failure(game, player_id, 10, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+    let destination = target_position(game, region_id, player_id, dispatch).unwrap_or_else(|| ai.lighting_arrow_2().map(|state| state.destination).unwrap_or_default()); if target_is_dead(game, region_id, dispatch) { failure(game, player_id, 10, mp_loss); abort_player_lighting_arrow_2(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
     if ai.lighting_arrow_2().is_some_and(|state| !state.condition_checked) {
-        let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_valid(game, player)) { failure(game, player_id, 0x0e, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } send_start(game, player_id, level); if let Some(state) = ai.lighting_arrow_2_mut() { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
+        let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); abort_player_lighting_arrow_2(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); if game.find_player(player_id).is_none_or(|player| !weapon_is_valid(game, player)) { failure(game, player_id, 0x0e, mp_loss); abort_player_lighting_arrow_2(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } send_start(game, player_id, level); if let Some(state) = ai.lighting_arrow_2_mut() { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started = ai.lighting_arrow_2().map(|state| state.kernel().started_at_ms()).unwrap_or_default();
     if ai.lighting_arrow_2().is_some_and(|state| !state.attacking_started) {
-        if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true) } let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, Some(maximum)); if path.is_empty() { send_broken(game, player_id, level); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if maximum != 0 && path.len() > maximum.wrapping_add(1) as usize { failure(game, player_id, 0x0b, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let count = path.iter().position(|cell| cell.2 == 2).unwrap_or(path.len()); let endpoint = path.get(count).or_else(|| path.last()).copied().unwrap_or((destination.0, destination.1, 2)); let visual_destination = if matches!(dispatch, PlayerSkillDispatch::Object { .. }) { destination } else { (endpoint.0, endpoint.1) }; send_fire(game, player_id, level, dispatch, visual_destination, missile_time); if let Some(state) = ai.lighting_arrow_2_mut() { state.path = path; state.attack_cell_count = count; state.current_cell = 0; state.attacking_started = true; let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
+        if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } restore_player_movement(game, player_id); let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, Some(maximum)); if path.is_empty() { send_broken(game, player_id, level); abort_player_lighting_arrow_2(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if maximum != 0 && path.len() > maximum.wrapping_add(1) as usize { failure(game, player_id, 0x0b, mp_loss); abort_player_lighting_arrow_2(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let count = path.iter().position(|cell| cell.2 == 2).unwrap_or(path.len()); let endpoint = path.get(count).or_else(|| path.last()).copied().unwrap_or((destination.0, destination.1, 2)); let visual_destination = if matches!(dispatch, PlayerSkillDispatch::Object { .. }) { destination } else { (endpoint.0, endpoint.1) }; send_fire(game, player_id, level, dispatch, visual_destination, missile_time); if let Some(state) = ai.lighting_arrow_2_mut() { state.path = path; state.attack_cell_count = count; state.current_cell = 0; state.attacking_started = true; let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); }
     }
-    let Some((current, count, cell)) = ai.lighting_arrow_2().map(|state| (state.current_cell, state.attack_cell_count, state.path.get(state.current_cell).copied())) else { return terminal(QueuedSkillExecutionState::Rejected) }; if current >= count { if let Some(state) = ai.lighting_arrow_2_mut() { let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); } ai.mark_lighting_arrow_2_used(runtime.now_milliseconds()); finish(game, player_id); return terminal(QueuedSkillExecutionState::Completed) } if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(missile_time.wrapping_mul(current as u32))) { return terminal(QueuedSkillExecutionState::Pending) }
+    let Some((current, count, cell)) = ai.lighting_arrow_2().map(|state| (state.current_cell, state.attack_cell_count, state.path.get(state.current_cell).copied())) else { return terminal(QueuedSkillExecutionState::Rejected) }; if current >= count { if let Some(state) = ai.lighting_arrow_2_mut() { let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); } finish_player_lighting_arrow_2(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Completed) } if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(missile_time.wrapping_mul(current as u32))) { return terminal(QueuedSkillExecutionState::Pending) }
     if let Some((x, y, _)) = cell { let mut attacked = ai.lighting_arrow_2_mut().map(|state| std::mem::take(&mut state.attacked_creatures)).unwrap_or_default(); attack_cell(game, player_id, region_id, level, factor, hit, x, y, &mut attacked, runtime); if let Some(state) = ai.lighting_arrow_2_mut() { state.attacked_creatures = attacked; state.current_cell = state.current_cell.wrapping_add(1); } }
     terminal(QueuedSkillExecutionState::Pending)
 }

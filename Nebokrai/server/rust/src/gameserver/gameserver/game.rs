@@ -814,7 +814,8 @@ use crate::gameserver::appserver::skills::lightingarrow::{
     execute_player_lighting_arrow, is_lighting_arrow_dispatch, LIGHTING_ARROW_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::lightingarrow2::{
-    execute_player_lighting_arrow_2, is_lighting_arrow_2_dispatch,
+    cancel_player_lighting_arrow_2, complete_player_lighting_arrow_2,
+    execute_player_lighting_arrow_2, is_lighting_arrow_2_dispatch, LIGHTING_ARROW_2_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::lightingarrowphalanx::{
     calculate_owned_lighting_arrow_attack, LightingArrowPhalanxTick,
@@ -37521,6 +37522,7 @@ impl CGame {
                 | HEARTLESS_ARROW_2_SKILL_ID
                 | HEARTLESS_ARROW_3_SKILL_ID
                 | LIGHTING_ARROW_SKILL_ID
+                | LIGHTING_ARROW_2_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
                 | AGILITY_SKILL_ID
@@ -37597,6 +37599,7 @@ impl CGame {
                 player_ai.heartless_arrow_area().is_some()
             }
             LIGHTING_ARROW_SKILL_ID => player_ai.lighting_arrow().is_some(),
+            LIGHTING_ARROW_2_SKILL_ID => player_ai.lighting_arrow_2().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
@@ -37630,6 +37633,12 @@ impl CGame {
                     ))
                 }
                 LIGHTING_ARROW_SKILL_ID => Some(complete_player_lighting_arrow(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                LIGHTING_ARROW_2_SKILL_ID => Some(complete_player_lighting_arrow_2(
                     self,
                     player_id,
                     &mut player_ai,
@@ -37858,6 +37867,9 @@ impl CGame {
             }
             LIGHTING_ARROW_SKILL_ID => {
                 cancel_player_lighting_arrow(self, player_id, &mut player_ai, runtime)
+            }
+            LIGHTING_ARROW_2_SKILL_ID => {
+                cancel_player_lighting_arrow_2(self, player_id, &mut player_ai, runtime)
             }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
