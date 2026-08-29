@@ -2104,11 +2104,13 @@ impl CPlayerAI {
 
     /// Продвигает ровно одну ожидающую команду только после конечного состояния
     /// предыдущей. Новый запрос может заменить ещё не начатый хвост FIFO, но
-    /// не уничтожает уже начатый `SkillExecutionKernel`.
+    /// не уничтожает уже начатый `SkillExecutionKernel`. Запрет нового
+    /// расписания у мёртвого владельца не останавливает активную команду.
     pub(crate) fn begin_next_battle_fairy_skill(
         &mut self,
+        can_schedule: bool,
     ) -> Option<BattleFairySkillDispatch> {
-        if self.current_battle_fairy_skill.is_none() {
+        if self.current_battle_fairy_skill.is_none() && can_schedule {
             self.current_battle_fairy_skill = self.battle_fairy_skills.pop_front();
             if let Some(dispatch) = self.current_battle_fairy_skill {
                 self.selected_battle_fairy_skill_id = dispatch.skill_id();
@@ -2805,7 +2807,9 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnScheduleAboutWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: ожидающая war-soul команда не извлекается у мёртвого владельца;
+// уже активное выполнение остаётся отдельной ProcessActiveAction-ветвью.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:143
@@ -2821,7 +2825,8 @@ impl CPlayerAI {
 // FUNCTION: CPlayerAI::OnSchedule
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: ветвь пустой очереди навыков с одним FIFO-назначением,
-// пространственным шагом и `ASA_MOVE`; ветвь целей ниже ещё не достигнута.
+// пространственным шагом и `ASA_MOVE`; ожидающая команда не начинается у
+// мёртвого владельца, а ветвь целей ниже ещё не достигнута.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:256

@@ -38887,11 +38887,16 @@ impl CGame {
         player_id: i32,
         player_ai: &mut CPlayerAI,
         execute_player_skill: bool,
+        can_schedule: bool,
         runtime: &mut Runtime,
     ) -> (usize, usize) {
         let mut execution_count = 0;
         let mut player_execution_count = 0;
+        let active_player_skill = self
+            .find_player(player_id)
+            .is_some_and(|player| player.current_skill_id().is_some());
         if execute_player_skill
+            && (can_schedule || active_player_skill)
             && let Some(dispatch) = player_ai.next_player_skill()
         {
             player_execution_count = 1;
@@ -39346,7 +39351,7 @@ impl CGame {
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
-        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill() {
+        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule) {
             let attribute_skill = match dispatch {
                 BattleFairySkillDispatch::SelfTarget { skill_id, .. }
                 | BattleFairySkillDispatch::Point { skill_id, .. }
@@ -44182,6 +44187,9 @@ impl CGame {
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
                                 .take_player_ai();
+                            let can_schedule_skill = self
+                                .find_player(player_id)
+                                .is_some_and(|player| !player.is_dead());
                             let active_move_handled =
                                 player_ai.advance_active_move(runtime.now_milliseconds());
                             let (executed_skills, executed_player_skills) = self
@@ -44189,6 +44197,7 @@ impl CGame {
                                     player_id,
                                     &mut player_ai,
                                     !active_move_handled,
+                                    can_schedule_skill,
                                     runtime,
                                 );
                             player_skill_executions += executed_skills;
