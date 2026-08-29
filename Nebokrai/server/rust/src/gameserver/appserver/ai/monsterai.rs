@@ -17,7 +17,7 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::skills::baseattack::real_distance;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
 
@@ -132,6 +132,63 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
     } else {
         0
     }
+}
+
+/// Ставит достигнутый общий `CMonsterAI::OnIdle`: при необходимости отдельный
+/// `ChangeSkill`, затем ровно один выбор `Move/Stand` и завершающий
+/// `SearchEnemy`. Каждый `AddAIEvent` получает собственный замер часов.
+pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &crate::setup::monsterlist::MonsterProperties,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((origin, speed, has_skill)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            let shape = monster.move_shape().shape();
+            Some((
+                ShapeAreaCoordinates {
+                    x: shape.get_tile_x().ok()?,
+                    y: shape.get_tile_y().ok()?,
+                },
+                shape.get_speed(),
+                monster.move_shape().current_skill_id().is_some(),
+            ))
+        })
+    else {
+        return false;
+    };
+    if !has_skill
+        && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+    {
+        monster.begin_active_ai_change_skill(runtime.now_milliseconds());
+    }
+    if (game.skill_random_below(10_000) as u32) < property.move_timer {
+        let direction = game.skill_random_below(8);
+        if let Ok(destination) = CShape::get_direction_position(direction, origin)
+            && game.move_owned_monster_step(
+                region,
+                monster_id,
+                destination.x,
+                destination.y,
+                CMonster::figure(property),
+            )
+            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+        {
+            monster.begin_active_ai_move(
+                one_step_move_delay_ms(direction, speed, property.stop_frame),
+                runtime.now_milliseconds(),
+            );
+        }
+    } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_stand(property.stop_frame, runtime.now_milliseconds());
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+    }
+    true
 }
 
 /// Выполняет общий шаг `CMonsterAI::Tracing` перед запуском выбранного навыка.
@@ -393,9 +450,10 @@ pub(crate) fn approach_attack_range(
 // FUNCTION: CMonsterAI::OnIdle
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `CMonster::hibernate_ai` и
-// `execute_owned_monster_base_attack` сохраняют проверку соседних игроков,
-// спящий переход и назначение текущего навыка до поиска противника для
-// полностью достигнутых списков. Случайное блуждание и очередь ожидания RAW.
+// `execute_owned_monster_base_attack` сохраняют проверку соседних игроков и
+// спящий переход. `queue_monster_idle` проводит `ChangeSkill`, точный RNG
+// случайного шага либо `Stand`, а затем `SearchEnemy` для достигнутых AI4,
+// AI6, AI7 и двух боссов. Остальные виртуальные владельцы остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:34

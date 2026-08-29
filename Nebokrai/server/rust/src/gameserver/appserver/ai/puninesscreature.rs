@@ -13,7 +13,7 @@
 //! `ChangeSkill → Move/Stand → SearchEnemy` проходит через тот же FIFO.
 
 
-use super::monsterai::one_step_move_delay_ms;
+use super::monsterai::{one_step_move_delay_ms, queue_monster_idle};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -154,39 +154,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
     if !schedule_idle {
         return true;
     }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id)
-        && monster.move_shape().current_skill_id().is_none()
-    {
-        monster.begin_active_ai_change_skill(runtime.now_milliseconds());
-    }
-    if (game.skill_random_below(10_000) as u32) < property.move_timer {
-        let direction = game.skill_random_below(8);
-        let origin = ShapeAreaCoordinates {
-            x: source_view.tile_x,
-            y: source_view.tile_y,
-        };
-        if let Ok(destination) = CShape::get_direction_position(direction, origin)
-            && game.move_owned_monster_step(
-                region,
-                monster_id,
-                destination.x,
-                destination.y,
-                CMonster::figure(&property),
-            )
-            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
-        {
-            monster.begin_active_ai_move(
-                one_step_move_delay_ms(direction, source.get_speed(), property.stop_frame),
-                runtime.now_milliseconds(),
-            );
-        }
-    } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.begin_active_ai_stand(property.stop_frame, runtime.now_milliseconds());
-    }
-    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
-    }
-    true
+    queue_monster_idle(game, region, monster_id, &property, runtime)
 }
 
 /// Выполняет отдельный `OnSearchEnemy` AI7 без движения и без запуска навыка.

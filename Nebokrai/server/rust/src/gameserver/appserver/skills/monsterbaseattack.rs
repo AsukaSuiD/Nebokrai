@@ -123,7 +123,7 @@ use crate::gameserver::appserver::ai::jiumai::{
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, hibernates_without_nearby_players, schedule_attack_interval,
-    select_attack_skill,
+    queue_monster_idle, select_attack_skill,
 };
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
@@ -550,6 +550,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster.hibernate_ai(runtime.now_milliseconds());
             return true;
         }
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && matches!(property.ai, 4 | 6)
+    {
+        return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
     if target.is_none() && cast.is_none() && !tamed && property.ai == 2 {
         let destination = region
