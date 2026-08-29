@@ -11,6 +11,8 @@
 //! сохраняет единственный вызов RNG, добавку стихии и коэффициент оружия. Для
 //! монстра недостигнутые добавки игрока не выдумываются. `CGame` только разрешает
 //! владельцев, применяет защиту и смерть и доставляет уже построенные пакеты.
+//! Три player-варианта используют общий `End`: очистку progress, возврат
+//! движения и `CAttackSkill::End(1)` с cooldown конкретного идентификатора.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
@@ -30,10 +32,13 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage};
+use crate::gameserver::appserver::skills::kernel::{
+    SkillExecutionKernel, SkillStage, SkillTermination,
+};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -294,11 +299,35 @@ fn send_player_projectile_end(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish_player_projectile(game: &mut CGame, player_id: i32) {
+fn finish_player_projectile<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_path_projectile_used(skill_id, now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_path_projectile<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((dispatch, skill_id)) = player_ai
+        .path_projectile()
+        .map(|state| (state.kernel().dispatch(), state.skill_id()))
+    else {
+        return false;
+    };
+    finish_player_projectile(game, player_id, skill_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 #[allow(clippy::too_many_arguments, reason = "параметры сохраняют формулу конкретного projectile-owner-а")]
@@ -447,6 +476,9 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(spec.skill_id), player.mana(),
     ))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(spec.skill_id, level) else {
+        if ai.path_projectile().is_some() {
+            finish_player_projectile(game, player_id, spec.skill_id, ai, runtime);
+        }
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
@@ -504,7 +536,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_player_projectile_failure(game, player_id, 7);
-            finish_player_projectile(game, player_id);
+            finish_player_projectile(game, player_id, spec.skill_id, ai, runtime);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         let destination = ai.path_projectile()
@@ -540,7 +572,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
         );
         if maximum_distance != 0 && path.len() > maximum_distance.wrapping_add(1) as usize {
             send_player_projectile_failure(game, player_id, 0x0b);
-            finish_player_projectile(game, player_id);
+            finish_player_projectile(game, player_id, spec.skill_id, ai, runtime);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         let target = player_object_target(dispatch);
@@ -567,9 +599,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             }
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        let ended_at = runtime.now_milliseconds();
-        ai.mark_path_projectile_used(spec.skill_id, ended_at);
-        finish_player_projectile(game, player_id);
+        finish_player_projectile(game, player_id, spec.skill_id, ai, runtime);
         return player_terminal(QueuedSkillExecutionState::Completed);
     }
 
