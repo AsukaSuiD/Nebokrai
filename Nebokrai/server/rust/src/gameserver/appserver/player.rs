@@ -2339,6 +2339,7 @@ impl CPlayer {
         let ex_state_length = read_player_game_save_count(source, cursor, "m_vExStates length")?;
         player.move_shape.replace_ex_states(
             read_player_game_save_slice(source, cursor, "m_vExStates", ex_state_length)?.to_vec(),
+            skill_factory,
         );
 
         player.friends.clear();

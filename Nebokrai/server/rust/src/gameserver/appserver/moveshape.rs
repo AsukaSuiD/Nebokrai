@@ -76,7 +76,9 @@ use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
 use crate::gameserver::appserver::skills::rushstate::RushState;
 use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::RoarState;
-use crate::gameserver::appserver::skills::energyholdingstate::EnergyHoldingState;
+use crate::gameserver::appserver::skills::energyholdingstate::{
+    EnergyHoldingState, ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID,
+};
 use crate::gameserver::appserver::skills::lifeshieldstate::{
     LifeShieldState, LIFE_SHIELD_STATE_BYTES,
 };
@@ -731,6 +733,9 @@ impl CMoveShape {
         if let Some(state) = self.blood_loss_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
+        if let Some(state) = self.energy_holding_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded());
+        }
         for state in &self.defense_shields {
             match state {
                 DefenseShieldState::Mana(state) => {
@@ -766,7 +771,7 @@ impl CMoveShape {
         payload
     }
 
-    pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>) {
+    pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>, skill_factory: &CSkillFactory) {
         let known_offsets = known_state_record_offsets(&states);
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
         self.change_body_states.retain(|state| {
@@ -874,6 +879,17 @@ impl CMoveShape {
         if self.blood_loss_state.is_some() {
             self.periodic_attack_order.insert(super::skills::bloodloss::BLOOD_LOSS_SKILL_ID);
         }
+        self.energy_holding_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(ENERGY_HOLDING_STATE_ID))
+            .and_then(|offset| {
+                let level = read_u32(&states, offset + 4)?;
+                let parameter_percent = skill_factory
+                    .query_skill_base_properties(ENERGY_HOLDING_STATE_ID, level as i32)?
+                    .query_property(super::skills::energyholding::PARAMETER_PERCENT);
+                EnergyHoldingState::decode(&states, offset, parameter_percent).ok()
+            });
         self.defense_shields.clear();
         self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
             match read_u32(&states, offset) {
@@ -2202,8 +2218,16 @@ impl CMoveShape {
     }
     pub(crate) const fn energy_holding_state(&self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state }
     pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut EnergyHoldingState> { self.state_storage.energy_holding_state.as_mut() }
-    pub(crate) fn begin_energy_holding_state(&mut self, state: EnergyHoldingState) { self.state_storage.energy_holding_state = Some(state); }
-    pub(crate) fn take_energy_holding_state(&mut self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state.take() }
+    pub(crate) fn begin_energy_holding_state(&mut self, state: EnergyHoldingState) {
+        self.remove_serialized_state_record(state.skill_id(), ENERGY_HOLDING_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
+        self.state_storage.energy_holding_state = Some(state);
+    }
+    pub(crate) fn take_energy_holding_state(&mut self) -> Option<EnergyHoldingState> {
+        let state = self.state_storage.energy_holding_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), ENERGY_HOLDING_STATE_BYTES);
+        Some(state)
+    }
     pub(crate) fn reached_property_states(&self) -> Vec<ReachedPropertyState> {
         let current = self.reached_property_state_order;
         let mut states = Vec::with_capacity(4);
@@ -3800,6 +3824,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             | super::skills::rapture::RAPTURE_SKILL_ID => PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
             super::skills::agility2::AGILITY_2_SKILL_ID => AGILITY_STATE_2_BYTES,
             super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
+            ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

@@ -7,15 +7,16 @@
 //! `CInverseChopped` при первом расчёте атаки. Создание, увеличение и снятие
 //! канонического player-state выполняются этим owner-ом.
 //!
-//! Не достигнуты реальные вызывающие цепочки `Serialize/Unserialize` из БД:
-//! без базового кодека состояний не подтверждена граница первого из трёх
-//! записываемых `DWORD`.
+//! DB-запись содержит ID, уровень навыка и число зарядов. Не сохраняемый
+//! процент восстанавливается из `CSkillFactory` usage `20020` того же уровня.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const ENERGY_HOLDING_STATE_ID: u32 = 0x89;
+pub(crate) const ENERGY_HOLDING_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EnergyHoldingState {
@@ -37,6 +38,31 @@ impl EnergyHoldingState {
         if self.energy_count >= self.skill_level { return false }
         self.energy_count = self.energy_count.wrapping_add(1);
         true
+    }
+
+    pub(crate) fn decode(
+        payload: &[u8],
+        offset: usize,
+        parameter_percent: u32,
+    ) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != ENERGY_HOLDING_STATE_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self {
+            skill_level: reader.read_u32()?,
+            energy_count: reader.read_u32()?,
+            parameter_percent,
+        })
+    }
+
+    pub(crate) fn encoded(self) -> [u8; ENERGY_HOLDING_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(ENERGY_HOLDING_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(ENERGY_HOLDING_STATE_ID);
+        writer.write_u32(self.skill_level);
+        writer.write_u32(self.energy_count);
+        bytes.try_into().expect("размер состояния накопления энергии фиксирован")
     }
 }
 
@@ -74,33 +100,3 @@ pub(crate) fn take_player_energy_holding(game: &mut CGame, player_id: i32) -> Op
     let ended = game.find_player_mut(player_id).and_then(|player| { let region_id = player.server_region_id()?; let identity = player.shape().identity(); let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; Some((region_id, identity, x, y, player.take_energy_holding_state()?)) });
     let (region_id, identity, x, y, state) = ended?; send_energy_holding_state_visual(game, region_id, identity, x, y, state, false); Some(state)
 }
-
-// Сохранены только недостигнутые функции DB-кодека.
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:165
-// RVA: 0x001E1D50
-// ADDRESS: 005e1d50
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CEnergyHoldingState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\energyholdingstate.cpp:176
-// RVA: 0x001E1E80
-// ADDRESS: 005e1e80
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//

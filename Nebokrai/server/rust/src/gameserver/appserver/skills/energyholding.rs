@@ -24,7 +24,7 @@ pub(crate) const ENERGY_HOLDING_SKILL_ID: u32 = 0x89;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
 const USER_MP_LOSE: u32 = 2;
-const PARAMETER_PERCENT: u32 = 20_020;
+pub(crate) const PARAMETER_PERCENT: u32 = 20_020;
 
 pub(crate) const fn is_energy_holding_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: ENERGY_HOLDING_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: ENERGY_HOLDING_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: ENERGY_HOLDING_SKILL_ID, .. })
