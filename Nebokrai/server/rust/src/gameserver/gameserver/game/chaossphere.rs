@@ -1,9 +1,8 @@
 //! Межвладельческая координация сферы хаоса.
 //!
 //! Cast, путь, часы, маска и формула принадлежат `chaossphere.rs` и
-//! `chaosspherephalanx.rs`. Здесь остаются регистрация в регионе, точный обход
-//! «боевой дух перед фигурой», пространственный `ForceMove` и применение
-//! атак к независимым владельцам.
+//! `chaosspherephalanx.rs`. Здесь остаются регистрация в регионе,
+//! пространственный `ForceMove` и применение атак к независимым владельцам.
 
 use super::*;
 use crate::gameserver::appserver::skills::chaosspherephalanx::CChaosSpherePhalanx;
@@ -88,45 +87,4 @@ impl CGame {
         true
     }
 
-    pub(super) fn chaos_sphere_targets(
-        &self,
-        region_id: i32,
-        phalanx: &CChaosSpherePhalanx,
-        center_x: i32,
-        center_y: i32,
-    ) -> Vec<(ShapeIdentity, bool)> {
-        let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) else { return Vec::new() };
-        let mut targets = Vec::new();
-        let mut ordinary = Vec::new();
-        for (tile_x, tile_y) in CChaosSpherePhalanx::scope_cells(center_x, center_y) {
-            if region.block_at(tile_x, tile_y) != Some(2) {
-                for (&player_id, _) in &region.war_souls_at(tile_x, tile_y) {
-                    let player_id = player_id as i32;
-                    if player_id != phalanx.master().master_id
-                        && self.find_player(player_id).is_some_and(|player| !player.is_dead())
-                        && self.player_base_attackable(phalanx.master().master_id, player_id)
-                    {
-                        targets.push((ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID }, true));
-                    }
-                }
-            }
-            let mut shapes = Vec::new();
-            if region.get_shapes(tile_x, tile_y, self.area_width, self.area_height, self, &mut shapes).is_err() { continue }
-            for shape in shapes {
-                let identity = shape.identity;
-                if identity == phalanx.shape().identity()
-                    || (identity.object_type == phalanx.master().master_type && identity.id == phalanx.master().master_id)
-                    || !matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE)
-                    || ordinary.contains(&identity)
-                { continue }
-                if phalanx.master().master_type == PLAYER_TYPE
-                    && identity.object_type == PLAYER_TYPE
-                    && !self.player_base_attackable(phalanx.master().master_id, identity.id)
-                { continue }
-                ordinary.push(identity);
-                targets.push((identity, false));
-            }
-        }
-        targets
-    }
 }

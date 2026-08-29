@@ -942,7 +942,7 @@ use crate::gameserver::appserver::skills::littleflash::{
 };
 use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
-    calculate_owned_chaos_sphere_attack, ChaosSpherePhalanxTick,
+    calculate_owned_chaos_sphere_attack, chaos_sphere_targets, ChaosSpherePhalanxTick,
 };
 use crate::gameserver::appserver::skills::lightning::{
     execute_player_lightning, is_lightning_target,
@@ -41250,7 +41250,7 @@ impl CGame {
                         let _ = self.force_move_chaos_sphere(region_id, phalanx_id, destination_x, destination_y, duration_ms);
                     }
                     if let Some((center_x, center_y, sampled_at_ms)) = scan {
-                        for (target, war_soul_hit) in self.chaos_sphere_targets(region_id, chaos, center_x, center_y) {
+                        for (target, war_soul_hit) in chaos_sphere_targets(self, region_id, chaos, center_x, center_y) {
                             match target.object_type {
                                 PLAYER_TYPE => self.apply_summoned_skill_to_player(
                                     &phalanx, target.id, region_id, war_soul_hit, runtime,
