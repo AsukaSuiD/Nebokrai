@@ -1371,7 +1371,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    if property.ai == 10
+    if matches!(property.ai, 10 | 15 | 19)
         && cast.is_none()
         && trace_city_sword_target(
             game,

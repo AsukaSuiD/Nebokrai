@@ -827,7 +827,7 @@ impl CMonster {
         let pet_search = self.tamed
             && alive
             && self.move_shape.current_skill_id().is_none();
-        if (alive && ai_type == 4) || ai_type == 10 || pet_search {
+        if (alive && ai_type == 4) || matches!(ai_type, 10 | 15 | 19) || pet_search {
             self.base_ai.begin_active_search_enemy(now_ms);
         }
     }
