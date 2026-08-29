@@ -9,7 +9,7 @@
 //! навыку. После завершения навыка `OnFighting` ставит `ASA_SEARCH_ENEMY`, а
 //! отдельный FIFO-такт повторяет тот же выбор цели до следующего расписания.
 
-use super::monsterai::one_step_move_delay_ms;
+use super::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;

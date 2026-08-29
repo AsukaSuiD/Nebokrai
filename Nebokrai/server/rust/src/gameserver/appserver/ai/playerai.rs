@@ -44,11 +44,14 @@
 //! использует сохранённые факты игрока и фракции и соблюдает беззнаковую
 //! проверку срока. Прирост опыта возвращается в полный `CGame::CheckLevel`,
 //! энергия публикуется адресным сообщением `0xBF72C`.
-//! Четырёхаргументный поиск пути `MoveTo` и остальные
-//! методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Четырёхаргументный `MoveTo` теперь использует каноническую очередь
+//! `CBaseAI`: свободная соседняя клетка проверяется до `0xBF605`, а задержка
+//! шага сохраняет скорость игрока, диагональный множитель и исходный нулевой
+//! остановочный кадр. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
 
+use super::baseai::CBaseAI;
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
@@ -122,6 +125,7 @@ pub(crate) struct PlayerAiDestination {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerAI {
+    base_ai: CBaseAI,
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
@@ -367,16 +371,45 @@ pub(crate) struct PlayerEnergyRegeneration {
 }
 
 impl CPlayerAI {
-    pub(crate) fn destinations(&self) -> &VecDeque<PlayerAiDestination> {
-        &self.destinations
-    }
-
     pub(crate) fn queue_client_destination(&mut self, direction: i32, is_run: bool) {
         while 3 < self.destinations.len() {
             self.destinations.pop_front();
         }
         self.destinations
             .push_back(PlayerAiDestination { direction, is_run });
+    }
+
+    /// Выполняет достигнутую `ASA_MOVE`-границу до нового `OnSchedule`.
+    /// Даже снятое в этом вызове событие удерживает расписание до следующего
+    /// такта, как `CBaseAI::ProcessActiveAction`.
+    pub(crate) fn advance_active_move(&mut self, now_ms: u32) -> bool {
+        self.base_ai.advance_active_move(now_ms)
+    }
+
+    pub(crate) fn has_queued_skill(&self) -> bool {
+        !self.player_skills.is_empty() || !self.battle_fairy_skills.is_empty()
+    }
+
+    pub(crate) fn next_destination(&self) -> Option<PlayerAiDestination> {
+        self.destinations.front().copied()
+    }
+
+    /// `CPlayerAI::OnSchedule` удаляет назначение независимо от результата
+    /// region cast и `MoveTo`; поэтому изъятие принадлежит самому FIFO-owner-у.
+    pub(crate) fn finish_destination(&mut self, expected: PlayerAiDestination) -> bool {
+        if self.destinations.front().copied() != Some(expected) {
+            return false;
+        }
+        self.destinations.pop_front();
+        true
+    }
+
+    pub(crate) fn begin_destination_move(&mut self, delay_ms: u32, now_ms: u32) {
+        self.base_ai.begin_active_move(delay_ms, now_ms);
+    }
+
+    pub(crate) fn stop_destination_move(&mut self) {
+        self.base_ai.cancel_active_move();
     }
 
     pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) -> usize {
@@ -2711,19 +2744,6 @@ impl CPlayerAI {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayerAI::MoveTo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:952
-// RVA: 0x00108F10
-// ADDRESS: 00508f10
-// PROTOTYPE: void __thiscall MoveTo(CRegion * param_1, long param_2, long param_3, int param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnLoseTarget
@@ -2795,19 +2815,6 @@ impl CPlayerAI {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayerAI::IsCanMoveTo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:1057
-// RVA: 0x00109360
-// ADDRESS: 00509360
-// PROTOTYPE: int __thiscall IsCanMoveTo(long param_1, long * param_2, long * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPlayerAI::Run
@@ -2839,7 +2846,9 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnSchedule
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: ветвь пустой очереди навыков с одним FIFO-назначением,
+// пространственным шагом и `ASA_MOVE`; ветвь целей ниже ещё не достигнута.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:256
@@ -2853,7 +2862,9 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::CPlayerAI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `CBaseAI`, очередь назначений и часы автоматического прироста;
+// оставшиеся очереди целей и `_last_count_time` сохранены ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:19

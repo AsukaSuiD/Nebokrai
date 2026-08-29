@@ -13,6 +13,7 @@
 //! ИИ и не подменяет отдельные reuse-таймеры установленных навыков. Остальные
 //! AI-ветви ниже остаются RAW.
 
+use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
@@ -124,23 +125,6 @@ pub(crate) const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
             0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 23 | 24
                 | 100 | 0x65 | 0x67 | 0x68
         )
-}
-
-/// Общая длительность одного шага `CBaseAI::MoveTo`: диагональ длиннее
-/// осевого шага, после чего прибавляется время остановочного кадра монстра.
-pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32) -> u32 {
-    let distance_units = if direction % 2 == 0 {
-        1_000_000.0
-    } else {
-        1_414_000.0
-    };
-    if speed > 0.0 {
-        (distance_units * 0.68 / speed + stop_frame as f32)
-            .round()
-            .max(0.0) as u32
-    } else {
-        0
-    }
 }
 
 /// Ставит достигнутый общий `CMonsterAI::OnIdle`: при необходимости отдельный

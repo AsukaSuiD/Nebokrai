@@ -774,7 +774,7 @@ use crate::gameserver::appserver::session::ctrader::{
 };
 use crate::gameserver::appserver::shape::{
     CShape, MoveCheckCellRegistry, SHAPE_CHANGE_AREA, SHAPE_CHANGE_DELETE, SHAPE_CHANGE_NONE,
-    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeCoordinateBlock,
+    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeAreaCoordinates, ShapeCoordinateBlock,
     ShapeFigure, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
@@ -39529,6 +39529,106 @@ impl CGame {
         execution_count
     }
 
+    /// Замыкает достигнутую ветвь очереди назначений `CPlayerAI::OnSchedule`.
+    /// Очередь и задержка остаются у владельца ИИ; `CGame` только временно
+    /// разводит владельцев игрока и региона для пространственной мутации и
+    /// фактической доставки `0xBF605`.
+    fn run_player_ai_destination<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        player_ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) -> bool {
+        if player_ai.has_queued_skill() {
+            return false;
+        }
+        let Some(destination) = player_ai.next_destination() else {
+            return false;
+        };
+        let Some(player) = self.find_player(player_id) else {
+            return false;
+        };
+        if !player.can_process_ai_destination() {
+            return false;
+        }
+
+        let snapshot = player.server_region_id().and_then(|region_id| {
+            Some((
+                region_id,
+                ShapeAreaCoordinates {
+                    x: player.shape().get_tile_x().ok()?,
+                    y: player.shape().get_tile_y().ok()?,
+                },
+                player.is_movement_allowed(),
+                player.movement_speed(),
+            ))
+        });
+        let _ = player_ai.finish_destination(destination);
+        let Some((region_id, origin, moveable, speed)) = snapshot else {
+            player_ai.stop_destination_move();
+            return true;
+        };
+        if !moveable {
+            player_ai.stop_destination_move();
+            return true;
+        }
+        let Ok(target) = CShape::get_direction_position(destination.direction, origin) else {
+            player_ai.stop_destination_move();
+            return true;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            player_ai.stop_destination_move();
+            return true;
+        };
+        if owner.base().block_at(target.x, target.y) != Some(0) {
+            self.restore_region_owner(owner);
+            player_ai.stop_destination_move();
+            return true;
+        }
+        let Some(mut player) = self.players.remove(&player_id) else {
+            self.restore_region_owner(owner);
+            return true;
+        };
+        let (area_width, area_height) = self.area_dimensions();
+        let moved = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            area_width,
+            area_height,
+        )
+        .is_some_and(|around| {
+            player
+                .move_step(
+                    owner.base_mut(),
+                    target.x,
+                    target.y,
+                    i32::from(destination.is_run),
+                    area_width,
+                    area_height,
+                    &around,
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(player_id, region_id, ?destination, ?error, "Шаг назначения игрока выполнен не полностью");
+                })
+                .is_ok()
+        });
+        self.players.insert(player_id, player);
+        self.restore_region_owner(owner);
+        if moved {
+            player_ai.begin_destination_move(
+                crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms(
+                    destination.direction,
+                    speed,
+                    0,
+                ),
+                runtime.now_milliseconds(),
+            );
+        } else {
+            player_ai.stop_destination_move();
+        }
+        true
+    }
+
     fn send_player_contribution_update(&self, player_id: i32) -> Option<i32> {
         let player = self.find_player(player_id)?;
         let mut message = CMessage::new(0x000b_f724);
@@ -41013,7 +41113,7 @@ impl CGame {
             self.players.insert(player_id, player);
             return None;
         };
-        let result = player.move_script_step(
+        let result = player.move_step(
             owner.base_mut(),
             destination_x,
             destination_y,
@@ -44065,12 +44165,27 @@ impl CGame {
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
                                 .take_player_ai();
-                            player_skill_executions += self.execute_queued_player_skills(
-                                player_id,
-                                &mut player_ai,
-                                runtime,
-                            );
-                            if self.find_player(player_id).is_some() {
+                            let active_move_handled =
+                                player_ai.advance_active_move(runtime.now_milliseconds());
+                            let executed_skills = if active_move_handled {
+                                0
+                            } else {
+                                self.execute_queued_player_skills(
+                                    player_id,
+                                    &mut player_ai,
+                                    runtime,
+                                )
+                            };
+                            player_skill_executions += executed_skills;
+                            let destination_handled = active_move_handled
+                                || (executed_skills == 0
+                                    && self.find_player(player_id).is_some()
+                                    && self.run_player_ai_destination(
+                                        player_id,
+                                        &mut player_ai,
+                                        runtime,
+                                    ));
+                            if self.find_player(player_id).is_some() && !destination_handled {
                                 restored = runtime.player_move_shape_active_state_ai(
                                     self,
                                     player_id,

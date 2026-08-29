@@ -127,8 +127,9 @@ use crate::gameserver::appserver::ai::jiumai::{
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, has_owned_search_enemy, hibernates_without_nearby_players,
-    one_step_move_delay_ms, queue_monster_idle, schedule_attack_interval, select_attack_skill,
+    queue_monster_idle, schedule_attack_interval, select_attack_skill,
 };
+use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::pet::lose_pet_target_and_search;
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;

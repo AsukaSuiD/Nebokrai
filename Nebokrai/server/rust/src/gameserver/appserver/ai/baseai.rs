@@ -19,7 +19,7 @@
 //! оборачивающийся счётчик времени, а `WakeUp` один раз вычисляет интервал сна.
 //! Достигнутый `Stand` из `ProcessActiveAction` удерживает расписание до
 //! исходного срока и сохраняет отдельный первый такт обработки. Общий runtime
-//! не вызывает очереди и `OnSchedule`, пока этот owner спит. Указатель
+//! не вызывает очереди и `OnSchedule`, пока этот владелец спит. Указатель
 //! владельца, цель, остальные действия и обработчики ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
@@ -303,6 +303,23 @@ impl CBaseAI {
     }
 }
 
+/// Общая длительность одного шага `CBaseAI::MoveTo`: диагональ длиннее
+/// осевого шага, после чего прибавляется остановочный кадр владельца.
+pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32) -> u32 {
+    let distance_units = if direction % 2 == 0 {
+        1_000_000.0
+    } else {
+        1_414_000.0
+    };
+    if speed > 0.0 {
+        (distance_units * 0.68 / speed + stop_frame as f32)
+            .round()
+            .max(0.0) as u32
+    } else {
+        0
+    }
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -384,19 +401,6 @@ impl CBaseAI {
 //
 //
 
-// ============================================================================
-// FUNCTION: CBaseAI::MoveTo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:379
-// RVA: 0x000C7CB0
-// ADDRESS: 004c7cb0
-// PROTOTYPE: void __thiscall MoveTo(CRegion * param_1, long param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBaseAI::Run

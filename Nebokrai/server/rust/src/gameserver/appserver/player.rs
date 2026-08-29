@@ -5879,6 +5879,18 @@ impl CPlayer {
         self.move_shape.shape_mut()
     }
 
+    pub(crate) const fn can_process_ai_destination(&self) -> bool {
+        !CMoveShape::is_died(self.base_properties.health)
+    }
+
+    pub(crate) const fn is_movement_allowed(&self) -> bool {
+        self.move_shape.is_moveable()
+    }
+
+    pub(crate) fn movement_speed(&self) -> f32 {
+        self.shape().get_speed()
+    }
+
     pub(crate) const fn set_skill_moveable(&mut self, moveable: bool) {
         self.move_shape.set_moveable(moveable);
     }
@@ -5914,10 +5926,10 @@ impl CPlayer {
         )
     }
 
-    /// Сценарные `WalkStep` и `RunStep` используют обычного владельца движения
-    /// `CMoveShape`, поэтому сетевой маршрут `0xBF605` и перестановка в регионе
-    /// остаются единым действием.
-    pub(crate) fn move_script_step(
+    /// Клиентский ИИ и сценарные `WalkStep`/`RunStep` используют обычного
+    /// владельца движения `CMoveShape`, поэтому сетевой маршрут `0xBF605` и
+    /// перестановка в регионе остаются единым действием.
+    pub(crate) fn move_step(
         &mut self,
         server_region: &mut CServerRegion,
         destination_x: i32,

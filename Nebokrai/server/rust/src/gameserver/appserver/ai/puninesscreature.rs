@@ -13,7 +13,8 @@
 //! `ChangeSkill → Move/Stand → SearchEnemy` проходит через тот же FIFO.
 
 
-use super::monsterai::{one_step_move_delay_ms, queue_monster_idle};
+use super::baseai::one_step_move_delay_ms;
+use super::monsterai::queue_monster_idle;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
