@@ -169,6 +169,7 @@ use super::shape::{
 use super::summonshape::{SUMMON_SHAPE_TYPE, SummonedSkillShape};
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::guid::CGuid;
+use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::public::netsession::{
     NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
 };
@@ -597,9 +598,9 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
     /// Возвращает snapshot текущего reloadable `CMonsterList` по original name.
     fn monster_property(&mut self, origin_name: &[u8]) -> Option<MonsterProperties>;
 
-    /// Выполняет ещё не достигнутый `CMonster::InitSkills` у concrete owners.
-    /// Последующий `InitAI` принадлежит самому `CMonster`.
-    fn initialize_monster_skills(&mut self, monster: &mut CMonster, property: &MonsterProperties);
+    /// Возвращает read-only snapshot уже декодированного process-level
+    /// `CSkillFactory`. Копия нужна только для раздельного заимствования RNG.
+    fn monster_skill_factory_snapshot(&self) -> CSkillFactory;
 
     /// Virtual `+0x9C(monsterID)` до speed/direction/AddObject для AI 10/11.
     fn initialize_guard_monster(&mut self, monster_id: i32);
@@ -1179,7 +1180,10 @@ impl CServerRegion {
         let id = self.next_monster_id.take();
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
-        context.initialize_monster_skills(&mut monster, property);
+        let skill_factory = context.monster_skill_factory_snapshot();
+        monster.initialize_skills(property, &skill_factory, &mut |bound| {
+            context.random_below(bound)
+        });
         monster.initialize_ai(property, now_ms);
         monster
             .move_shape_mut()
@@ -1255,7 +1259,10 @@ impl CServerRegion {
         let id = self.next_monster_id.take();
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
-        context.initialize_monster_skills(&mut monster, property);
+        let skill_factory = context.monster_skill_factory_snapshot();
+        monster.initialize_skills(property, &skill_factory, &mut |bound| {
+            context.random_below(bound)
+        });
         let special_ai_started_at_ms = if property.ai == 0x68 {
             now_ms(context)
         } else {

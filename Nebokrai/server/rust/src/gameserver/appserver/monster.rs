@@ -13,8 +13,9 @@
 //! висячий указатель и сохраняя обновление свойств. Снимок создания — имя,
 //! графика, HP и скорость — остаётся в объекте, как в `AddMonster`.
 //! `InitAI` и `GetAI` материализованы типизированным binding-ом из
-//! `ai/aifactory.rs`; `InitSkills`, сериализация и полный автономный ИИ
-//! остаются ниже в исходном материале. Достигнутая цепочка базовой атаки
+//! `ai/aifactory.rs`; `InitSkills` использует канонические `CSkillFactory` и
+//! `CMoveShape`, а сериализация и полный автономный ИИ остаются ниже в
+//! исходном материале. Достигнутая цепочка базовой атаки
 //! хранит канонические
 //! HP, защиту первого нападающего, снимок смертельной атаки и цель боевого ИИ;
 //! `CGame` координирует урон и смерть, `Nation/GodsBattle`, награду, добычу,
@@ -102,6 +103,7 @@ use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::SpiderMistProgress;
 use super::skills::summoncreatureskill::SummonCreatureProgress;
 use super::skills::yunshenglightning::YunShengLightningProgress;
+use super::skills::skillfactory::CSkillFactory;
 use crate::nets::netserver::message::CMessage;
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -439,6 +441,26 @@ impl CMonster {
         match self.ai_binding {
             Some(binding) => binding.active(self.master_info),
             None => None,
+        }
+    }
+
+    /// Exact `CMonster::InitSkills`: базовая защита добавляется первой,
+    /// затем исходный бессодержательный `random(skill_count)` расходует RNG,
+    /// после чего property skills проходят в wire-порядке. `odds` на этой
+    /// границе не читается; fallback base attack в точном owner-е отсутствует.
+    pub(crate) fn initialize_skills(
+        &mut self,
+        property: &MonsterProperties,
+        factory: &CSkillFactory,
+        random: &mut impl FnMut(i32) -> i32,
+    ) {
+        self.move_shape.clear_skills();
+        self.move_shape.add_base_defense_skill(factory);
+        let _discarded_roll = random(property.skills.len() as i32);
+        for skill in &property.skills {
+            let _loaded =
+                self.move_shape
+                    .add_skill(u32::from(skill.id), i32::from(skill.level), factory);
         }
     }
 
@@ -2263,20 +2285,6 @@ impl CMonster {
 // RVA: 0x000E8400
 // ADDRESS: 004e8400
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::InitSkills
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:257
-// RVA: 0x000E86B0
-// ADDRESS: 004e86b0
-// PROTOTYPE: void __thiscall InitSkills(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

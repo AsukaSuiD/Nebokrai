@@ -32,7 +32,7 @@
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
 //! остаются у этого владельца.
 //!
-//! Реализованные `AddSkill`, `DelSkill`, `AddState`, `GetStatesNum` и
+//! Реализованные `AddSkill`, `DelSkill`, `ClearSkills`, `AddState`, `GetStatesNum` и
 //! `UpdateAbnormality` используют это же хранилище. Ещё не восстановленные
 //! классы навыков и ИИ остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
 
@@ -147,6 +147,7 @@ const SKILL_TYPE_ATTACK: u32 = 0;
 const SKILL_TYPE_DEFENSE: u32 = 1;
 const SKILL_TYPE_STATE: u32 = 2;
 const SKILL_TYPE_SUMMON: u32 = 3;
+const SKILL_BASE_DEFENSE: u32 = 10;
 const SKILL_NOT_DISAPPEAR_AFTER_DEAD: u32 = 56;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
@@ -3515,6 +3516,35 @@ impl CMoveShape {
         self.skills.get(&skill_id)
     }
 
+    /// Exact `ClearSkills` для канонической Rust-проекции четырёх C++
+    /// skill-векторов. Concrete `End/Delete` не имеют отдельного наблюдаемого
+    /// состояния после уже достигнутого сброса current skill.
+    pub(crate) fn clear_skills(&mut self) {
+        self.current_skill_id = None;
+        self.skills.clear();
+    }
+
+    /// `CSkillFactory::QuerySkill(SKILL_BASE_DEFENSE, 1)` создавал
+    /// `CFightDefense` отдельной ветвью даже без reloadable properties.
+    /// Registry используется только для имени проекции и не может отменить
+    /// intrinsic defense либо изменить его категорию.
+    pub(crate) fn add_base_defense_skill(&mut self, factory: &CSkillFactory) {
+        let name = factory
+            .query_skill_base_properties(SKILL_BASE_DEFENSE, 1)
+            .map(|properties| properties.skill_name().to_vec())
+            .unwrap_or_default();
+        self.skills.insert(
+            SKILL_BASE_DEFENSE,
+            MoveShapeSkill {
+                id: SKILL_BASE_DEFENSE,
+                level: 1,
+                skill_type: SKILL_TYPE_DEFENSE,
+                name,
+                item_position: -1,
+            },
+        );
+    }
+
     pub(crate) fn set_item_skill_position(&mut self, skill_id: u32, position: i32) -> bool {
         let Some(skill) = self.skills.get_mut(&skill_id) else { return false };
         skill.set_item_position(position);
@@ -4689,20 +4719,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 // RVA: 0x000CEC40
 // ADDRESS: 004cec40
 // PROTOTYPE: uint __thiscall GetCHBYState(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMoveShape::ClearSkills
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:192
-// RVA: 0x000CECE0
-// ADDRESS: 004cece0
-// PROTOTYPE: void __thiscall ClearSkills(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
