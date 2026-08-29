@@ -106,6 +106,7 @@ use crate::gameserver::appserver::ai::bossblue::{
 use crate::gameserver::appserver::ai::bossfiend::{
     choose_boss_fiend_attack_skill, select_boss_fiend_enemy,
 };
+use crate::gameserver::appserver::ai::bossidle::{BossIdleProgress, advance_boss_idle};
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
@@ -448,6 +449,15 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let skill_id = u32::from(skill.id);
     if !is_owned_monster_attack_skill(skill_id) {
         return false;
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && matches!(property.ai, 0x67 | 0x68)
+        && advance_boss_idle(game, region, monster_id, &property, runtime)
+            == BossIdleProgress::Waiting
+    {
+        return true;
     }
     if skill_id == FURY_SKILL_ID {
         let Some(skill_properties) = game

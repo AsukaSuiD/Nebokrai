@@ -9,32 +9,16 @@
 //! `0x1f9`. Выполнение выбранного навыка остаётся у skill-owner-а.
 //!
 //! `OnSearchEnemy` подключён к реальному ходу монстра и сохраняет зависимость
-//! выбора от минимальной дистанции текущего навыка. Общий путь
-//! `OnIdle → Hibernate` при отсутствии игроков также подключён к runtime.
-//! Случайный шаг `OnIdle`, `OnSchedule` и `OnMoving` ниже остаются RAW.
+//! выбора от минимальной дистанции текущего навыка. `OnIdle` подключён
+//! целиком: общий владелец бездействия выполняет исходный случайный шаг либо ожидание
+//! перед поиском, а отсутствие игроков переводит владельца в сон.
+//! `OnSchedule` и `OnMoving` ниже остаются RAW.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp
-
-// ============================================================================
-// FUNCTION: CBossFiend::OnIdle
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: общий runtime проверяет игроков в девяти соседних областях и
-// вызывает `CMonster::hibernate_ai`, когда их нет.
-// REMAINS: выбор шага либо ожидания и точная очередь событий остаются RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp:326
-// RVA: 0x002093C0
-// ADDRESS: 006093c0
-// PROTOTYPE: void __thiscall OnIdle(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBossFiend::OnSchedule
