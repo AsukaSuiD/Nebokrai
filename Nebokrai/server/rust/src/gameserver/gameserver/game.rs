@@ -988,7 +988,7 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::skills::monsterbaseattack::{
     change_owned_monster_attack_skill, execute_owned_monster_base_attack,
-    search_owned_boss_enemy,
+    search_owned_monster_enemy,
 };
 use crate::gameserver::appserver::skills::machinerystomp::{
     execute_owned_wide_arc_attack_target, finish_owned_wide_arc_attack,
@@ -35812,7 +35812,7 @@ impl CGame {
     /// Координирует отдельный FIFO-такт `ASA_SEARCH_ENEMY` боссов. Выбор
     /// цели остаётся у конкретных владельцев ИИ и не начинает атаку в этом же
     /// такте.
-    fn run_owned_boss_enemy_search(
+    fn run_owned_monster_enemy_search(
         &mut self,
         region_id: i32,
         monster_id: i32,
@@ -35821,7 +35821,23 @@ impl CGame {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        let searched = search_owned_boss_enemy(self, owner.base_mut(), monster_id);
+        let tamed = owner
+            .base()
+            .find_monster_by_id(monster_id)
+            .is_some_and(CMonster::is_tamed);
+        if tamed {
+            self.restore_region_owner(owner);
+            let searched = self.run_owned_pet_active_search(region_id, monster_id);
+            let Some(mut owner) = self.take_region_owner(region_id) else {
+                return searched;
+            };
+            if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                monster.finish_active_ai_search_enemy(now_ms);
+            }
+            self.restore_region_owner(owner);
+            return searched;
+        }
+        let searched = search_owned_monster_enemy(self, owner.base_mut(), monster_id);
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
             monster.finish_active_ai_search_enemy(now_ms);
         }
@@ -42403,6 +42419,13 @@ impl CGame {
                 {
                     continue;
                 }
+                let ai_type = self
+                    .find_region(region_id)
+                    .and_then(|owner| owner.base().find_monster_by_id(monster_id))
+                    .and_then(|monster| {
+                        self.find_monster_property_by_origin_name(monster.base_property_key()?)
+                    })
+                    .map_or(0, |property| property.ai);
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let mut schedule_ready = false;
                     let mut attack_pending = false;
@@ -42420,6 +42443,7 @@ impl CGame {
                                 "обработаны пассивные Defense-события монстра"
                             );
                         }
+                        monster.queue_search_after_active_move(ai_type, now_ms);
                         move_pending = monster.advance_active_ai_move(now_ms);
                         if !move_pending && monster.active_ai_attack_pending() {
                             if monster.base_attack_cast().is_some() {
@@ -42457,7 +42481,7 @@ impl CGame {
                         continue;
                     }
                     if search_enemy_pending {
-                        let _ = self.run_owned_boss_enemy_search(
+                        let _ = self.run_owned_monster_enemy_search(
                             region_id,
                             monster_id,
                             now_ms,

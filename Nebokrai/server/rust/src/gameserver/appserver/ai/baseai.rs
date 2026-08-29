@@ -168,6 +168,12 @@ impl CBaseAI {
         })
     }
 
+    pub(crate) fn active_move_unhandled(&self) -> bool {
+        self.active_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::Move && event.handling == 0
+        })
+    }
+
     /// Сообщает, что следующий FIFO-элемент должен продолжить текущий
     /// `CSkill::AI` через подтверждённый `OnFighting`.
     pub(crate) fn active_attack_pending(&self) -> bool {
@@ -554,7 +560,8 @@ impl CBaseAI {
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `CBaseAI::advance_active_stand` сохраняет достигнутую ветвь
 // `ASA_STAND`, `advance_active_move` — задержку `ASA_MOVE`,
-// `active_attack_pending` — продолжение `ASA_ATTACK`, а
+// `active_attack_pending` — продолжение `ASA_ATTACK`, отдельный такт
+// `ASA_SEARCH_ENEMY` вызывает достигнутые функции выбора целей, а
 // `finish_active_change_skill` — отдельный такт `ASA_CHANGE_SKILL`, их
 // FIFO-позицию, handling и границу задержки.
 // COMPONENT: GameServer

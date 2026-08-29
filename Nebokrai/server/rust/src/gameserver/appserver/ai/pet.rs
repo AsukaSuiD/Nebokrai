@@ -3,8 +3,10 @@
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/ai/pet.cpp`. Контроллер сохраняет секундный поиск хозяина,
 //! шестичасовой счётчик жизни, переходы режима/действия, возврат и одичание.
-//! Поиск живых владельцев, пространственное перемещение, пакеты и удаление остаются у
-//! `CGame`; состояние хранится ровно один раз внутри `CMonster`.
+//! `OnMoving` живого питомца без текущего навыка ставит отдельный
+//! `ASA_SEARCH_ENEMY` в общую FIFO-очередь.
+//! Поиск живых владельцев, пространственное перемещение, пакеты и удаление
+//! остаются у `CGame`; состояние хранится ровно один раз внутри `CMonster`.
 //!
 //! Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 //! Декомпилятор: Ghidra 12.1.2
@@ -462,20 +464,6 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 // RVA: 0x000E9450
 // ADDRESS: 004e9450
 // PROTOTYPE: void __thiscall ~CPet(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPet::OnMoving
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:537
-// RVA: 0x000E9540
-// ADDRESS: 004e9540
-// PROTOTYPE: int __thiscall OnMoving(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

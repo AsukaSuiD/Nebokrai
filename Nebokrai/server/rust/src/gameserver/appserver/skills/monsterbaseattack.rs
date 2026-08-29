@@ -336,10 +336,10 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     .is_some()
 }
 
-/// Выполняет только подтверждённый `OnSearchEnemy` двух боссов. Событие
-/// бездействия уже снято владельцем FIFO, поэтому здесь нет повторного броска
-/// движения и не начинается атака в том же такте.
-pub(crate) fn search_owned_boss_enemy(
+/// Выполняет только подтверждённый `OnSearchEnemy` лучника, городского
+/// охранника и двух боссов. Предшествующее событие уже обработано владельцем
+/// FIFO, поэтому здесь не начинается атака в том же такте.
+pub(crate) fn search_owned_monster_enemy(
     game: &CGame,
     region: &mut CServerRegion,
     monster_id: i32,
@@ -360,6 +360,27 @@ pub(crate) fn search_owned_boss_enemy(
         return false;
     };
     let selected = match property.ai {
+        4 => select_archer_enemy(
+            game,
+            region,
+            owner,
+            area_index,
+            property.guard_range as i32,
+        ),
+        10 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            select_city_guard_enemy(
+                game,
+                region,
+                owner,
+                area_index,
+                property.guard_range as i32,
+                minimum_skill_distance,
+            )
+            .map(|selected| selected.identity)
+        }
         0x67 => select_boss_blue_enemy(
             game,
             region,

@@ -812,6 +812,19 @@ impl CMonster {
         self.base_ai.active_attack_pending()
     }
 
+    pub(crate) fn queue_search_after_active_move(&mut self, ai_type: u32, now_ms: u32) {
+        if !self.base_ai.active_move_unhandled() {
+            return;
+        }
+        let alive = !CMoveShape::is_died(self.hit_points);
+        let pet_search = self.tamed
+            && alive
+            && self.move_shape.current_skill_id().is_none();
+        if (alive && ai_type == 4) || ai_type == 10 || pet_search {
+            self.base_ai.begin_active_search_enemy(now_ms);
+        }
+    }
+
     pub(crate) fn begin_active_ai_move(&mut self, delay_ms: u32, now_ms: u32) {
         self.base_ai.begin_active_move(delay_ms, now_ms);
     }
