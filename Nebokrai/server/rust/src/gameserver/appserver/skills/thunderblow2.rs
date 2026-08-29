@@ -7,18 +7,22 @@
 //! элементальную атаку. Формула сохраняет ровно два вызова MSVCRT RNG. `CGame`
 //! только координирует независимых владельцев региона и цели при `ForceMove`
 //! и последующем применении рассчитанной атаки.
+//! Подтверждённый `End` не возвращает движение: он очищает внутренний путь,
+//! обновляет свойства через `CSummonSkill`, очищает текущий навык и фиксирует
+//! время восстановления.
 
 use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -40,11 +44,16 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
+fn finish_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_thunder_blow_2_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.thunder_blow_2().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {
@@ -220,6 +229,9 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
         )))
     else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(THUNDER_BLOW_2_SKILL_ID, level) else {
+        if player_ai.thunder_blow_2().is_some() {
+            finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -272,12 +284,12 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss, false);
-            finish(game, player_id);
+            finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_failure(game, player_id, 10, mp_loss, false);
-            finish(game, player_id);
+            finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -298,18 +310,18 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
     }
     if game.periodic_state_target_dead(region_id, target) {
         send_failure(game, player_id, 10, mp_loss, false);
-        finish(game, player_id);
+        finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
         send_failure(game, player_id, 10, mp_loss, false);
-        finish(game, player_id);
+        finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let path = game.base_magic_path(region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None);
     if maximum_distance != 0 && path.len() > maximum_distance as usize {
         send_failure(game, player_id, 0x0b, mp_loss, false);
-        finish(game, player_id);
+        finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -333,13 +345,13 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
     let master = game.find_player(player_id).map(master_info).unwrap_or_default();
     if !game.owned_player_skill_target_attackable(master, target, region_id) {
         send_direction_visual(game, player_id, level, 3);
-        finish(game, player_id);
+        finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((master, attack)) = calculate_attack(
         game, player_id, level, minimum, maximum, element_modifier, hit_modifier, damage_modifier,
     ) else {
-        finish(game, player_id);
+        finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     match target.object_type {
@@ -350,7 +362,6 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
     if let Some(execution) = player_ai.thunder_blow_2_mut() {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_thunder_blow_2_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

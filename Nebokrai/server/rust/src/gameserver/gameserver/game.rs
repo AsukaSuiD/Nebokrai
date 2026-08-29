@@ -953,7 +953,8 @@ use crate::gameserver::appserver::skills::chainlightning::{
     CHAIN_LIGHTNING_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::thunderblow2::{
-    execute_player_thunder_blow_2, is_thunder_blow_2_dispatch,
+    cancel_player_thunder_blow_2, execute_player_thunder_blow_2, is_thunder_blow_2_dispatch,
+    THUNDER_BLOW_2_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::mosou::{execute_player_mosou, is_mosou_dispatch};
 use crate::gameserver::appserver::skills::ghostcut::{execute_player_ghost_cut, is_ghost_cut_dispatch};
@@ -37410,6 +37411,7 @@ impl CGame {
                 | ENERGY_HOLDING_SKILL_ID
                 | INVERSE_CHOPPED_SKILL_ID
                 | INFERNOL_SKILL_ID
+                | THUNDER_BLOW_2_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37439,6 +37441,7 @@ impl CGame {
             ENERGY_HOLDING_SKILL_ID => player_ai.energy_holding().is_some(),
             INVERSE_CHOPPED_SKILL_ID => player_ai.inverse_chopped().is_some(),
             INFERNOL_SKILL_ID => player_ai.infernol().is_some(),
+            THUNDER_BLOW_2_SKILL_ID => player_ai.thunder_blow_2().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37495,6 +37498,9 @@ impl CGame {
             }
             INFERNOL_SKILL_ID => {
                 cancel_player_infernol(self, player_id, &mut player_ai, runtime)
+            }
+            THUNDER_BLOW_2_SKILL_ID => {
+                cancel_player_thunder_blow_2(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
