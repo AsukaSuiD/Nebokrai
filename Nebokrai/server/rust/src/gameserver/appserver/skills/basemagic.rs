@@ -8,13 +8,16 @@
 //! намеренно не выполняется здесь: выстрел создаёт принадлежащий региону
 //! `CBaseMagicPhalanx`, который атакует в ИИ региона после отдельной задержки
 //! полёта. Это сохраняет исходные моменты действий, двух владельцев жизненного
-//! цикла и порядок пакетов. Все достигнутые перегрузки, проверки и визуальные
-//! пакеты реализованы этим owner-ом; `CGame` оставляет только доступ к региону,
-//! владельцам целей и фактическую доставку.
+//! цикла и порядок пакетов. Обычное, отказное и клиентское завершение после
+//! `Begin` используют один хвост `End(1)` с износом оружия и временем
+//! восстановления. Все
+//! достигнутые перегрузки, проверки и визуальные пакеты реализованы этим
+//! владельцем; `CGame` оставляет только доступ к региону, владельцам целей и
+//! фактическую доставку.
 
-use super::baseattack::{real_distance, time_reached};
+use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagicphalanx::CBaseMagicPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -69,7 +72,8 @@ impl BaseMagicExecutionState {
             target,
             condition_checked: false,
         }
-}
+    }
+
     pub(crate) const fn kernel(self) -> SkillExecutionKernel<PlayerSkillDispatch> {
         self.kernel
     }
@@ -89,6 +93,30 @@ impl BaseMagicExecutionState {
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
         &mut self.kernel
     }
+}
+
+fn finish_player_base_magic<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_base_magic_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_base_magic<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.base_magic().map(|state| state.kernel().dispatch()) else {
+        return false;
+    };
+    finish_player_base_magic(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
@@ -244,9 +272,7 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
     }
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
         game.send_base_magic_failure(player_id, 10);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_current_skill_id(None);
-        }
+        finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     };
     let target_dead = match target.object_type {
@@ -261,12 +287,11 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
         game.send_base_magic_failure(player_id, 10);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_current_skill_id(None);
-        }
+        finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     }
     let Some(source_view) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
+        finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     };
     let attack_time = real_distance(
@@ -361,10 +386,7 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
             .kernel_mut()
             .advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_base_magic_used(runtime.now_milliseconds());
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
+    finish_player_base_magic(game, player_id, player_ai, runtime);
     QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Completed,
         first_contact: false,

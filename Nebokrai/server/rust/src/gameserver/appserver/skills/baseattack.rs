@@ -7,10 +7,15 @@
 //! цель завершает навык кодом 2, удалённая цель — кодом `0x0b`.
 //! `SkillExecutionKernel` хранится в `CPlayerAI` и переживает задержку между
 //! тактами. Формулы PvP, RNG и сетевые последствия ранения и смерти остаются
-//! у вызывающего `CGame`; другие идентификаторы навыков сюда не направляются.
+//! у вызывающего `CGame`. Общий хвост `BaseMagic/Archery::End` сохраняет
+//! восстановление движения, `AfterUseSkill`, время восстановления и очистку
+//! текущего навыка;
+//! другие идентификаторы навыков сюда не направляются.
 
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) const BASE_ATTACK_SKILL_ID: u32 = 1;
 pub(crate) const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5003;
@@ -30,6 +35,29 @@ pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_
     (x.mul_add(x, y * y).sqrt()).round_ties_even() as i32
 }
 
+/// Общий достигнутый хвост `CBaseMagic::End` и `CArchery::End`:
+/// движение восстанавливается до `AfterUseSkill`, износ оружия предшествует
+/// фиксации времени восстановления, а текущий навык очищается последним.
+pub(crate) fn finish_delayed_base_attack<Runtime, MarkUsed>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+    mark_used: MarkUsed,
+) where
+    Runtime: GameMainLoopRuntime,
+    MarkUsed: FnOnce(&mut CPlayerAI, u32),
+{
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+    game.damage_player_weapon(player_id, runtime);
+    mark_used(player_ai, runtime.now_milliseconds());
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -45,20 +73,6 @@ pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_
 // RVA: 0x00113E00
 // ADDRESS: 00513e00
 // PROTOTYPE: void __thiscall Restart(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::AfterUseSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:233
-// RVA: 0x0013CF30
-// ADDRESS: 0053cf30
-// PROTOTYPE: void __thiscall AfterUseSkill(CMoveShape * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

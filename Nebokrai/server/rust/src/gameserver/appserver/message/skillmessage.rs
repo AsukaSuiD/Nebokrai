@@ -28,7 +28,9 @@
 use crate::gameserver::appserver::player::{BattleFairySkillRequest, PlayerSkillRequest};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
-use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
+use crate::gameserver::gameserver::game::{
+    CGame, GameMainLoopRuntime, colored_player_notice_message,
+};
 use crate::nets::netserver::message::CMessage;
 use tracing::trace;
 
@@ -58,7 +60,7 @@ pub(crate) enum GameSkillMessageError {
     MissingField(&'static str),
 }
 
-pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
+pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -124,7 +126,10 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
             let outcome = match current_skill_id {
                 None => "нет текущего навыка",
                 Some(current) if current != requested_skill_id as u32 => "идентификатор не совпал",
-                Some(current) => match runtime.end_current_player_skill(game, player_id, current) {
+                Some(current) => match game
+                    .end_materialized_player_skill(player_id, current, runtime)
+                    .unwrap_or_else(|| runtime.end_current_player_skill(game, player_id, current))
+                {
                     PlayerSkillEndRuntimeOutcome::AlreadyEnded => "уже завершён",
                     PlayerSkillEndRuntimeOutcome::Ended => "завершён",
                 },

@@ -646,7 +646,7 @@ use crate::gameserver::appserver::message::shapemessage::{
 };
 use crate::gameserver::appserver::message::shopmessage::dispatch_shop_message;
 use crate::gameserver::appserver::message::skillmessage::{
-    GameSkillMessageRuntime, dispatch_game_skill_message,
+    GameSkillMessageRuntime, PlayerSkillEndRuntimeOutcome, dispatch_game_skill_message,
 };
 use crate::gameserver::appserver::message::teammessage::dispatch_game_team_message;
 use crate::gameserver::appserver::message::unibillmessage::dispatch_increment_shop_billing_message;
@@ -789,7 +789,7 @@ use crate::gameserver::appserver::skills::wangsheng::{
     execute_battle_fairy_wangsheng, WANGSHENG_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::archery::{
-    execute_player_archery, ARCHERY_SKILL_ID,
+    cancel_player_archery, execute_player_archery, ARCHERY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::heartlessarrow::{
     execute_player_heartless_arrow, is_heartless_arrow_dispatch,
@@ -837,7 +837,7 @@ use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
 };
 use crate::gameserver::appserver::skills::basemagic::{
-    execute_player_base_magic, BASE_MAGIC_SKILL_ID,
+    cancel_player_base_magic, execute_player_base_magic, BASE_MAGIC_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::basemagicphalanx::{
     calculate_owned_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
@@ -37316,6 +37316,47 @@ impl CGame {
                 .is_some_and(|monster| monster.move_shape().has_state_by_skill_id(state_id)),
             _ => false,
         }
+    }
+
+    /// Завершает только уже материализованные владельцы навыков.
+    /// Извлечение `CPlayerAI` остаётся здесь как координация заимствований, а
+    /// порядок игровых последствий принадлежит соответствующему владельцу.
+    pub(crate) fn end_materialized_player_skill<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        skill_id: u32,
+        runtime: &mut Runtime,
+    ) -> Option<PlayerSkillEndRuntimeOutcome> {
+        if !matches!(skill_id, BASE_MAGIC_SKILL_ID | ARCHERY_SKILL_ID) {
+            return None;
+        }
+        let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
+        let materialized = match skill_id {
+            BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
+            ARCHERY_SKILL_ID => player_ai.archery().is_some(),
+            _ => unreachable!("фильтр ограничивает materialized end владельцами"),
+        };
+        if !materialized {
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.restore_player_ai(player_ai);
+            }
+            return None;
+        }
+        let ended = match skill_id {
+            BASE_MAGIC_SKILL_ID => {
+                cancel_player_base_magic(self, player_id, &mut player_ai, runtime)
+            }
+            ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
+            _ => unreachable!("фильтр ограничивает materialized end владельцами"),
+        };
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.restore_player_ai(player_ai);
+        }
+        Some(if ended {
+            PlayerSkillEndRuntimeOutcome::Ended
+        } else {
+            PlayerSkillEndRuntimeOutcome::AlreadyEnded
+        })
     }
 
     pub(crate) fn periodic_state_target_dead(

@@ -15303,20 +15303,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::OnWeaponDamaged
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2932
-// RVA: 0x00041D50
-// ADDRESS: 00441d50
-// PROTOTYPE: void __thiscall OnWeaponDamaged(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::OnBeenHurted
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

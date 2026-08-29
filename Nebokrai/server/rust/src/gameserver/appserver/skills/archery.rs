@@ -5,11 +5,12 @@
 //! `CPlayerAI`: проверяет дальность, непролётные клетки и оружие категории
 //! лука либо арбалета, блокирует движение на задержку и передаёт попадание
 //! региональному `CArcheryPhalanx`. Формулы и порядок RNG применяются только
-//! при достижении цели снарядом.
+//! при достижении цели снарядом. Обычное, отказное и клиентское завершение
+//! после `Begin` используют общий подтверждённый `CBaseAttack`-хвост.
 
 use super::archeryphalanx::CArcheryPhalanx;
-use super::baseattack::{real_distance, time_reached};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -61,6 +62,30 @@ impl ArcheryExecutionState {
     pub(crate) const fn target(self) -> ShapeIdentity {
         self.target
     }
+}
+
+fn finish_player_archery<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_archery_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_archery<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.archery().map(|state| state.kernel().dispatch()) else {
+        return false;
+    };
+    finish_player_archery(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
@@ -248,9 +273,7 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
     }
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {
         game.send_base_magic_failure(player_id, 10);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_current_skill_id(None);
-        }
+        finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     };
     let target_dead = match target.object_type {
@@ -265,12 +288,11 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
         game.send_base_magic_failure(player_id, 10);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_current_skill_id(None);
-        }
+        finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     }
     let Some(source_view) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
+        finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     };
     let attack_time = real_distance(
@@ -356,10 +378,7 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
             .kernel_mut()
             .advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_archery_used(runtime.now_milliseconds());
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
+    finish_player_archery(game, player_id, player_ai, runtime);
     QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Completed,
         first_contact: false,
