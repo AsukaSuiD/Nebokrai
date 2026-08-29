@@ -1,152 +1,69 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Каноническое временное состояние `CAgilityState2`.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
+//! `agilitystate2.cpp`. Состояние `0x81` добавляет `full_miss` сложением с
+//! переполнением, завершается только при строгом `started + keep < now` и при
+//! вычислении положительного клиентского остатка второй раз читает часы.
+//! Жизненный цикл принадлежит `CanonicalStateStorage`; legacy-сериализация пока
+//! не подключена и сохранена ниже как RAW.
+
+use super::agility2::AGILITY_2_SKILL_ID;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AgilityState2 {
+    full_miss: u16,
+    started_at_ms: u32,
+    keep_time_ms: i32,
+}
+
+impl AgilityState2 {
+    pub(crate) const fn new(full_miss: u16, started_at_ms: u32, keep_time_ms: i32) -> Self {
+        Self {
+            full_miss,
+            started_at_ms,
+            keep_time_ms,
+        }
+    }
+
+    pub(crate) const fn skill_id(self) -> u32 { AGILITY_2_SKILL_ID }
+
+    pub(crate) fn apply_to_player(
+        self,
+        mut properties: PlayerCombatProperties,
+    ) -> PlayerCombatProperties {
+        properties.full_miss = properties.full_miss.wrapping_add(self.full_miss);
+        properties
+    }
+
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms as u32) < now_ms
+    }
+
+    pub(crate) const fn client_time_needs_second_clock(self, first_now_ms: u32) -> bool {
+        first_now_ms < self.started_at_ms.wrapping_add(self.keep_time_ms as u32)
+    }
+
+    pub(crate) const fn client_time(self, first_now_ms: u32, second_now_ms: u32) -> i32 {
+        if self.started_at_ms.wrapping_add(self.keep_time_ms as u32) <= first_now_ms {
+            0
+        } else {
+            self.started_at_ms
+                .wrapping_sub(second_now_ms)
+                .wrapping_add(self.keep_time_ms as u32) as i32
+        }
+    }
+}
+
+// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
+// Декомпилятор: Ghidra 12.1.2
+// Сохранены неподключённые legacy-сериализация и обратное чтение состояния.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp
-
-// ============================================================================
-// FUNCTION: CAgilityState2::GetRemainedTime
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:219
-// RVA: 0x001D5F30
-// ADDRESS: 005d5f30
-// PROTOTYPE: ulong __thiscall GetRemainedTime(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:142
-// RVA: 0x001D60B0
-// ADDRESS: 005d60b0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:129
-// RVA: 0x001EEBA0
-// ADDRESS: 005eeba0
-// PROTOTYPE: void __thiscall End(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::CAgilityState2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:15
-// RVA: 0x001F0040
-// ADDRESS: 005f0040
-// PROTOTYPE: undefined __thiscall CAgilityState2(long param_1, ushort param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::CAgilityState2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:25
-// RVA: 0x001F00C0
-// ADDRESS: 005f00c0
-// PROTOTYPE: undefined __thiscall CAgilityState2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::~CAgilityState2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:35
-// RVA: 0x001F0130
-// ADDRESS: 005f0130
-// PROTOTYPE: void __thiscall ~CAgilityState2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:93
-// RVA: 0x001F0140
-// ADDRESS: 005f0140
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:111
-// RVA: 0x001F0200
-// ADDRESS: 005f0200
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:78
-// RVA: 0x001F0350
-// ADDRESS: 005f0350
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2VisualEffect::UpdateVisualEffect
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:185
-// RVA: 0x001F0400
-// ADDRESS: 005f0400
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CAgilityState2::Serialize
@@ -175,8 +92,5 @@
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
-
-
-
 
 // COMPONENT_VARIANT_END: GameServer

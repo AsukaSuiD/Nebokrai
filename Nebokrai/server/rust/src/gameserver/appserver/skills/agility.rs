@@ -10,6 +10,8 @@
 //! `CanonicalStateStorage` и вызывающему `CGame`, а не общему
 //! `SkillExecutionKernel`.
 
+use super::agility2::begin_agility_2_state;
+pub(crate) use super::agility2::AGILITY_2_SKILL_ID;
 use super::agilitystate::{
     send_agility_family_state_visual, AgilityState, PersistentAgilityFamilyState,
 };
@@ -27,7 +29,6 @@ use crate::gameserver::gameserver::game::{
 };
 
 pub(crate) const AGILITY_SKILL_ID: u32 = 218;
-pub(crate) const AGILITY_2_SKILL_ID: u32 = 129;
 pub(crate) const AGILITY_EFFECT_MESSAGE: i32 = 0x000b_fe01;
 pub(crate) const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 pub(crate) const SKILL_USAGE_TARGET_FULL_MISS_GAIN: u32 = 127;
@@ -235,7 +236,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
 
     let removed_skill_id = if skill_id == AGILITY_2_SKILL_ID {
         game.find_player_mut(player_id)
-            .and_then(|player| player.take_agility_state(skill_id))
+            .and_then(CPlayer::take_agility_state_2)
             .map(|state| state.skill_id())
     } else {
         game.find_player_mut(player_id)
@@ -258,17 +259,14 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     let state_started_at_ms = runtime.now_milliseconds();
     let client_time = if skill_id == AGILITY_2_SKILL_ID {
         let FamilyBonus::FullMiss(full_miss) = bonus else { unreachable!() };
-        let state = AgilityState::timed(full_miss, state_started_at_ms, keep_time_ms);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.begin_agility_state(state);
-        }
-        let first_now_ms = runtime.now_milliseconds();
-        let second_now_ms = if state.client_time_needs_second_clock(first_now_ms) {
-            runtime.now_milliseconds()
-        } else {
-            first_now_ms
-        };
-        state.client_time(first_now_ms, second_now_ms)
+        begin_agility_2_state(
+            game,
+            player_id,
+            full_miss,
+            state_started_at_ms,
+            keep_time_ms,
+            runtime,
+        )
     } else {
         let state = match bonus {
             FamilyBonus::FullMiss(full_miss) => PersistentAgilityFamilyState::Agility(

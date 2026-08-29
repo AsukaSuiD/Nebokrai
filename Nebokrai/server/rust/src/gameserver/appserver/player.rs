@@ -4195,6 +4195,25 @@ impl CPlayer {
         self.move_shape.begin_agility_state(state);
     }
 
+    pub(crate) fn agility_state_2(
+        &self,
+    ) -> Option<super::skills::agilitystate2::AgilityState2> {
+        self.move_shape.agility_state_2()
+    }
+
+    pub(crate) fn take_agility_state_2(
+        &mut self,
+    ) -> Option<super::skills::agilitystate2::AgilityState2> {
+        self.move_shape.take_agility_state_2()
+    }
+
+    pub(crate) fn begin_agility_state_2(
+        &mut self,
+        state: super::skills::agilitystate2::AgilityState2,
+    ) {
+        self.move_shape.begin_agility_state_2(state);
+    }
+
     pub(crate) fn take_persistent_agility_family_state(
         &mut self,
     ) -> Option<super::skills::agilitystate::PersistentAgilityFamilyState> {
@@ -4211,7 +4230,7 @@ impl CPlayer {
     pub(crate) fn take_expired_agility_state_2(
         &mut self,
         now_ms: u32,
-    ) -> Option<super::skills::agilitystate::AgilityState> {
+    ) -> Option<super::skills::agilitystate2::AgilityState2> {
         self.move_shape.take_expired_agility_state_2(now_ms)
     }
 
@@ -4362,7 +4381,7 @@ impl CPlayer {
         if let Some(state) = self.move_shape.persistent_agility_family_state() {
             properties = state.apply_to_player(properties);
         }
-        if let Some(state) = self.agility_state(super::skills::agility::AGILITY_2_SKILL_ID) {
+        if let Some(state) = self.agility_state_2() {
             properties = state.apply_to_player(properties);
         }
         if let Some(state) = self.move_shape.taiji_state() {
