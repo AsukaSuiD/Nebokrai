@@ -906,6 +906,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         id: monster_id,
                         ex_id: CGuid::GUID_INVALID,
                     },
+                    runtime,
                 );
             }
             if tamed {
@@ -1385,12 +1386,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             game.player_base_attack_level_block(attacker_master.master_id, target.id)
         {
             game.send_base_attack_level_block(attacker_master.master_id, string_id, limit);
-            game.release_reciprocal_player_target(target.id, pet_identity);
+            game.release_reciprocal_player_target(target.id, pet_identity, runtime);
             lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
             return true;
         }
         if !game.player_base_attackable(attacker_master.master_id, target.id) {
-            game.release_reciprocal_player_target(target.id, pet_identity);
+            game.release_reciprocal_player_target(target.id, pet_identity, runtime);
             lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
             return true;
         }

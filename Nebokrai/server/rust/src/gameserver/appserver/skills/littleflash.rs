@@ -8,13 +8,15 @@
 //! пройденных клетках. Списание MP необратимо предшествует повторной проверке
 //! оружия. Общая с `CFlash` damage-формула вызывается из этого owner-а;
 //! различия второго навыка задаёт его собственный owner.
+//! Общий `End` очищает execution-state, возвращает движение и завершает
+//! `CAttackSkill::End(1)` с отдельной cooldown-ячейкой варианта.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::flash::{
     calculate_dash_attack, cell_views, master_info, target_level, weapon_is_valid,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::littleflash2::{
     EMPTY_PATH_MESSAGE_ID as LITTLE_FLASH_2_EMPTY_PATH_MESSAGE_ID, LITTLE_FLASH_2_SKILL_ID,
 };
@@ -22,6 +24,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::citygate::CITY_GATE_OBJECT_TYPE;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
+use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -121,11 +124,35 @@ pub(crate) const fn is_little_flash_dispatch(dispatch: PlayerSkillDispatch) -> b
     LittleFlashVariant::from_dispatch(dispatch).is_some()
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish_player_little_flash<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_little_flash_used(skill_id, now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_little_flash<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((dispatch, skill_id)) = player_ai
+        .little_flash()
+        .map(|state| (state.kernel().dispatch(), state.skill_id()))
+    else {
+        return false;
+    };
+    finish_player_little_flash(game, player_id, skill_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32, string_id: Option<&[u8]>) {
@@ -308,7 +335,9 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(skill_id),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
-        if ai.little_flash().is_some() { finish(game, player_id); }
+        if ai.little_flash().is_some() {
+            finish_player_little_flash(game, player_id, skill_id, ai, runtime);
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -344,7 +373,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
     if ai.little_flash().is_some_and(|state| state.kernel.stage() == SkillStage::Begin) {
         let Some((target_x, target_y)) = target_position(game, region_id, variant, dispatch) else {
             failure(game, player_id, 10, mp_loss, None);
-            finish(game, player_id);
+            finish_player_little_flash(game, player_id, skill_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -369,20 +398,20 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
                 mp_loss,
                 Some(variant.empty_path_message_id()),
             );
-            finish(game, player_id);
+            finish_player_little_flash(game, player_id, skill_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             failure(game, player_id, 7, mp_loss, Some(b"GS0288"));
-            finish(game, player_id);
+            finish_player_little_flash(game, player_id, skill_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         if game.find_player(player_id).is_none_or(|player| !weapon_is_valid(game, player)) {
             failure(game, player_id, 0x0e, mp_loss, Some(b"GS0292"));
-            finish(game, player_id);
+            finish_player_little_flash(game, player_id, skill_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(state) = ai.little_flash_mut() {
@@ -432,7 +461,6 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     send_visual(game, player_id, skill_id, level, 3, (0, 0));
     if let Some(state) = ai.little_flash_mut() { let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); }
-    ai.mark_little_flash_used(skill_id, runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_little_flash(game, player_id, skill_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -974,7 +974,7 @@ use crate::gameserver::appserver::skills::armybreak::{
 };
 use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
 use crate::gameserver::appserver::skills::rage::{
-    RAGE_SKILL_ID, end_player_rage, execute_player_rage, is_rage_dispatch,
+    cancel_player_rage, execute_player_rage, is_rage_dispatch, RAGE_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::ragebreak::{
     cancel_player_rage_break, execute_player_rage_break, is_rage_break_dispatch,
@@ -1008,8 +1008,10 @@ use crate::gameserver::appserver::skills::lightningsword2::LIGHTNING_SWORD_2_SKI
 use crate::gameserver::appserver::skills::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID;
 use crate::gameserver::appserver::skills::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
 use crate::gameserver::appserver::skills::littleflash::{
-    execute_player_little_flash, is_little_flash_dispatch,
+    cancel_player_little_flash, execute_player_little_flash, is_little_flash_dispatch,
+    LITTLE_FLASH_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::littleflash2::LITTLE_FLASH_2_SKILL_ID;
 use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::appserver::skills::chaosspherephalanx::{
     calculate_owned_chaos_sphere_attack, chaos_sphere_targets, ChaosSpherePhalanxTick,
@@ -34131,36 +34133,42 @@ impl CGame {
     /// Player mutation и effects сохраняют native order: optional contend
     /// notice, безусловный `ClearEmotion 0xBF611`, authorization, socket
     /// reject либо очередь concrete `CPlayerAI`.
-    pub(crate) fn request_player_skill(
+    pub(crate) fn request_player_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         facts: PlayerSkillRequestFacts,
+        runtime: &mut Runtime,
     ) -> Option<()> {
         let journal = self.players.get_mut(&player_id).map(|player| {
             player.request_player_skill(socket_id, request, facts, &self.skill_factory)
         })?;
-        self.apply_skill_effect_journal(journal);
+        self.apply_skill_effect_journal(journal, runtime);
         Some(())
     }
 
-    pub(crate) fn request_item_skill(
+    pub(crate) fn request_item_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: PlayerSkillRequest,
         skill_level: i32,
         facts: PlayerSkillRequestFacts,
+        runtime: &mut Runtime,
     ) -> Option<()> {
         let journal = self.players.get_mut(&player_id).map(|player| {
             player.request_item_skill(socket_id, request, skill_level, facts, &self.skill_factory)
         })?;
-        self.apply_skill_effect_journal(journal);
+        self.apply_skill_effect_journal(journal, runtime);
         Some(())
     }
 
-    fn apply_skill_effect_journal(&mut self, mut journal: GameEffectJournal) {
+    fn apply_skill_effect_journal<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        mut journal: GameEffectJournal,
+        runtime: &mut Runtime,
+    ) {
         for effect in journal.take_all() {
             match effect {
                 GameEffect::SkillNotification {
@@ -34228,26 +34236,12 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
-                    let (
-                        rejected,
-                        interrupted_rage_level,
-                        interrupted_flash,
-                        interrupted_little_flash,
-                    ) = {
+                    let (changes_command, current_skill_id, interrupted_delayed_skill) = {
                         let player = self
                             .players
-                            .get_mut(&player_id)
+                            .get(&player_id)
                             .expect("skill dispatch сохраняет canonical player");
                         let changes_command = player.player_ai().next_player_skill() != Some(dispatch);
-                        let interrupted_rage_level = (changes_command
-                            && player.player_ai().rage().is_some())
-                            .then(|| player.learned_skill_level(RAGE_SKILL_ID));
-                        let interrupted_flash = changes_command && player.player_ai().flash().is_some();
-                        let interrupted_little_flash = changes_command
-                            .then_some(())
-                            .and_then(|()| player.player_ai().little_flash().map(|state| state.skill_id()));
-                        let interrupted_agility = player.player_ai().agility_family().is_some()
-                            && changes_command;
                         let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
                             || player.player_ai().archery().is_some()
                             || player.player_ai().heartless_arrow().is_some()
@@ -34283,34 +34277,28 @@ impl CGame {
                             || player.player_ai().rush_2().is_some()
                             || player.player_ai().knock_out().is_some())
                             && changes_command;
-                        if interrupted_delayed_skill {
+                        (
+                            changes_command,
+                            player.current_skill_id(),
+                            interrupted_delayed_skill,
+                        )
+                    };
+                    let materialized_ended = changes_command
+                        && current_skill_id.is_some_and(|skill_id| {
+                            self.end_materialized_player_skill(player_id, skill_id, runtime)
+                                .is_some()
+                        });
+                    let rejected = {
+                        let player = self
+                            .players
+                            .get_mut(&player_id)
+                            .expect("skill dispatch сохраняет canonical player");
+                        if interrupted_delayed_skill && !materialized_ended {
                             player.set_skill_moveable(true);
-                            if interrupted_agility {
-                                player.set_skill_moveable(true);
-                            }
                             player.set_current_skill_id(None);
                         }
-                        let rejected = player.player_ai_mut().queue_player_skill(dispatch);
-                        (rejected, interrupted_rage_level, interrupted_flash, interrupted_little_flash)
+                        player.player_ai_mut().queue_player_skill(dispatch)
                     };
-                    if let Some(level) = interrupted_rage_level {
-                        end_player_rage(self, player_id, level);
-                        let interrupted_at_ms = game_tick_milliseconds();
-                        if let Some(player) = self.players.get_mut(&player_id) {
-                            player.player_ai_mut().mark_rage_used(interrupted_at_ms);
-                        }
-                    }
-                    if interrupted_flash || interrupted_little_flash.is_some() {
-                        let interrupted_at_ms = game_tick_milliseconds();
-                        if let Some(player) = self.players.get_mut(&player_id) {
-                            if interrupted_flash { player.player_ai_mut().mark_flash_used(interrupted_at_ms); }
-                            if let Some(skill_id) = interrupted_little_flash {
-                                player
-                                    .player_ai_mut()
-                                    .mark_little_flash_used(skill_id, interrupted_at_ms);
-                            }
-                        }
-                    }
                     for _ in 0..rejected {
                         let mut message = CMessage::new(0x000b_fe01);
                         message.add_byte(0);
@@ -34923,22 +34911,21 @@ impl CGame {
         message.send_to_player(self.net_server(), player_id)
     }
 
-    pub(crate) fn release_reciprocal_player_target(
+    pub(crate) fn release_reciprocal_player_target<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         target: ShapeIdentity,
+        runtime: &mut Runtime,
     ) {
-        let mut interrupted_rage_level = None;
-        let mut interrupted_flash = false;
-        let mut interrupted_little_flash = None;
-        let released = self.find_player_mut(player_id).is_some_and(|player| {
-            let interrupted_agility = player.player_ai().agility_family().is_some();
-            if player.player_ai().rage().is_some() {
-                interrupted_rage_level = Some(player.learned_skill_level(RAGE_SKILL_ID));
-            }
-            interrupted_flash = player.player_ai().flash().is_some();
-            interrupted_little_flash = player.player_ai().little_flash().map(|state| state.skill_id());
-            let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
+        let Some((current_skill_id, interrupted_delayed_skill)) = self
+            .find_player(player_id)
+            .and_then(|player| {
+                let matches_target = matches!(
+                    player.player_ai().next_player_skill(),
+                    Some(PlayerSkillDispatch::Object { target: current, .. }) if current == target
+                );
+                matches_target.then(|| {
+                    let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
                 || player.player_ai().archery().is_some()
                 || player.player_ai().heartless_arrow().is_some()
                 || player.player_ai().heartless_arrow_area().is_some()
@@ -34982,37 +34969,25 @@ impl CGame {
                 || player.player_ai().rush().is_some()
                 || player.player_ai().rush_2().is_some()
                 || player.player_ai().knock_out().is_some();
+                    (player.current_skill_id(), interrupted_delayed_skill)
+                })
+            })
+        else {
+            return;
+        };
+        let materialized_ended = current_skill_id.is_some_and(|skill_id| {
+            self.end_materialized_player_skill(player_id, skill_id, runtime)
+                .is_some()
+        });
+        let released = self.find_player_mut(player_id).is_some_and(|player| {
             let released = player.player_ai_mut().release_object_target(target);
-            if released {
-                if interrupted_delayed_skill {
-                    player.set_skill_moveable(true);
-                    if interrupted_agility {
-                        player.set_skill_moveable(true);
-                    }
-                }
+            if released && interrupted_delayed_skill && !materialized_ended {
+                player.set_skill_moveable(true);
                 player.set_current_skill_id(None);
             }
             released
         });
         if released {
-            if let Some(level) = interrupted_rage_level {
-                end_player_rage(self, player_id, level);
-                let interrupted_at_ms = game_tick_milliseconds();
-                if let Some(player) = self.find_player_mut(player_id) {
-                    player.player_ai_mut().mark_rage_used(interrupted_at_ms);
-                }
-            }
-            if interrupted_flash || interrupted_little_flash.is_some() {
-                let interrupted_at_ms = game_tick_milliseconds();
-                if let Some(player) = self.find_player_mut(player_id) {
-                    if interrupted_flash { player.player_ai_mut().mark_flash_used(interrupted_at_ms); }
-                    if let Some(skill_id) = interrupted_little_flash {
-                        player
-                            .player_ai_mut()
-                            .mark_little_flash_used(skill_id, interrupted_at_ms);
-                    }
-                }
-            }
             let _ = self.send_base_attack_failure(player_id, 2);
         }
     }
@@ -37455,6 +37430,7 @@ impl CGame {
                 | KNIGHT_CUT_SKILL_ID
                 | ARMY_BREAK_SKILL_ID
                 | ARMY_BREAK_2_SKILL_ID
+                | RAGE_SKILL_ID
                 | RAGE_BREAK_SKILL_ID
                 | FURY_SKILL_ID
                 | FLASH_SKILL_ID
@@ -37467,6 +37443,8 @@ impl CGame {
                 | LIGHTNING_SWORD_2_SKILL_ID
                 | LIGHTNING_SWORD_3_SKILL_ID
                 | LIGHTNING_SWORD_4_SKILL_ID
+                | LITTLE_FLASH_SKILL_ID
+                | LITTLE_FLASH_2_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37503,6 +37481,7 @@ impl CGame {
             }
             KNIGHT_CUT_SKILL_ID => player_ai.knight_cut().is_some(),
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => player_ai.army_break().is_some(),
+            RAGE_SKILL_ID => player_ai.rage().is_some(),
             RAGE_BREAK_SKILL_ID => player_ai.rage_break().is_some(),
             FURY_SKILL_ID => player_ai.fury().is_some(),
             FLASH_SKILL_ID => player_ai.flash().is_some(),
@@ -37515,6 +37494,9 @@ impl CGame {
             | LIGHTNING_SWORD_2_SKILL_ID
             | LIGHTNING_SWORD_3_SKILL_ID
             | LIGHTNING_SWORD_4_SKILL_ID => player_ai.lightning_sword().is_some(),
+            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
+                player_ai.little_flash().is_some()
+            }
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37585,6 +37567,7 @@ impl CGame {
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => {
                 cancel_player_army_break(self, player_id, &mut player_ai, runtime)
             }
+            RAGE_SKILL_ID => cancel_player_rage(self, player_id, &mut player_ai, runtime),
             RAGE_BREAK_SKILL_ID => {
                 cancel_player_rage_break(self, player_id, &mut player_ai, runtime)
             }
@@ -37604,6 +37587,9 @@ impl CGame {
             | LIGHTNING_SWORD_3_SKILL_ID
             | LIGHTNING_SWORD_4_SKILL_ID => {
                 cancel_player_lightning_sword(self, player_id, &mut player_ai, runtime)
+            }
+            LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
+                cancel_player_little_flash(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
@@ -40255,12 +40241,13 @@ impl CGame {
     /// Facts оставляют explicit boundaries для ещё сырого `CPlayerAI`,
     /// `SymbolIsAttackAble` и monster registry, не выдавая player-only resolver
     /// текущего `CGame` за полный region lookup.
-    pub(crate) fn request_battle_fairy_skill(
+    pub(crate) fn request_battle_fairy_skill<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         socket_id: i32,
         request: BattleFairySkillRequest,
         facts: BattleFairySkillRequestFacts,
+        runtime: &mut Runtime,
     ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let journal = self.players.get(&player_id).map(|player| {
@@ -40273,7 +40260,7 @@ impl CGame {
                 &self.skill_factory,
             )
         })?;
-        self.apply_skill_effect_journal(journal);
+        self.apply_skill_effect_journal(journal, runtime);
         Some(())
     }
 

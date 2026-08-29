@@ -107,7 +107,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
             };
             let facts = game.player_skill_request_facts(player_id, region_id, request);
             game
-                .request_player_skill(player_id, socket_id, request, facts)
+                .request_player_skill(player_id, socket_id, request, facts, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
             trace!(player_id, skill_id = request.skill_id(), "Обработан запрос навыка игрока");
         }
@@ -206,7 +206,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
             };
             let facts = game.player_skill_request_facts(player_id, region_id, request);
             game
-                .request_item_skill(player_id, socket_id, request, skill_level, facts)
+                .request_item_skill(player_id, socket_id, request, skill_level, facts, runtime)
                 .expect("resolved message player остаётся в CGame во время item-skill dispatch");
             trace!(player_id, skill_id = request.skill_id(), skill_level, "Обработан запрос предметного навыка");
         }
@@ -230,7 +230,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
             };
             let facts = game.battle_fairy_skill_request_facts(player_id, region_id, request);
             game
-                .request_battle_fairy_skill(player_id, socket_id, request, facts)
+                .request_battle_fairy_skill(player_id, socket_id, request, facts, runtime)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
             trace!(player_id, skill_id = request.skill_id(), "Обработан запрос навыка боевой феи");
         }

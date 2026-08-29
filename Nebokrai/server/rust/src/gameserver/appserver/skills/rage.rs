@@ -6,10 +6,11 @@
 //! предельного RP проверяется после необратимого списания MP. Собственный
 //! `RageExecutionState` хранит только жизненный цикл канала; `CGame`
 //! разрешает player-owner-а, обновляет общий боевой режим и доставляет пакеты.
+//! Замена команды и потеря цели вызывают тот же owner-`End` до очистки AI.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::gameserver::game::{
@@ -135,6 +136,33 @@ pub(crate) fn end_player_rage(game: &mut CGame, player_id: i32, level: i32) {
     send_cast_visual(game, player_id, level, 3, 0);
 }
 
+fn finish_player_rage<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    level: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    end_player_rage(game, player_id, level);
+    player_ai.mark_rage_used(runtime.now_milliseconds());
+}
+
+pub(crate) fn cancel_player_rage<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.rage().map(|state| state.kernel().dispatch()) else {
+        return false;
+    };
+    let level = game
+        .find_player(player_id)
+        .map_or(0, |player| player.learned_skill_level(RAGE_SKILL_ID));
+    finish_player_rage(game, player_id, level, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
+
 pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -199,8 +227,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
 
     if game.find_player(player_id).is_none_or(|player| player.health() == 0) {
         game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 2);
-        end_player_rage(game, player_id, level);
-        ai.mark_rage_used(runtime.now_milliseconds());
+        finish_player_rage(game, player_id, level, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -244,8 +271,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
     let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
     if (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
         send_failure(game, player_id, 7, 0);
-        end_player_rage(game, player_id, level);
-        ai.mark_rage_used(runtime.now_milliseconds());
+        finish_player_rage(game, player_id, level, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if let Some(player) = game.find_player_mut(player_id) {
@@ -259,8 +285,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         if let Some(state) = ai.rage_mut() {
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        end_player_rage(game, player_id, level);
-        ai.mark_rage_used(runtime.now_milliseconds());
+        finish_player_rage(game, player_id, level, ai, runtime);
         return terminal(QueuedSkillExecutionState::Completed);
     }
     if let Some(player) = game.find_player_mut(player_id) {
