@@ -31,7 +31,8 @@
 //! `0x19e`, `0x19f`, `0x1a0`, `0x1a1`, `0x1a2`, `0x1a3`, `0x1a4` и `0x1a5`
 //! тот же владелец
 //! хранит цель, выбранный по исходным `odds` навык, выполнение и задержку
-//! повторного применения. Быстрая атака дополнительно хранит визуальную фазу
+//! повторного применения каждого установленного навыка отдельно; timestamp
+//! расписания `CMonsterAI` остаётся независимым. Быстрая атака дополнительно хранит визуальную фазу
 //! и первый из двух ударов; `0x19d/0x1a1` используют единое состояние полёта
 //! прямого снаряда, `0x1a0/0x1a2` — общий пошаговый путь с разной шириной,
 //! `0x1a3` — накапливаемые состояния ярости, а `0x1a4` — длительный линейный
@@ -62,6 +63,8 @@
 //! проверка выполняется до увеличения, а установка признака — после него,
 //! включая исходную недостижимость успеха на последней разрешённой попытке.
 
+use std::collections::BTreeMap;
+
 use super::ai::baseai::CBaseAI;
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
@@ -70,7 +73,7 @@ use super::ai::carriage::{
 };
 use super::ai::guardtarget::GuardStationState;
 use super::ai::jiumai::JiuMaiAiState;
-use super::ai::monsterai::accepts_hurt_target;
+use super::ai::monsterai::{MonsterAiScheduleState, accepts_hurt_target};
 use super::ai::passivegladiator::PassiveGladiatorState;
 use super::ai::pet::{PetBehaviorState, PetLifecycleFacts, PetLifecycleOutcome};
 use super::ai::smartgladiator::SmartGladiatorState;
@@ -130,7 +133,8 @@ pub(crate) struct CMonster {
     summon_creature_progress: Option<SummonCreatureProgress>,
     yunsheng_lightning_progress: Option<YunShengLightningProgress>,
     summoned_creature: Option<SummonedCreatureLifecycle>,
-    last_base_attack_ms: u32,
+    skill_last_used_ms: BTreeMap<u32, u32>,
+    ai_schedule: MonsterAiScheduleState,
     base_attack_owned_tick: bool,
     trace_move_delay: Option<MonsterTraceMoveDelay>,
     boss_blue_ai: BossBlueAiState,
@@ -246,7 +250,8 @@ impl CMonster {
             summon_creature_progress: None,
             yunsheng_lightning_progress: None,
             summoned_creature: None,
-            last_base_attack_ms: 0,
+            skill_last_used_ms: BTreeMap::new(),
+            ai_schedule: MonsterAiScheduleState::default(),
             base_attack_owned_tick: false,
             trace_move_delay: None,
             boss_blue_ai: BossBlueAiState::default(),
@@ -926,6 +931,7 @@ impl CMonster {
 
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
+        let skill_id = execution.dispatch().skill_id;
         self.fast_attack_progress = None;
         self.monster_projectile_progress = None;
         self.path_projectile_progress = None;
@@ -937,7 +943,7 @@ impl CMonster {
         self.yunsheng_lightning_progress = None;
         self.move_shape.set_current_skill_id(None);
         let _ = execution.terminate(SkillTermination::Completed);
-        self.last_base_attack_ms = now_ms;
+        self.skill_last_used_ms.insert(skill_id, now_ms);
         Some(execution)
     }
 
@@ -974,8 +980,20 @@ impl CMonster {
         }
     }
 
-    pub(crate) const fn last_base_attack_ms(&self) -> u32 {
-        self.last_base_attack_ms
+    pub(crate) fn skill_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.skill_last_used_ms
+            .get(&skill_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(crate) const fn begin_ai_attack_attempt(
+        &mut self,
+        now_ms: u32,
+        interval_ms: u32,
+    ) -> bool {
+        self.ai_schedule
+            .begin_attack_attempt(now_ms, interval_ms)
     }
 
     pub(crate) const fn set_base_attack_owned_tick(&mut self, owned: bool) {

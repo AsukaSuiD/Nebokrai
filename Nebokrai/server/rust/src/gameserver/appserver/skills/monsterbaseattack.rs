@@ -265,7 +265,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         monster_health,
         mut target,
         cast,
-        last_attack_ms,
         tamed,
         attacker_master,
         pet_attack_properties,
@@ -286,7 +285,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster.hit_points(),
             monster.ai_target(),
             monster.base_attack_cast(),
-            monster.last_base_attack_ms(),
             monster.is_tamed(),
             monster.master_info(),
             pet_attack_properties,
@@ -1570,10 +1568,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         property.ai,
         pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
     );
-    if last_attack_ms != 0
-        && (now_ms.wrapping_sub(last_attack_ms) < attack_interval
-            || now_ms.wrapping_sub(last_attack_ms) < reuse_delay_ms)
-    {
+    if let Some(attack_interval) = attack_interval {
+        let attack_started = region
+            .find_monster_by_id_mut(monster_id)
+            .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval));
+        if !attack_started {
+            return true;
+        }
+    }
+    let last_used_ms = region
+        .find_monster_by_id(monster_id)
+        .map(|monster| monster.skill_last_used_ms(skill_id))
+        .unwrap_or_default();
+    if last_used_ms != 0 && now_ms.wrapping_sub(last_used_ms) < reuse_delay_ms {
         return true;
     }
     let direction = get_line_direction(monster_x, monster_y, target_x, target_y);

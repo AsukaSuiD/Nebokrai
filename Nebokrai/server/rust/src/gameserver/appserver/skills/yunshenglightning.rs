@@ -310,7 +310,7 @@ pub(crate) fn execute_owned_yunsheng_lightning<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 monster.base_attack_cast(),
                 monster.yunsheng_lightning_progress(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(YUNSHENG_LIGHTNING_SKILL_ID),
             ))
         })
     else {

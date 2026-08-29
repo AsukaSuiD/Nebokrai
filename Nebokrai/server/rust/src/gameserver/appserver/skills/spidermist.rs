@@ -235,7 +235,7 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
             monster.move_shape().shape().clone(),
             monster.base_attack_cast(),
             monster.spider_mist_progress(),
-            monster.last_base_attack_ms(),
+            monster.skill_last_used_ms(SPIDER_MIST_SKILL_ID),
         ))
     else {
         return false;

@@ -108,7 +108,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
         .map(|monster| (
             monster.move_shape().shape().clone(),
             monster.base_attack_cast(),
-            monster.last_base_attack_ms(),
+            monster.skill_last_used_ms(skill_id),
         ))
     else {
         return false;

@@ -242,7 +242,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
                 .is_tamed()
                 .then(|| monster.pet_attack_properties(&property)),
             monster.base_attack_cast(),
-            monster.last_base_attack_ms(),
+            monster.skill_last_used_ms(MONSTER_THORN_SKILL_ID),
         ))
     }) else {
         return false;
@@ -293,9 +293,10 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     if cast.is_none() {
         let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
         let attack_interval = pet_attack.map_or(property.attack_speed, |pet| pet.attack_interval);
-        if last_used_ms != 0
-            && (!time_reached(now_ms, last_used_ms, reuse_delay_ms)
-                || !time_reached(now_ms, last_used_ms, attack_interval))
+        if !region
+            .find_monster_by_id_mut(monster_id)
+            .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval))
+            || (last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay_ms))
         {
             return true;
         }

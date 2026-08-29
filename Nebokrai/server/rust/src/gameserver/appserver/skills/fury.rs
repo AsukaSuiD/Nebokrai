@@ -145,7 +145,7 @@ pub(crate) fn execute_owned_fury(
             (
                 monster.move_shape().shape().clone(),
                 monster.base_attack_cast(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(FURY_SKILL_ID),
             )
         })
     else {

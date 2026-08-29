@@ -302,7 +302,7 @@ pub(crate) fn execute_owned_sprite_burn<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.base_attack_cast(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(SPRITE_BURN_SKILL_ID),
             ))
         })
     else {

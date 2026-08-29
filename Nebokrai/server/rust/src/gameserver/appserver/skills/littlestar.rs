@@ -484,7 +484,7 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 monster.base_attack_cast(),
                 monster.little_star_progress().cloned(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(LITTLE_STAR_SKILL_ID),
             ))
         })
     else {

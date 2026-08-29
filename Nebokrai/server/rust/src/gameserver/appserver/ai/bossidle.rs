@@ -24,11 +24,14 @@ pub(crate) enum BossIdleProgress {
 /// `Tracing/CheckCast` прямо к `ASA_ATTACK` и не имеют дополнительной проверки
 /// `CMonster::GetAttackSpeed`, присутствующей в обычном `CMonsterAI`.
 /// Задержка повторного применения самого навыка остаётся отдельной проверкой.
-pub(crate) const fn schedule_attack_interval(ai_type: u32, ordinary_interval_ms: u32) -> u32 {
+pub(crate) const fn schedule_attack_interval(
+    ai_type: u32,
+    ordinary_interval_ms: u32,
+) -> Option<u32> {
     if matches!(ai_type, 0x67 | 0x68) {
-        0
+        None
     } else {
-        ordinary_interval_ms
+        Some(ordinary_interval_ms)
     }
 }
 

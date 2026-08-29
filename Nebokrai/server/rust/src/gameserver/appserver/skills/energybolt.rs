@@ -839,7 +839,7 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 monster.base_attack_cast(),
                 monster.path_projectile_progress().cloned(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(spec.skill_id),
             ))
         })
     else {

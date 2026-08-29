@@ -498,7 +498,7 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
                 monster.is_tamed(),
                 monster.base_attack_cast(),
                 monster.boss_fiend_penetrate_progress().cloned(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(BOSS_FIEND_PENETRATE_SKILL_ID),
             ))
         })
     else {

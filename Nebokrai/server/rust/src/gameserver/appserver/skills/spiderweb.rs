@@ -294,7 +294,7 @@ pub(crate) fn execute_owned_spider_web(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.base_attack_cast(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(SPIDER_WEB_SKILL_ID),
             ))
         })
     else {

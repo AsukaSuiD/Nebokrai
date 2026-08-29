@@ -90,7 +90,7 @@ pub(crate) fn prepare_owned_monster_projectile(
     now_ms: u32,
     dispatch: &mut Option<MonsterProjectileDispatch>,
 ) -> bool {
-    let Some((source, property, master, tamed, cast, progress, last_used_ms)) = region
+    let Some((source, property, master, tamed, cast, progress)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
@@ -103,7 +103,6 @@ pub(crate) fn prepare_owned_monster_projectile(
                 monster.is_tamed(),
                 monster.base_attack_cast(),
                 monster.monster_projectile_progress(),
-                monster.last_base_attack_ms(),
             ))
         })
     else {
@@ -180,7 +179,10 @@ pub(crate) fn prepare_owned_monster_projectile(
         } else {
             property.attack_speed
         };
-        if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, attack_interval) {
+        if !region
+            .find_monster_by_id_mut(monster_id)
+            .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, attack_interval))
+        {
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);

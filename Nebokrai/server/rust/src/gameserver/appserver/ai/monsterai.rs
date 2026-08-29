@@ -9,7 +9,9 @@
 //! преследования сохраняет slip-порядок, задержку движения и ограничения
 //! питомца без дополнительного RNG. Реакция `WhenBeenHurted` назначает новую
 //! цель только свободному ИИ: игрок принимается всегда, а монстр — только после
-//! подтверждения приручения. Остальные AI-ветви ниже остаются RAW.
+//! подтверждения приручения. Timestamp попытки атаки принадлежит расписанию
+//! ИИ и не подменяет отдельные reuse-таймеры установленных навыков. Остальные
+//! AI-ветви ниже остаются RAW.
 
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -18,6 +20,23 @@ use crate::gameserver::appserver::skills::baseattack::{real_distance, time_reach
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
+
+/// Отдельный timestamp расписания `CMonsterAI`; он не является cooldown
+/// конкретного `CSkill` и обновляется до его `CheckCast`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MonsterAiScheduleState {
+    last_attack_attempt_ms: u32,
+}
+
+impl MonsterAiScheduleState {
+    pub(crate) const fn begin_attack_attempt(&mut self, now_ms: u32, interval_ms: u32) -> bool {
+        if now_ms.wrapping_sub(self.last_attack_attempt_ms) < interval_ms {
+            return false;
+        }
+        self.last_attack_attempt_ms = now_ms;
+        true
+    }
+}
 
 /// Сохраняет точный порядок и границу сравнения `SelectAttackSkill`.
 /// `roll` получает вызывающая сторона из исходного генератора случайных чисел,

@@ -123,7 +123,7 @@ pub(crate) fn execute_owned_corpse_candle_blasting<Runtime: GameMainLoopRuntime>
                 monster.is_tamed(),
                 monster.script_file().to_vec(),
                 monster.base_attack_cast(),
-                monster.last_base_attack_ms(),
+                monster.skill_last_used_ms(CORPSE_CANDLE_BLASTING_SKILL_ID),
             ))
         })
     else {
