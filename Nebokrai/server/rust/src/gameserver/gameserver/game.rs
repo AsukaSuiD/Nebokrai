@@ -1150,7 +1150,6 @@ use crate::gameserver::appserver::skills::huoxieshu::{
 use crate::gameserver::appserver::skills::immediatestate::{
     execute_player_immediate_state, is_immediate_state_skill,
 };
-use crate::gameserver::appserver::skills::wuxing::{execute_player_wuxing, is_wuxing_skill};
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::skills::knockoutruntime::{
     cancel_player_knock_out, complete_player_knock_out, execute_player_knock_out,
@@ -38683,11 +38682,6 @@ impl CGame {
                     is_immediate_state_skill(skill_id)
                 }
             };
-            let concrete_wuxing = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. }
-                | PlayerSkillDispatch::Point { skill_id, .. }
-                | PlayerSkillDispatch::Object { skill_id, .. } => is_wuxing_skill(skill_id),
-            };
             let concrete_non_fun = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -38875,8 +38869,6 @@ impl CGame {
                 execute_player_self_shield_dispatch(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_immediate_state {
                 execute_player_immediate_state(self, player_id, dispatch, player_ai, runtime)
-            } else if concrete_wuxing {
-                execute_player_wuxing(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_non_fun {
                 execute_player_non_fun(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_swordship {
