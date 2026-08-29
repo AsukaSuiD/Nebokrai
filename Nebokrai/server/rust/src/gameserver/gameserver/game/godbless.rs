@@ -35,33 +35,4 @@ impl CGame {
         true
     }
 
-    pub(super) fn finish_player_god_bless<Runtime: GameMainLoopRuntime>(&mut self, player_id: i32, now_ms: u32, runtime: &mut Runtime) -> bool {
-        let ended = self.find_player_mut(player_id).and_then(|player| {
-            let region = player.server_region_id()?;
-            let x = player.shape().get_tile_x().ok()?;
-            let y = player.shape().get_tile_y().ok()?;
-            let state = player.take_expired_god_bless_state(now_ms)?;
-            Some((region, x, y, state))
-        });
-        let Some((region, x, y, state)) = ended else { return false };
-        send_god_bless_state_visual(self, region, ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID }, x, y, state, false, now_ms);
-        let _ = self.update_player_properties(player_id, runtime);
-        true
-    }
-
-    pub(super) fn finish_monster_god_bless(&mut self, region_id: i32, monster_id: i32, now_ms: u32) -> bool {
-        let ended = if let Some(mut owner) = self.take_region_owner(region_id) {
-            let result = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
-                let x = monster.move_shape().shape().get_tile_x().ok()?;
-                let y = monster.move_shape().shape().get_tile_y().ok()?;
-                let state = monster.move_shape_mut().take_expired_god_bless_state(now_ms)?;
-                Some((x, y, state))
-            });
-            self.restore_region_owner(owner);
-            result
-        } else { None };
-        let Some((x, y, state)) = ended else { return false };
-        send_god_bless_state_visual(self, region_id, ShapeIdentity { object_type: MONSTER_TYPE, id: monster_id, ex_id: CGuid::GUID_INVALID }, x, y, state, false, now_ms);
-        true
-    }
 }

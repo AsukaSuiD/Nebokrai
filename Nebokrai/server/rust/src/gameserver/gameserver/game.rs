@@ -873,6 +873,9 @@ use crate::gameserver::appserver::skills::rushstate2::{
     expire_monster_rush_2_state, expire_player_rush_2_state,
 };
 use crate::gameserver::appserver::skills::roar::{execute_player_roar, is_roar_dispatch};
+use crate::gameserver::appserver::skills::roarstate::{
+    finish_monster_roar, finish_player_roar,
+};
 use crate::gameserver::appserver::skills::energyholding::{execute_player_energy_holding, is_energy_holding_dispatch};
 use crate::gameserver::appserver::skills::inversechopped::{execute_player_inverse_chopped, is_inverse_chopped_dispatch};
 use crate::gameserver::appserver::skills::firewall::{
@@ -1034,6 +1037,9 @@ use crate::gameserver::appserver::skills::snowstormphalanx::{
 };
 use crate::gameserver::appserver::skills::weak::{execute_player_weak, is_weak_target};
 use crate::gameserver::appserver::skills::weakphalanx::WeakPhalanxTick;
+use crate::gameserver::appserver::skills::weakstate::{
+    finish_monster_weak_outside, finish_player_weak_outside,
+};
 use crate::gameserver::appserver::skills::yinyang::{execute_player_yin_yang, is_yin_yang_target};
 use crate::gameserver::appserver::skills::yinyang2::{execute_player_yin_yang_2, is_yin_yang_2_target};
 use crate::gameserver::appserver::skills::yinyangphalanx::YinYangPhalanxTick;
@@ -1046,6 +1052,9 @@ use crate::gameserver::appserver::skills::godpunishmentphalanx::GodPunishmentPha
 use crate::gameserver::appserver::skills::godthunderphalanx::GodThunderPhalanxTick;
 use crate::gameserver::appserver::skills::godthunderphalanx2::GodThunder2PhalanxTick;
 use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
+use crate::gameserver::appserver::skills::godblessstate::{
+    finish_monster_god_bless, finish_player_god_bless,
+};
 use crate::gameserver::appserver::skills::cure::{execute_player_cure, is_cure_target};
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
@@ -26413,9 +26422,9 @@ impl CGame {
             let _ = self.update_player_properties(player_id, runtime);
         }
         let _ = expire_player_fury_states(self, player_id, now_ms, runtime);
-        let weak_ended = self.finish_player_weak_outside(player_id, runtime);
-        let god_bless_ended = self.finish_player_god_bless(player_id, now_ms, runtime);
-        let roar_ended = self.finish_player_roar(player_id, now_ms, runtime);
+        let weak_ended = finish_player_weak_outside(self, player_id, runtime);
+        let god_bless_ended = finish_player_god_bless(self, player_id, now_ms, runtime);
+        let roar_ended = finish_player_roar(self, player_id, now_ms, runtime);
         let expired_cure = self
             .find_player_mut(player_id)
             .and_then(CPlayer::take_cure_state_for_ai);
@@ -42232,9 +42241,9 @@ impl CGame {
                 {
                     continue;
                 }
-                let _ = self.finish_monster_weak_outside(region_id, monster_id);
-                let _ = self.finish_monster_god_bless(region_id, monster_id, now_ms);
-                let _ = self.finish_monster_roar(region_id, monster_id, now_ms);
+                let _ = finish_monster_weak_outside(self, region_id, monster_id);
+                let _ = finish_monster_god_bless(self, region_id, monster_id, now_ms);
+                let _ = finish_monster_roar(self, region_id, monster_id, now_ms);
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let _ = expire_monster_rush_state(
                         self,
