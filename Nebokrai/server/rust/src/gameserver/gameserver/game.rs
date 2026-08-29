@@ -4129,9 +4129,12 @@ struct GameMainLoopState {
     pacing_deadline_ms: u32,
 }
 
-/// Concrete Script/region/AI/session owners подключаются сюда по мере их
-/// материализации; message routing уже исполняется самим `CGame`, а region
-/// decoder получает тот же live factory-контекст без отдельного shadow state.
+/// Конкретные владельцы сценариев, регионов, AI и сессий подключаются сюда по
+/// мере их материализации. Обе очереди навыков уже целиком исполняются своими
+/// владельцами, а неизвестный ID или неподдерживаемая перегрузка синхронно
+/// отклоняются диспетчером. Маршрутизацию сообщений уже исполняет `CGame`, а
+/// декодер региона получает тот же актуальный контекст фабрик без отдельного
+/// теневого состояния.
 pub(crate) trait GameMainLoopRuntime:
     InitialRegionStartupContext
     + GameRegionEnterContext
@@ -4152,23 +4155,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Concrete `CSkill/CBaseAI` execution boundary одного normal FIFO front.
-    /// `Pending` оставляет команду для следующего tick; terminal outcome
-    /// удаляет только тот же front. `first_contact` является event этого tick.
-    fn execute_player_skill_dispatch(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        dispatch: PlayerSkillDispatch,
-    ) -> QueuedSkillExecutionOutcome;
-    /// Отдельная war-soul очередь исполняется тем же tick независимо от
-    /// normal skill queue, как два native `m_qTarget*` owner-а.
-    fn execute_battle_fairy_skill_dispatch(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        dispatch: BattleFairySkillDispatch,
-    ) -> QueuedSkillExecutionOutcome;
     /// Исполняет оставшийся `CBaseAI::Run` prefix virtual `CPlayerAI::Run`
     /// после owned `UpdateCurrentState` и двух materialized FIFO front.
     /// Возвращает post-AI restored-state current war-soul skill; owned
@@ -39303,7 +39289,16 @@ impl CGame {
             } else if concrete_gibe {
                 execute_player_gibe(self, player_id, dispatch, player_ai, runtime)
             } else {
-                runtime.execute_player_skill_dispatch(self, player_id, dispatch)
+                tracing::debug!(
+                    player_id,
+                    ?dispatch,
+                    "Отклонён неизвестный ID или неподдерживаемая перегрузка навыка игрока"
+                );
+                QueuedSkillExecutionOutcome {
+                    state: QueuedSkillExecutionState::Rejected,
+                    first_contact: false,
+                    killing_blow: None,
+                }
             };
             if outcome.first_contact {
                 match dispatch {
@@ -39488,7 +39483,16 @@ impl CGame {
             ) {
                 execute_battle_fairy_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else {
-                runtime.execute_battle_fairy_skill_dispatch(self, player_id, dispatch)
+                tracing::debug!(
+                    player_id,
+                    ?dispatch,
+                    "Отклонён неизвестный ID или неподдерживаемая перегрузка навыка боевой феи"
+                );
+                QueuedSkillExecutionOutcome {
+                    state: QueuedSkillExecutionState::Rejected,
+                    first_contact: false,
+                    killing_blow: None,
+                }
             };
             if outcome.first_contact {
                 match dispatch {
