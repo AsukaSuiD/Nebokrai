@@ -4707,6 +4707,16 @@ impl CPlayer {
         self.move_shape.activate_loaded_hearten_state(now_ms);
     }
 
+    pub(crate) fn activate_loaded_agility_states(
+        &mut self,
+        now_ms: u32,
+    ) -> (
+        Option<super::skills::agilitystate::PersistentAgilityFamilyState>,
+        Option<super::skills::agilitystate2::AgilityState2>,
+    ) {
+        self.move_shape.activate_loaded_agility_states(now_ms)
+    }
+
     pub(crate) fn take_expired_blind_state(
         &mut self,
         now_ms: u32,

@@ -28819,6 +28819,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_hearten_state(login_tick_ms);
+        let (loaded_persistent_agility, loaded_agility_2) = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_agility_states(login_tick_ms);
         let loaded_defense_shields = self
             .players
             .get_mut(&expected_player_id)
@@ -28895,6 +28900,30 @@ impl CGame {
         }
         if let Some(state) = loaded_cure_state {
             send_cure_state_visual(self, expected_player_id, state, true);
+        }
+        if let Some(state) = loaded_persistent_agility {
+            crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
+                self,
+                expected_player_id,
+                state.skill_id(),
+                true,
+                0,
+            );
+        }
+        if let Some(state) = loaded_agility_2 {
+            let first_now_ms = context.now_milliseconds();
+            let second_now_ms = if state.client_time_needs_second_clock(first_now_ms) {
+                context.now_milliseconds()
+            } else {
+                first_now_ms
+            };
+            crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
+                self,
+                expected_player_id,
+                state.skill_id(),
+                true,
+                state.client_time(first_now_ms, second_now_ms),
+            );
         }
         for state in loaded_defense_shields {
             match state {

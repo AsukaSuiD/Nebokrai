@@ -58,9 +58,9 @@ use super::shape::{
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
 };
 use crate::gameserver::appserver::skills::agilitystate::{
-    AgilityState, PersistentAgilityFamilyState,
+    AgilityState, PersistentAgilityFamilyState, PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::agilitystate2::AgilityState2;
+use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY_STATE_2_BYTES};
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
 use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
@@ -723,6 +723,9 @@ impl CMoveShape {
                 &state.encoded(now_ms),
             );
         }
+        if let Some(state) = self.agility_state_2 {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+        }
         for state in &self.defense_shields {
             match state {
                 DefenseShieldState::Mana(state) => {
@@ -846,6 +849,16 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::hearten::HEARTEN_SKILL_ID))
             .and_then(|offset| HeartenState::decode(&states, offset, 0).ok());
+        self.persistent_agility_family_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset).is_some_and(PersistentAgilityFamilyState::is_known_skill))
+            .and_then(|offset| PersistentAgilityFamilyState::decode(&states, offset).ok());
+        self.agility_state_2 = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(super::skills::agility2::AGILITY_2_SKILL_ID))
+            .and_then(|offset| AgilityState2::decode(&states, offset, 0).ok());
         self.defense_shields.clear();
         self.defense_shields.extend(known_offsets.iter().copied().filter_map(|offset| {
             match read_u32(&states, offset) {
@@ -2666,6 +2679,7 @@ impl CMoveShape {
         match self.persistent_agility_family_state {
             Some(PersistentAgilityFamilyState::Agility(state)) if state.skill_id() == skill_id => {
                 self.persistent_agility_family_state.take();
+                self.remove_serialized_state_record(skill_id, PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
                 Some(state)
             }
             _ => None,
@@ -2678,6 +2692,7 @@ impl CMoveShape {
             crate::gameserver::appserver::skills::agility::AGILITY_SKILL_ID
         );
         debug_assert!(self.persistent_agility_family_state.is_none());
+        self.append_serialized_state_record(&PersistentAgilityFamilyState::Agility(state).encoded());
         self.persistent_agility_family_state =
             Some(PersistentAgilityFamilyState::Agility(state));
     }
@@ -2687,11 +2702,14 @@ impl CMoveShape {
     }
 
     pub(crate) fn take_agility_state_2(&mut self) -> Option<AgilityState2> {
-        self.agility_state_2.take()
+        let state = self.agility_state_2.take()?;
+        self.remove_serialized_state_record(state.skill_id(), AGILITY_STATE_2_BYTES);
+        Some(state)
     }
 
     pub(crate) fn begin_agility_state_2(&mut self, state: AgilityState2) {
         debug_assert!(self.agility_state_2.is_none());
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.agility_state_2 = Some(state);
     }
 
@@ -2704,7 +2722,9 @@ impl CMoveShape {
     pub(crate) fn take_persistent_agility_family_state(
         &mut self,
     ) -> Option<PersistentAgilityFamilyState> {
-        self.persistent_agility_family_state.take()
+        let state = self.persistent_agility_family_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn begin_persistent_agility_family_state(
@@ -2715,12 +2735,23 @@ impl CMoveShape {
             state.skill_id()
         ));
         debug_assert!(self.persistent_agility_family_state.is_none());
+        self.append_serialized_state_record(&state.encoded());
         self.persistent_agility_family_state = Some(state);
     }
 
     pub(crate) fn take_expired_agility_state_2(&mut self, now_ms: u32) -> Option<AgilityState2> {
         self.agility_state_2.filter(|state| state.expired(now_ms))?;
-        self.agility_state_2.take()
+        self.take_agility_state_2()
+    }
+
+    pub(crate) fn activate_loaded_agility_states(
+        &mut self,
+        now_ms: u32,
+    ) -> (Option<PersistentAgilityFamilyState>, Option<AgilityState2>) {
+        if let Some(state) = &mut self.agility_state_2 {
+            state.activate_loaded(now_ms);
+        }
+        (self.persistent_agility_family_state, self.agility_state_2)
     }
 
     pub(crate) fn take_first_script_state(&mut self, state_id: i32) -> Option<ScriptMoveState> {
@@ -3723,6 +3754,10 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::lifeshield::LIFE_SHIELD_SKILL_ID => LIFE_SHIELD_STATE_BYTES,
             super::skills::promotion::PROMOTION_SKILL_ID => PROMOTION_STATE_BYTES,
             super::skills::hearten::HEARTEN_SKILL_ID => HEARTEN_STATE_BYTES,
+            super::skills::agility::AGILITY_SKILL_ID
+            | super::skills::natural::NATURAL_SKILL_ID
+            | super::skills::rapture::RAPTURE_SKILL_ID => PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
+            super::skills::agility2::AGILITY_2_SKILL_ID => AGILITY_STATE_2_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {

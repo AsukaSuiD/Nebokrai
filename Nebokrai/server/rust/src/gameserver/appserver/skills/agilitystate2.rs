@@ -4,12 +4,15 @@
 //! `agilitystate2.cpp`. Состояние `0x81` добавляет `full_miss` сложением с
 //! переполнением, завершается только при строгом `started + keep < now` и при
 //! вычислении положительного клиентского остатка второй раз читает часы.
-//! Жизненный цикл принадлежит `CanonicalStateStorage`; legacy-сериализация пока
-//! не подключена и сохранена ниже как RAW.
+//! Жизненный цикл принадлежит `CanonicalStateStorage`; DB-запись хранит
+//! остаток срока и WORD-прибавку полного уклонения.
 
 use super::agility2::AGILITY_2_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
+
+pub(crate) const AGILITY_STATE_2_BYTES: usize = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AgilityState2 {
@@ -54,6 +57,32 @@ impl AgilityState2 {
                 .wrapping_add(self.keep_time_ms as u32) as i32
         }
     }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != AGILITY_2_SKILL_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        let keep_time_ms = reader.read_i32()?;
+        Ok(Self::new(reader.read_u16()?, now_ms, keep_time_ms))
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; AGILITY_STATE_2_BYTES] {
+        let mut bytes = Vec::with_capacity(AGILITY_STATE_2_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(AGILITY_2_SKILL_ID);
+        writer.write_i32(self.client_time(now_ms, now_ms));
+        writer.write_u16(self.full_miss);
+        bytes.try_into().expect("размер временного состояния ловкости фиксирован")
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; AGILITY_STATE_2_BYTES] {
+        self.encoded(self.started_at_ms)
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
+    }
 }
 
 pub(crate) fn expire_player_agility_state_2(
@@ -70,43 +99,3 @@ pub(crate) fn expire_player_agility_state_2(
     }
     ended
 }
-
-// Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
-// Декомпилятор: Ghidra 12.1.2
-// Сохранены неподключённые legacy-сериализация и обратное чтение состояния.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp
-
-// ============================================================================
-// FUNCTION: CAgilityState2::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:158
-// RVA: 0x001F1050
-// ADDRESS: 005f1050
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CAgilityState2::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate2.cpp:171
-// RVA: 0x001F48E0
-// ADDRESS: 005f48e0
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer

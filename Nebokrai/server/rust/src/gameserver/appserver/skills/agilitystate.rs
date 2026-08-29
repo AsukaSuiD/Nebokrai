@@ -4,6 +4,7 @@
 //! `agilitystate.cpp`. Состояние `0xda` публикует начало/завершение и добавляет
 //! `full_miss` сложением с переполнением. Временным состоянием `0x81` владеет
 //! отдельный `agilitystate2.rs`; оба slot-а принадлежат `CanonicalStateStorage`.
+//! Три постоянных варианта используют общую шестибайтную DB-запись `ID + WORD`.
 
 use super::agility::AGILITY_SKILL_ID;
 use super::natural::NATURAL_SKILL_ID;
@@ -11,11 +12,13 @@ use super::naturalstate::NaturalState;
 use super::rapture::RAPTURE_SKILL_ID;
 use super::rapturestate::RaptureState;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const AGILITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const AGILITY_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+pub(crate) const PERSISTENT_AGILITY_FAMILY_STATE_BYTES: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AgilityState {
@@ -86,6 +89,31 @@ impl PersistentAgilityFamilyState {
         }
         properties
     }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let skill_id = reader.read_u32()?;
+        let value = reader.read_u16()?;
+        match skill_id {
+            AGILITY_SKILL_ID => Ok(Self::Agility(AgilityState::persistent(value))),
+            NATURAL_SKILL_ID => Ok(Self::Natural(NaturalState::new(value))),
+            RAPTURE_SKILL_ID => Ok(Self::Rapture(RaptureState::new(value))),
+            _ => Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }),
+        }
+    }
+
+    pub(crate) fn encoded(self) -> [u8; PERSISTENT_AGILITY_FAMILY_STATE_BYTES] {
+        let value = match self {
+            Self::Agility(state) => state.full_miss(),
+            Self::Natural(state) => state.element_resistance_gain(),
+            Self::Rapture(state) => state.blast_attack_gain(),
+        };
+        let mut bytes = Vec::with_capacity(PERSISTENT_AGILITY_FAMILY_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(self.skill_id());
+        writer.write_u16(value);
+        bytes.try_into().expect("размер постоянного состояния ловкости фиксирован")
+    }
 }
 
 pub(crate) fn send_agility_family_state_visual(
@@ -116,7 +144,7 @@ pub(crate) fn send_agility_family_state_visual(
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сохранены посторонний недостигнутый helper, конструктор по умолчанию и сериализация.
+// Сохранены посторонний недостигнутый helper и конструктор по умолчанию.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -148,36 +176,6 @@ pub(crate) fn send_agility_family_state_visual(
 // RVA: 0x001F4140
 // ADDRESS: 005f4140
 // PROTOTYPE: undefined __thiscall CAgilityState(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: CAgilityState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:156
-// RVA: 0x001F3E40
-// ADDRESS: 005f3e40
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-// ============================================================================
-// FUNCTION: CAgilityState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\agilitystate.cpp:166
-// RVA: 0x001F4420
-// ADDRESS: 005f4420
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
