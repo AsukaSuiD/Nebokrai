@@ -103,7 +103,9 @@ impl PetBehaviorState {
     }
 
     pub(crate) const fn begin_target(&mut self) {
-        self.action = 0;
+        if self.action == 1 {
+            self.action = 0;
+        }
     }
 
     pub(crate) fn retarget_passive(&mut self, tamed: bool, has_target: bool) -> bool {
@@ -121,10 +123,11 @@ impl PetBehaviorState {
         current_target: Option<ShapeIdentity>,
         attacker: ShapeIdentity,
     ) -> bool {
-        let replace = current_target.is_none()
-            || current_target.is_some_and(|target| {
-                target.object_type != PLAYER_TYPE && attacker.object_type == PLAYER_TYPE
-            });
+        let replace = self.mode != 0
+            && (current_target.is_none()
+                || current_target.is_some_and(|target| {
+                    target.object_type != PLAYER_TYPE && attacker.object_type == PLAYER_TYPE
+                }));
         if replace && self.action == 1 {
             self.action = 0;
         }
@@ -465,20 +468,6 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 //
 
 // ============================================================================
-// FUNCTION: CPet::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:490
-// RVA: 0x000E94E0
-// ADDRESS: 004e94e0
-// PROTOTYPE: void __thiscall WhenBeenHurted(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPet::OnMoving
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -515,20 +504,6 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 // RVA: 0x000E95F0
 // ADDRESS: 004e95f0
 // PROTOTYPE: int __thiscall OnLoseTarget(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPet::SetTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:666
-// RVA: 0x000E9630
-// ADDRESS: 004e9630
-// PROTOTYPE: void __thiscall SetTarget(long param_1, long param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
