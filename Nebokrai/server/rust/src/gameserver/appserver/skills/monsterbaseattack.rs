@@ -534,7 +534,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.ai,
             property.guard_range as i32,
         ),
-        16 => {
+        15 | 16 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
                 .map_or(0, |properties| properties.query_property(5_004) as i32);
@@ -545,6 +545,21 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 area_index,
                 property.guard_range as i32,
                 minimum_skill_distance,
+            )
+            .map(|selected| selected.identity)
+        }
+        19 => {
+            let minimum_skill_distance = game
+                .skill_base_properties(skill_id, i32::from(skill_level))
+                .map_or(0, |properties| properties.query_property(5_004) as i32);
+            select_nation_country_guard_enemy(
+                game,
+                region,
+                owner,
+                area_index,
+                property.guard_range as i32,
+                minimum_skill_distance,
+                property.race,
             )
             .map(|selected| selected.identity)
         }
@@ -755,7 +770,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 13 | 14 | 17 | 18 | 20 | 21 | 24 | 100 | 0x65)
+        && matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 13 | 14 | 15 | 17 | 18 | 19 | 20 | 21 | 24 | 100 | 0x65)
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
@@ -884,53 +899,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 monster.set_ai_target(selected);
             }
             target = Some(selected);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 19
-        && let Some(area_index) = area_index
-    {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        if let Some(selected) = select_nation_country_guard_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-            minimum_skill_distance,
-            property.race,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected.identity);
-            }
-            target = Some(selected.identity);
-        }
-    }
-    if target.is_none()
-        && cast.is_none()
-        && !tamed
-        && property.ai == 15
-        && let Some(area_index) = area_index
-    {
-        let minimum_skill_distance = game
-            .skill_base_properties(skill_id, i32::from(skill.level))
-            .map_or(0, |properties| properties.query_property(5_004) as i32);
-        if let Some(selected) = select_village_country_guard_enemy(
-            game,
-            region,
-            monster_view,
-            area_index,
-            property.guard_range as i32,
-            minimum_skill_distance,
-        ) {
-            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                monster.set_ai_target(selected.identity);
-            }
-            target = Some(selected.identity);
         }
     }
     let target = cast.map(|cast| cast.dispatch().target).or(target);
