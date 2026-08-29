@@ -1867,6 +1867,11 @@ impl CServerRegion {
         phalanx
             .shape_mut()
             .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        for existing in self.owned_skill_phalanxes.values_mut() {
+            if let SummonedSkillShape::PoisonFog(existing) = existing {
+                existing.replace_affect_region(tile_x, tile_y);
+            }
+        }
         self.add_object(
             phalanx.shape_mut(),
             ShapeRuntimeFacts::default(),
