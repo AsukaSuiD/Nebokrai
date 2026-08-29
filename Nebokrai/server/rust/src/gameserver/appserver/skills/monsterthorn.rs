@@ -1,171 +1,20 @@
-//! Шипастая атака `CMonsterThorn` (`0x197`) для достигнутого владельца-монстра.
+//! Владелец шипастой атаки `CMonsterThorn` (`0x197`).
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
-//! `appserver/skills/monsterthorn.cpp`. Модуль хранит задержку повторного
-//! применения отдельно от attack-speed расписания ИИ, запрет движения,
-//! стадии, два визуальных пакета, формулу и два исходных RNG-вызова. Общая
-//! `CMonster::IsAttackAble`, защита и применение уже рассчитанного удара идут
-//! через узкий `monsterattack`; `CGame` оставляет только возврат региона и
-//! межвладельческий хвост смерти. Проверки списка питомцев и повозки для
-//! игрока, а также координатные перегрузки остаются RAW до реального
-//! вызывающего пути игрока.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.h
-
-// ============================================================================
-// FUNCTION: CMonsterThorn::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:102
-// RVA: 0x00141520
-// ADDRESS: 00541520
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterThorn::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:118
-// RVA: 0x001415F0
-// ADDRESS: 005415f0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterThorn::Begin
-// STATUS: PARTIALLY_IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:85
-// RVA: 0x001416E0
-// ADDRESS: 005416e0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
-//
-// IMPLEMENTED: объектная ветвь владельца-монстра материализована ниже;
-// вариант игрока сохранён в этом RAW.
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterThornEffect::UpdateVisualEffect
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: действия 0 и 1 для владельца-монстра материализованы ниже;
-// клиентские ошибки варианта игрока сохранены в этом RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:368
-// RVA: 0x001417A0
-// ADDRESS: 005417a0
-// PROTOTYPE: void __thiscall UpdateVisualEffect(CState * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterThorn::CheckCastCondition
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: задержка повторного применения и запрет движения
-// владельца-монстра материализованы ниже; ограничения списка питомцев относятся
-// к недостигнутому вызывающему пути игрока.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:32
-// RVA: 0x00141C40
-// ADDRESS: 00541c40
-// PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterThorn::CalculateAttackPower
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: формула владельца-монстра и оба RNG-вызова материализованы ниже;
-// критический удар игрока и дополнительные атаки сохранены в этом RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:300
-// RVA: 0x00141E10
-// ADDRESS: 00541e10
-// PROTOTYPE: void __thiscall CalculateAttackPower(CMoveShape * param_1, CMoveShape * param_2, tagAttackInformation * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterThorn::Attack
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: вызов общей защиты и применения удара источником-монстром
-// материализован ниже; разрешения игрока сохранены в этом RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:276
-// RVA: 0x00142060
-// ADDRESS: 00542060
-// PROTOTYPE: void __thiscall Attack(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterThorn::AI
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: объектная последовательность источника-монстра между тактами
-// материализована ниже; ветви питомцев и повозки игрока сохранены в этом RAW.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\monsterthorn.cpp:147
-// RVA: 0x00142180
-// ADDRESS: 00542180
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+//! `appserver/skills/monsterthorn.cpp`. Player и monster/pet пути сохраняют
+//! cooldown, повторную проверку длины и `BLOCK_UNFLY` после задержки, запрет
+//! движения и одиночный удар по живой объектной цели. Player-формула выполняет
+//! RNG физического урона и critical-roll, затем в исходном порядке передаёт
+//! physical, element и soul записи; monster-формула сохраняет нулевые element
+//! и soul записи и обязательный второй RNG. `CGame` только разрешает владельцев,
+//! применяет защиту/смерть и доставляет готовые visual packets.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     time_reached,
 };
+use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
+use super::flash::master_info;
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
@@ -176,16 +25,25 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::skills::kernel::SkillStage;
+use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const MONSTER_TYPE: i32 = 600;
+const PLAYER_TYPE: i32 = 400;
 pub(crate) const MONSTER_THORN_SKILL_ID: u32 = 0x197;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerMonsterThornExecutionState { kernel: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32), condition_checked: bool }
+impl PlayerMonsterThornExecutionState { fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now: u32) -> Self { Self { kernel: SkillExecutionKernel::begin(dispatch, now), destination, condition_checked: false } } pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel } pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel } }
 
 fn send_thorn_visual(
     game: &CGame,
@@ -214,7 +72,6 @@ fn send_thorn_visual(
     }
     let _ = game.send_game_shape_around(region, source_shape, None, &message);
 }
-
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, цель и текущий такт исходного навыка")]
 pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -460,4 +317,24 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
         let _ = monster.finish_base_attack_cast(now_ms);
     }
     true
+}
+fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
+pub(crate) const fn is_player_monster_thorn_dispatch(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::Point { skill_id: MONSTER_THORN_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: MONSTER_THORN_SKILL_ID, .. }) }
+fn player_target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
+fn player_destination(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch, fallback: Option<(i32, i32)>) -> Option<(i32, i32)> { match dispatch { PlayerSkillDispatch::Point { x, y, .. } => Some((x, y)), PlayerSkillDispatch::Object { target, .. } => game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y)).or(fallback), PlayerSkillDispatch::SelfTarget { .. } => None } }
+fn send_player_failure(game: &CGame, player_id: i32, action: u8) { game.send_self_state_skill_failure(0x000b_fe01, player_id, action); }
+fn send_player_visual(game: &mut CGame, player_id: i32, level: i32, action: u8, target: Option<ShapeIdentity>, destination: (i32, i32)) { let Some(direction) = game.find_player(player_id).map(|player| player.shape().get_direction()) else { return }; let mut message = CMessage::new(0x000b_fe01); message.add_byte(action); message.add_long(MONSTER_THORN_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); if action == 1 { message.add_long(direction); } else { message.add_long(target.map_or(0, |target| target.object_type)); message.add_long(target.map_or(0, |target| target.id)); message.add_long(destination.0); message.add_long(destination.1); } let _ = game.send_player_shape_around(player_id, None, &message); }
+fn restore_player(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
+fn finish_player<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) { restore_player(game, player_id); finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_monster_thorn_used(now_ms)); }
+pub(crate) fn cancel_player_monster_thorn<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.monster_thorn().map(|state| state.kernel().dispatch()) else { return false }; finish_player(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
+fn calculate_player_attack(game: &mut CGame, player_id: i32, level: i32, hit: i32) -> Option<(MasterInfo, AttackInformation)> { let (combat, master) = game.find_player(player_id).map(|player| (player.combat_properties(), master_info(player)))?; let minimum = combat.minimum_attack as i32; let span = (combat.maximum_attack as i32).wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32; let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0); let mut attack = AttackInformation { skill_id: MONSTER_THORN_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] }; if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } } Some((master, attack)) }
+
+pub(crate) fn execute_player_monster_thorn<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
+    if !is_player_monster_thorn_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
+    let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(MONSTER_THORN_SKILL_ID)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(MONSTER_THORN_SKILL_ID, level).cloned() else { if ai.monster_thorn().is_some() { restore_player(game, player_id); abort_skill(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) }; let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let hit = properties.query_property(super::baseattack::SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED); let now = runtime.now_milliseconds();
+    if ai.monster_thorn().is_none() { if ai.monster_thorn_last_used_ms() != 0 && !time_reached(now, ai.monster_thorn_last_used_ms(), reuse) { send_player_failure(game, player_id, 0x0d); return player_terminal(QueuedSkillExecutionState::Rejected) } let Some(destination) = player_destination(game, region_id, dispatch, None) else { return player_terminal(QueuedSkillExecutionState::Rejected) }; let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(MONSTER_THORN_SKILL_ID)); } ai.begin_monster_thorn(PlayerMonsterThornExecutionState::begin(dispatch, destination, now)); }
+    let fallback = ai.monster_thorn().map(|state| state.destination); let Some(destination) = player_destination(game, region_id, dispatch, fallback) else { restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }; if player_target(dispatch).is_some_and(|target| game.base_magic_target_view(region_id, target).is_some() && game.periodic_state_target_dead(region_id, target)) { send_player_failure(game, player_id, 10); restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }
+    if ai.monster_thorn().is_some_and(|state| !state.condition_checked) { if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, destination.0, destination.1)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_visual(game, player_id, level, 1, None, destination); if let Some(state) = ai.monster_thorn_mut() { state.condition_checked = true; let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); } }
+    let started = ai.monster_thorn().map(|state| state.kernel().started_at_ms()).unwrap_or_default(); if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) } let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { send_player_failure(game, player_id, 0x0b); restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == 2) { send_player_failure(game, player_id, 0x0f); restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) }
+    let target = player_target(dispatch).filter(|target| game.base_magic_target_view(region_id, *target).is_some()); send_player_visual(game, player_id, level, 2, target, destination); if let Some(target) = target && game.find_player(player_id).map(master_info).is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)) { if let Some((master, attack)) = calculate_player_attack(game, player_id, level, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } } } if let Some(state) = ai.monster_thorn_mut() { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); } finish_player(game, player_id, ai, runtime); player_terminal(QueuedSkillExecutionState::Completed)
 }
