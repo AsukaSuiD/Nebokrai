@@ -7,11 +7,16 @@
 //! после задержки создаёт форму в клетке перед игроком. Формулы, пакеты и
 //! жизненный цикл принадлежат этому модулю и `thunderslashphalanx`; `CGame`
 //! координирует только владельцев региона, применение атаки и доставку.
+//! После `Begin` успех, отказ и клиентская отмена используют точный общий
+//! хвост `End(1)` с возвратом движения, `AfterUseSkill` и временем восстановления.
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+use super::baseattack::{
+    finish_delayed_base_attack, time_reached, SKILL_USAGE_DELAY_TIME,
+    SKILL_USAGE_REUSE_DELAY_TIME,
+};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_SUMMONED_LIFETIME};
 use super::flash::master_info;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::ragebreakstate::send_rage_break_state_visual;
 use super::thunderslashphalanx::CThunderSlashPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -35,7 +40,29 @@ fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch {
 } }
 pub(crate) fn is_thunder_slash_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == THUNDER_SLASH_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); } }
+fn finish_player_thunder_slash<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_thunder_slash_used(now_ms);
+    });
+}
+
+pub(crate) fn cancel_player_thunder_slash<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.thunder_slash().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_thunder_slash(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
+}
 fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 1) }
 
 fn failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
@@ -75,7 +102,10 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
         player.learned_skill_level(THUNDER_SLASH_SKILL_ID), player.mana(), player.rp(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(THUNDER_SLASH_SKILL_ID, level) else {
-        if ai.thunder_slash().is_some() { finish(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected);
+        if ai.thunder_slash().is_some() {
+            finish_player_thunder_slash(game, player_id, ai, runtime);
+        }
+        return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE); let rp_loss = properties.query_property(USER_RP_LOSE);
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -95,17 +125,39 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
         ai.begin_thunder_slash(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if ai.thunder_slash().is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
-    let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else {
+        finish_player_thunder_slash(game, player_id, ai, runtime);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
     if ai.thunder_slash().is_some_and(|state| state.stage() == SkillStage::Begin) {
-        let Some(player) = game.find_player(player_id) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
-        if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
-        let Some(rage_state) = game.find_player_mut(player_id).and_then(CPlayer::take_rage_break_state) else { failure(game, player_id, 4, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+        let Some(player) = game.find_player(player_id) else {
+            finish_player_thunder_slash(game, player_id, ai, runtime);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        if !weapon_is_valid(game, player) {
+            failure(game, player_id, 0x0e, mp_loss);
+            finish_player_thunder_slash(game, player_id, ai, runtime);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let Some(rage_state) = game.find_player_mut(player_id).and_then(CPlayer::take_rage_break_state) else {
+            failure(game, player_id, 4, mp_loss);
+            finish_player_thunder_slash(game, player_id, ai, runtime);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
         send_rage_break_state_visual(game, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: Default::default() }, source_x, source_y, rage_state, false, runtime.now_milliseconds());
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if mp_loss != 0 && current_mana < mp_loss { failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        if mp_loss != 0 && current_mana < mp_loss {
+            failure(game, player_id, 7, mp_loss);
+            finish_player_thunder_slash(game, player_id, ai, runtime);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
         if mp_loss != 0 && let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if rp_loss != 0 && u32::from(current_rp) < rp_loss { failure(game, player_id, 8, rp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        if rp_loss != 0 && u32::from(current_rp) < rp_loss {
+            failure(game, player_id, 8, rp_loss);
+            finish_player_thunder_slash(game, player_id, ai, runtime);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
         if let Some(player) = game.find_player_mut(player_id) { if rp_loss != 0 { player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16); } player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
         let _ = game.update_player_properties(player_id, runtime); send_visual(game, player_id, level, None);
         if let Some(state) = ai.thunder_slash_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
@@ -127,6 +179,6 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
         }
     }
     if let Some(state) = ai.thunder_slash_mut() { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
-    ai.mark_thunder_slash_used(runtime.now_milliseconds()); finish(game, player_id);
+    finish_player_thunder_slash(game, player_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

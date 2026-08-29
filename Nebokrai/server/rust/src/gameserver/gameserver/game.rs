@@ -867,7 +867,8 @@ use crate::gameserver::appserver::skills::thunderblowphalanx::{
     calculate_owned_thunder_blow_attack, thunder_blow_targets, ThunderBlowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunderslash::{
-    execute_player_thunder_slash, is_thunder_slash_dispatch,
+    cancel_player_thunder_slash, execute_player_thunder_slash, is_thunder_slash_dispatch,
+    THUNDER_SLASH_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::thunderslashphalanx::{
     calculate_owned_thunder_slash_attack, thunder_slash_target, ThunderSlashPhalanxTick,
@@ -37379,6 +37380,7 @@ impl CGame {
                 | BASE_MAGIC_SKILL_ID
                 | FIRE_BOLT_SKILL_ID
                 | FIRE_BALL_SKILL_ID
+                | THUNDER_SLASH_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37397,6 +37399,7 @@ impl CGame {
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
             FIRE_BALL_SKILL_ID => player_ai.fire_ball().is_some(),
+            THUNDER_SLASH_SKILL_ID => player_ai.thunder_slash().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37426,6 +37429,9 @@ impl CGame {
             }
             FIRE_BALL_SKILL_ID => {
                 cancel_player_fire_ball(self, player_id, &mut player_ai, runtime)
+            }
+            THUNDER_SLASH_SKILL_ID => {
+                cancel_player_thunder_slash(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
