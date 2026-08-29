@@ -65,6 +65,8 @@
 //! `Talk` формирует принадлежащий монстру пакет `0xBF801` и сохраняет строгий
 //! прямоугольный предел `AREA_WIDTH/AREA_HEIGHT`; обход игроков и доставка
 //! остаются у регионального runtime-владельца.
+//! Формулы групповой квоты и поправки опыта также принадлежат этому owner-у;
+//! состав живой группы, множители игрока/региона и выдачу координирует `CGame`.
 
 use std::collections::BTreeMap;
 
@@ -160,6 +162,91 @@ pub(crate) struct MonsterCombatProperties {
     pub(crate) attack_avoid: u16,
     pub(crate) element_avoid: u16,
     pub(crate) promotion_magic_attack_factor: Option<u16>,
+}
+
+/// Параметры точных `CalculateExperienceQuota` и
+/// `CalculateExperienceCorrective`; состав группы и применение результата
+/// остаются у `CGame`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MonsterExperienceFormula {
+    ratios: [f32; 8],
+    difference: f32,
+    limit: f32,
+    amerce: f32,
+    amerce_limit: f32,
+    amerce_start_level: i32,
+    hit_base_level: i32,
+    hit_prize: f32,
+    maximum_hit_prize: f32,
+}
+
+impl MonsterExperienceFormula {
+    pub(crate) const fn new(
+        experience: ([f32; 8], f32, f32, f32, f32, i32),
+        continuous_kill: (i32, f32, f32),
+    ) -> Self {
+        Self {
+            ratios: experience.0,
+            difference: experience.1,
+            limit: experience.2,
+            amerce: experience.3,
+            amerce_limit: experience.4,
+            amerce_start_level: experience.5,
+            hit_base_level: continuous_kill.0,
+            hit_prize: continuous_kill.1,
+            maximum_hit_prize: continuous_kill.2,
+        }
+    }
+
+    pub(crate) fn quota(
+        self,
+        property: &MonsterProperties,
+        team_id: i32,
+        average_level: f32,
+        alive_amount: u32,
+        player_level: u8,
+    ) -> u32 {
+        if team_id <= 0 {
+            return property.experience;
+        }
+        let factor = ((1.0
+            - self.difference * (average_level - f32::from(player_level)))
+            / alive_amount as f32)
+            .max(self.limit);
+        (property.experience as f32
+            * factor
+            * self.ratios[(alive_amount.saturating_sub(1).min(7)) as usize])
+            .round_ties_even() as u32
+    }
+
+    pub(crate) fn corrective(
+        self,
+        property: &MonsterProperties,
+        quota: u32,
+        player_level: u8,
+        is_first_attacker: bool,
+        continuous_kill_amount: u32,
+    ) -> u32 {
+        let level_delta = i32::from(player_level) - property.level as i32;
+        let amerce_level = level_delta.wrapping_sub(self.amerce_start_level).max(0);
+        let corrective_factor =
+            (1.0 - amerce_level as f32 * self.amerce).max(self.amerce_limit);
+        let mut corrected = (quota as f32 * corrective_factor)
+            .round_ties_even()
+            .max(0.0) as u32;
+        corrected = corrected.min(property.experience);
+        if level_delta.max(0) <= self.hit_base_level
+            && is_first_attacker
+            && continuous_kill_amount != 0
+        {
+            let prize = (continuous_kill_amount as f32 * self.hit_prize)
+                .min(self.maximum_hit_prize);
+            corrected = (corrected as f32 * (prize + 1.0))
+                .round_ties_even()
+                .max(0.0) as u32;
+        }
+        corrected
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1851,20 +1938,6 @@ impl CMonster {
 //
 
 // ============================================================================
-// FUNCTION: CMonster::CalculateExperienceCorrective
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:468
-// RVA: 0x000E7A70
-// ADDRESS: 004e7a70
-// PROTOTYPE: ulong __thiscall CalculateExperienceCorrective(CPlayer * param_1, ulong param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CMonster::~CMonster
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -2183,20 +2256,6 @@ impl CMonster {
 // RVA: 0x000E7E70
 // ADDRESS: 004e7e70
 // PROTOTYPE: undefined __thiscall CMonster(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::CalculateExperienceQuota
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:369
-// RVA: 0x000E7FE0
-// ADDRESS: 004e7fe0
-// PROTOTYPE: ulong __thiscall CalculateExperienceQuota(CPlayer * param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

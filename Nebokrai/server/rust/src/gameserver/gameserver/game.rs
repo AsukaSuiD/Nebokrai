@@ -658,7 +658,9 @@ use crate::gameserver::appserver::ai::pet::{
     PetLifecycleFacts, PetLifecycleNotice, execute_owned_pet_active_search,
     execute_owned_pet_follow,
 };
-use crate::gameserver::appserver::monster::{CMonster, MonsterKillingAttack};
+use crate::gameserver::appserver::monster::{
+    CMonster, MonsterExperienceFormula, MonsterKillingAttack,
+};
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
@@ -35372,39 +35374,37 @@ impl CGame {
             self.globe_setup.monster_experience_parameters();
         let (hit_base_level, _, hit_prize, maximum_hit_prize) =
             self.globe_setup.monster_continuous_kill_parameters();
+        let experience_formula = MonsterExperienceFormula::new(
+            (
+                ratios,
+                exp_difference,
+                exp_limit,
+                amerce,
+                amerce_limit,
+                amerce_start,
+            ),
+            (hit_base_level, hit_prize, maximum_hit_prize),
+        );
 
         for player_id in recipients {
             let Some(player) = self.find_player(player_id) else {
                 continue;
             };
             let player_level = player.level();
-            let quota = if team_id <= 0 {
-                monster.experience
-            } else {
-                let factor = ((1.0 - exp_difference * (average_level - f32::from(player_level)))
-                    / alive_amount as f32)
-                    .max(exp_limit);
-                (monster.experience as f32
-                    * factor
-                    * ratios[(alive_amount.saturating_sub(1).min(7)) as usize])
-                    .round_ties_even() as u32
-            };
-            let level_delta = i32::from(player_level) - monster.level as i32;
-            let amerce_level = level_delta.wrapping_sub(amerce_start).max(0);
-            let corrective_factor = (1.0 - amerce_level as f32 * amerce).max(amerce_limit);
-            let mut corrected = (quota as f32 * corrective_factor)
-                .round_ties_even()
-                .max(0.0) as u32;
-            corrected = corrected.min(monster.experience);
-            if level_delta.max(0) <= hit_base_level && player_id == first_attacker_id {
-                let amount = player.continuous_kill_amount();
-                if amount != 0 {
-                    let prize = (amount as f32 * hit_prize).min(maximum_hit_prize);
-                    corrected = (corrected as f32 * (prize + 1.0))
-                        .round_ties_even()
-                        .max(0.0) as u32;
-                }
-            }
+            let quota = experience_formula.quota(
+                monster,
+                team_id,
+                average_level,
+                alive_amount,
+                player_level,
+            );
+            let corrected = experience_formula.corrective(
+                monster,
+                quota,
+                player_level,
+                player_id == first_attacker_id,
+                player.continuous_kill_amount(),
+            );
             let improve_multiplier = player.improve_experience_multiplier();
             let experience_gain =
                 ((corrected as f32) * exp_scale * region_scale * improve_multiplier)
