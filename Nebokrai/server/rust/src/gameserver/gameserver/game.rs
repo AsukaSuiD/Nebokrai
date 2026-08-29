@@ -25660,6 +25660,20 @@ impl CGame {
         y: i32,
         figure: ShapeFigure,
     ) -> bool {
+        self.move_owned_monster_step_with_run(region, monster_id, x, y, figure, 0)
+    }
+
+    /// Сохраняет исходный флаг шага, когда конкретный ИИ различает ходьбу и
+    /// бег; пространственное членство и wire-доставка остаются общими.
+    pub(crate) fn move_owned_monster_step_with_run(
+        &mut self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        x: i32,
+        y: i32,
+        figure: ShapeFigure,
+        run: i32,
+    ) -> bool {
         let area_width = self.globe_setup.area_width();
         let area_height = self.globe_setup.area_height();
         let Some(around) =
@@ -25672,7 +25686,7 @@ impl CGame {
                 monster_id,
                 x,
                 y,
-                0,
+                run,
                 figure,
                 area_width,
                 area_height,
@@ -31199,6 +31213,14 @@ impl CGame {
         let damage = health.min(i32::MAX as u32);
         let current_health = health.wrapping_sub(damage);
         let now_ms = runtime.now_milliseconds();
+        let lord_hurt_plan = (property.ai == 100 && current_health != 0).then(|| {
+            crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
+                self,
+                region_id,
+                monster_id,
+                &property,
+            )
+        });
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
@@ -31223,6 +31245,9 @@ impl CGame {
                     critical: false,
                     blast_attack: false,
                 });
+            } else if property.ai == 100 {
+                // AI100 применяет Defense, spatial-step и выбор цели после
+                // освобождения изменяемого заимствования монстра.
             } else {
                 monster.when_been_hurted_by(
                     ShapeIdentity {
@@ -31234,6 +31259,21 @@ impl CGame {
                     now_ms,
                 );
             }
+        }
+        if let Some(plan) = lord_hurt_plan {
+            let _ = crate::gameserver::appserver::ai::lord::apply_lord_hurt_response(
+                self,
+                owner.base_mut(),
+                monster_id,
+                &property,
+                ShapeIdentity {
+                    object_type: PLAYER_TYPE,
+                    id: player_id,
+                    ex_id: CGuid::GUID_INVALID,
+                },
+                now_ms,
+                plan,
+            );
         }
         self.restore_region_owner(owner);
         if current_health != 0 {
@@ -36643,6 +36683,18 @@ impl CGame {
             first_contact = true;
             let damage = attack.hp_damage().min(monster_health);
             let current_health = monster_health - damage;
+            let lord_hurt_plan = (monster_property.ai == 100
+                && attack.full_miss == 0
+                && damage != 0
+                && current_health != 0)
+                .then(|| {
+                    crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
+                        self,
+                        region_id,
+                        target_id,
+                        &monster_property,
+                    )
+                });
             let mut owner = self
                 .take_region_owner(region_id)
                 .expect("monster target region сохранён");
@@ -36677,6 +36729,9 @@ impl CGame {
                     } else if monster_property.ai == 0x65 {
                         // AI101 разрешает игрока и связывает близнеца после
                         // освобождения изменяемого заимствования монстра.
+                    } else if monster_property.ai == 100 {
+                        // AI100 применяет Defense, spatial-step и выбор цели
+                        // после освобождения заимствования монстра.
                     } else if matches!(monster_property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -36757,6 +36812,21 @@ impl CGame {
                         ex_id: CGuid::GUID_INVALID,
                     },
                     now_ms,
+                );
+            }
+            if let Some(plan) = lord_hurt_plan {
+                let _ = crate::gameserver::appserver::ai::lord::apply_lord_hurt_response(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &monster_property,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    now_ms,
+                    plan,
                 );
             }
             if attack.full_miss == 0
@@ -40740,6 +40810,18 @@ impl CGame {
         );
         let damage = attack.hp_damage().min(target_health);
         let current_health = target_health - damage;
+        let lord_hurt_plan = (property.ai == 100
+            && attack.full_miss == 0
+            && damage != 0
+            && current_health != 0)
+            .then(|| {
+                crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
+                    self,
+                    region_id,
+                    target_id,
+                    &property,
+                )
+            });
         if let Some(mut owner) = self.take_region_owner(region_id) {
             if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
                 monster.set_hit_points(current_health);
@@ -40772,6 +40854,9 @@ impl CGame {
                     } else if property.ai == 0x65 {
                         // AI101 разрешает владельца призыва и связывает
                         // близнеца после освобождения изменяемого заимствования.
+                    } else if property.ai == 100 {
+                        // AI100 применяет Defense, spatial-step и выбор цели
+                        // после освобождения заимствования монстра.
                     } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -40857,6 +40942,21 @@ impl CGame {
                         ex_id: CGuid::GUID_INVALID,
                     },
                     now_ms,
+                );
+            }
+            if let Some(plan) = lord_hurt_plan {
+                let _ = crate::gameserver::appserver::ai::lord::apply_lord_hurt_response(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &property,
+                    ShapeIdentity {
+                        object_type: master.master_type,
+                        id: master.master_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    now_ms,
+                    plan,
                 );
             }
             if attack.full_miss == 0

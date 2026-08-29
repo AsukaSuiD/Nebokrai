@@ -635,6 +635,18 @@ impl CGame {
         );
         let damage = attack.hp_damage().min(target_health);
         let current_health = target_health - damage;
+        let lord_hurt_plan = (property.ai == 100
+            && attack.full_miss == 0
+            && damage != 0
+            && current_health != 0)
+            .then(|| {
+                crate::gameserver::appserver::ai::lord::plan_lord_hurt_response(
+                    self,
+                    region_id,
+                    target_id,
+                    &property,
+                )
+            });
         if let Some(mut owner) = self.take_region_owner(region_id) {
             if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
                 monster.set_hit_points(current_health);
@@ -667,6 +679,9 @@ impl CGame {
                     } else if property.ai == 0x65 {
                         // AI101 разрешает владельца периодического эффекта и
                         // связывает близнеца после освобождения заимствования.
+                    } else if property.ai == 100 {
+                        // AI100 применяет Defense, spatial-step и выбор цели
+                        // после освобождения заимствования монстра.
                     } else if matches!(property.ai, 8 | 13 | 14 | 20) {
                         monster.when_been_hurted(now_ms);
                     } else {
@@ -752,6 +767,21 @@ impl CGame {
                         ex_id: CGuid::GUID_INVALID,
                     },
                     now_ms,
+                );
+            }
+            if let Some(plan) = lord_hurt_plan {
+                let _ = crate::gameserver::appserver::ai::lord::apply_lord_hurt_response(
+                    self,
+                    owner.base_mut(),
+                    target_id,
+                    &property,
+                    ShapeIdentity {
+                        object_type: master.master_type,
+                        id: master.master_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    now_ms,
+                    plan,
                 );
             }
             if attack.full_miss == 0

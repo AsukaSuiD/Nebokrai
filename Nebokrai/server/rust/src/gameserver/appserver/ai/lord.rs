@@ -6,9 +6,11 @@
 //! Этот владелец выбирает навык и ближайшую живую цель, реальный путь
 //! `monsterbaseattack` назначает результат, а `lordfastattack` и
 //! `lordwiderangingattack` исполняют конкретные стадии и эффекты.
-//!
-//! `WhenBeenHurted` ниже остаётся RAW: специальное уклонение от summon-shape
-//! ещё не подключено.
+//! Реакция на урон сначала сохраняет общую Defense-ветвь, затем в порядке
+//! `x -> y -> CServerRegion::GetShape` ищет первую призванную форму в квадрате
+//! младшего байта `figure`, делает от её клетки один беговой шаг и только при
+//! отсутствии прежней цели принимает атакующего. Пространственная мутация и
+//! wire-доставка остаются у `CGame`.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -16,30 +18,115 @@
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp
 
-// ============================================================================
-// FUNCTION: CLord::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\lord.cpp:32
-// RVA: 0x0020B0B0
-// ADDRESS: 0060b0b0
-// PROTOTYPE: void __thiscall WhenBeenHurted(long param_1, long param_2, ulong param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// CLord::WhenBeenHurted, RVA 0x0020B0B0, материализован ниже.
 
 // COMPONENT_VARIANT_END: GameServer
 
 use super::guardtarget::select_nearest_player_or_pet;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::shape::{
+    CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
+};
+use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::gameserver::game::CGame;
-use crate::setup::monsterlist::MonsterSkill;
+use crate::public::tools::get_line_direction;
+use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
 const EXCLUDED_BASE_ATTACK_SKILL_ID: u16 = 1;
 const EXCLUDED_ARCHERY_SKILL_ID: u16 = 2;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct LordHurtPlan {
+    avoidance_step: Option<ShapeAreaCoordinates>,
+}
+
+/// Вычисляет неизменяющую пространственную часть `WhenBeenHurted` до
+/// временного изъятия region-owner-а из `CGame`.
+pub(crate) fn plan_lord_hurt_response(
+    game: &CGame,
+    region_id: i32,
+    monster_id: i32,
+    property: &MonsterProperties,
+) -> LordHurtPlan {
+    let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else {
+        return LordHurtPlan::default();
+    };
+    let Some(owner) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| monster.shape_view(property))
+    else {
+        return LordHurtPlan::default();
+    };
+    let radius = i32::from(property.figure as u8);
+    let end_x = owner.tile_x.wrapping_add(radius);
+    let end_y = owner.tile_y.wrapping_add(radius);
+    let (area_width, area_height) = game.area_dimensions();
+
+    let mut x = owner.tile_x.wrapping_sub(radius);
+    while x < end_x {
+        let mut y = owner.tile_y.wrapping_sub(radius);
+        while y < end_y {
+            let mut shapes = Vec::new();
+            if region
+                .get_shapes(x, y, area_width, area_height, game, &mut shapes)
+                .is_ok()
+                && shapes
+                    .iter()
+                    .any(|shape| shape.identity.object_type == SUMMON_SHAPE_TYPE)
+            {
+                let direction = get_line_direction(x, y, owner.tile_x, owner.tile_y);
+                let avoidance_step = CShape::get_direction_position(
+                    direction,
+                    ShapeAreaCoordinates {
+                        x: owner.tile_x,
+                        y: owner.tile_y,
+                    },
+                )
+                .ok();
+                return LordHurtPlan { avoidance_step };
+            }
+            y = y.wrapping_add(1);
+        }
+        x = x.wrapping_add(1);
+    }
+    LordHurtPlan::default()
+}
+
+/// Применяет ordered часть `WhenBeenHurted`: Defense, один беговой шаг и
+/// назначение атакующего только при всё ещё пустой текущей цели.
+pub(crate) fn apply_lord_hurt_response(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    attacker: ShapeIdentity,
+    now_ms: u32,
+    plan: LordHurtPlan,
+) -> bool {
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+        return false;
+    };
+    monster.when_been_hurted(now_ms);
+
+    if let Some(destination) = plan.avoidance_step {
+        let _ = game.move_owned_monster_step_with_run(
+            region,
+            monster_id,
+            destination.x,
+            destination.y,
+            CMonster::figure(property),
+            1,
+        );
+    }
+
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id)
+        && monster.ai_target().is_none()
+    {
+        monster.set_ai_target(attacker);
+    }
+    true
+}
 
 /// Выполняет подтверждённый `OnSearchEnemy` AI100 через общий nearest-проход,
 /// сохраняя игроков перед питомцами и замену при равной дистанции.
