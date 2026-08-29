@@ -2,14 +2,16 @@
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
 //! исходный владелец `appserver/ai/bossblue.cpp` подтверждают восемь
-//! одноразовых HP-порогов ярости. `CMonster` сбрасывает их после общего
-//! пробуждения, а реальный путь `monsterbaseattack` выполняет один исходный
-//! RNG-бросок перед пороговым или взвешенным выбором навыка. Накопление
+//! одноразовых HP-порогов ярости. `CMonster` создаёт и сбрасывает их после
+//! общего пробуждения, а этот владелец принимает один исходный RNG-бросок
+//! runtime перед пороговым или взвешенным выбором навыка. Накопление
 //! `odds` намеренно учитывает доли исключённых ID `2` и `0x1f7`; применение
 //! выбранного навыка остаётся у его skill-owner-а.
 //!
-//! `Run`, `Hibernate`, `OnIdle`, `OnSchedule` и `OnSearchEnemy` ниже остаются
-//! RAW: их специальные переходы и поиск цели ещё не подключены к runtime.
+//! `OnSearchEnemy` подключён к реальному ходу монстра и сохраняет общий проход
+//! игроков, затем питомцев с заменой цели при равной дистанции. `Run`,
+//! `Hibernate`, `OnIdle` и `OnSchedule` ниже остаются RAW: их специальные
+//! переходы ещё не подключены к runtime.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -46,20 +48,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CBossBlue::CBossBlue
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp:19
-// RVA: 0x00209CB0
-// ADDRESS: 00609cb0
-// PROTOTYPE: undefined __thiscall CBossBlue(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CBossBlue::OnIdle
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -87,27 +75,101 @@
 //
 //
 
-// ============================================================================
-// FUNCTION: CBossBlue::OnSearchEnemy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp:197
-// RVA: 0x0020A3E0
-// ADDRESS: 0060a3e0
-// PROTOTYPE: int __thiscall OnSearchEnemy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-
 // COMPONENT_VARIANT_END: GameServer
 
-use crate::setup::monsterlist::MonsterSkill;
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::gameserver::game::CGame;
+use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
 const BOSS_BLUE_FURY_SKILL_ID: u16 = 0x1f7;
 const EXCLUDED_ARCHERY_SKILL_ID: u16 = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BossBlueTarget {
+    identity: ShapeIdentity,
+    distance: i32,
+}
+
+fn consider_boss_blue_target(
+    selected: Option<BossBlueTarget>,
+    candidate: BossBlueTarget,
+    guard_range: i32,
+) -> Option<BossBlueTarget> {
+    if candidate.distance > guard_range {
+        return selected;
+    }
+    match selected {
+        Some(current) if current.distance < candidate.distance => Some(current),
+        _ => Some(candidate),
+    }
+}
+
+/// Выполняет подтверждённый `OnSearchEnemy` синего босса: ближайшая живая
+/// цель выбирается общим проходом игроков, затем питомцев; равенство заменяет
+/// предыдущую запись.
+pub(crate) fn select_boss_blue_enemy(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+) -> Option<ShapeIdentity> {
+    let mut selected = None;
+    for player_id in region.player_ids_around_area(area_index) {
+        let Some(player) = game.find_player(player_id) else {
+            continue;
+        };
+        if player.server_region_id() != Some(region.id) || player.is_dead() {
+            continue;
+        }
+        let Some(candidate) = player.shape_view() else {
+            continue;
+        };
+        selected = consider_boss_blue_target(
+            selected,
+            BossBlueTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+        );
+    }
+    for pet_id in region.pet_ids_around_area(area_index) {
+        let Some(candidate) = region
+            .find_monster_by_id(pet_id)
+            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+            .and_then(|pet| {
+                let property =
+                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                pet.shape_view(property)
+            })
+        else {
+            continue;
+        };
+        selected = consider_boss_blue_target(
+            selected,
+            BossBlueTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+        );
+    }
+    selected.map(|selected| selected.identity)
+}
 
 /// Восемь одноразовых порогов ярости принадлежат конкретному ИИ синего босса.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -197,4 +259,28 @@ pub(crate) fn select_boss_blue_attack_skill(
         }
     }
     default_skill_id
+}
+
+/// Разрешает состояние конкретного синего босса и выполняет его пороговый
+/// выбор после единственного RNG-броска, полученного вызывающим runtime.
+pub(crate) fn choose_boss_blue_attack_skill(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    hit_points: u32,
+    roll: i32,
+    default_skill_id: u16,
+) -> Option<u16> {
+    region.find_monster_by_id_mut(monster_id).map(|monster| {
+        let has_fury_state = monster.move_shape().boss_blue_fury_state().is_some();
+        select_boss_blue_attack_skill(
+            monster.boss_blue_ai_mut(),
+            hit_points,
+            property.maximum_hp,
+            has_fury_state,
+            &property.skills,
+            roll,
+            default_skill_id,
+        )
+    })
 }

@@ -100,8 +100,12 @@ use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::archer::select_archer_enemy;
-use crate::gameserver::appserver::ai::bossblue::select_boss_blue_attack_skill;
-use crate::gameserver::appserver::ai::bossfiend::select_boss_fiend_attack_skill;
+use crate::gameserver::appserver::ai::bossblue::{
+    choose_boss_blue_attack_skill, select_boss_blue_enemy,
+};
+use crate::gameserver::appserver::ai::bossfiend::{
+    choose_boss_fiend_attack_skill, select_boss_fiend_enemy,
+};
 use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, select_city_guard_enemy, trace_city_sword_target,
 };
@@ -362,62 +366,24 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
         let roll = game.skill_random_below(10_000);
         let selected = if property.ai == 0x67 {
-            region
-                .find_monster_by_id_mut(monster_id)
-                .map(|monster| {
-                    let has_fury_state = monster.move_shape().boss_blue_fury_state().is_some();
-                    select_boss_blue_attack_skill(
-                        monster.boss_blue_ai_mut(),
-                        monster_health,
-                        property.maximum_hp,
-                        has_fury_state,
-                        &property.skills,
-                        roll,
-                        default_skill_id,
-                    )
-                })
+            choose_boss_blue_attack_skill(
+                region,
+                monster_id,
+                &property,
+                monster_health,
+                roll,
+                default_skill_id,
+            )
         } else if property.ai == 0x68 {
-            let below_repeat_threshold =
-                monster_health as f32 / (property.maximum_hp as f32) < 0.08;
-            let persist_modifier = below_repeat_threshold
-                .then(|| {
-                    game.skill_base_properties(BOSS_FIEND_SUMMON_SKILL_ID, 1)
-                        .map(|properties| properties.query_property(10_003))
-                })
-                .flatten();
-            let timer_check_ms = (below_repeat_threshold && persist_modifier.is_some())
-                .then(|| runtime.now_milliseconds());
-            let selection = region
-                .find_monster_by_id(monster_id)
-                .and_then(|monster| monster.boss_fiend_ai())
-                .and_then(|state| {
-                    select_boss_fiend_attack_skill(
-                        state,
-                        monster_health,
-                        property.maximum_hp,
-                        &property.skills,
-                        roll,
-                        timer_check_ms,
-                        persist_modifier,
-                    )
-                });
-            if let Some(selection) = selection {
-                if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-                    monster
-                        .move_shape_mut()
-                        .set_current_skill_id(Some(u32::from(selection.skill_id)));
-                }
-                if selection.records_summon {
-                    let recorded_at_ms = runtime.now_milliseconds();
-                    if let Some(state) = region
-                        .find_monster_by_id_mut(monster_id)
-                        .and_then(|monster| monster.boss_fiend_ai_mut())
-                    {
-                        state.record_summon(selection.summon_threshold, recorded_at_ms);
-                    }
-                }
-            }
-            selection.map(|selection| selection.skill_id)
+            choose_boss_fiend_attack_skill(
+                game,
+                region,
+                monster_id,
+                &property,
+                monster_health,
+                roll,
+                runtime,
+            )
         } else if property.ai == 100 {
             Some(select_lord_attack_skill(
                 monster_health,
@@ -469,6 +435,47 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         );
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 0x67
+        && let Some(area_index) = area_index
+        && let Some(selected) = select_boss_blue_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            property.guard_range as i32,
+        )
+    {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.set_ai_target(selected);
+        }
+        target = Some(selected);
+    }
+    if target.is_none()
+        && cast.is_none()
+        && !tamed
+        && property.ai == 0x68
+        && let Some(area_index) = area_index
+    {
+        let minimum_skill_distance = game
+            .skill_base_properties(skill_id, i32::from(skill.level))
+            .map_or(0, |properties| properties.query_property(5_004) as i32);
+        if let Some(selected) = select_boss_fiend_enemy(
+            game,
+            region,
+            monster_view,
+            area_index,
+            property.guard_range as i32,
+            minimum_skill_distance,
+        ) {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+                monster.set_ai_target(selected);
+            }
+            target = Some(selected);
+        }
+    }
     if target.is_none()
         && cast.is_none()
         && !tamed

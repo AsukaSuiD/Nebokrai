@@ -3,13 +3,15 @@
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
 //! исходный владелец `appserver/ai/bossfiend.cpp` подтверждают восемь
 //! одноразовых HP-порогов призыва и повторный призыв ниже 8% HP по строгой
-//! проверке исходного таймера. Реальный путь `monsterbaseattack` сохраняет
-//! один RNG-бросок до порогового выбора, отдельные чтения времени для проверки
-//! и фиксации призыва и накопление `odds` через исключённые ID `1`, `2` и
+//! проверке исходного таймера. Этот владелец принимает один RNG-бросок runtime
+//! до порогового выбора, отдельно читает время для проверки и фиксации призыва
+//! и накапливает `odds` через исключённые ID `1`, `2` и
 //! `0x1f9`. Выполнение выбранного навыка остаётся у skill-owner-а.
 //!
-//! `OnIdle`, `OnSchedule`, `OnSearchEnemy` и `OnMoving` ниже остаются RAW: их
-//! специальные переходы и поиск цели ещё не подключены к runtime.
+//! `OnSearchEnemy` подключён к реальному ходу монстра и сохраняет зависимость
+//! выбора от минимальной дистанции текущего навыка. `OnIdle`, `OnSchedule` и
+//! `OnMoving` ниже остаются RAW: их специальные переходы ещё не подключены к
+//! runtime.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -46,20 +48,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CBossFiend::OnSearchEnemy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossfiend.cpp:168
-// RVA: 0x002099F0
-// ADDRESS: 006099f0
-// PROTOTYPE: int __thiscall OnSearchEnemy(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CBossFiend::OnMoving
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -76,11 +64,84 @@
 
 // COMPONENT_VARIANT_END: GameServer
 
-use crate::setup::monsterlist::MonsterSkill;
+use super::guardtarget::{GuardDistanceTarget, consider_guard_distance_target};
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
 const BOSS_FIEND_SUMMON_SKILL_ID: u16 = 0x1f9;
 const EXCLUDED_BASE_ATTACK_SKILL_ID: u16 = 1;
 const EXCLUDED_ARCHERY_SKILL_ID: u16 = 2;
+
+/// Выполняет подтверждённый `OnSearchEnemy` демона-босса. Один выбор проходит
+/// игроков, затем питомцев и сохраняет особое предпочтение целей не ближе
+/// минимальной дистанции текущего навыка.
+pub(crate) fn select_boss_fiend_enemy(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+    minimum_skill_distance: i32,
+) -> Option<ShapeIdentity> {
+    let mut selected = None;
+    for player_id in region.player_ids_around_area(area_index) {
+        let Some(player) = game.find_player(player_id) else {
+            continue;
+        };
+        if player.server_region_id() != Some(region.id) || player.is_dead() {
+            continue;
+        }
+        let Some(candidate) = player.shape_view() else {
+            continue;
+        };
+        selected = consider_guard_distance_target(
+            selected,
+            GuardDistanceTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            minimum_skill_distance,
+        );
+    }
+    for pet_id in region.pet_ids_around_area(area_index) {
+        let Some(candidate) = region
+            .find_monster_by_id(pet_id)
+            .filter(|pet| pet.is_tamed() && !CMoveShape::is_died(pet.hit_points()))
+            .and_then(|pet| {
+                let property =
+                    game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
+                pet.shape_view(property)
+            })
+        else {
+            continue;
+        };
+        selected = consider_guard_distance_target(
+            selected,
+            GuardDistanceTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            minimum_skill_distance,
+        );
+    }
+    selected.map(|selected| selected.identity)
+}
 
 /// Одноразовые пороги призыва и время последнего принудительного призыва
 /// принадлежат конкретному экземпляру ИИ демона-босса.
@@ -186,4 +247,56 @@ pub(crate) fn select_boss_fiend_attack_skill(
         }
     }
     None
+}
+
+/// Выполняет полную AI-specific фиксацию выбранного навыка демона-босса.
+/// Проверка таймера и запись момента призыва используют два отдельных чтения
+/// runtime-часов в исходных местах.
+pub(crate) fn choose_boss_fiend_attack_skill<Runtime: GameMainLoopRuntime>(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+    hit_points: u32,
+    roll: i32,
+    runtime: &mut Runtime,
+) -> Option<u16> {
+    let below_repeat_threshold = hit_points as f32 / (property.maximum_hp as f32) < 0.08;
+    let persist_modifier = below_repeat_threshold
+        .then(|| {
+            game.skill_base_properties(BOSS_FIEND_SUMMON_SKILL_ID.into(), 1)
+                .map(|properties| properties.query_property(10_003))
+        })
+        .flatten();
+    let timer_check_ms = (below_repeat_threshold && persist_modifier.is_some())
+        .then(|| runtime.now_milliseconds());
+    let selection = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| monster.boss_fiend_ai())
+        .and_then(|state| {
+            select_boss_fiend_attack_skill(
+                state,
+                hit_points,
+                property.maximum_hp,
+                &property.skills,
+                roll,
+                timer_check_ms,
+                persist_modifier,
+            )
+        })?;
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster
+            .move_shape_mut()
+            .set_current_skill_id(Some(u32::from(selection.skill_id)));
+    }
+    if selection.records_summon {
+        let recorded_at_ms = runtime.now_milliseconds();
+        if let Some(state) = region
+            .find_monster_by_id_mut(monster_id)
+            .and_then(|monster| monster.boss_fiend_ai_mut())
+        {
+            state.record_summon(selection.summon_threshold, recorded_at_ms);
+        }
+    }
+    Some(selection.skill_id)
 }
