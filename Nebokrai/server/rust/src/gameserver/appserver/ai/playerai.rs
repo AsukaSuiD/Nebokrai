@@ -2838,8 +2838,9 @@ impl CPlayerAI {
 // ============================================================================
 // FUNCTION: CPlayerAI::OnScheduleAboutWarSoul
 // STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: ожидающая war-soul команда не извлекается у мёртвого владельца;
-// уже активное выполнение остаётся отдельной ProcessActiveAction-ветвью.
+// IMPLEMENTED: ожидающая war-soul команда не извлекается у мёртвого или
+// временно неспособного сражаться владельца; уже активное выполнение остаётся
+// отдельной `OnFightingWithWarSoul`-ветвью.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:143

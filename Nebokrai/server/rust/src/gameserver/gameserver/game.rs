@@ -39485,7 +39485,16 @@ impl CGame {
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
-        if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule) {
+        // `OnScheduleAboutWarSoul` проверяет боеспособность до извлечения
+        // ожидающей команды. Уже начатый навык относится к отдельной
+        // `OnFightingWithWarSoul`-ветви и продолжает свой kernel.
+        let can_schedule_battle_fairy = can_schedule
+            && self
+                .find_player(player_id)
+                .is_some_and(CPlayer::can_fight);
+        if let Some(dispatch) =
+            player_ai.begin_next_battle_fairy_skill(can_schedule_battle_fairy)
+        {
             let attribute_skill = match dispatch {
                 BattleFairySkillDispatch::SelfTarget { skill_id, .. }
                 | BattleFairySkillDispatch::Point { skill_id, .. }
