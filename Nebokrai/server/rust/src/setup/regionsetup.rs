@@ -35,6 +35,10 @@ impl CRegionSetup {
         &self.entries
     }
 
+    pub(crate) fn get(&self, region_id: i32) -> Option<RegionSetupEntry> {
+        self.entries.get(&region_id).copied()
+    }
+
     /// Читает оригинал World grammar: поиск маркера `#`, затем три signed long.
     /// Owner очищается до чтения; при некорректной записи сохраняется уже
     /// прочитанный префикс, а неизвестные значения остаются пустыми.

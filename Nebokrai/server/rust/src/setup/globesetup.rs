@@ -168,6 +168,7 @@ const FORBID_RETURN_LEVEL_OFFSET: usize = 0x82C;
 const REGIONAL_PROTECTION_OFFSET: usize = 0x830;
 const CARRIAGE_STOP_DISTANCE_OFFSET: usize = 0x810;
 const CARRIAGE_DISAPPEAR_TIME_OFFSET: usize = 0x814;
+const CARRIAGE_TRANSPORT_DISTANCE_OFFSET: usize = 0x818;
 const EXP_TO_VIGOUR_X_OFFSET: usize = 0x75C;
 const EXP_TO_VIGOUR_Y_OFFSET: usize = 0x760;
 const MAXIMUM_VIGOUR_ONCE_OFFSET: usize = 0x764;
@@ -323,6 +324,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn carriage_disappear_time_ms(&self) -> u32 {
         self.read_u32(CARRIAGE_DISAPPEAR_TIME_OFFSET)
+    }
+
+    pub(crate) fn carriage_transport_distance(&self) -> u32 {
+        self.read_u32(CARRIAGE_TRANSPORT_DISTANCE_OFFSET)
     }
 
     pub(crate) fn base_combat_scales(&self) -> [f32; 5] {

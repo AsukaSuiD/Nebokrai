@@ -77,10 +77,30 @@ pub(crate) struct RegionSwitch {
 }
 
 impl RegionSwitch {
+    fn read_i32(self, offset: usize) -> i32 {
+        LegacyReader::at(&self.bytes, offset)
+            .and_then(|mut reader| reader.read_i32())
+            .expect("поле switch занимает четыре байта")
+    }
+
     pub(crate) fn state(self) -> i32 {
-        LegacyReader::new(&self.bytes)
-            .read_i32()
-            .expect("switch state занимает четыре байта")
+        self.read_i32(0)
+    }
+
+    pub(crate) fn region_id(self) -> i32 {
+        self.read_i32(4)
+    }
+
+    pub(crate) fn coordinate_x(self) -> i32 {
+        self.read_i32(8)
+    }
+
+    pub(crate) fn coordinate_y(self) -> i32 {
+        self.read_i32(12)
+    }
+
+    pub(crate) fn direction(self) -> i32 {
+        self.read_i32(16)
     }
 }
 

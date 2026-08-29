@@ -15990,7 +15990,9 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 
 // ============================================================================
 // FUNCTION: CPlayer::OnStandOnSwitchPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// MATERIALIZED: `CGame::on_player_stand_on_switch_point` сохраняет сценарную
+// точку, ограничения, возврат, уведомление и общий `ChangeRegion`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2596

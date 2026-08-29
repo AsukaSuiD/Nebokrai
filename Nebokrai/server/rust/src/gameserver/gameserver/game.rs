@@ -4158,8 +4158,9 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет оставшийся `CBaseAI::Run` prefix virtual `CPlayerAI::Run`
-    /// после owned `UpdateCurrentState` и двух materialized FIFO front.
+    /// Исполняет оставшийся префикс `CBaseAI::Run` виртуального
+    /// `CPlayerAI::Run` после `UpdateCurrentState`, достигнутых FIFO-очередей
+    /// навыков, движения и точки перехода.
     /// Выбранный навык боевого духа и его восстановление принадлежат
     /// каноническому `CPlayerAI`; хвосты auto-exp/CheckLevel/energy идут сразу
     /// после.
@@ -39786,6 +39787,144 @@ impl CGame {
         true
     }
 
+    /// Замыкает `CPlayerAI::OnMoving -> CPlayer::OnStandOnSwitchPoint` после
+    /// фактического шага. Точка перехода читается из текущей клетки до любого
+    /// перемещения; отказ сначала возвращает игрока на три клетки назад, затем
+    /// отправляет красное уведомление, а обычный переход использует общий
+    /// `ChangeRegion` с исходной дистанцией перевозки.
+    fn on_player_stand_on_switch_point<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> Option<()> {
+        const NORMAL_SWITCH: i32 = 0;
+        const SCRIPT_SWITCH: i32 = 2;
+
+        let (source_region_id, tile_x, tile_y, direction, level, contribution, country) = self
+            .find_player(player_id)
+            .and_then(|player| {
+                Some((
+                    player.server_region_id()?,
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                    player.shape().get_direction(),
+                    i32::from(player.level()),
+                    player.contribution(),
+                    player.country(),
+                ))
+            })?;
+        let switch = self
+            .find_region(source_region_id)?
+            .base()
+            .region
+            .get_switch_at(tile_x, tile_y)
+            .ok()?
+            .copied()?;
+        let target_region_id = switch.region_id();
+
+        if switch.state() != NORMAL_SWITCH {
+            if switch.state() == SCRIPT_SWITCH {
+                let path = format!("Scripts/regions/{target_region_id}.script");
+                let queued = self.queue_player_script(player_id, path.as_bytes());
+                tracing::trace!(
+                    player_id,
+                    source_region_id,
+                    target_region_id,
+                    ?queued,
+                    "запущен сценарий точки перехода"
+                );
+            }
+            return Some(());
+        }
+
+        let restriction = self.region_setup.get(target_region_id).and_then(|setup| {
+            if level < setup.can_enter_level {
+                return Some((b"GS0129".as_slice(), Some(setup.can_enter_level)));
+            }
+            if contribution < setup.required_contribute {
+                return Some((b"GS0130".as_slice(), Some(setup.required_contribute)));
+            }
+            if self.globe_setup.regional_protection() != 0 {
+                let target_country = self
+                    .find_region(target_region_id)
+                    .map(|owner| owner.base().country)
+                    .or_else(|| self.find_proxy_region(target_region_id).map(|region| region.country()));
+                if target_country.is_some_and(|target| target != 0 && target != country) {
+                    return Some((b"GS0131".as_slice(), None));
+                }
+            }
+            None
+        });
+
+        if let Some((string_id, value)) = restriction {
+            let rear_direction = self
+                .find_player(player_id)?
+                .shape()
+                .get_rear_direction()
+                .ok()?;
+            let mut destination = ShapeAreaCoordinates {
+                x: tile_x,
+                y: tile_y,
+            };
+            for _ in 0..3 {
+                destination = CShape::get_direction_position(rear_direction, destination).ok()?;
+            }
+            let outcome = self.change_player_region(
+                player_id,
+                source_region_id,
+                destination.x,
+                destination.y,
+                direction,
+                0,
+                1,
+                0,
+                runtime,
+            );
+            let template = self.get_string_by_id(string_id);
+            let text = value.map_or_else(
+                || legacy_c_string_prefix(template).to_vec(),
+                |value| {
+                    format_legacy_mixed(
+                        template,
+                        &[LegacyFormatArgument::Signed(value)],
+                        255,
+                    )
+                },
+            );
+            let delivery = colored_player_notice_message(0xffff_0000, 0, &text)
+                .send_to_player(self.net_server(), player_id);
+            tracing::trace!(
+                player_id,
+                source_region_id,
+                target_region_id,
+                ?outcome,
+                delivery,
+                "переход игрока ограничен настройками региона"
+            );
+            return Some(());
+        }
+
+        let outcome = self.change_player_region(
+            player_id,
+            target_region_id,
+            switch.coordinate_x(),
+            switch.coordinate_y(),
+            switch.direction(),
+            0,
+            0,
+            self.globe_setup.carriage_transport_distance() as i32,
+            runtime,
+        );
+        tracing::trace!(
+            player_id,
+            source_region_id,
+            target_region_id,
+            ?outcome,
+            "игрок использовал точку перехода"
+        );
+        Some(())
+    }
+
     fn send_player_contribution_update(&self, player_id: i32) -> Option<i32> {
         let player = self.find_player(player_id)?;
         let mut message = CMessage::new(0x000b_f724);
@@ -44328,8 +44467,12 @@ impl CGame {
                             let can_schedule_skill = self
                                 .find_player(player_id)
                                 .is_some_and(|player| !player.is_dead());
+                            let moving_started = player_ai.active_move_unhandled();
                             let active_move_handled =
                                 player_ai.advance_active_move(runtime.now_milliseconds());
+                            if moving_started {
+                                let _ = self.on_player_stand_on_switch_point(player_id, runtime);
+                            }
                             let (executed_skills, executed_player_skills) = self
                                 .execute_queued_player_skills(
                                     player_id,

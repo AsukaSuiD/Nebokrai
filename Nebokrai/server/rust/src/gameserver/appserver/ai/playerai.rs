@@ -402,6 +402,10 @@ impl CPlayerAI {
         self.base_ai.advance_active_move(now_ms)
     }
 
+    pub(crate) fn active_move_unhandled(&self) -> bool {
+        self.base_ai.active_move_unhandled()
+    }
+
     pub(crate) fn has_queued_player_skill(&self) -> bool {
         !self.player_skills.is_empty()
     }
@@ -2716,17 +2720,15 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnMoving
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// MATERIALIZED: первый проход `ASA_MOVE` вызывает владельца точки перехода до
+// ожидания задержки; `CGame` сохраняет возможную смену региона и уведомления.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:658
 // RVA: 0x00108E90
 // ADDRESS: 00508e90
 // PROTOTYPE: int __thiscall OnMoving(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnStanding
