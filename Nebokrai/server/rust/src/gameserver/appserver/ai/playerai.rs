@@ -23,6 +23,7 @@
 //! и двойной направленный удары,
 //! периодический удар листвы и фронтальный рубящий удар,
 //! быстрая атака владыки,
+//! прямые снаряды метателя камня и скелета-стрелка,
 //! машинный и мана-щит, защитная стойка,
 //! оглушение, ослабление, очищение,
 //! атака боевой феи и её призываемые области
@@ -86,6 +87,7 @@ use crate::gameserver::appserver::skills::knightcut::KnightCutExecutionState;
 use crate::gameserver::appserver::skills::littleflash::LittleFlashExecutionState;
 use crate::gameserver::appserver::skills::littlestar::PlayerLittleStarExecutionState;
 use crate::gameserver::appserver::skills::energybolt::PlayerPathProjectileExecutionState;
+use crate::gameserver::appserver::skills::directprojectile::PlayerDirectProjectileExecutionState;
 use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
@@ -221,6 +223,8 @@ pub(crate) struct CPlayerAI {
     little_star_last_used_ms: u32,
     path_projectile: Option<PlayerPathProjectileExecutionState>,
     path_projectile_last_used_ms: [u32; 3],
+    direct_projectile: Option<PlayerDirectProjectileExecutionState>,
+    direct_projectile_last_used_ms: [u32; 2],
     sprite_burn: Option<SpriteBurnExecutionState>,
     sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -402,6 +406,7 @@ impl CPlayerAI {
         self.seven_shooting_star = None;
         self.little_star = None;
         self.path_projectile = None;
+        self.direct_projectile = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -695,6 +700,10 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение пошагового снаряда завершено");
         }
+        if let Some(mut execution) = self.direct_projectile.take() {
+            let _ = execution.kernel_mut().terminate(termination);
+            tracing::trace!(?expected, ?termination, skill_id = execution.skill_id(), stage = ?execution.kernel().stage(), "выполнение прямого снаряда завершено");
+        }
         if let Some(mut execution) = self.sprite_burn.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
@@ -881,6 +890,7 @@ impl CPlayerAI {
         self.seven_shooting_star = None;
         self.little_star = None;
         self.path_projectile = None;
+        self.direct_projectile = None;
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
@@ -1468,6 +1478,34 @@ impl CPlayerAI {
 
     pub(crate) fn mark_path_projectile_used(&mut self, skill_id: u32, now_ms: u32) {
         self.path_projectile_last_used_ms[Self::path_projectile_index(skill_id)] = now_ms;
+    }
+
+    pub(crate) const fn direct_projectile(&self) -> Option<&PlayerDirectProjectileExecutionState> {
+        self.direct_projectile.as_ref()
+    }
+
+    pub(crate) fn begin_direct_projectile(&mut self, state: PlayerDirectProjectileExecutionState) {
+        self.direct_projectile = Some(state);
+    }
+
+    pub(crate) fn direct_projectile_mut(&mut self) -> Option<&mut PlayerDirectProjectileExecutionState> {
+        self.direct_projectile.as_mut()
+    }
+
+    const fn direct_projectile_index(skill_id: u32) -> usize {
+        match skill_id {
+            0x19d => 0,
+            0x1a1 => 1,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) const fn direct_projectile_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.direct_projectile_last_used_ms[Self::direct_projectile_index(skill_id)]
+    }
+
+    pub(crate) fn mark_direct_projectile_used(&mut self, skill_id: u32, now_ms: u32) {
+        self.direct_projectile_last_used_ms[Self::direct_projectile_index(skill_id)] = now_ms;
     }
 
     pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {

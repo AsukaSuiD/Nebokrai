@@ -972,6 +972,15 @@ use crate::gameserver::appserver::skills::energybolt::{
     cancel_player_path_projectile, execute_player_energy_bolt,
     is_player_path_projectile_dispatch, ENERGY_BOLT_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::directprojectile::{
+    cancel_player_direct_projectile, is_player_direct_projectile_dispatch,
+};
+use crate::gameserver::appserver::skills::chuckstone::{
+    execute_player_chuck_stone, CHUCK_STONE_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::skeletonarchery::{
+    execute_player_skeleton_archery, SKELETON_ARCHERY_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::snakebolt::{
     SNAKE_BOLT_SKILL_ID, execute_player_snake_bolt,
 };
@@ -34373,6 +34382,7 @@ impl CGame {
                             || player.player_ai().little_flash().is_some()
                             || player.player_ai().little_star().is_some()
                             || player.player_ai().path_projectile().is_some()
+                            || player.player_ai().direct_projectile().is_some()
                             || player.player_ai().sprite_burn().is_some()
                             || player.player_ai().wide_arc_attack().is_some()
                             || player.player_ai().lord_fast_attack().is_some()
@@ -35071,6 +35081,7 @@ impl CGame {
                 || player.player_ai().little_flash().is_some()
                 || player.player_ai().little_star().is_some()
                 || player.player_ai().path_projectile().is_some()
+                || player.player_ai().direct_projectile().is_some()
                 || player.player_ai().sprite_burn().is_some()
                 || player.player_ai().wide_arc_attack().is_some()
                 || player.player_ai().lord_fast_attack().is_some()
@@ -37620,6 +37631,8 @@ impl CGame {
                 | PETS_CONTROL_SKILL_ID
                 | MONSTER_TAMING_SKILL_ID
                 | KNOCK_OUT_SKILL_ID
+                | CHUCK_STONE_SKILL_ID
+                | SKELETON_ARCHERY_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
             && !is_heal_skill(skill_id)
         {
@@ -37668,6 +37681,9 @@ impl CGame {
             LITTLE_STAR_SKILL_ID => player_ai.little_star().is_some(),
             ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
                 player_ai.path_projectile().is_some()
+            }
+            CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
+                player_ai.direct_projectile().is_some()
             }
             SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
@@ -38074,6 +38090,9 @@ impl CGame {
             }
             ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID => {
                 cancel_player_path_projectile(self, player_id, &mut player_ai, runtime)
+            }
+            CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID => {
+                cancel_player_direct_projectile(self, player_id, &mut player_ai, runtime)
             }
             SPRITE_BURN_SKILL_ID => {
                 cancel_player_sprite_burn(self, player_id, &mut player_ai, runtime)
@@ -38556,6 +38575,7 @@ impl CGame {
             let concrete_seven_shooting_star = is_seven_shooting_star_dispatch(dispatch);
             let concrete_little_star = is_player_little_star_dispatch(dispatch);
             let concrete_path_projectile = is_player_path_projectile_dispatch(dispatch);
+            let concrete_direct_projectile = is_player_direct_projectile_dispatch(dispatch);
             let path_projectile_skill_id = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -38813,6 +38833,10 @@ impl CGame {
                 execute_player_zombie_claw(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_path_projectile && path_projectile_skill_id == SNAKE_BOLT_SKILL_ID {
                 execute_player_snake_bolt(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_direct_projectile && path_projectile_skill_id == CHUCK_STONE_SKILL_ID {
+                execute_player_chuck_stone(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_direct_projectile && path_projectile_skill_id == SKELETON_ARCHERY_SKILL_ID {
+                execute_player_skeleton_archery(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_sprite_burn {
                 execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machinery_stomp {
