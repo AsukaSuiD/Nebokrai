@@ -948,7 +948,8 @@ use crate::gameserver::appserver::skills::lordwiderangingattack::{
     LORD_WIDERANGING_ATTACK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::lordfastattack::{
-    execute_player_lord_fast_attack, is_lord_fast_attack_dispatch,
+    cancel_player_lord_fast_attack, execute_player_lord_fast_attack,
+    is_lord_fast_attack_dispatch, LORD_FAST_ATTACK_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::chaossphere::{
     execute_player_chaos_sphere, is_chaos_sphere_dispatch,
@@ -37457,6 +37458,7 @@ impl CGame {
                 | SPRITE_BURN_SKILL_ID
                 | MACHINERY_STOMP_SKILL_ID
                 | LORD_WIDERANGING_ATTACK_SKILL_ID
+                | LORD_FAST_ATTACK_SKILL_ID
                 | ARCHERY_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
@@ -37517,6 +37519,7 @@ impl CGame {
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
                 player_ai.wide_arc_attack().is_some()
             }
+            LORD_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
@@ -37622,6 +37625,9 @@ impl CGame {
             }
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
                 cancel_player_wide_arc_attack(self, player_id, &mut player_ai, runtime)
+            }
+            LORD_FAST_ATTACK_SKILL_ID => {
+                cancel_player_lord_fast_attack(self, player_id, &mut player_ai, runtime)
             }
             ARCHERY_SKILL_ID => cancel_player_archery(self, player_id, &mut player_ai, runtime),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
