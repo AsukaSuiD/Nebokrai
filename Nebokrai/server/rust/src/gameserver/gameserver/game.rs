@@ -659,7 +659,10 @@ use crate::gameserver::appserver::message::unibillmessage::dispatch_increment_sh
 use crate::gameserver::appserver::ai::carriage::{
     CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts,
 };
-use crate::gameserver::appserver::ai::pet::{PetLifecycleFacts, PetLifecycleNotice};
+use crate::gameserver::appserver::ai::pet::{
+    PetLifecycleFacts, PetLifecycleNotice, execute_owned_pet_active_search,
+    execute_owned_pet_follow,
+};
 use crate::gameserver::appserver::monster::{CMonster, MonsterKillingAttack};
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver,
@@ -25674,6 +25677,74 @@ impl CGame {
             .is_some_and(|result| result.is_ok())
     }
 
+    pub(crate) const fn spatial_delivery_ready(&self) -> bool {
+        self.area_width > 0 && self.area_height > 0
+    }
+
+    /// Применяет шаг питомца с размерами областей текущего runtime-владельца,
+    /// как в исходной ветви `CPet::OnFallowingSchedule`.
+    pub(crate) fn move_owned_pet_step(
+        &mut self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        x: i32,
+        y: i32,
+        figure: ShapeFigure,
+    ) -> bool {
+        let area_width = self.area_width;
+        let area_height = self.area_height;
+        let Some(around) = GameServerAroundRuntime::new(
+            self,
+            &self.session_factory,
+            area_width,
+            area_height,
+        ) else {
+            return false;
+        };
+        region
+            .move_owned_monster(
+                monster_id,
+                x,
+                y,
+                0,
+                figure,
+                area_width,
+                area_height,
+                &around,
+            )
+            .is_some_and(|result| result.is_ok())
+    }
+
+    /// Применяет рассчитанный владельцем ИИ мгновенный перенос монстра;
+    /// `CGame` сохраняет членство областей и порядок сетевой доставки.
+    pub(crate) fn set_owned_pet_position(
+        &mut self,
+        region: &mut CServerRegion,
+        monster_id: i32,
+        x: i32,
+        y: i32,
+        figure: ShapeFigure,
+    ) -> bool {
+        let area_width = self.area_width;
+        let area_height = self.area_height;
+        let Some(around) =
+            GameServerAroundRuntime::new(self, &self.session_factory, area_width, area_height)
+        else {
+            return false;
+        };
+        region
+            .set_owned_monster_position(
+                monster_id,
+                x,
+                y,
+                figure,
+                area_width,
+                area_height,
+                &around,
+            )
+            .is_some_and(|result| result.is_ok())
+    }
+
     pub(crate) const fn player_ranks(&self) -> Option<&CPlayerRanks> {
         self.player_ranks.as_ref()
     }
@@ -35077,70 +35148,8 @@ impl CGame {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        let selected = (|| {
-            let region = owner.base_mut();
-            let Some(master) = region.find_monster_by_id(monster_id).and_then(|pet| {
-                (pet.is_tamed() && pet.pet_mode() == 2 && pet.ai_target().is_none())
-                    .then_some(pet.master_info())
-            }) else {
-                return false;
-            };
-            if master.master_type != PLAYER_TYPE || master.master_id == 0 {
-                return false;
-            }
-            let Some((master_view, master_badman, area_index)) = self
-                .find_player(master.master_id)
-                .filter(|player| player.server_region_id() == Some(region_id))
-                .and_then(|player| {
-                    Some((
-                        player.shape_view()?,
-                        player.is_badman(self.globe_setup.pk_count_per_kill()),
-                        player.shape().area_index()?,
-                    ))
-                })
-            else {
-                return false;
-            };
-            let mut selected = None;
-            let mut selected_distance = i32::MAX;
-            for candidate_id in region.monster_ids_around_area(area_index) {
-                if candidate_id == monster_id {
-                    continue;
-                }
-                let Some(candidate) = region
-                    .find_monster_by_id(candidate_id)
-                    .filter(|candidate| {
-                        !candidate.is_tamed() && !CMoveShape::is_died(candidate.hit_points())
-                    })
-                    .and_then(|candidate| {
-                        let property = self
-                            .find_monster_property_by_origin_name(candidate.base_property_key()?)?;
-                        (!(property.tamable == 1 && property.maximum_tame_attempt_count == 0)
-                            && (property.kind != 5 || master_badman))
-                            .then(|| candidate.shape_view(property))?
-                    })
-                else {
-                    continue;
-                };
-                let distance = real_distance(
-                    master_view.tile_x,
-                    master_view.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                );
-                if distance <= 10 && distance <= selected_distance {
-                    selected = Some(candidate.identity);
-                    selected_distance = distance;
-                }
-            }
-            if let Some(target) = selected
-                && let Some(pet) = region.find_monster_by_id_mut(monster_id)
-            {
-                pet.set_ai_target(target);
-                return true;
-            }
-            false
-        })();
+        let selected =
+            execute_owned_pet_active_search(self, owner.base_mut(), region_id, monster_id);
         self.restore_region_owner(owner);
         selected
     }
@@ -35287,130 +35296,8 @@ impl CGame {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        let handled = (|| {
-            let region = owner.base_mut();
-            let Some((pet_shape, pet_health, master, moveable, property)) =
-                region.find_monster_by_id(monster_id).and_then(|monster| {
-                    if !monster.is_tamed() || monster.pet_action() != 1 {
-                        return None;
-                    }
-                    let property = self
-                        .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                        .clone();
-                    Some((
-                        monster.move_shape().shape().clone(),
-                        monster.hit_points(),
-                        monster.master_info(),
-                        monster.move_shape().is_moveable(),
-                        property,
-                    ))
-                })
-            else {
-                return false;
-            };
-            if CMoveShape::is_died(pet_health) || !moveable {
-                return true;
-            }
-            if master.master_type != PLAYER_TYPE || master.master_id == 0 {
-                return true;
-            }
-            let Some((master_shape, pet_index)) =
-                self.find_player(master.master_id).and_then(|player| {
-                    (player.server_region_id() == Some(region_id)).then(|| {
-                        let index = player.active_pets().iter().position(|pet| {
-                            pet.object_type == MONSTER_TYPE && pet.id == monster_id
-                        })?;
-                        Some((player.shape().clone(), index))
-                    })?
-                })
-            else {
-                return true;
-            };
-            let (Ok(pet_x), Ok(pet_y), Ok(master_x), Ok(master_y), Ok(rear)) = (
-                pet_shape.get_tile_x(),
-                pet_shape.get_tile_y(),
-                master_shape.get_tile_x(),
-                master_shape.get_tile_y(),
-                master_shape.get_rear_direction(),
-            ) else {
-                return true;
-            };
-            let mut destination = ShapeAreaCoordinates {
-                x: master_x,
-                y: master_y,
-            };
-            for _ in 0..(pet_index / 3 + 1) {
-                let Ok(next) = CShape::get_direction_position(rear, destination) else {
-                    return true;
-                };
-                let Ok(next) = CShape::get_direction_position(rear, next) else {
-                    return true;
-                };
-                destination = next;
-            }
-            let side = match pet_index % 3 {
-                1 => master_shape.get_left_direction().ok(),
-                2 => master_shape.get_right_direction().ok(),
-                _ => None,
-            };
-            if let Some(side) = side {
-                let Ok(next) = CShape::get_direction_position(side, destination) else {
-                    return true;
-                };
-                let Ok(next) = CShape::get_direction_position(side, next) else {
-                    return true;
-                };
-                destination = next;
-            }
-            if (pet_x, pet_y) == (destination.x, destination.y) {
-                return true;
-            }
-            let Some(around) = GameServerAroundRuntime::new(
-                self,
-                &self.session_factory,
-                self.area_width,
-                self.area_height,
-            ) else {
-                return true;
-            };
-            let figure = CMonster::figure(&property);
-            if (real_distance(pet_x, pet_y, master_x, master_y) as f32)
-                <= self.globe_setup.pet_translate_distance()
-            {
-                let _ = region.move_owned_monster(
-                    monster_id,
-                    destination.x,
-                    destination.y,
-                    0,
-                    figure,
-                    self.area_width,
-                    self.area_height,
-                    &around,
-                );
-                return true;
-            }
-            let Ok(position) = region.region.get_random_pos_in_range(
-                master_x.wrapping_sub(3),
-                master_y.wrapping_sub(3),
-                7,
-                7,
-                runtime,
-            ) else {
-                return true;
-            };
-            if position.found {
-                let _ = region.set_owned_monster_position(
-                    monster_id,
-                    position.x,
-                    position.y,
-                    figure,
-                    self.area_width,
-                    self.area_height,
-                    &around,
-                );
-            }
-            true
-        })();
+        let handled =
+            execute_owned_pet_follow(self, owner.base_mut(), region_id, monster_id, runtime);
         self.restore_region_owner(owner);
         handled
     }

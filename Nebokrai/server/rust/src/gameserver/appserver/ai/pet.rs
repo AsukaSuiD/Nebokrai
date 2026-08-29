@@ -10,6 +10,16 @@
 //! Декомпилятор: Ghidra 12.1.2
 //! Сохранены ещё не сопоставленные боевые и событийные ветви `CPet`.
 
+use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::moveshape::CMoveShape;
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates};
+use crate::gameserver::appserver::skills::baseattack::real_distance;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+
+const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
+
 const SEEK_MASTER_INTERVAL_MS: u32 = 1_000;
 const LIFE_CYCLE_INTERVAL_MS: u32 = 21_600_000;
 
@@ -118,6 +128,201 @@ impl PetLifecycleState {
         }
         outcome
     }
+}
+
+/// Выбирает ближайшего дикого монстра для активного питомца. Равная дальность
+/// сохраняет исходное правило: побеждает более поздняя запись обхода региона.
+pub(crate) fn execute_owned_pet_active_search(
+    game: &CGame,
+    region: &mut CServerRegion,
+    region_id: i32,
+    monster_id: i32,
+) -> bool {
+    let Some(master) = region.find_monster_by_id(monster_id).and_then(|pet| {
+        (pet.is_tamed() && pet.pet_mode() == 2 && pet.ai_target().is_none())
+            .then_some(pet.master_info())
+    }) else {
+        return false;
+    };
+    if master.master_type != PLAYER_TYPE || master.master_id == 0 {
+        return false;
+    }
+    let Some((master_view, master_badman, area_index)) = game
+        .find_player(master.master_id)
+        .filter(|player| player.server_region_id() == Some(region_id))
+        .and_then(|player| {
+            Some((
+                player.shape_view()?,
+                player.is_badman(game.globe_setup().pk_count_per_kill()),
+                player.shape().area_index()?,
+            ))
+        })
+    else {
+        return false;
+    };
+
+    let mut selected = None;
+    let mut selected_distance = i32::MAX;
+    for candidate_id in region.monster_ids_around_area(area_index) {
+        if candidate_id == monster_id {
+            continue;
+        }
+        let Some(candidate) = region
+            .find_monster_by_id(candidate_id)
+            .filter(|candidate| {
+                !candidate.is_tamed() && !CMoveShape::is_died(candidate.hit_points())
+            })
+            .and_then(|candidate| {
+                let property =
+                    game.find_monster_property_by_origin_name(candidate.base_property_key()?)?;
+                (!(property.tamable == 1 && property.maximum_tame_attempt_count == 0)
+                    && (property.kind != 5 || master_badman))
+                    .then(|| candidate.shape_view(property))?
+            })
+        else {
+            continue;
+        };
+        let distance = real_distance(
+            master_view.tile_x,
+            master_view.tile_y,
+            candidate.tile_x,
+            candidate.tile_y,
+        );
+        if distance <= 10 && distance <= selected_distance {
+            selected = Some(candidate.identity);
+            selected_distance = distance;
+        }
+    }
+    if let Some(target) = selected
+        && let Some(pet) = region.find_monster_by_id_mut(monster_id)
+    {
+        pet.set_ai_target(target);
+        return true;
+    }
+    false
+}
+
+/// Исполняет достигнутое следование `CPet`: слот питомца задаёт позицию позади
+/// хозяина, близкая цель достигается обычным шагом, а далёкая — переносом в
+/// свободную клетку `7x7` с тем же порядком пространственной доставки.
+pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    region_id: i32,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some((pet_shape, pet_health, master, moveable, property)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            if !monster.is_tamed() || monster.pet_action() != 1 {
+                return None;
+            }
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            Some((
+                monster.move_shape().shape().clone(),
+                monster.hit_points(),
+                monster.master_info(),
+                monster.move_shape().is_moveable(),
+                property,
+            ))
+        })
+    else {
+        return false;
+    };
+    if CMoveShape::is_died(pet_health) || !moveable {
+        return true;
+    }
+    if master.master_type != PLAYER_TYPE || master.master_id == 0 {
+        return true;
+    }
+    let Some((master_shape, pet_index)) = game.find_player(master.master_id).and_then(|player| {
+        (player.server_region_id() == Some(region_id)).then(|| {
+            let index = player
+                .active_pets()
+                .iter()
+                .position(|pet| pet.object_type == MONSTER_TYPE && pet.id == monster_id)?;
+            Some((player.shape().clone(), index))
+        })?
+    }) else {
+        return true;
+    };
+    let (Ok(pet_x), Ok(pet_y), Ok(master_x), Ok(master_y), Ok(rear)) = (
+        pet_shape.get_tile_x(),
+        pet_shape.get_tile_y(),
+        master_shape.get_tile_x(),
+        master_shape.get_tile_y(),
+        master_shape.get_rear_direction(),
+    ) else {
+        return true;
+    };
+    let mut destination = ShapeAreaCoordinates {
+        x: master_x,
+        y: master_y,
+    };
+    for _ in 0..(pet_index / 3 + 1) {
+        let Ok(next) = CShape::get_direction_position(rear, destination) else {
+            return true;
+        };
+        let Ok(next) = CShape::get_direction_position(rear, next) else {
+            return true;
+        };
+        destination = next;
+    }
+    let side = match pet_index % 3 {
+        1 => master_shape.get_left_direction().ok(),
+        2 => master_shape.get_right_direction().ok(),
+        _ => None,
+    };
+    if let Some(side) = side {
+        let Ok(next) = CShape::get_direction_position(side, destination) else {
+            return true;
+        };
+        let Ok(next) = CShape::get_direction_position(side, next) else {
+            return true;
+        };
+        destination = next;
+    }
+    if (pet_x, pet_y) == (destination.x, destination.y) {
+        return true;
+    }
+    if !game.spatial_delivery_ready() {
+        return true;
+    }
+    let figure = CMonster::figure(&property);
+    if (real_distance(pet_x, pet_y, master_x, master_y) as f32)
+        <= game.globe_setup().pet_translate_distance()
+    {
+        let _ = game.move_owned_pet_step(
+            region,
+            monster_id,
+            destination.x,
+            destination.y,
+            figure,
+        );
+        return true;
+    }
+    let Ok(position) = region.region.get_random_pos_in_range(
+        master_x.wrapping_sub(3),
+        master_y.wrapping_sub(3),
+        7,
+        7,
+        runtime,
+    ) else {
+        return true;
+    };
+    if position.found {
+        let _ = game.set_owned_pet_position(
+            region,
+            monster_id,
+            position.x,
+            position.y,
+            figure,
+        );
+    }
+    true
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -233,20 +438,6 @@ impl PetLifecycleState {
 // RVA: 0x000E9650
 // ADDRESS: 004e9650
 // PROTOTYPE: void __thiscall OnStayingSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPet::OnSearchEnemy
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:556
-// RVA: 0x000E98A0
-// ADDRESS: 004e98a0
-// PROTOTYPE: int __thiscall OnSearchEnemy(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
