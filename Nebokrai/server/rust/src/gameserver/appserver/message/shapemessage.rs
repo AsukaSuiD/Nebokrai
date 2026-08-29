@@ -12,9 +12,10 @@
 //! `OnCannotMove`, сброс эмоции и FIFO назначения в принадлежащем игроку
 //! `CPlayerAI`. Разрешение клиентской позиции читается из действующего
 //! `CGlobeSetup::bAllowClientChangePos`; исходный порядок проверки, поиска и
-//! payload сохранён. Полиморфный `SetTileXY` достигнутых игроков, монстров и NPC
-//! применяется их каноническими владельцами региона после wire; только прочие
-//! категории фигур и полные сериализаторы остаются границами исполнения.
+//! payload сохранён. Полиморфный `SetTileXY` достигнутых игроков, монстров, NPC
+//! и призванных форм применяется их каноническими владельцами региона после
+//! wire; только прочие категории фигур и полные сериализаторы остаются
+//! границами исполнения.
 //! `QUERY_SHAPE_SNAPSHOT` напрямую использует достигнутые сериализаторы
 //! призванных форм; неподтверждённые производные payload не имитируются.
 //! Синхронные отправки не
@@ -41,6 +42,7 @@ const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
 const NPC_TYPE: i32 = 500;
 const MONSTER_TYPE: i32 = 600;
+const SUMMON_SHAPE_TYPE: i32 = 1000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShapeSnapshot {
@@ -224,7 +226,10 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 target.tile_y,
                 &relocation,
             );
-            if matches!(identity.object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE) {
+            if matches!(
+                identity.object_type,
+                PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE | SUMMON_SHAPE_TYPE
+            ) {
                 match game.relocate_region_shape(
                     region_id,
                     identity,

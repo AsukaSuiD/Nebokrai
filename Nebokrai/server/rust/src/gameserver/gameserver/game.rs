@@ -39397,6 +39397,10 @@ impl CGame {
                 area_width,
                 area_height,
             ),
+            SUMMON_SHAPE_TYPE => owner
+                .base_mut()
+                .set_owned_skill_phalanx_tile_position(identity.id, tile_x, tile_y)
+                .map(Ok),
             _ => None,
         };
         self.restore_region_owner(owner);

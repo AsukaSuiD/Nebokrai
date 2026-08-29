@@ -162,8 +162,9 @@ use super::region::{
     RegionReturnPoint, RegionStorageBlock,
 };
 use super::shape::{
-    CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError, ShapeCoordinateBlock,
-    ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver, ShapeRuntimeFacts, ShapeView,
+    BaseShapePositionDispatch, CShape, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
+    ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
+    ShapeRuntimeFacts, ShapeView,
 };
 use super::summonshape::{SUMMON_SHAPE_TYPE, SummonedSkillShape};
 use crate::nets::netserver::message::GameServerAroundRuntime;
@@ -1896,6 +1897,28 @@ impl CServerRegion {
 
     pub(crate) fn find_skill_phalanx_mut(&mut self, id: i32) -> Option<&mut SummonedSkillShape> {
         self.owned_skill_phalanxes.get_mut(&id)
+    }
+
+    /// Применяет базовый virtual `SetTileXY` к принадлежащей региону
+    /// призванной форме; у этого семейства нет spatial override-а
+    /// `CMoveShape`, поэтому area/block membership не перестраивается.
+    pub(crate) fn set_owned_skill_phalanx_tile_position(
+        &mut self,
+        id: i32,
+        tile_x: i32,
+        tile_y: i32,
+    ) -> Option<()> {
+        let phalanx = self.owned_skill_phalanxes.get_mut(&id)?;
+        phalanx
+            .shape_mut()
+            .set_tile_xy(
+                &mut self.region,
+                tile_x,
+                tile_y,
+                &mut BaseShapePositionDispatch,
+            )
+            .expect("базовая запись координат не возвращает ошибку");
+        Some(())
     }
 
     pub(crate) fn finish_fatal_blow_phalanx(&mut self, id: i32) -> bool {

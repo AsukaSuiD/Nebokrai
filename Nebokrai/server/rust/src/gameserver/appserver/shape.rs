@@ -307,6 +307,26 @@ pub(crate) trait ShapePositionDispatch {
     ) -> Result<(), Self::Error>;
 }
 
+/// Вызывает достигнутую базовую реализацию virtual `CShape::SetPosXY` для
+/// фигур без пространственного override-а `CMoveShape`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BaseShapePositionDispatch;
+
+impl ShapePositionDispatch for BaseShapePositionDispatch {
+    type Error = std::convert::Infallible;
+
+    fn set_pos_xy(
+        &mut self,
+        _region: &mut CRegion,
+        shape: &mut CShape,
+        x: f32,
+        y: f32,
+    ) -> Result<(), Self::Error> {
+        shape.set_pos_xy_base(x, y);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShapeCoordinateBlock {
     NonFiniteOrOutOfRange { bits: u32 },
