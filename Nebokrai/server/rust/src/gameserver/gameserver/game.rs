@@ -1151,7 +1151,10 @@ use crate::gameserver::appserver::skills::immediatestate::{
     execute_player_immediate_state, is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
-use crate::gameserver::appserver::skills::knockoutruntime::{execute_player_knock_out, KNOCK_OUT_SKILL_ID};
+use crate::gameserver::appserver::skills::knockoutruntime::{
+    cancel_player_knock_out, complete_player_knock_out, execute_player_knock_out,
+    KNOCK_OUT_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::knockoutstate::{
     expire_monster_blind_states, expire_player_blind_states,
     finish_blind_states_on_defense, finish_player_blind_states_on_defense,
@@ -37616,6 +37619,7 @@ impl CGame {
                 | PROMOTION_SKILL_ID
                 | PETS_CONTROL_SKILL_ID
                 | MONSTER_TAMING_SKILL_ID
+                | KNOCK_OUT_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
             && !is_heal_skill(skill_id)
         {
@@ -37717,6 +37721,7 @@ impl CGame {
             PROMOTION_SKILL_ID => player_ai.promotion().is_some(),
             PETS_CONTROL_SKILL_ID => player_ai.pets_control().is_some(),
             MONSTER_TAMING_SKILL_ID => player_ai.monster_taming().is_some(),
+            KNOCK_OUT_SKILL_ID => player_ai.knock_out().is_some(),
             _ if is_heal_skill(skill_id) => (0..4).any(|index| player_ai.heal_family(index).is_some()),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(&player_ai, skill_id)
@@ -37892,6 +37897,12 @@ impl CGame {
                     runtime,
                 )),
                 MONSTER_TAMING_SKILL_ID => Some(complete_player_monster_taming(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                KNOCK_OUT_SKILL_ID => Some(complete_player_knock_out(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38205,6 +38216,9 @@ impl CGame {
             }
             MONSTER_TAMING_SKILL_ID => {
                 cancel_player_monster_taming(self, player_id, &mut player_ai, runtime)
+            }
+            KNOCK_OUT_SKILL_ID => {
+                cancel_player_knock_out(self, player_id, &mut player_ai, runtime)
             }
             _ if is_heal_skill(skill_id) => {
                 cancel_player_heal(self, player_id, &mut player_ai, runtime)
