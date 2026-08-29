@@ -111,6 +111,7 @@ use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::weakstate::WeakState;
+use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
 use crate::gameserver::appserver::skills::godblessstate::GodBlessState;
 use crate::gameserver::appserver::skills::soulcollectstate::SoulCollectState;
 use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
@@ -534,7 +535,7 @@ pub(crate) struct CanonicalStateStorage {
     kerosene_state: Option<KeroseneState>,
     swordship_states: Vec<SwordshipState>,
     strike_states: Vec<StrikeState>,
-    wuxing_states: Vec<super::skills::wuxingstate::WuXingState>,
+    wuxing_states: Vec<WuXingState>,
     automatic_restore_states: Vec<AutomaticRestoreState>,
     consumable_restore_states: ConsumableRestoreStateStorage,
     particular_states: Vec<ParticularState>,
@@ -775,6 +776,11 @@ impl CMoveShape {
             .copied()
             .filter(|offset| read_u32(&states, *offset) == Some(STRIKE_STATE_ID))
             .filter_map(|offset| StrikeState::decode(&states, offset).ok())
+            .collect();
+        self.wuxing_states = known_offsets
+            .iter()
+            .copied()
+            .filter_map(|offset| WuXingState::decode(&states, offset).ok())
             .collect();
         self.ex_states.replace(states);
     }
@@ -1438,8 +1444,25 @@ impl CMoveShape {
     /// новый skill ID добавляется в хвост, как в исходном `m_vStates`.
     pub(crate) fn replace_wuxing_state(
         &mut self,
-        state: super::skills::wuxingstate::WuXingState,
-    ) -> Option<super::skills::wuxingstate::WuXingState> {
+        state: WuXingState,
+    ) -> Option<WuXingState> {
+        let serialized_offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(state.skill_id()));
+        if let Some(offset) = serialized_offset {
+            let end = offset.saturating_add(WUXING_STATE_BYTES);
+            if let Some(destination) = self.ex_states.get_mut(offset..end) {
+                destination.copy_from_slice(&state.encoded());
+            }
+        } else {
+            if self.ex_states.len() < 4 {
+                self.ex_states.clear();
+                LegacyWriter::new(&mut self.ex_states).write_u32(0);
+            }
+            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
+            self.ex_states.extend_from_slice(&state.encoded());
+        }
         if let Some(slot) = self
             .wuxing_states
             .iter_mut()
@@ -1451,7 +1474,7 @@ impl CMoveShape {
         None
     }
 
-    pub(crate) fn wuxing_states(&self) -> &[super::skills::wuxingstate::WuXingState] {
+    pub(crate) fn wuxing_states(&self) -> &[WuXingState] {
         &self.wuxing_states
     }
 
@@ -3428,6 +3451,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
             KEROSENE_STATE_ID => KEROSENE_STATE_BYTES,
             STRIKE_STATE_ID => STRIKE_STATE_BYTES,
+            0x353..=0x357 => WUXING_STATE_BYTES,
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             BLIND_STATE_ID => BLIND_STATE_BYTES,

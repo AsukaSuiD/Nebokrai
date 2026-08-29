@@ -4,9 +4,15 @@
 //! 0x5c-байтный набор параметров и одинаковый `OnUpdateProperties` для пяти
 //! элементов. Только Metal дополнительно применяет `MAX_MP_GAIN`. Порядок
 //! состояний сохраняет исходную позицию при замене того же skill ID.
+//! Каждая DB-запись состоит из ID и исходного 0x5c-байтного
+//! `tagWuXingState`; два байта выравнивания после пяти `short` сохраняются
+//! как часть подтверждённого legacy layout.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
+
+pub(crate) const WUXING_STATE_BYTES: usize = 96;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WuXingKind {
@@ -30,12 +36,12 @@ pub(crate) struct WuXingStateParameters {
     pub(crate) intelligence: i32,
     pub(crate) maximum_hp: i32,
     pub(crate) maximum_mp: u32,
-    pub(crate) blast_attack_scale_percent: i32,
-    pub(crate) blast_defense_scale_percent: i32,
-    pub(crate) critical_rate_percent: i32,
-    pub(crate) element_blast_attack_scale_percent: i32,
-    pub(crate) element_blast_defense_scale_percent: i32,
-    pub(crate) full_miss_scale_percent: i32,
+    pub(crate) blast_attack_scale_bits: u32,
+    pub(crate) blast_defense_scale_bits: u32,
+    pub(crate) critical_rate_bits: u32,
+    pub(crate) element_blast_attack_scale_bits: u32,
+    pub(crate) element_blast_defense_scale_bits: u32,
+    pub(crate) full_miss_scale_bits: u32,
     pub(crate) resume_hp_peace: i32,
     pub(crate) resume_mp_peace: i32,
     pub(crate) resume_hp_fight: i32,
@@ -63,6 +69,96 @@ impl WuXingState {
     }
 
     pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let skill_id = reader.read_u32()?;
+        let kind = kind_for_skill_id(skill_id).ok_or(LegacyReadBlock {
+            offset,
+            needed: 4,
+            available: payload.len().saturating_sub(offset),
+        })?;
+        let element_modify = reader.read_i16()?;
+        let maximum_attack = reader.read_i16()?;
+        let minimum_attack = reader.read_i16()?;
+        let defense = reader.read_i16()?;
+        let element_resistance = reader.read_i16()?;
+        let _alignment = reader.read_u16()?;
+        let parameters = WuXingStateParameters {
+            element_modify,
+            maximum_attack,
+            minimum_attack,
+            defense,
+            element_resistance,
+            strength: reader.read_i32()?,
+            dexterity: reader.read_i32()?,
+            constitution: reader.read_i32()?,
+            intelligence: reader.read_i32()?,
+            maximum_hp: reader.read_i32()?,
+            maximum_mp: reader.read_u32()?,
+            blast_attack_scale_bits: reader.read_u32()?,
+            blast_defense_scale_bits: reader.read_u32()?,
+            critical_rate_bits: reader.read_u32()?,
+            element_blast_attack_scale_bits: reader.read_u32()?,
+            element_blast_defense_scale_bits: reader.read_u32()?,
+            full_miss_scale_bits: reader.read_u32()?,
+            resume_hp_peace: reader.read_i32()?,
+            resume_mp_peace: reader.read_i32()?,
+            resume_hp_fight: reader.read_i32()?,
+            resume_mp_fight: reader.read_i32()?,
+            restored_hp_peace: reader.read_i32()?,
+            restored_mp_peace: reader.read_i32()?,
+            restored_hp_fight: reader.read_i32()?,
+            restored_mp_fight: reader.read_i32()?,
+        };
+        Ok(Self::new(skill_id, kind, parameters))
+    }
+
+    pub(crate) fn encoded(self) -> [u8; WUXING_STATE_BYTES] {
+        let parameters = self.parameters;
+        let mut bytes = Vec::with_capacity(WUXING_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(self.skill_id);
+        writer.write_i16(parameters.element_modify);
+        writer.write_i16(parameters.maximum_attack);
+        writer.write_i16(parameters.minimum_attack);
+        writer.write_i16(parameters.defense);
+        writer.write_i16(parameters.element_resistance);
+        writer.write_u16(0);
+        for value in [
+            parameters.strength,
+            parameters.dexterity,
+            parameters.constitution,
+            parameters.intelligence,
+            parameters.maximum_hp,
+        ] {
+            writer.write_i32(value);
+        }
+        writer.write_u32(parameters.maximum_mp);
+        for value in [
+            parameters.blast_attack_scale_bits,
+            parameters.blast_defense_scale_bits,
+            parameters.critical_rate_bits,
+            parameters.element_blast_attack_scale_bits,
+            parameters.element_blast_defense_scale_bits,
+            parameters.full_miss_scale_bits,
+        ] {
+            writer.write_u32(value);
+        }
+        for value in [
+            parameters.resume_hp_peace,
+            parameters.resume_mp_peace,
+            parameters.resume_hp_fight,
+            parameters.resume_mp_fight,
+            parameters.restored_hp_peace,
+            parameters.restored_mp_peace,
+            parameters.restored_hp_fight,
+            parameters.restored_mp_fight,
+        ] {
+            writer.write_i32(value);
+        }
+        bytes.try_into().expect("размер состояния У-син фиксирован")
+    }
 
     pub(crate) fn apply_to_player(
         self,
@@ -134,32 +230,32 @@ impl WuXingState {
 
         apply_scale(
             &mut properties.blast_attack_scale_bits,
-            parameters.blast_attack_scale_percent,
+            parameters.blast_attack_scale_bits,
             1.0,
         );
         apply_scale(
             &mut properties.blast_defense_scale_bits,
-            parameters.blast_defense_scale_percent,
+            parameters.blast_defense_scale_bits,
             0.01,
         );
         apply_scale(
             &mut properties.critical_rate_bits,
-            parameters.critical_rate_percent,
+            parameters.critical_rate_bits,
             1.0,
         );
         apply_scale(
             &mut properties.element_blast_attack_scale_bits,
-            parameters.element_blast_attack_scale_percent,
+            parameters.element_blast_attack_scale_bits,
             1.0,
         );
         apply_scale(
             &mut properties.element_blast_defense_scale_bits,
-            parameters.element_blast_defense_scale_percent,
+            parameters.element_blast_defense_scale_bits,
             0.01,
         );
         apply_scale(
             &mut properties.full_miss_scale_bits,
-            parameters.full_miss_scale_percent,
+            parameters.full_miss_scale_bits,
             0.01,
         );
 
@@ -187,12 +283,24 @@ fn derived(value: i32, coefficient: f32) -> i32 {
     (value as f32 * coefficient).round() as i32
 }
 
-fn apply_scale(bits: &mut u32, percent: i32, minimum: f32) {
-    if percent == 0 {
+fn apply_scale(bits: &mut u32, percent_bits: u32, minimum: f32) {
+    let percent = f32::from_bits(percent_bits);
+    if percent == 0.0 {
         return;
     }
-    let value = f32::from_bits(*bits) + percent as f32 * 0.01;
+    let value = f32::from_bits(*bits) + percent * 0.01;
     *bits = if value < minimum { minimum } else { value }.to_bits();
+}
+
+pub(crate) const fn kind_for_skill_id(skill_id: u32) -> Option<WuXingKind> {
+    match skill_id {
+        0x353 => Some(WuXingKind::Metal),
+        0x354 => Some(WuXingKind::Wood),
+        0x355 => Some(WuXingKind::Water),
+        0x356 => Some(WuXingKind::Fire),
+        0x357 => Some(WuXingKind::Earth),
+        _ => None,
+    }
 }
 
 fn add_with_floor(value: i32, delta: i32, floor: i32) -> i32 {

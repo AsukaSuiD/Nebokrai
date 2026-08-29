@@ -9,7 +9,7 @@ use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::wuxingearth::WUXING_EARTH_SKILL_ID;
 use super::wuxingfire::WUXING_FIRE_SKILL_ID;
 use super::wuxingmetal::WUXING_METAL_SKILL_ID;
-use super::wuxingstate::{WuXingKind, WuXingState, WuXingStateParameters};
+use super::wuxingstate::{kind_for_skill_id, WuXingKind, WuXingState, WuXingStateParameters};
 use super::wuxingwater::WUXING_WATER_SKILL_ID;
 use super::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -55,17 +55,6 @@ pub(crate) const fn is_wuxing_skill(skill_id: u32) -> bool {
     )
 }
 
-fn definition(skill_id: u32) -> Option<WuXingKind> {
-    match skill_id {
-        WUXING_METAL_SKILL_ID => Some(WuXingKind::Metal),
-        WUXING_WOOD_SKILL_ID => Some(WuXingKind::Wood),
-        WUXING_WATER_SKILL_ID => Some(WuXingKind::Water),
-        WUXING_FIRE_SKILL_ID => Some(WuXingKind::Fire),
-        WUXING_EARTH_SKILL_ID => Some(WuXingKind::Earth),
-        _ => None,
-    }
-}
-
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
@@ -84,7 +73,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
             if is_wuxing_skill(skill_id) => skill_id,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
-    let Some(kind) = definition(skill_id) else {
+    let Some(kind) = kind_for_skill_id(skill_id) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     if game.find_player(player_id).is_none() {
@@ -125,12 +114,12 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         intelligence: query(TARGET_INT_GAIN) as i32,
         maximum_hp,
         maximum_mp: (kind == WuXingKind::Metal).then(|| query(MAX_MP_GAIN)).unwrap_or(0),
-        blast_attack_scale_percent: query(BLAST_ATTACK_SCALE_FIX) as i32,
-        blast_defense_scale_percent: query(BLAST_DEFENSE_SCALE_FIX) as i32,
-        critical_rate_percent: query(CRITICAL_RATE_FIX) as i32,
-        element_blast_attack_scale_percent: query(ELEMENT_BLAST_ATTACK_SCALE_FIX) as i32,
-        element_blast_defense_scale_percent: query(ELEMENT_BLAST_DEFENSE_SCALE_FIX) as i32,
-        full_miss_scale_percent: query(FULL_MISS_SCALE_FIX) as i32,
+        blast_attack_scale_bits: (query(BLAST_ATTACK_SCALE_FIX) as i32 as f32).to_bits(),
+        blast_defense_scale_bits: (query(BLAST_DEFENSE_SCALE_FIX) as i32 as f32).to_bits(),
+        critical_rate_bits: (query(CRITICAL_RATE_FIX) as i32 as f32).to_bits(),
+        element_blast_attack_scale_bits: (query(ELEMENT_BLAST_ATTACK_SCALE_FIX) as i32 as f32).to_bits(),
+        element_blast_defense_scale_bits: (query(ELEMENT_BLAST_DEFENSE_SCALE_FIX) as i32 as f32).to_bits(),
+        full_miss_scale_bits: (query(FULL_MISS_SCALE_FIX) as i32 as f32).to_bits(),
         resume_hp_peace: query(RESUME_HP_PEACE_FIX) as i32,
         resume_mp_peace: query(RESUME_MP_PEACE_FIX) as i32,
         resume_hp_fight: query(RESUME_HP_FIGHT_FIX) as i32,
