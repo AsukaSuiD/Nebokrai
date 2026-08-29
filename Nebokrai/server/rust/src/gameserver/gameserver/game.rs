@@ -775,7 +775,8 @@ use crate::gameserver::appserver::shape::{
     ShapeFigure, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
-    BASE_ATTACK_SKILL_ID, BaseAttackExecutionState, SKILL_USAGE_DELAY_TIME,
+    cancel_player_base_attack, finish_player_base_attack, BASE_ATTACK_SKILL_ID,
+    BaseAttackExecutionState, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     real_distance, time_reached,
 };
@@ -36571,9 +36572,7 @@ impl CGame {
                 .is_some_and(CPlayer::is_dead)
         {
             let _ = self.send_base_attack_failure(player_id, 2);
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.set_current_skill_id(None);
-            }
+            finish_player_base_attack(self, player_id, player_ai, runtime);
             return rejected();
         }
         if let Some((target_identity, _)) = target
@@ -36587,9 +36586,7 @@ impl CGame {
                 .is_none_or(|monster| monster.hit_points() == 0 || monster.move_shape().is_god());
             if monster_unavailable {
                 let _ = self.send_base_attack_failure(player_id, 2);
-                if let Some(player) = self.find_player_mut(player_id) {
-                    player.set_current_skill_id(None);
-                }
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             }
         }
@@ -36815,6 +36812,7 @@ impl CGame {
                 .find_player(player_id)
                 .and_then(CPlayer::server_region_id)
             else {
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             };
             let monster_property = self
@@ -36825,6 +36823,7 @@ impl CGame {
                 .cloned();
             let Some(monster_property) = monster_property else {
                 let _ = self.send_base_attack_failure(player_id, 2);
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             };
             let monster_snapshot = self.find_region(region_id).and_then(|owner| {
@@ -36848,14 +36847,17 @@ impl CGame {
             )) = monster_snapshot
             else {
                 let _ = self.send_base_attack_failure(player_id, 2);
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             };
             if monster_health == 0 || monster_god {
                 let _ = self.send_base_attack_failure(player_id, 2);
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             }
             if !self.guard_monster_attackable(player_id, region_id, &monster_property) {
                 let _ = self.send_base_attack_failure(player_id, 2);
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             }
             let owned_target_player = ((monster_tamed || monster_carriage)
@@ -36870,6 +36872,7 @@ impl CGame {
                 self.send_base_attack_level_block(player_id, string_id, limit);
                 self.enter_player_combat_state(player_id);
                 let _ = self.send_base_attack_failure(player_id, 2);
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             }
             let owned_target_attackable = owned_target_player.is_none_or(|owner_id| {
@@ -36883,6 +36886,7 @@ impl CGame {
             if !owned_target_attackable {
                 self.enter_player_combat_state(player_id);
                 let _ = self.send_base_attack_failure(player_id, 2);
+                finish_player_base_attack(self, player_id, player_ai, runtime);
                 return rejected();
             }
             if let Some(owner_id) = owned_target_player {
@@ -37288,11 +37292,7 @@ impl CGame {
         }
         let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
         let _ = player_ai.advance_base_attack(SkillStage::Attack, SkillStage::Apply);
-        self.damage_player_weapon(player_id, runtime);
-        player_ai.mark_base_attack_used(now_ms);
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.set_current_skill_id(None);
-        }
+        finish_player_base_attack(self, player_id, player_ai, runtime);
         QueuedSkillExecutionOutcome {
             state: QueuedSkillExecutionState::Completed,
             first_contact,
@@ -37327,11 +37327,15 @@ impl CGame {
         skill_id: u32,
         runtime: &mut Runtime,
     ) -> Option<PlayerSkillEndRuntimeOutcome> {
-        if !matches!(skill_id, BASE_MAGIC_SKILL_ID | ARCHERY_SKILL_ID) {
+        if !matches!(
+            skill_id,
+            BASE_ATTACK_SKILL_ID | BASE_MAGIC_SKILL_ID | ARCHERY_SKILL_ID
+        ) {
             return None;
         }
         let mut player_ai = self.find_player_mut(player_id)?.take_player_ai();
         let materialized = match skill_id {
+            BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             _ => unreachable!("фильтр ограничивает materialized end владельцами"),
@@ -37343,6 +37347,9 @@ impl CGame {
             return None;
         }
         let ended = match skill_id {
+            BASE_ATTACK_SKILL_ID => {
+                cancel_player_base_attack(self, player_id, &mut player_ai, runtime)
+            }
             BASE_MAGIC_SKILL_ID => {
                 cancel_player_base_magic(self, player_id, &mut player_ai, runtime)
             }

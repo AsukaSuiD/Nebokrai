@@ -14,7 +14,7 @@
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::skills::kernel::SkillExecutionKernel;
+use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillTermination};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) const BASE_ATTACK_SKILL_ID: u32 = 1;
@@ -35,9 +35,32 @@ pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_
     (x.mul_add(x, y * y).sqrt()).round_ties_even() as i32
 }
 
-/// Общий достигнутый хвост `CBaseMagic::End` и `CArchery::End`:
-/// движение восстанавливается до `AfterUseSkill`, износ оружия предшествует
-/// фиксации времени восстановления, а текущий навык очищается последним.
+/// Общий достигнутый хвост `CBaseAttack::End`, `CBaseMagic::End` и
+/// `CArchery::End`: износ оружия предшествует фиксации времени восстановления
+/// и очистке текущего навыка; задержанные варианты сначала возвращают движение.
+fn finish_base_attack_owner<Runtime, MarkUsed>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+    restore_movement: bool,
+    mark_used: MarkUsed,
+) where
+    Runtime: GameMainLoopRuntime,
+    MarkUsed: FnOnce(&mut CPlayerAI, u32),
+{
+    if restore_movement
+        && let Some(player) = game.find_player_mut(player_id)
+    {
+        player.set_skill_moveable(true);
+    }
+    game.damage_player_weapon(player_id, runtime);
+    mark_used(player_ai, runtime.now_milliseconds());
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+}
+
 pub(crate) fn finish_delayed_base_attack<Runtime, MarkUsed>(
     game: &mut CGame,
     player_id: i32,
@@ -48,14 +71,36 @@ pub(crate) fn finish_delayed_base_attack<Runtime, MarkUsed>(
     Runtime: GameMainLoopRuntime,
     MarkUsed: FnOnce(&mut CPlayerAI, u32),
 {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-    }
-    game.damage_player_weapon(player_id, runtime);
-    mark_used(player_ai, runtime.now_milliseconds());
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_current_skill_id(None);
-    }
+    finish_base_attack_owner(game, player_id, player_ai, runtime, true, mark_used);
+}
+
+pub(crate) fn finish_player_base_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) {
+    finish_base_attack_owner(
+        game,
+        player_id,
+        player_ai,
+        runtime,
+        false,
+        |player_ai, now_ms| player_ai.mark_base_attack_used(now_ms),
+    );
+}
+
+pub(crate) fn cancel_player_base_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.base_attack().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish_player_base_attack(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -157,20 +202,6 @@ pub(crate) fn finish_delayed_base_attack<Runtime, MarkUsed>(
 // RVA: 0x001B2F40
 // ADDRESS: 005b2f40
 // PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::End
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:97
-// RVA: 0x001B3010
-// ADDRESS: 005b3010
-// PROTOTYPE: void __thiscall End(int param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
