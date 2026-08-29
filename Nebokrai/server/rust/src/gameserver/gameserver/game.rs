@@ -1211,11 +1211,17 @@ use crate::gameserver::appserver::skills::godthunderphalanx::{
 use crate::gameserver::appserver::skills::godthunderphalanx2::{
     calculate_owned_god_thunder_2_attack, god_thunder_2_targets, GodThunder2PhalanxTick,
 };
-use crate::gameserver::appserver::skills::godbless::{execute_player_god_bless, is_god_bless_skill};
+use crate::gameserver::appserver::skills::godbless::{
+    cancel_player_god_bless, complete_player_god_bless, execute_player_god_bless,
+    is_god_bless_skill, GOD_BLESS_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::godbless2::GOD_BLESS_2_SKILL_ID;
 use crate::gameserver::appserver::skills::godblessstate::{
     finish_monster_god_bless, finish_player_god_bless,
 };
-use crate::gameserver::appserver::skills::cure::{execute_player_cure, is_cure_target};
+use crate::gameserver::appserver::skills::cure::{
+    cancel_player_cure, complete_player_cure, execute_player_cure, is_cure_target, CURE_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
@@ -37599,6 +37605,9 @@ impl CGame {
                 | POISON_FOG_SKILL_ID
                 | SNOW_STORM_SKILL_ID
                 | WEAK_SKILL_ID
+                | GOD_BLESS_SKILL_ID
+                | GOD_BLESS_2_SKILL_ID
+                | CURE_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
         {
             return None;
@@ -37694,6 +37703,8 @@ impl CGame {
             POISON_FOG_SKILL_ID => player_ai.poison_fog().is_some(),
             SNOW_STORM_SKILL_ID => player_ai.snow_storm().is_some(),
             WEAK_SKILL_ID => player_ai.weak().is_some(),
+            GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => player_ai.god_bless().is_some(),
+            CURE_SKILL_ID => player_ai.cure().is_some(),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(&player_ai, skill_id)
             }
@@ -37838,6 +37849,18 @@ impl CGame {
                     runtime,
                 )),
                 WEAK_SKILL_ID => Some(complete_player_weak(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => Some(complete_player_god_bless(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                CURE_SKILL_ID => Some(complete_player_cure(
                     self,
                     player_id,
                     &mut player_ai,
@@ -38133,6 +38156,10 @@ impl CGame {
                 cancel_player_snow_storm(self, player_id, &mut player_ai, runtime)
             }
             WEAK_SKILL_ID => cancel_player_weak(self, player_id, &mut player_ai, runtime),
+            GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => {
+                cancel_player_god_bless(self, player_id, &mut player_ai, runtime)
+            }
+            CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, runtime),
             _ if is_self_shield_skill(skill_id) => cancel_player_self_shield_dispatch(
                 self,
                 player_id,

@@ -10,10 +10,12 @@
 use super::baseattack::time_reached;
 use super::godblessstate::GodBlessState;
 use super::godbless2::GOD_BLESS_2_SKILL_ID;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -78,9 +80,11 @@ fn send_cast(game: &mut CGame, player_id: i32, skill_id: u32, target: Target, le
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); player.set_current_skill_id(None); }
-}
+fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
+fn finish_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, family_index: usize, runtime: &mut Runtime) { restore_player_movement(game, player_id); finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_god_bless_used(family_index, now_ms)); }
+fn abort_player_god_bless(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
+pub(crate) fn complete_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.god_bless().map(SkillExecutionKernel::dispatch) else { return false }; let skill_id = match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id }; finish_player_god_bless(game, player_id, player_ai, usize::from(skill_id == GOD_BLESS_2_SKILL_ID), runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Completed) }
+pub(crate) fn cancel_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.god_bless().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_god_bless(game, player_id); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
 fn gains(base: u32, coefficient: u32, weapon: u32) -> u32 {
     let scaled = coefficient.wrapping_mul(weapon);
@@ -117,10 +121,10 @@ pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut 
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
         player_ai.begin_god_bless(SkillExecutionKernel::begin(dispatch, started));
     } else if player_ai.god_bless().is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    let Some(target) = requested_target(game, region_id, player_id, skill_id, dispatch) else { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(target) = requested_target(game, region_id, player_id, skill_id, dispatch) else { abort_player_god_bless(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
     if player_ai.god_bless().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if mana < mp_loss { send_failure(game, player_id, 7, mp_loss); finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
+        if mana < mp_loss { send_failure(game, player_id, 7, mp_loss); abort_player_god_bless(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_cast(game, player_id, skill_id, target, level, false);
@@ -136,8 +140,7 @@ pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut 
     let state = GodBlessState::new(skill_id, runtime.now_milliseconds(), keep_time, minimum_gain, maximum_gain, element_gain);
     let installed = game.install_god_bless_state(region_id, target.identity, state, runtime);
     if let Some(execution) = player_ai.god_bless_mut() { let _ = execution.advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack); let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
-    player_ai.mark_god_bless_used(family_index, runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_god_bless(game, player_id, player_ai, family_index, runtime);
     terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
 

@@ -16,7 +16,8 @@ use super::bossbluequakestate::{
     finish_player_boss_blue_quake_state_on_cure, send_boss_blue_quake_state_visual,
 };
 use super::curestate::{CureState, send_cure_state_visual, send_cure_state_visual_at};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::stateskill::finish_state_skill;
 use super::knockoutstate::{
     KNOCK_OUT_STATE_ID, KnockOutState, finish_player_knock_out_state_on_defense,
     send_knock_out_state_visual,
@@ -40,6 +41,7 @@ use super::poisonfogstate::{POISON_FOG_STATE_ID, PoisonFogState, send_poison_fog
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -146,11 +148,32 @@ fn send_cast(game: &mut CGame, player_id: i32, target: &CureTarget, level: i32, 
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn finish_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
+    restore_player_movement(game, player_id);
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_cure_used(now_ms));
+}
+
+fn abort_player_cure(game: &mut CGame, player_id: i32) {
+    restore_player_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
+pub(crate) fn complete_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.cure().map(SkillExecutionKernel::dispatch) else { return false };
+    finish_player_cure(game, player_id, player_ai, runtime);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
+}
+
+pub(crate) fn cancel_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.cure().map(SkillExecutionKernel::dispatch) else { return false };
+    abort_player_cure(game, player_id);
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn cure_threshold(element_modify: i32, base_probability: u32, constant: u32, em_modifier: u32) -> i32 {
@@ -346,7 +369,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
 
     let mut target = match target_snapshot(game, region_id, requested_identity) {
         Some(target) => target,
-        None => { finish(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
+        None => { abort_player_cure(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
     };
     if target.ordinary_monster {
         target = target_snapshot(game, region_id, caster_identity(player_id)).expect("заклинатель очищения сохранён");
@@ -354,7 +377,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     if target.dead {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
-        finish(game, player_id);
+        abort_player_cure(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai.cure().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
@@ -362,7 +385,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            abort_player_cure(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -394,8 +417,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_cure_used(runtime.now_milliseconds());
-    finish(game, player_id);
+    finish_player_cure(game, player_id, player_ai, runtime);
     terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
 
