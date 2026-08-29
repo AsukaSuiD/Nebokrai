@@ -17,8 +17,8 @@
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 //! Эмоция `0x8F905` сохраняет странность EXE: наличие `ChangeBody` сначала
 //! публикует `GS1038`, но не прерывает последующую проверку цели и
-//! `PerformEmotion`. Внешней остаётся только ещё не восстановленная ссылка
-//! `CBaseAI::GetTarget`.
+//! `PerformEmotion`. `CBaseAI::GetTarget` выражен текущей объектной командой
+//! игрока и её разрешением через тот же региональный владелец.
 
 use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
@@ -69,14 +69,6 @@ pub(crate) trait GameShapeMessageRuntime: GameClockContext {
         region_id: i32,
         identity: ShapeIdentity,
     ) -> Option<ShapeSnapshot>;
-    /// Возвращает только ещё не материализованный указатель
-    /// `CBaseAI::GetTarget`; сам `CPlayerAI`, часы и состояния принадлежат
-    /// каноническим владельцам.
-    fn player_ai_has_unmaterialized_target(
-        &mut self,
-        game: &CGame,
-        player_id: i32,
-    ) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -401,7 +393,7 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 return Some(Ok(()));
             }
             let repeated = game.emotion_repeated(fields.2);
-            let ai_has_target = runtime.player_ai_has_unmaterialized_target(game, player_id);
+            let ai_has_target = game.player_ai_has_resolved_target(player_id, region_id);
             let now_ms = runtime.now_milliseconds();
             let publish = game
                 .find_player_mut(player_id)

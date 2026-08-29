@@ -39784,6 +39784,27 @@ impl CGame {
         )
     }
 
+    /// Достигнутый `CBaseAI::GetTarget` игрока: до планирования FIFO-команды
+    /// поля цели ещё нулевые, поэтому требуется совпадающий текущий навык.
+    /// Координатная и самостоятельная команды указатель цели не создают.
+    pub(crate) fn player_ai_has_resolved_target(&self, player_id: i32, region_id: i32) -> bool {
+        let Some(player) = self.find_player(player_id) else {
+            return false;
+        };
+        let Some(current_skill_id) = player.current_skill_id() else {
+            return false;
+        };
+        let Some(PlayerSkillDispatch::Object { skill_id, target }) =
+            player.player_ai().next_player_skill()
+        else {
+            return false;
+        };
+        skill_id == current_skill_id
+            && 0 < target.object_type
+            && 0 < target.id
+            && self.find_shape_in_region(region_id, target).is_some()
+    }
+
     pub(crate) fn region_symbol_attackable(&self, region_id: i32) -> bool {
         self.find_region(region_id)
             .is_some_and(ServerRegionOwner::symbol_is_attackable)
