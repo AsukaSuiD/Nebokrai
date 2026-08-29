@@ -14,8 +14,8 @@
 //! границей буфера. Skill-script path входит в reached `CGame::run_script_file`
 //! с player/region context. Оба AI-dispatch теперь попадают в canonical
 //! player-owned `CPlayerAI`. Canonical player AI, base/city
-//! `SymbolIsAttackAble` virtual и owned region target разрешаются самим
-//! `CGame`; runtime отвечает только за ещё внешние polymorphic shape owner-ы.
+//! `SymbolIsAttackAble` virtual и все зарегистрированные region target
+//! разрешаются самим `CGame`; отдельного внешнего shape-resolver-а нет.
 //! Concrete `CSkill::IsEnd/End(true)` и исполнение target/skill очередей
 //! остаются явно названными runtime-границами.
 
@@ -28,7 +28,6 @@
 use crate::gameserver::appserver::player::{BattleFairySkillRequest, PlayerSkillRequest};
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
-use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, colored_player_notice_message};
 use crate::nets::netserver::message::CMessage;
 use tracing::trace;
@@ -52,13 +51,6 @@ pub(crate) trait GameSkillMessageRuntime: ScriptFunctionRuntime {
         player_id: i32,
         skill_id: u32,
     ) -> PlayerSkillEndRuntimeOutcome;
-
-    fn external_skill_target_available(
-        &mut self,
-        game: &CGame,
-        region_id: i32,
-        target: ShapeIdentity,
-    ) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,7 +103,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 trace!(message_type, socket_id, "Команда навыка не имеет игрока");
                 return Some(Ok(()));
             };
-            let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
+            let facts = game.player_skill_request_facts(player_id, region_id, request);
             game
                 .request_player_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
@@ -207,7 +199,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 trace!(message_type, socket_id, "Команда предметного навыка не имеет игрока");
                 return Some(Ok(()));
             };
-            let facts = game.player_skill_request_facts(player_id, region_id, request, runtime);
+            let facts = game.player_skill_request_facts(player_id, region_id, request);
             game
                 .request_item_skill(player_id, socket_id, request, skill_level, facts)
                 .expect("resolved message player остаётся в CGame во время item-skill dispatch");
@@ -231,8 +223,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameSkillMessageRuntime>(
                 trace!(message_type, socket_id, "Команда навыка боевой феи не имеет игрока");
                 return Some(Ok(()));
             };
-            let facts =
-                game.battle_fairy_skill_request_facts(player_id, region_id, request, runtime);
+            let facts = game.battle_fairy_skill_request_facts(player_id, region_id, request);
             game
                 .request_battle_fairy_skill(player_id, socket_id, request, facts)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");

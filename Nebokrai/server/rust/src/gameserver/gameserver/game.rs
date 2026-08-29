@@ -39876,14 +39876,13 @@ impl CGame {
 
     /// Exact facts для трёх client skill family. `CPlayer::GetAI` не может
     /// быть null у canonical Rust player: AI является его owned полем.
-    /// `FindChildObject` сначала разрешает player/monster/NPC/goods storage;
-    /// только неизвестный polymorphic shape делегируется process runtime.
-    pub(crate) fn player_skill_request_facts<Runtime: GameSkillMessageRuntime>(
+    /// `FindChildObject` разрешает все категории, которые реально добавляются
+    /// в region registry; отдельный process-resolver не вводится.
+    pub(crate) fn player_skill_request_facts(
         &self,
         player_id: i32,
         region_id: Option<i32>,
         request: PlayerSkillRequest,
-        runtime: &mut Runtime,
     ) -> PlayerSkillRequestFacts {
         let target = ShapeIdentity {
             object_type: request.target_type,
@@ -39892,10 +39891,8 @@ impl CGame {
         };
         let object_target_available = request.target_type != 0
             && request.target_id != 0
-            && region_id.is_some_and(|region_id| {
-                self.find_shape_in_region(region_id, target).is_some()
-                    || runtime.external_skill_target_available(self, region_id, target)
-            });
+            && region_id
+                .is_some_and(|region_id| self.find_shape_in_region(region_id, target).is_some());
         PlayerSkillRequestFacts {
             symbol_attackable: region_id.is_some_and(|id| self.region_symbol_attackable(id)),
             player_ai_available: self.find_player(player_id).is_some(),
@@ -39903,12 +39900,11 @@ impl CGame {
         }
     }
 
-    pub(crate) fn battle_fairy_skill_request_facts<Runtime: GameSkillMessageRuntime>(
+    pub(crate) fn battle_fairy_skill_request_facts(
         &self,
         player_id: i32,
         region_id: Option<i32>,
         request: BattleFairySkillRequest,
-        runtime: &mut Runtime,
     ) -> BattleFairySkillRequestFacts {
         let target = ShapeIdentity {
             object_type: request.target_type,
@@ -39917,10 +39913,8 @@ impl CGame {
         };
         let object_target_available = request.target_type != 0
             && request.target_id != 0
-            && region_id.is_some_and(|region_id| {
-                self.find_shape_in_region(region_id, target).is_some()
-                    || runtime.external_skill_target_available(self, region_id, target)
-            });
+            && region_id
+                .is_some_and(|region_id| self.find_shape_in_region(region_id, target).is_some());
         BattleFairySkillRequestFacts {
             symbol_attackable: region_id.is_some_and(|id| self.region_symbol_attackable(id)),
             player_ai_available: self.find_player(player_id).is_some(),
