@@ -499,6 +499,7 @@ mod thunderblow2;
 mod mosou;
 mod rush;
 mod boalock;
+mod bossbluequake;
 mod roar;
 mod seal;
 mod thunder;
@@ -1011,6 +1012,10 @@ use crate::gameserver::appserver::skills::summonspore::SUMMON_SPORE_SKILL_ID;
 use crate::gameserver::appserver::skills::bossbluefury::{
     cancel_player_boss_blue_fury, execute_player_boss_blue_fury,
     is_player_boss_blue_fury_dispatch, BOSS_BLUE_FURY_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::bossbluequake::{
+    BOSS_BLUE_QUAKE_SKILL_ID, cancel_player_boss_blue_quake,
+    execute_player_boss_blue_quake, is_player_boss_blue_quake_dispatch,
 };
 use crate::gameserver::appserver::skills::snakebolt::{
     SNAKE_BOLT_SKILL_ID, execute_player_snake_bolt,
@@ -34424,6 +34429,7 @@ impl CGame {
                             || player.player_ai().spider_web().is_some()
                             || player.player_ai().summon_creature().is_some()
                             || player.player_ai().boss_blue_fury().is_some()
+                            || player.player_ai().boss_blue_quake().is_some()
                             || player.player_ai().sprite_burn().is_some()
                             || player.player_ai().wide_arc_attack().is_some()
                             || player.player_ai().lord_fast_attack().is_some()
@@ -35130,6 +35136,7 @@ impl CGame {
                 || player.player_ai().spider_web().is_some()
                 || player.player_ai().summon_creature().is_some()
                 || player.player_ai().boss_blue_fury().is_some()
+                || player.player_ai().boss_blue_quake().is_some()
                 || player.player_ai().sprite_burn().is_some()
                 || player.player_ai().wide_arc_attack().is_some()
                 || player.player_ai().lord_fast_attack().is_some()
@@ -37690,6 +37697,7 @@ impl CGame {
                 | SUMMON_SKELETON_SKILL_ID
                 | SUMMON_SPORE_SKILL_ID
                 | BOSS_BLUE_FURY_SKILL_ID
+                | BOSS_BLUE_QUAKE_SKILL_ID
         ) && !is_self_shield_skill(skill_id)
             && !is_heal_skill(skill_id)
         {
@@ -37749,6 +37757,7 @@ impl CGame {
             SPIDER_WEB_SKILL_ID => player_ai.spider_web().is_some(),
             SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID => player_ai.summon_creature().is_some(),
             BOSS_BLUE_FURY_SKILL_ID => player_ai.boss_blue_fury().is_some(),
+            BOSS_BLUE_QUAKE_SKILL_ID => player_ai.boss_blue_quake().is_some(),
             SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
                 player_ai.wide_arc_attack().is_some()
@@ -38178,6 +38187,9 @@ impl CGame {
             }
             BOSS_BLUE_FURY_SKILL_ID => {
                 cancel_player_boss_blue_fury(self, player_id, &mut player_ai, runtime)
+            }
+            BOSS_BLUE_QUAKE_SKILL_ID => {
+                cancel_player_boss_blue_quake(self, player_id, &mut player_ai, runtime)
             }
             SPRITE_BURN_SKILL_ID => {
                 cancel_player_sprite_burn(self, player_id, &mut player_ai, runtime)
@@ -38668,6 +38680,7 @@ impl CGame {
             let concrete_spider_web = is_player_spider_web_dispatch(dispatch);
             let concrete_summon_creature = is_player_summon_creature_dispatch(dispatch);
             let concrete_boss_blue_fury = is_player_boss_blue_fury_dispatch(dispatch);
+            let concrete_boss_blue_quake = is_player_boss_blue_quake_dispatch(dispatch);
             let path_projectile_skill_id = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. }
@@ -38943,6 +38956,8 @@ impl CGame {
                 execute_player_summon_creature(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_boss_blue_fury {
                 execute_player_boss_blue_fury(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_boss_blue_quake {
+                execute_player_boss_blue_quake(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_sprite_burn {
                 execute_player_sprite_burn(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_machinery_stomp {
