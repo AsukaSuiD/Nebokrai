@@ -17,7 +17,8 @@
 //! Состояние сна также принадлежит этому владельцу: `Hibernate` запоминает
 //! оборачивающийся счётчик времени, а `WakeUp` один раз вычисляет интервал сна.
 //! Достигнутый `Stand` из `ProcessActiveAction` удерживает расписание до
-//! исходного срока и сохраняет отдельный первый такт обработки. Указатель
+//! исходного срока и сохраняет отдельный первый такт обработки. Общий runtime
+//! не вызывает очереди и `OnSchedule`, пока этот owner спит. Указатель
 //! владельца, цель, остальные действия и обработчики ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
@@ -285,7 +286,10 @@ impl CBaseAI {
 
 // ============================================================================
 // FUNCTION: CBaseAI::Run
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `CGame` проверяет `CBaseAI::is_hibernated` до обработки
+// очередей и конкретного `OnSchedule`; достигнутая `Stand`-ветвь исполняется
+// через `CBaseAI::advance_active_stand`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:472

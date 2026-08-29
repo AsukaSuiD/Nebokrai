@@ -42339,6 +42339,13 @@ impl CGame {
                 if self.run_owned_carriage_lifecycle(region_id, monster_id, runtime) {
                     continue;
                 }
+                if self
+                    .find_region(region_id)
+                    .and_then(|owner| owner.base().find_monster_by_id(monster_id))
+                    .is_some_and(CMonster::is_ai_hibernated)
+                {
+                    continue;
+                }
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let mut schedule_ready = false;
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
