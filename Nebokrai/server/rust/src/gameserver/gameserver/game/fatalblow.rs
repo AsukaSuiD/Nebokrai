@@ -60,26 +60,6 @@ impl CGame {
         Some(())
     }
 
-    pub(super) fn calculate_fatal_blow_attack(
-        &mut self,
-        phalanx: &CFatalBlowPhalanx,
-    ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
-        let master = phalanx.master();
-        if master.master_type != PLAYER_TYPE || master.master_id == 0 {
-            return None;
-        }
-        let player = self.find_player(master.master_id)?;
-        let battle_fairy_attack = player.war_soul_attack(&self.goods_factory)?;
-        let battle_fairy_attack = (f64::from(battle_fairy_attack) * 0.0001)
-            .round_ties_even() as i32;
-        let combat = player.combat_properties();
-        let occupation = player.occupation();
-        let attacker_level = player.level();
-        let mut random_below = |maximum| game_legacy_random(&mut self.random_state, maximum);
-        let attack = phalanx.calculate_attack(battle_fairy_attack, &mut random_below);
-        Some((attack, combat, occupation, attacker_level))
-    }
-
     pub(super) fn fatal_blow_attack_ready(
         &self,
         phalanx: &CFatalBlowPhalanx,

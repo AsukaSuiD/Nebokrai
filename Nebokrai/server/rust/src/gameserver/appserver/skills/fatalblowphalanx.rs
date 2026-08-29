@@ -10,12 +10,14 @@
 
 use super::fatalblow::FATAL_BLOW_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use crate::gameserver::gameserver::game::CGame;
 use crate::public::guid::CGuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +37,24 @@ pub(crate) struct CFatalBlowPhalanx {
     target: ShapeIdentity,
     minimum_attack: i32,
     maximum_attack: i32,
+}
+
+pub(crate) fn calculate_owned_fatal_blow_attack(
+    game: &mut CGame,
+    phalanx: &CFatalBlowPhalanx,
+) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
+    let master = phalanx.master();
+    if master.master_type != 400 || master.master_id == 0 { return None }
+    let player = game.find_player(master.master_id)?;
+    let battle_fairy_attack = (f64::from(player.war_soul_attack(game.goods_factory())?) * 0.0001)
+        .round_ties_even() as i32;
+    let combat = player.combat_properties();
+    let occupation = player.occupation();
+    let attacker_level = player.level();
+    let attack = phalanx.calculate_attack(battle_fairy_attack, &mut |maximum| {
+        game.skill_random_below(maximum)
+    });
+    Some((attack, combat, occupation, attacker_level))
 }
 
 impl CFatalBlowPhalanx {

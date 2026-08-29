@@ -1123,7 +1123,7 @@ use crate::gameserver::appserver::skills::fatalblow::{
     FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
 };
 use crate::gameserver::appserver::skills::fatalblowphalanx::{
-    CFatalBlowPhalanx, FatalBlowPhalanxTick,
+    calculate_owned_fatal_blow_attack, CFatalBlowPhalanx, FatalBlowPhalanxTick,
 };
 use crate::gameserver::appserver::skills::thunder::{
     THUNDER_SKILL_ID, execute_battle_fairy_thunder,
@@ -40344,7 +40344,7 @@ impl CGame {
                 calculate_owned_battle_fairy_base_magic_attack(self, phalanx)
             }
             SummonedSkillShape::FatalBlow(phalanx) => {
-                self.calculate_fatal_blow_attack(phalanx)
+                calculate_owned_fatal_blow_attack(self, phalanx)
             }
             SummonedSkillShape::FireBolt(phalanx) => {
                 calculate_owned_fire_bolt_attack(self, phalanx, target_level)
