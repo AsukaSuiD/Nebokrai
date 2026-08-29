@@ -1,11 +1,30 @@
-//! Общая граница сетевого формата достигнутых навыков-состояний игрока.
+//! Общая граница достигнутых навыков-состояний игрока.
 //!
 //! Несколько конкретных владельцев используют одинаковый каркас пакета
 //! отказа и начала/завершения каста. Значения `opcode`, `skill ID` и `action`
 //! передаёт конкретный навык; здесь сохраняется только общий порядок полей.
+//! Унаследованный `CStateSkill → CSkill::End(true)` очищает current skill и
+//! фиксирует cooldown без повторного применения уже установленного состояния.
 
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::GameMainLoopRuntime;
 use crate::nets::netserver::message::CMessage;
+
+pub(crate) fn finish_state_skill<Runtime, MarkUsed>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+    mark_used: MarkUsed,
+) where
+    Runtime: GameMainLoopRuntime,
+    MarkUsed: FnOnce(&mut CPlayerAI, u32),
+{
+    abort_skill(game, player_id);
+    mark_used(player_ai, runtime.now_milliseconds());
+}
 
 impl CGame {
     pub(crate) fn send_self_state_skill_failure(

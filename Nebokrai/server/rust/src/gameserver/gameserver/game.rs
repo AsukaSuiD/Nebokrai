@@ -1236,7 +1236,10 @@ use crate::gameserver::appserver::skills::leafcutstate3::{
     LeafCutState3, LEAF_CUT_3_STATE_ID, send_leaf_cut_3_state_visual,
     update_monster_leaf_cut_3_state, update_player_leaf_cut_3_state,
 };
-use crate::gameserver::appserver::skills::kerosene::{execute_player_kerosene, is_kerosene_dispatch};
+use crate::gameserver::appserver::skills::kerosene::{
+    cancel_player_kerosene, complete_player_kerosene, execute_player_kerosene,
+    is_kerosene_dispatch, KEROSENE_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::kerosenestate::{
     update_monster_kerosene_state, update_player_kerosene_state,
 };
@@ -1244,7 +1247,10 @@ use crate::gameserver::appserver::skills::ignition::{
     cancel_player_ignition, complete_player_ignition, execute_player_ignition,
     is_ignition_dispatch, IGNITION_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::blind::{execute_player_blind, is_blind_dispatch};
+use crate::gameserver::appserver::skills::blind::{
+    cancel_player_blind, complete_player_blind, execute_player_blind, is_blind_dispatch,
+    BLIND_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::fatalblow::{
     FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
 };
@@ -37541,6 +37547,8 @@ impl CGame {
                 | RAIN_ARROW_SKILL_ID
                 | POISON_MOTH_SKILL_ID
                 | IGNITION_SKILL_ID
+                | KEROSENE_SKILL_ID
+                | BLIND_SKILL_ID
                 | CALLOSITY_SKILL_ID
                 | CALLOSITY_2_SKILL_ID
                 | AGILITY_SKILL_ID
@@ -37623,6 +37631,8 @@ impl CGame {
             RAIN_ARROW_SKILL_ID => player_ai.rain_arrow().is_some(),
             POISON_MOTH_SKILL_ID => player_ai.poison_moth().is_some(),
             IGNITION_SKILL_ID => player_ai.ignition().is_some(),
+            KEROSENE_SKILL_ID => player_ai.kerosene().is_some(),
+            BLIND_SKILL_ID => player_ai.blind().is_some(),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
@@ -37692,6 +37702,18 @@ impl CGame {
                     runtime,
                 )),
                 IGNITION_SKILL_ID => Some(complete_player_ignition(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                KEROSENE_SKILL_ID => Some(complete_player_kerosene(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    runtime,
+                )),
+                BLIND_SKILL_ID => Some(complete_player_blind(
                     self,
                     player_id,
                     &mut player_ai,
@@ -37938,6 +37960,12 @@ impl CGame {
             }
             IGNITION_SKILL_ID => {
                 cancel_player_ignition(self, player_id, &mut player_ai, runtime)
+            }
+            KEROSENE_SKILL_ID => {
+                cancel_player_kerosene(self, player_id, &mut player_ai, runtime)
+            }
+            BLIND_SKILL_ID => {
+                cancel_player_blind(self, player_id, &mut player_ai, runtime)
             }
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => {
                 cancel_player_callosity(self, player_id, &mut player_ai, runtime)
