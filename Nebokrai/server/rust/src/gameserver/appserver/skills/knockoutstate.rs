@@ -13,7 +13,8 @@
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 use super::spiderweb::SPIDER_WEB_SKILL_ID;
 use super::spiderwebstate::{
@@ -36,19 +37,18 @@ impl KnockOutState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self { Self { started_at_ms, keep_time_ms } }
     pub(crate) const fn skill_id(self) -> u32 { KNOCK_OUT_STATE_ID }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) as i32 }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 }
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точку фактической круговой доставки")]
-pub(crate) fn send_knock_out_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KnockOutState, begin: bool, now_ms: u32) {
+pub(crate) fn send_knock_out_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KnockOutState, begin: bool, now_milliseconds: impl FnMut() -> u32) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    if begin { message.add_long(state.client_time(now_milliseconds)); message.add_long(0); }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
@@ -58,14 +58,14 @@ fn send_owned_monster_knock_out_state_visual(
     shape: &crate::gameserver::appserver::shape::CShape,
     state: KnockOutState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let identity = shape.identity();
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    if begin { message.add_long(state.client_time(now_milliseconds)); message.add_long(0); }
     let _ = game.send_game_shape_around(region, shape, None, &message);
 }
 
@@ -93,9 +93,11 @@ pub(crate) fn replace_player_knock_out_state(
         return false;
     };
     if let Some(old) = old {
-        send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, old, false, now_ms);
+        send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, old, false, || now_ms);
     }
-    send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now_ms);
+    send_knock_out_state_visual(
+        game, region_id, identity, tile_x, tile_y, state, true, game_tick_milliseconds,
+    );
     let _ = game.publish_player_states(player_id);
     true
 }
@@ -122,9 +124,11 @@ pub(crate) fn replace_monster_knock_out_state(
         return false;
     };
     if let Some(old) = old {
-        send_owned_monster_knock_out_state_visual(game, region, &shape, old, false, now_ms);
+        send_owned_monster_knock_out_state_visual(game, region, &shape, old, false, || now_ms);
     }
-    send_owned_monster_knock_out_state_visual(game, region, &shape, state, true, now_ms);
+    send_owned_monster_knock_out_state_visual(
+        game, region, &shape, state, true, game_tick_milliseconds,
+    );
     true
 }
 
@@ -136,7 +140,7 @@ fn finish_player_state(game: &mut CGame, player_id: i32, now_ms: u32, only_expir
         Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
     });
     let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
-    send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms);
+    send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms);
     true
 }
 
@@ -148,7 +152,7 @@ fn finish_monster_state(game: &mut CGame, region: &mut CServerRegion, monster_id
         Some((state, monster.move_shape().shape().clone()))
     });
     let Some((state, shape)) = finished else { return false };
-    send_owned_monster_knock_out_state_visual(game, region, &shape, state, false, now_ms);
+    send_owned_monster_knock_out_state_visual(game, region, &shape, state, false, || now_ms);
     true
 }
 
