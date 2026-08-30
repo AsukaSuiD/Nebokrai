@@ -2133,8 +2133,6 @@ pub(crate) trait EquipmentComposeContext: GameContainerMessageRuntime {}
 
 impl<T: GameContainerMessageRuntime> EquipmentComposeContext for T {}
 
-pub(crate) trait EquipmentDaKongContext {}
-
 pub(crate) trait EquipmentUpgradeContext: GameContainerMessageRuntime {}
 
 impl<T: GameContainerMessageRuntime> EquipmentUpgradeContext for T {}
@@ -19975,11 +19973,10 @@ impl CGame {
             .register_equipment_da_kong_plug(actual_plug_id, plug);
     }
 
-    pub(crate) fn reflush_equipment_da_kong_external_property<Context: EquipmentDaKongContext>(
+    pub(crate) fn reflush_equipment_da_kong_external_property(
         &mut self,
         player_id: i32,
         cost_original_name: &[u8],
-        context: &mut Context,
     ) {
         if !self.da_kong_xiang_qian.key() {
             tracing::trace!(player_id, "обновление внешнего свойства DaKong отключено");
@@ -20002,7 +19999,6 @@ impl CGame {
         self.reflush_equipment_da_kong_external_property_inner(
             &mut player,
             cost_original_name,
-            context,
         );
         self.players.insert(player_id, player);
     }
@@ -20010,11 +20006,10 @@ impl CGame {
     /// Сценарии `9352/9353` используют выбранный предмет контейнера улучшения и
     /// общий пакет игрока, затем публикуют тот же `0xBF918`, что остальные
     /// операции DaKong.
-    pub(crate) fn modify_script_equipment_da_kong<Context: EquipmentDaKongContext>(
+    pub(crate) fn modify_script_equipment_da_kong(
         &mut self,
         player_id: i32,
         kind: EquipmentDaKongScriptModifyKind,
-        _context: &mut Context,
     ) {
         const COST_ORIGINAL_NAME: &[u8] = b"GMXF18";
         if !self.da_kong_xiang_qian.key() {
@@ -20130,11 +20125,10 @@ impl CGame {
         self.players.insert(player_id, player);
     }
 
-    fn reflush_equipment_da_kong_external_property_inner<Context: EquipmentDaKongContext>(
+    fn reflush_equipment_da_kong_external_property_inner(
         &mut self,
         player: &mut CPlayer,
         cost_original_name: &[u8],
-        _context: &mut Context,
     ) {
         use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
             GAP_DAKONG_1, GAP_DAKONG_EXTERN_1, GAP_DAKONG_EXTERN_2, GAP_DAKONG_EXTERN_3,
@@ -20318,10 +20312,10 @@ impl CGame {
                 self.equipment_da_kong_create_socket(player, plug, color_index, context);
             }
             EquipmentDaKongOperation::ChangeRoleColor { socket } => {
-                self.equipment_da_kong_change_color(player, plug, socket, context);
+                self.equipment_da_kong_change_color(player, plug, socket);
             }
             EquipmentDaKongOperation::QueryResult => {
-                let published = self.equipment_da_kong_publish_preview(player, plug, context);
+                let published = self.equipment_da_kong_publish_preview(player, plug);
                 tracing::trace!(
                     player_id = player.player_id(),
                     session_id,
@@ -20333,7 +20327,7 @@ impl CGame {
                 self.equipment_da_kong_enchase(player, plug, parameter, context);
             }
             EquipmentDaKongOperation::DestroyGem { socket } => {
-                self.equipment_da_kong_destroy_gem(player, plug, socket, context);
+                self.equipment_da_kong_destroy_gem(player, plug, socket);
             }
         }
     }
@@ -20378,9 +20372,8 @@ impl CGame {
         );
     }
 
-    fn equipment_da_kong_publish_update<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_publish_update(
         &self,
-        _context: &mut Context,
         player_id: i32,
         goods: &CGoods,
     ) {
@@ -21587,7 +21580,7 @@ impl CGame {
             .expect("DaKong equipment сохраняется до audit");
         self.equipment_da_kong_log(player, 1, stone_index, equipment);
         self.equipment_da_kong_consume_packet(player, stone_index);
-        let preview_published = self.equipment_da_kong_publish_preview(player, plug, context);
+        let preview_published = self.equipment_da_kong_publish_preview(player, plug);
         tracing::trace!(
             player_id,
             ?equipment_id,
@@ -21598,11 +21591,10 @@ impl CGame {
         );
     }
 
-    fn equipment_da_kong_publish_preview<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_publish_preview(
         &self,
         player: &CPlayer,
         plug: &CEquipmentDaKong,
-        context: &mut Context,
     ) -> bool {
         let goods = Self::equipment_da_kong_equipment_id(plug)
             .and_then(|goods_id| player.get_goods_by_id(goods_id))
@@ -21612,16 +21604,15 @@ impl CGame {
         };
         let gems = self.equipment_da_kong_gems(player, plug);
         let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
-        self.equipment_da_kong_publish_update(context, player.player_id(), &preview);
+        self.equipment_da_kong_publish_update(player.player_id(), &preview);
         true
     }
 
-    fn equipment_da_kong_change_color<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_change_color(
         &mut self,
         player: &mut CPlayer,
         plug: &CEquipmentDaKong,
         socket: i32,
-        context: &mut Context,
     ) {
         if !(1..=7).contains(&socket) {
             tracing::trace!(
@@ -21713,7 +21704,7 @@ impl CGame {
             .get_goods_by_id(equipment_id)
             .expect("color equipment сохраняется до audit/update");
         self.equipment_da_kong_log(player, 0, stone_index, equipment);
-        self.equipment_da_kong_publish_update(context, player_id, equipment);
+        self.equipment_da_kong_publish_update(player_id, equipment);
         tracing::trace!(
             player_id,
             ?equipment_id,
@@ -21830,7 +21821,7 @@ impl CGame {
         let equipment = player
             .get_goods_by_id(equipment_id)
             .expect("enchase equipment сохраняется после gem consumption");
-        self.equipment_da_kong_publish_update(context, player_id, equipment);
+        self.equipment_da_kong_publish_update(player_id, equipment);
         tracing::trace!(
             player_id,
             ?equipment_id,
@@ -21839,12 +21830,11 @@ impl CGame {
         );
     }
 
-    fn equipment_da_kong_destroy_gem<Context: EquipmentDaKongContext>(
+    fn equipment_da_kong_destroy_gem(
         &mut self,
         player: &mut CPlayer,
         plug: &CEquipmentDaKong,
         socket: u32,
-        context: &mut Context,
     ) {
         let player_id = player.player_id();
         let Some(equipment_id) = Self::equipment_da_kong_equipment_id(plug) else {
@@ -21987,7 +21977,7 @@ impl CGame {
             .expect("destroy equipment сохраняется до preview")
             .clone();
         let _ = deal_enchase_gems(&mut preview, &gems, &self.goods_factory, false);
-        self.equipment_da_kong_publish_update(context, player_id, &preview);
+        self.equipment_da_kong_publish_update(player_id, &preview);
         tracing::trace!(
             player_id,
             ?equipment_id,

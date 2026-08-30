@@ -449,9 +449,9 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
-    BattleFairyScriptAction, CGame, CiQingComposeContext, EquipmentDaKongContext, GameClockContext,
-    GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
-    MonsterDeathContext, NationCombatContext, PlayerReliveContext,
+    BattleFairyScriptAction, CGame, CiQingComposeContext, GameClockContext,
+    GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext, MonsterDeathContext,
+    NationCombatContext, PlayerReliveContext,
     RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
     ScriptRegionChangeContext, ScriptTimedGoodsParameters, ServerRegionOwner,
     colored_player_notice_message, colored_text_message, format_legacy_text_fields,
@@ -844,7 +844,6 @@ pub(crate) trait ScriptFunctionRuntime:
     GameClockContext
     + NationCombatContext
     + CiQingComposeContext
-    + EquipmentDaKongContext
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
     + CityGateRuntimeContext
@@ -862,7 +861,6 @@ impl<T> ScriptFunctionRuntime for T where
     T: GameClockContext
         + NationCombatContext
         + CiQingComposeContext
-        + EquipmentDaKongContext
         + GameContainerMessageRuntime
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
@@ -3104,12 +3102,11 @@ pub(crate) enum EquipmentDaKongScriptFunctionOutcome {
     Handled,
 }
 
-pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongContext>(
+pub(crate) fn run_equipment_da_kong_script_function(
     game: &mut CGame,
     player_id: i32,
     function_id: i32,
     evaluated_first_string: Option<&[u8]>,
-    context: &mut Context,
 ) -> EquipmentDaKongScriptFunctionOutcome {
     if function_id == SCRIPT_FUNCTION_DA_KONG_MODIFY
         || function_id == SCRIPT_FUNCTION_DA_KONG_DELUX_MODIFY
@@ -3119,7 +3116,7 @@ pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongCont
         } else {
             EquipmentDaKongScriptModifyKind::ClampDeluxProperties
         };
-        game.modify_script_equipment_da_kong(player_id, kind, context);
+        game.modify_script_equipment_da_kong(player_id, kind);
         return EquipmentDaKongScriptFunctionOutcome::Handled;
     }
     if function_id != SCRIPT_FUNCTION_REFLUSH_EXTERN_PROPERTY {
@@ -3128,7 +3125,7 @@ pub(crate) fn run_equipment_da_kong_script_function<Context: EquipmentDaKongCont
     let Some(cost_original_name) = evaluated_first_string.filter(|value| !value.is_empty()) else {
         return EquipmentDaKongScriptFunctionOutcome::Handled;
     };
-    game.reflush_equipment_da_kong_external_property(player_id, cost_original_name, context);
+    game.reflush_equipment_da_kong_external_property(player_id, cost_original_name);
     EquipmentDaKongScriptFunctionOutcome::Handled
 }
 
@@ -8777,7 +8774,6 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         script_player_id.unwrap_or_default(),
         function_id,
         string_arguments[0],
-        runtime,
     ) {
         EquipmentDaKongScriptFunctionOutcome::DifferentFunction => {
             ScriptFunctionDispatchOutcome::DifferentFunction

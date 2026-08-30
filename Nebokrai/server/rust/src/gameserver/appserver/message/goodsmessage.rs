@@ -32,8 +32,7 @@ use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongOperation;
 use crate::gameserver::gameserver::game::{
     CGame, CiQingComposeContext, CiQingOtherPersonTarget, EquipmentComposeContext,
-    EquipmentDaKongContext, EquipmentUpgradeContext, GameContainerMessageRuntime,
-    SynthesisContext,
+    EquipmentUpgradeContext, GameContainerMessageRuntime, SynthesisContext,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -85,7 +84,6 @@ pub(crate) trait GameGoodsMessageRuntime:
     ScriptFunctionRuntime
     + CiQingComposeContext
     + EquipmentComposeContext
-    + EquipmentDaKongContext
     + EquipmentUpgradeContext
     + GameContainerMessageRuntime
     + SynthesisContext
