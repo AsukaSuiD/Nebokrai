@@ -18,10 +18,12 @@
 //! Состояние сна также принадлежит этому владельцу: `Hibernate` запоминает
 //! оборачивающийся счётчик времени, а `WakeUp` один раз вычисляет интервал сна.
 //! Достигнутый `Stand` из `ProcessActiveAction` удерживает расписание до
-//! исходного срока и сохраняет отдельный первый такт обработки. Общий runtime
-//! не вызывает очереди и `OnSchedule`, пока этот владелец спит. Указатель
-//! владельца, цель, остальные действия и обработчики ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! исходного срока и сохраняет отдельный первый такт обработки. `OnIdle` точно
+//! ставит следующий `Stand` на 1000 мс только при пустом результате основного
+//! прохода и отсутствии цели; `CPlayerAI` применяет эту границу после своих
+//! typed очередей. Общий runtime не вызывает очереди и `OnSchedule`, пока этот
+//! владелец спит. Указатель владельца, цель, остальные действия и обработчики
+//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
 
@@ -202,6 +204,18 @@ impl CBaseAI {
 
     pub(crate) fn begin_active_stand(&mut self, delay_ms: u32, now_ms: u32) {
         self.add_ai_event(AiShapeAction::Stand, delay_ms, 0, now_ms);
+    }
+
+    /// Материализует точный `CBaseAI::OnIdle`: пустой основной проход без
+    /// target-а ставит `ASA_STAND` на 1000 мс. Наличие Rust-owner-а заменяет
+    /// исходную проверку `m_pOwner != nullptr`; dormant и непустые очереди
+    /// проверяются здесь, чтобы caller не мог обойти начало `CBaseAI::Run`.
+    pub(crate) fn begin_idle_stand(&mut self, now_ms: u32) -> bool {
+        if self.is_dormant || !self.primary_queues_idle() {
+            return false;
+        }
+        self.begin_active_stand(1_000, now_ms);
+        true
     }
 
     pub(crate) fn begin_active_search_enemy(&mut self, now_ms: u32) {
@@ -419,7 +433,8 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: `CGame` проверяет `CBaseAI::is_hibernated` до обработки
 // очередей и конкретного `OnSchedule`; достигнутая `Stand`-ветвь исполняется
-// через `CBaseAI::advance_active_stand`.
+// через `CBaseAI::advance_active_stand`, а пустой player-проход завершает
+// точный `CBaseAI::begin_idle_stand`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:472
@@ -756,7 +771,8 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnIdle
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: `CBaseAI::begin_idle_stand`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1134

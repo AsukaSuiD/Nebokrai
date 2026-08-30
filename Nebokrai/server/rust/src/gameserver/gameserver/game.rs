@@ -4165,18 +4165,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Исполняет оставшийся префикс `CBaseAI::Run` виртуального
-    /// `CPlayerAI::Run` после `UpdateCurrentState`, достигнутых FIFO-очередей
-    /// навыков, движения, ожидания и точки перехода.
-    /// Выбранный навык боевого духа и его восстановление принадлежат
-    /// каноническому `CPlayerAI`; хвосты auto-exp/CheckLevel/energy идут сразу
-    /// после.
-    fn player_move_shape_active_state_ai(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        player_ai: &mut CPlayerAI,
-    );
     /// Разрешает state ground goods и прочих external shape owners, которых
     /// нет в player/monster/NPC Rust storage.
     fn external_region_shape_change_state(
@@ -43800,16 +43788,19 @@ impl CGame {
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
                                 .take_player_ai();
+                            let ai_hibernated = player_ai.is_hibernated();
                             let can_schedule_skill = self
                                 .find_player(player_id)
                                 .is_some_and(|player| !player.is_dead());
-                            let moving_started = player_ai.active_move_unhandled();
-                            let active_move_handled =
-                                player_ai.advance_active_move(runtime.now_milliseconds());
+                            let moving_started =
+                                !ai_hibernated && player_ai.active_move_unhandled();
+                            let active_move_handled = !ai_hibernated
+                                && player_ai.advance_active_move(runtime.now_milliseconds());
                             if moving_started {
                                 let _ = self.on_player_stand_on_switch_point(player_id, runtime);
                             }
-                            let active_stand_handled = if !active_move_handled
+                            let active_stand_handled = if !ai_hibernated
+                                && !active_move_handled
                                 && player_ai.active_stand_pending()
                             {
                                 let standing_started = player_ai.active_stand_unhandled();
@@ -43825,28 +43816,34 @@ impl CGame {
                             };
                             let active_action_handled =
                                 active_move_handled || active_stand_handled;
-                            let (executed_skills, executed_player_skills) = self
-                                .execute_queued_player_skills(
+                            let (executed_skills, executed_player_skills) = if ai_hibernated {
+                                (0, 0)
+                            } else {
+                                self.execute_queued_player_skills(
                                     player_id,
                                     &mut player_ai,
                                     !active_action_handled,
                                     can_schedule_skill,
                                     runtime,
-                                );
+                                )
+                            };
                             player_skill_executions += executed_skills;
                             let destination_handled = active_action_handled
-                                || (executed_player_skills == 0
+                                || (!ai_hibernated
+                                    && executed_player_skills == 0
                                     && self.find_player(player_id).is_some()
                                     && self.run_player_ai_destination(
                                         player_id,
                                         &mut player_ai,
                                         runtime,
                                     ));
-                            if self.find_player(player_id).is_some() && !destination_handled {
-                                runtime.player_move_shape_active_state_ai(
-                                    self,
-                                    player_id,
-                                    &mut player_ai,
+                            if self.find_player(player_id).is_some() && !ai_hibernated {
+                                let player_action_executed = active_action_handled
+                                    || executed_player_skills != 0
+                                    || destination_handled;
+                                let _ = player_ai.finish_base_run(
+                                    player_action_executed,
+                                    runtime.now_milliseconds(),
                                 );
                             }
                             let progress_setup = (

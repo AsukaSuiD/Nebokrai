@@ -47,7 +47,10 @@
 //! Четырёхаргументный `MoveTo` теперь использует каноническую очередь
 //! `CBaseAI`: свободная соседняя клетка проверяется до `0xBF605`, а задержка
 //! шага сохраняет скорость игрока, диагональный множитель и исходный нулевой
-//! остановочный кадр. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! остановочный кадр. Пустой основной проход `CPlayerAI::Run` теперь замыкает
+//! подтверждённый `CBaseAI::OnIdle`: только при отсутствии исполненного
+//! player-действия, target-а и primary FIFO ставится `ASA_STAND` на 1000 мс.
+//! Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
 //! следующий навык продвигается только после завершения текущего. Выбранный
@@ -416,6 +419,21 @@ impl CPlayerAI {
 
     pub(crate) fn active_stand_unhandled(&self) -> bool {
         self.base_ai.active_stand_unhandled()
+    }
+
+    pub(crate) const fn is_hibernated(&self) -> bool {
+        self.base_ai.is_hibernated()
+    }
+
+    /// Завершает достигнутый основной `CBaseAI::Run` после typed расписания.
+    /// Caller сообщает, было ли в этом такте исполнено обычное player-действие;
+    /// независимая очередь боевой феи не входит в исходный результат до
+    /// `OnIdle` и поэтому не запрещает фоновый stand.
+    pub(crate) fn finish_base_run(&mut self, player_action_executed: bool, now_ms: u32) -> bool {
+        if player_action_executed {
+            return false;
+        }
+        self.base_ai.begin_idle_stand(now_ms)
     }
 
     pub(crate) fn has_queued_player_skill(&self) -> bool {
