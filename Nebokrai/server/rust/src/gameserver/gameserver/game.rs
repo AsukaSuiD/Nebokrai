@@ -14446,7 +14446,7 @@ impl CGame {
                 if offer.goods_amount < source_amount {
                     let Some(split) = self.create_goods_core(base_properties_index) else {
                         self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                        self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
+                        self.rollback_detached_trade_goods(&parties, removed_by_plug);
                         return false;
                     };
                     packet_splits.insert(offer.goods_id, split);
@@ -14454,7 +14454,7 @@ impl CGame {
             }
             let Some(mut player) = self.players.remove(&party.owner_id) else {
                 self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug);
                 return false;
             };
             let mut removed_goods = Vec::new();
@@ -14567,7 +14567,7 @@ impl CGame {
             removed_by_plug.insert(party.plug_id, removed_goods);
             if failed {
                 self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug);
                 return false;
             }
         }
@@ -14580,7 +14580,7 @@ impl CGame {
             let Some(player) = self.players.get_mut(&receiver.owner_id) else {
                 removed_by_plug.insert(source.plug_id, goods);
                 self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug);
                 return false;
             };
             let originals = goods.clone();
@@ -14610,7 +14610,7 @@ impl CGame {
             if failed {
                 removed_by_plug.insert(source.plug_id, rejected);
                 self.undo_delivered_trade_goods(&mut removed_by_plug, delivered);
-                self.rollback_detached_trade_goods(&parties, removed_by_plug, context);
+                self.rollback_detached_trade_goods(&parties, removed_by_plug);
                 return false;
             }
         }
@@ -14811,11 +14811,10 @@ impl CGame {
         }
     }
 
-    fn rollback_detached_trade_goods<Context: GameContainerMessageRuntime>(
+    fn rollback_detached_trade_goods(
         &mut self,
         parties: &[PlayerTradePartySnapshot; 2],
         mut goods_by_plug: BTreeMap<i32, Vec<CGoods>>,
-        _context: &mut Context,
     ) {
         for party in parties {
             let goods = goods_by_plug.remove(&party.plug_id).unwrap_or_default();
