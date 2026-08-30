@@ -18,7 +18,7 @@ use crate::gameserver::appserver::player::{PlayerLeiTingDecodeBlock, PlayerTalkC
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::appserver::message::gmmessage::parse_gm_command;
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
-use crate::gameserver::appserver::script::script::legacy_atoi;
+use crate::gameserver::appserver::script::script::{ScriptExecutionContext, legacy_atoi};
 use crate::gameserver::gameserver::game::{
     CGame, colored_player_notice_message, player_skill_learned_message,
 };
@@ -333,6 +333,69 @@ fn dispatch_gm_chat<Runtime: ScriptFunctionRuntime>(
         }
     }
     tracing::trace!(message_type, player_id, gm_level, "GM-команда принята");
+    Ok(())
+}
+
+fn dispatch_client_script_chat<Runtime: ScriptFunctionRuntime>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Result<(), GameOtherMessageError> {
+    let message_type = PLAYER_CHAT_REQUEST;
+    message.resolve_player_context(game);
+    let Some(player_id) = message.player_id() else {
+        tracing::trace!(message_type, "у клиентской script-строки нет игрока");
+        return Ok(());
+    };
+    let Some(region_id) = message
+        .region_id()
+        .filter(|region_id| game.find_region(*region_id).is_some())
+    else {
+        tracing::trace!(message_type, player_id, "у клиентской script-строки нет live-региона");
+        return Ok(());
+    };
+    let Some(player) = game.find_player_mut(player_id) else {
+        tracing::trace!(message_type, player_id, "игрок клиентской script-строки не найден");
+        return Ok(());
+    };
+    if player.is_in_silence(runtime.now_milliseconds()) {
+        let _ = colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0330"))
+            .send_to_player(game.net_server(), player_id);
+        tracing::trace!(message_type, player_id, "клиентская script-строка запрещена молчанием");
+        return Ok(());
+    }
+
+    let channel = read_long(message, "chat channel")?;
+    debug_assert_eq!(channel, 9);
+    let _owner_type = read_long(message, "chat owner type")?;
+    let _owner_id = read_long(message, "chat owner id")?;
+    let sender_name = read_string(message, 0x100);
+    let line = read_string(message, 0x400);
+    let canonical_name = game
+        .find_player(player_id)
+        .expect("client-script player остаётся live после decode")
+        .player_name()
+        .to_vec();
+    if sender_name != canonical_name {
+        tracing::warn!(message_type, player_id, channel, "имя отправителя client-script не совпало");
+        return Ok(());
+    }
+    if !game.globe_setup().allow_client_run_script() {
+        tracing::trace!(message_type, player_id, "client-script отключён setup-ом");
+        return Ok(());
+    }
+
+    let disposition = game.run_script_line(
+        &line,
+        ScriptExecutionContext {
+            player_id: Some(player_id),
+            region_id: Some(region_id),
+            npc_id: None,
+            ..ScriptExecutionContext::default()
+        },
+        runtime,
+    );
+    tracing::trace!(message_type, player_id, ?disposition, "client-script строка исполнена");
     Ok(())
 }
 
@@ -752,6 +815,9 @@ pub(crate) fn dispatch_game_other_message<Runtime: ScriptFunctionRuntime>(
         let channel = peek_long(message)?;
         if channel == 8 {
             return Some(dispatch_gm_chat(message, game, runtime));
+        }
+        if channel == 9 {
+            return Some(dispatch_client_script_chat(message, game, runtime));
         }
         if matches!(channel, 0 | 1 | 2 | 4) {
             return Some(dispatch_player_chat(message, game, || {

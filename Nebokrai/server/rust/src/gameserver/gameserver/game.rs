@@ -15840,6 +15840,25 @@ impl CGame {
         self.queue_script_file(path, context)
     }
 
+    /// Immediate `g_Script.RunLine` не создаёт запись в `g_Scripts`: исходный
+    /// global owner очищает временные operation/value buffers, исполняет одну
+    /// переданную строку и отбрасывает возможное ожидание. Нулевой script ID и
+    /// пустой path сохраняют отсутствие scheduler/file identity.
+    pub(crate) fn run_script_line<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        line: &[u8],
+        context: ScriptExecutionContext,
+        runtime: &mut Runtime,
+    ) -> ScriptStepDisposition {
+        let mut script = ActiveScript::new(
+            0,
+            Vec::new(),
+            legacy_c_string_prefix(line).to_vec(),
+            context,
+        );
+        script.run_step(self, runtime)
+    }
+
     /// Общий достигнутый путь `CPlayer::RequestChangeAppellation`: сначала
     /// сохраняет запрошенный титул, затем запускает тот же сценарий как для
     /// клиентского `0x8FA18`, так и для автоматического снятия GodsBattle.

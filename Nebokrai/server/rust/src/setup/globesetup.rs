@@ -27,8 +27,9 @@
 //! pet lifecycle/tracing/follow используют raw `m_dwPetWildTime +0x728`,
 //! `m_dwMaxPetTracingDistance +0x72C` и `m_fTranslateDistance +0x73C`;
 //! абсолютные VA `0xEF410C/0xEF4110` подтверждены целевым GameServer EXE.
-//! `bAllowClientChangePos +0x50D` загружается позиционной проекцией GameServer
-//! и напрямую разрешает `shapemessage 0x8F902`. Поле `bRotation +0xC48`,
+//! `bAllowClientRunScript +0x50C` и соседний `bAllowClientChangePos +0x50D`
+//! загружаются позиционной проекцией GameServer и напрямую разрешают
+//! `othermessage 0x8FB01/channel 9` и `shapemessage 0x8F902`. Поле `bRotation +0xC48`,
 //! подтверждённое PDB непосредственно перед `bGoodsAi +0xC4C`, задаёт
 //! серверный байт поворота для квестового шага `0x8F903`.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
@@ -62,6 +63,7 @@ const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 const AUTO_PROTECT_TIME_OFFSET: usize = 0x804;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
+const ALLOW_CLIENT_RUN_SCRIPT_OFFSET: usize = 0x50C;
 const ALLOW_CLIENT_CHANGE_POSITION_OFFSET: usize = 0x50D;
 const ROTATION_OFFSET: usize = 0xC48;
 const SAVE_POINT_TIME_OFFSET: usize = 0x510;
@@ -775,6 +777,12 @@ impl GlobeSetupSnapshot {
     /// накладывает его из второй boolean-записи `gamesetup.ini`.
     pub(crate) const fn allow_client_change_position(&self) -> bool {
         self.bytes[ALLOW_CLIENT_CHANGE_POSITION_OFFSET] != 0
+    }
+
+    /// PDB-layout `tagSetup::bAllowClientRunScript +0x50C`; channel `9`
+    /// читает этот gate после sender-name проверки и до global `RunLine`.
+    pub(crate) const fn allow_client_run_script(&self) -> bool {
+        self.bytes[ALLOW_CLIENT_RUN_SCRIPT_OFFSET] != 0
     }
 
     /// Точный байт `tagSetup::bRotation +0xC48` для ответа `0xBF738`.
