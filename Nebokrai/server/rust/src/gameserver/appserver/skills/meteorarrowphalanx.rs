@@ -104,7 +104,7 @@ impl CMeteorArrowPhalanx {
           writer.write_i32(METEOR_ARROW_SKILL_ID as i32); writer.write_u32(self.frequency_ms);
           writer.write_i32(i32::try_from(self.cells.len()).ok()?);
           for &(cell_x, cell_y) in &self.cells { writer.write_i32(cell_x); writer.write_i32(cell_y); } }
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 }
 

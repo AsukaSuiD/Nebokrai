@@ -125,7 +125,7 @@ impl CGodThunderPhalanx2 {
             writer.write_u32(remained); writer.write_u32(self.lifetime_ms); writer.write_u32(self.frequency_ms);
             let count = (self.lifetime_ms / self.frequency_ms).wrapping_mul(self.target_count); writer.write_u32(count);
             for &(x, y) in self.cells.iter().take(count as usize) { writer.write_i32(x); writer.write_i32(y); }
-        } self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        } self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
     pub(crate) fn calculate_attack(&self, combat: PlayerCombatProperties, occupation: u8, level: u8, factor: f32, critical_rate: f32, random: &mut dyn FnMut(i32) -> i32) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
         let width = self.maximum_attack.wrapping_sub(self.minimum_attack).wrapping_abs().wrapping_add(1);

@@ -157,7 +157,7 @@ impl CSnowStormPhalanx {
             writer.write_u32(self.cells.len() as u32);
             for &(x, y) in &self.cells { writer.write_i32(x); writer.write_i32(y); }
         }
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 
     pub(crate) fn calculate_attack(&self, combat: PlayerCombatProperties, occupation: u8, attacker_level: u8, random_below: &mut dyn FnMut(i32) -> i32) -> (AttackInformation, PlayerCombatProperties, u8, u8) {

@@ -234,7 +234,7 @@ impl CGoods {
     /// Derived fairy-проекции не имеют отдельного wire: они восстанавливаются
     /// decoder-ом из base properties и addon list.
     pub(crate) fn serialize(&self, destination: &mut Vec<u8>, include_child: bool) -> bool {
-        if !self.shape.encode_to_byte_array(destination, include_child) {
+        if !self.shape.add_to_byte_array(destination, include_child) {
             return false;
         }
         let mut writer = LegacyWriter::new(destination);

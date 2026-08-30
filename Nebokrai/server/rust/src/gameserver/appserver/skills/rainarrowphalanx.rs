@@ -74,7 +74,7 @@ impl CRainArrowPhalanx {
         let mut payload = Vec::new(); { let mut writer = LegacyWriter::new(&mut payload);
             writer.write_i32(RAIN_ARROW_SKILL_ID as i32); writer.write_i32(self.skill_level);
             writer.write_i32(self.shape.get_tile_x().ok()?); writer.write_i32(self.shape.get_tile_y().ok()?); writer.write_u32(remained); }
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 }
 

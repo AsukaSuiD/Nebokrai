@@ -42,7 +42,7 @@ impl CThunderFirePhalanx {
         if force_move.is_some()||scan.is_some(){ThunderFirePhalanxTick::Active{force_move,scan}}else{ThunderFirePhalanxTick::Pending}
     }
     pub(crate) fn encode_client_snapshot(&self,mut now:impl FnMut()->u32)->Option<Vec<u8>>{
-        let first=now();let remained=if self.started_at_ms.wrapping_add(self.lifetime_ms)<=first{0}else{self.lifetime_ms.wrapping_sub(now()).wrapping_add(self.started_at_ms)};let mut payload=Vec::new();{let mut w=LegacyWriter::new(&mut payload);w.write_i32(ITEM_SKILL_2_ID as i32);w.write_i32(self.skill_level);w.write_i32(self.master.master_type);w.write_i32(self.master.master_id);w.write_u32(remained);}self.shape.encode_to_byte_array(&mut payload,true).then_some(payload)
+        let first=now();let remained=if self.started_at_ms.wrapping_add(self.lifetime_ms)<=first{0}else{self.lifetime_ms.wrapping_sub(now()).wrapping_add(self.started_at_ms)};let mut payload=Vec::new();{let mut w=LegacyWriter::new(&mut payload);w.write_i32(ITEM_SKILL_2_ID as i32);w.write_i32(self.skill_level);w.write_i32(self.master.master_type);w.write_i32(self.master.master_id);w.write_u32(remained);}self.shape.add_to_byte_array(&mut payload,true).then_some(payload)
     }
 }
 

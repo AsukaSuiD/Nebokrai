@@ -76,7 +76,7 @@ impl CThunderSlashPhalanx {
         { let mut writer = LegacyWriter::new(&mut payload); writer.write_i32(self.tile_x);
           writer.write_i32(self.skill_level); writer.write_i32(self.tile_y);
           writer.write_i32(THUNDER_SLASH_SKILL_ID as i32); writer.write_u32(remained); }
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 }
 

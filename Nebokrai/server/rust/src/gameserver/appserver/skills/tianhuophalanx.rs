@@ -120,7 +120,7 @@ impl CTianhuoPhalanx {
     pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> {
         let mut payload = Vec::new();
         self.shape
-            .encode_to_byte_array(&mut payload, true)
+            .add_to_byte_array(&mut payload, true)
             .then_some(payload)
     }
 

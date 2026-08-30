@@ -38,6 +38,9 @@
 //! insertion-order и повторный append сохранены, `Vec` заменяет MSVC list.
 //! Persistence decode `0x0005B280/0x0005BC30` сохраняет wire-порядок и exact
 //! quirk: сериализованная position читается, но live `m_lPos` становится нулём.
+//! `AddToByteArray` и `AddShapeToByteArray` сохраняются отдельными слоями:
+//! первый добавляет `CBaseObject`, второй пишет GUID и shape-поля в исходном
+//! порядке без параллельного wire-кодека.
 
 use super::baseobject::{BaseObjectDecodeError, CBaseObject};
 use super::legacycodec::{LegacyReader, LegacyWriter};
@@ -516,19 +519,9 @@ impl CShape {
         self.action = action;
     }
 
-    /// Exact shape-prefix `AddToByteArray`, необходимый persisted `CGoods`
-    /// внутри auction-node. GUID marker и scalar order зеркальны decoder-у.
-    pub(crate) fn encode_to_byte_array(
-        &self,
-        destination: &mut Vec<u8>,
-        include_child: bool,
-    ) -> bool {
-        if !self
-            .base_object
-            .add_to_byte_array(destination, include_child)
-        {
-            return false;
-        }
+    /// Exact `AddShapeToByteArray`: GUID marker и scalar order зеркальны
+    /// `DecordShapeFromByteArray` и не включают базовый `CBaseObject`.
+    pub(crate) fn add_shape_to_byte_array(&self, destination: &mut Vec<u8>) -> bool {
         let ex_id = self.base_object.get_ex_id();
         let mut writer = LegacyWriter::new(destination);
         if ex_id.is_invalid() {
@@ -546,6 +539,22 @@ impl CShape {
         writer.write_u16(self.state);
         writer.write_u16(self.action);
         true
+    }
+
+    /// Exact virtual `AddToByteArray`: сначала базовый объект, затем shape-
+    /// часть через отдельный виртуальный слой исходного owner-а.
+    pub(crate) fn add_to_byte_array(
+        &self,
+        destination: &mut Vec<u8>,
+        include_child: bool,
+    ) -> bool {
+        if !self
+            .base_object
+            .add_to_byte_array(destination, include_child)
+        {
+            return false;
+        }
+        self.add_shape_to_byte_array(destination)
     }
 
     /// Exact `DecordFromByteArray + DecordShapeFromByteArray`; wire position
@@ -935,7 +944,7 @@ fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) 
 
 // ============================================================================
 // FUNCTION: CShape::AddShapeToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED ABOVE; DECOMPILER STORED LOCALLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:236
@@ -949,7 +958,7 @@ fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) 
 
 // ============================================================================
 // FUNCTION: CShape::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED ABOVE; DECOMPILER STORED LOCALLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:271

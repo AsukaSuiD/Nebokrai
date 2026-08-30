@@ -102,7 +102,7 @@ pub(crate) fn encode_related_phalanx_snapshot(
         writer.write_u32(remained);
     }
     shape
-        .encode_to_byte_array(&mut payload, true)
+        .add_to_byte_array(&mut payload, true)
         .then_some(payload)
 }
 

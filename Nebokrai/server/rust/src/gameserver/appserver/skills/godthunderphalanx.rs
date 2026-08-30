@@ -162,7 +162,7 @@ impl CGodThunderPhalanx {
                 writer.write_i32(x); writer.write_i32(y);
             }
         }
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 
     pub(crate) fn calculate_attack(

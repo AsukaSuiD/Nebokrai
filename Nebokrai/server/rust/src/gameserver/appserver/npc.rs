@@ -115,7 +115,7 @@ impl CNpc {
         let mut payload = Vec::new();
         self.move_shape
             .shape()
-            .encode_to_byte_array(&mut payload, include_child)
+            .add_to_byte_array(&mut payload, include_child)
             .then_some(payload)
     }
 

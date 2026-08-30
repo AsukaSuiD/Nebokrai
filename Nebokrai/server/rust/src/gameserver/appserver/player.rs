@@ -2634,7 +2634,7 @@ impl CPlayer {
         carriage: &PlayerUncreatedCarriage,
         recreate_carriage: bool,
     ) -> Result<bool, PlayerGameSaveCodecError> {
-        if !self.shape().encode_to_byte_array(destination, true) {
+        if !self.shape().add_to_byte_array(destination, true) {
             return Err(PlayerGameSaveCodecError::CodecReturnedFalse { field: "CShape" });
         }
         destination.extend_from_slice(&self.synchronized_base_property_wire());

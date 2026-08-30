@@ -144,7 +144,7 @@ impl CYinYangPhalanx {
 
     pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> {
         let mut payload = Vec::new();
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 
     pub(crate) fn calculate_attack(&self, damage_factor: f32, combat: PlayerCombatProperties, occupation: u8, attacker_level: u8, critical_rate: f32, random_below: &mut dyn FnMut(i32) -> i32) -> (AttackInformation, PlayerCombatProperties, u8, u8) {

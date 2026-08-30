@@ -89,7 +89,7 @@ impl CThunderBlowPhalanx {
             writer.write_i32(self.shape.identity().id);
             writer.write_u32(remained);
         }
-        self.shape.encode_to_byte_array(&mut payload, true).then_some(payload)
+        self.shape.add_to_byte_array(&mut payload, true).then_some(payload)
     }
 }
 
