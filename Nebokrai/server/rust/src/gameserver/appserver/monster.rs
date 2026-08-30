@@ -883,6 +883,9 @@ impl CMonster {
     }
 
     pub(crate) fn battle_fairy_element_modify(&self, mut value: i32) -> i32 {
+        if let Some(state) = self.move_shape.origin_state() {
+            value = state.apply_to_monster();
+        }
         for state in self.move_shape.reached_property_states() {
             match state {
                 super::moveshape::ReachedPropertyState::GodBless(state) => {
