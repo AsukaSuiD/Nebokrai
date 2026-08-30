@@ -256,6 +256,10 @@ pub(crate) struct ShapeRuntimeFacts {
     pub(crate) is_npc: bool,
     pub(crate) goods: Option<GoodsAreaFacts>,
     pub(crate) is_move_shape: bool,
+    /// Совпадает с достигнутым условием `HP != 0 || type == NPC` при
+    /// пространственной регистрации `CMoveShape`; само здоровье остаётся у
+    /// concrete player/monster owner-а и не копируется в region registry.
+    pub(crate) blocks_region_cell: bool,
     pub(crate) figure: ShapeFigure,
 }
 

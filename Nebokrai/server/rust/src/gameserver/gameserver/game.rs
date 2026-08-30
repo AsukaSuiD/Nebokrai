@@ -17913,6 +17913,7 @@ impl CGame {
             is_npc: false,
             goods: None,
             is_move_shape: true,
+            blocks_region_cell: !player.is_dead(),
             figure: player.figure(),
         };
         let removal = owner
@@ -18392,6 +18393,7 @@ impl CGame {
             is_npc: false,
             goods: None,
             is_move_shape: true,
+            blocks_region_cell: !player.is_dead(),
             figure: player.figure(),
         };
         let membership = owner.base_mut().add_object_with_area_entry(
@@ -29552,6 +29554,7 @@ impl CGame {
             is_npc: false,
             goods: None,
             is_move_shape: true,
+            blocks_region_cell: !player.is_dead(),
             figure: player.figure(),
         };
         let membership = owner.base_mut().add_object_with_area_entry(
@@ -45267,6 +45270,7 @@ impl CGame {
                         is_npc: false,
                         goods: None,
                         is_move_shape: true,
+                        blocks_region_cell: !player.is_dead(),
                         figure: player.figure(),
                     };
                     let removal = owner

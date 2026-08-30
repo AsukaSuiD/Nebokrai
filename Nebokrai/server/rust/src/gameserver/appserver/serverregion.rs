@@ -74,8 +74,9 @@
 //! потенциально более ранний `GetShape` candidate разрешим runtime owner-ом;
 //! неразрешённый goods/other shape блокирует сценарий до ложного player match.
 //! Достигнутые movement commands вызывают здесь именно owner
-//! `CShape::SetTileXY`: region дополняет runtime area facts и передаёт virtual
-//! dispatch, не дублируя tile-center либо `CMoveShape::SetPosXY`.
+//! `CShape::SetTileXY`: region дополняет area facts и сам выбирает базовый
+//! либо `CMoveShape::SetPosXY`, не перекладывая игровые spatial-факты в
+//! процессный runtime и не дублируя tile-center.
 //! Aggressive monster tracing использует тот же owner: девяти-area player/pet
 //! snapshots сохраняют раздельный storage order, а concrete `OnMove` временно
 //! вынимает monster из map, публикует `0xBF506` и меняет block/area membership.
@@ -571,9 +572,7 @@ pub(crate) trait ServerRegionAreaTransitionContext {
     fn send_area_shape_to_player(&mut self, player_id: i32, shape: ShapeView, payload: &[u8]);
 }
 
-pub(crate) trait ServerRegionMembershipContext:
-    RegionRandomContext + ShapePositionDispatch<Error = RegionMembershipBlock>
-{
+pub(crate) trait ServerRegionMembershipContext: RegionRandomContext {
     /// Материализует достигнутый virtual `CMoveShape` area-enter callback.
     fn move_shape_entered_area(&mut self, identity: ShapeIdentity);
 }
@@ -1287,6 +1286,7 @@ impl CServerRegion {
                 },
             ),
             is_move_shape: true,
+            blocks_region_cell: true,
             figure: CMonster::figure(property),
             ..ShapeRuntimeFacts::default()
         };
@@ -1370,6 +1370,7 @@ impl CServerRegion {
         let facts = ShapeRuntimeFacts {
             monster: Some(super::shape::MonsterAreaClass::Active),
             is_move_shape: true,
+            blocks_region_cell: true,
             figure: CMonster::figure(property),
             ..ShapeRuntimeFacts::default()
         };
@@ -2746,6 +2747,7 @@ impl CServerRegion {
             let facts = ShapeRuntimeFacts {
                 is_npc: true,
                 is_move_shape: true,
+                blocks_region_cell: true,
                 figure: ShapeFigure::default(),
                 ..ShapeRuntimeFacts::default()
             };
@@ -3538,7 +3540,24 @@ impl CServerRegion {
             tile_x = position.x;
             tile_y = position.y;
         }
-        shape.set_tile_xy(&mut self.region, tile_x, tile_y, context)?;
+        if facts.is_move_shape {
+            let mut dispatch = MoveShapePositionDispatch {
+                facts: MoveShapePositionFacts {
+                    current_hit_points: u32::from(facts.blocks_region_cell),
+                    figure: facts.figure,
+                    current_area: None,
+                    area_width,
+                    area_height,
+                },
+            };
+            shape
+                .set_tile_xy(&mut self.region, tile_x, tile_y, &mut dispatch)
+                .map_err(RegionMembershipBlock::MoveShape)?;
+        } else {
+            shape
+                .set_tile_xy(&mut self.region, tile_x, tile_y, &mut BaseShapePositionDispatch)
+                .expect("базовая запись координат CShape не может завершиться ошибкой");
+        }
 
         let identity = shape.identity();
         self.registry.add(identity, facts);
