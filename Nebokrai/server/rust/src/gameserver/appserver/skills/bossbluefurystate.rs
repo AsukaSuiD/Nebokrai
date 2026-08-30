@@ -190,6 +190,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -235,13 +236,8 @@ impl BossBlueFuryState {
         !self.weak_released
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms {
-            0
-        } else {
-            deadline.wrapping_sub(now_ms) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
@@ -256,7 +252,7 @@ impl BossBlueFuryState {
         let mut bytes = Vec::with_capacity(BOSS_BLUE_FURY_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(BOSS_BLUE_FURY_STATE_ID);
-        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_u32(self.client_time(|| now_ms) as u32);
         writer.write_i32(self.attack_factor_percent);
         bytes.try_into().expect("размер состояния ярости синего босса фиксирован")
     }
@@ -310,7 +306,7 @@ pub(crate) fn send_boss_blue_fury_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);

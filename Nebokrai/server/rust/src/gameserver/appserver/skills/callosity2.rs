@@ -13,7 +13,8 @@ pub(crate) const CALLOSITY_2_SKILL_ID: u32 = 0x7d;
 
 pub(crate) const fn create_callosity_2_state(
     blast_factor: u16,
+    started_at_ms: u32,
     time_to_keep: i32,
 ) -> CallosityState2 {
-    CallosityState2::new(blast_factor, time_to_keep)
+    CallosityState2::new(blast_factor, started_at_ms, time_to_keep)
 }

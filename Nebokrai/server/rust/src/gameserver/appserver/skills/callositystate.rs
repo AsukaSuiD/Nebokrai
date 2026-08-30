@@ -5,8 +5,9 @@
 //! второе состояние реализовано в `callositystate2.rs`; enum семейства не даёт
 //! двум взаимно исключающим состояниям образовать параллельные источники истины.
 //! Подтверждённая
-//! странность сохранена: `time_to_keep` не обслуживается отдельным `AI`, а
-//! унаследованные `GetClientStateTime/GetAdditionalData` возвращают нули.
+//! странность сохранена: `time_to_keep` не обслуживается отдельным `AI`.
+//! Exact vtable обеих закалок направляет `GetRemainedTime` на `0x005D5F30`;
+//! additional-data остаётся базовым нулём.
 //! Коэффициент `CCH` применяется только при общем `UpdateProperty`; каждый
 //! такой проход повторно публикует начальный визуальный эффект, как
 //! `OnUpdateProperties`.
@@ -14,10 +15,8 @@
 use super::callosity::CALLOSITY_SKILL_ID;
 use super::callositystate2::CallosityState2;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::states::state::{
-    default_additional_data, default_client_state_time,
-};
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::state::{default_additional_data, timed_client_state_time};
+use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const CALLOSITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
@@ -25,13 +24,15 @@ pub(crate) const CALLOSITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CallosityState {
     blast_factor: u16,
+    started_at_ms: u32,
     time_to_keep: i32,
 }
 
 impl CallosityState {
-    pub(crate) const fn new(blast_factor: u16, time_to_keep: i32) -> Self {
+    pub(crate) const fn new(blast_factor: u16, started_at_ms: u32, time_to_keep: i32) -> Self {
         Self {
             blast_factor,
+            started_at_ms,
             time_to_keep,
         }
     }
@@ -48,8 +49,12 @@ impl CallosityState {
         self.time_to_keep
     }
 
-    pub(crate) const fn client_state_time(self) -> i32 {
-        default_client_state_time()
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(
+            self.started_at_ms,
+            self.time_to_keep as u32,
+            now_milliseconds,
+        ) as i32
     }
 
     pub(crate) const fn additional_data(self) -> u32 {
@@ -79,10 +84,10 @@ impl CallosityFamilyState {
         }
     }
 
-    pub(crate) const fn client_state_time(self) -> i32 {
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
         match self {
-            Self::Callosity(state) => state.client_state_time(),
-            Self::Callosity2(state) => state.client_state_time(),
+            Self::Callosity(state) => state.client_state_time(now_milliseconds),
+            Self::Callosity2(state) => state.client_state_time(now_milliseconds),
         }
     }
 
@@ -117,7 +122,7 @@ pub(crate) fn send_callosity_state_begin(
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
-    message.add_long(state.client_state_time());
+    message.add_long(state.client_state_time(game_tick_milliseconds));
     message.add_ulong(state.additional_data());
     let _ = game.send_player_shape_around(player_id, None, &message);
 }

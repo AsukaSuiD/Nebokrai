@@ -11,6 +11,7 @@ use super::agility2::AGILITY_2_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 
 pub(crate) const AGILITY_STATE_2_BYTES: usize = 10;
 
@@ -44,18 +45,12 @@ impl AgilityState2 {
         self.started_at_ms.wrapping_add(self.keep_time_ms as u32) < now_ms
     }
 
-    pub(crate) const fn client_time_needs_second_clock(self, first_now_ms: u32) -> bool {
-        first_now_ms < self.started_at_ms.wrapping_add(self.keep_time_ms as u32)
-    }
-
-    pub(crate) const fn client_time(self, first_now_ms: u32, second_now_ms: u32) -> i32 {
-        if self.started_at_ms.wrapping_add(self.keep_time_ms as u32) <= first_now_ms {
-            0
-        } else {
-            self.started_at_ms
-                .wrapping_sub(second_now_ms)
-                .wrapping_add(self.keep_time_ms as u32) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(
+            self.started_at_ms,
+            self.keep_time_ms as u32,
+            now_milliseconds,
+        ) as i32
     }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
@@ -71,7 +66,7 @@ impl AgilityState2 {
         let mut bytes = Vec::with_capacity(AGILITY_STATE_2_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(AGILITY_2_SKILL_ID);
-        writer.write_i32(self.client_time(now_ms, now_ms));
+        writer.write_i32(self.client_time(|| now_ms));
         writer.write_u16(self.full_miss);
         bytes.try_into().expect("размер временного состояния ловкости фиксирован")
     }

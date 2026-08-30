@@ -7,9 +7,9 @@
 //! построенное здесь общее визуальное сообщение `0xBFE03/0xBFE04`. Момент
 //! `Begin` и `DWORD`-срок хранятся у общего адаптера: все семь vtable используют
 //! один strict wrapping gate `started + keep < timeGetTime()` перед `End`.
-//! Vtable-аудит exact EXE отдельно подтверждает `CBlindState::GetRemainedTime`
-//! (`0x005F2CD0`) у AutoProtect и пяти `UseGoodsEnlarge*`; `ImproveExp`
-//! сохраняет базовую нулевую client-проекцию.
+//! Vtable-аудит exact EXE подтверждает `CBlindState::GetRemainedTime`
+//! (`0x005F2CD0`) у AutoProtect и пяти `UseGoodsEnlarge*`, а `ImproveExp`
+//! направляет тот же двухчтенийный контракт на `0x005D5F30`.
 
 use super::autoprotectstate::{AutoProtectState, AUTO_PROTECT_STATE_ID};
 use super::improveexpstate::{ImproveExpState, IMPROVE_EXP_STATE_ID};
@@ -30,9 +30,7 @@ use super::usegoodsenlargemaxhpstate::{
 use super::usegoodsenlargemaxmpstate::{
     UseGoodsEnlargeMaxMpState, USE_GOODS_ENLARGE_MAX_MP_STATE_ID,
 };
-use crate::gameserver::appserver::states::state::{
-    default_client_state_time, timed_client_state_time,
-};
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::nets::netserver::message::CMessage;
 
 const SCRIPT_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
@@ -123,8 +121,8 @@ impl ScriptMoveState {
         now_milliseconds: impl FnMut() -> u32,
     ) -> i32 {
         match self.kind {
-            ScriptStateKind::ImproveExp(_) => default_client_state_time(),
-            ScriptStateKind::EnlargeMaxHp(_)
+            ScriptStateKind::ImproveExp(_)
+            | ScriptStateKind::EnlargeMaxHp(_)
             | ScriptStateKind::EnlargeMaxMp(_)
             | ScriptStateKind::EnlargeDefense(_)
             | ScriptStateKind::EnlargeElementDefense(_)

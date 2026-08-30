@@ -29341,18 +29341,12 @@ impl CGame {
             );
         }
         if let Some(state) = loaded_agility_2 {
-            let first_now_ms = context.now_milliseconds();
-            let second_now_ms = if state.client_time_needs_second_clock(first_now_ms) {
-                context.now_milliseconds()
-            } else {
-                first_now_ms
-            };
             crate::gameserver::appserver::skills::agilitystate::send_agility_family_state_visual(
                 self,
                 expected_player_id,
                 state.skill_id(),
                 true,
-                state.client_time(first_now_ms, second_now_ms),
+                state.client_time(|| context.now_milliseconds()),
             );
         }
         if let Some(state) = loaded_blood_loss_state

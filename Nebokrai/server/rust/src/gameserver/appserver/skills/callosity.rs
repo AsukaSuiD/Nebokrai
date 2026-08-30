@@ -235,14 +235,17 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     if removed.is_some() {
         let _ = game.publish_player_states(player_id);
     }
+    let state_started_at_ms = runtime.now_milliseconds();
     let state = if skill_id == CALLOSITY_2_SKILL_ID {
         CallosityFamilyState::Callosity2(create_callosity_2_state(
             blast_factor,
+            state_started_at_ms,
             state_persist_time,
         ))
     } else {
         CallosityFamilyState::Callosity(CallosityState::new(
             blast_factor,
+            state_started_at_ms,
             state_persist_time,
         ))
     };

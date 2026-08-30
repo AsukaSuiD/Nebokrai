@@ -4,6 +4,8 @@
 //! `appserver/other states/improveexpstate.cpp`. Достигнутый путь создаётся
 //! `CMoveShape::AddState`; каждый живой экземпляр независимо добавляет
 //! `coefficient * 0.01` к множителю опыта в порядке канонического списка.
+//! Exact vtable направляет клиентский срок на
+//! `CAgilityState2::GetRemainedTime` по `0x005D5F30`.
 
 pub(crate) const IMPROVE_EXP_STATE_ID: i32 = 100_009;
 

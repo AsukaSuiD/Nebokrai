@@ -25,11 +25,5 @@ pub(crate) fn begin_agility_2_state<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.begin_agility_state_2(state);
     }
-    let first_now_ms = runtime.now_milliseconds();
-    let second_now_ms = if state.client_time_needs_second_clock(first_now_ms) {
-        runtime.now_milliseconds()
-    } else {
-        first_now_ms
-    };
-    state.client_time(first_now_ms, second_now_ms)
+    state.client_time(|| runtime.now_milliseconds())
 }

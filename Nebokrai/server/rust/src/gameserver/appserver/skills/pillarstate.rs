@@ -6,6 +6,7 @@
 //! типизированным источником для проверки запрета рывков и `PostDefense`.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -21,10 +22,7 @@ impl PillarState {
     pub(crate) const fn skill_id(self) -> u32 { PILLAR_STATE_ID }
     pub(crate) const fn damage_factor(self) -> f32 { f32::from_bits(self.damage_factor_bits) }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) as i32 }
-    }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32 }
 }
 
 pub(crate) fn send_pillar_state_visual(
@@ -34,7 +32,7 @@ pub(crate) fn send_pillar_state_visual(
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type); message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
