@@ -5,11 +5,13 @@
 //! использует строгую беззнаковую проверку срока и публикует точные
 //! `0xBFE03/0xBFE04`. Игрок и монстр хранят один типизированный экземпляр в
 //! `CanonicalStateStorage`; пространственный владелец остаётся у `CGame` и
-//! `CServerRegion`.
+//! `CServerRegion`. Vtable exact EXE подтверждает общий с `CBlindState`
+//! клиентский срок по `0x005F2CD0`.
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const RUSH_STATE_ID: u32 = 0x73;
@@ -31,23 +33,23 @@ impl RushState {
         now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms {
-            0
-        } else {
-            self.keep_time_ms.wrapping_sub(elapsed) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 }
 
-fn state_message(identity: ShapeIdentity, state: RushState, begin: bool, now_ms: u32) -> CMessage {
+fn state_message(
+    identity: ShapeIdentity,
+    state: RushState,
+    begin: bool,
+    now_milliseconds: impl FnMut() -> u32,
+) -> CMessage {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     message
@@ -79,10 +81,10 @@ pub(crate) fn replace_player_rush_state(
         return false;
     };
     if let Some(old) = old {
-        let message = state_message(identity, old, false, now_ms);
+        let message = state_message(identity, old, false, || now_ms);
         let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
     }
-    let message = state_message(identity, state, true, now_ms);
+    let message = state_message(identity, state, true, game_tick_milliseconds);
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
     true
 }
@@ -107,10 +109,10 @@ pub(crate) fn replace_monster_rush_state(
     });
     let Some((old, shape)) = installed else { return false };
     if let Some(old) = old {
-        let message = state_message(shape.identity(), old, false, now_ms);
+        let message = state_message(shape.identity(), old, false, || now_ms);
         let _ = game.send_game_shape_around(region, &shape, None, &message);
     }
-    let message = state_message(shape.identity(), state, true, now_ms);
+    let message = state_message(shape.identity(), state, true, game_tick_milliseconds);
     let _ = game.send_game_shape_around(region, &shape, None, &message);
     true
 }
@@ -129,7 +131,7 @@ pub(crate) fn expire_player_rush_state(game: &mut CGame, player_id: i32, now_ms:
         ))
     });
     let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
-    let message = state_message(identity, state, false, now_ms);
+    let message = state_message(identity, state, false, || now_ms);
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
     true
 }
@@ -147,7 +149,7 @@ pub(crate) fn expire_monster_rush_state(
         Some((state, monster.move_shape().shape().clone()))
     });
     let Some((state, shape)) = finished else { return false };
-    let message = state_message(shape.identity(), state, false, now_ms);
+    let message = state_message(shape.identity(), state, false, || now_ms);
     let _ = game.send_game_shape_around(region, &shape, None, &message);
     true
 }
