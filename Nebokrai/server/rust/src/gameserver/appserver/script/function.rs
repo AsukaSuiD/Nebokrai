@@ -5865,7 +5865,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 player_name,
                 position,
                 level_delta,
-                runtime,
             );
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }

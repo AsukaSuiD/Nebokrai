@@ -41011,13 +41011,12 @@ impl CGame {
             .unwrap_or(0)
     }
 
-    pub(crate) fn upgrade_script_player_equipment<Context>(
+    pub(crate) fn upgrade_script_player_equipment(
         &mut self,
         script_player_id: Option<i32>,
         player_name: &[u8],
         position: i32,
         level_delta: i32,
-        _context: &mut Context,
     ) -> i32 {
         let target_id = if player_name.is_empty() {
             script_player_id.filter(|player_id| self.find_player(*player_id).is_some())
