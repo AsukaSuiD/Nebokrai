@@ -1084,6 +1084,7 @@ impl CMoveShape {
             || !self.state_storage.extended_states.is_empty()
             || !self.state_storage.undead_states.is_empty()
             || self.state_storage.ride_state.is_some()
+            || !self.state_storage.script_states.is_empty()
     }
 
     pub(crate) fn restore_automatic_hp_mp_states(
@@ -1235,12 +1236,14 @@ impl CMoveShape {
         value1: i32,
         value2: i32,
         sufferer_is_gm: bool,
+        started_at_ms: u32,
     ) -> Option<ScriptMoveState> {
         let state = ScriptMoveState::from_factory(
             state_id,
             value1,
             value2,
             sufferer_is_gm,
+            started_at_ms,
         )?;
         self.script_states.push(state);
         Some(state)
@@ -2952,6 +2955,14 @@ impl CMoveShape {
 
     pub(crate) fn script_states(&self) -> &[ScriptMoveState] {
         &self.script_states
+    }
+
+    pub(crate) fn script_state(&self, index: usize) -> Option<ScriptMoveState> {
+        self.script_states.get(index).copied()
+    }
+
+    pub(crate) fn remove_script_state_at(&mut self, index: usize) -> Option<ScriptMoveState> {
+        (index < self.script_states.len()).then(|| self.script_states.remove(index))
     }
 
     pub(crate) fn take_pending_script_state_visuals(&mut self) -> Vec<ScriptMoveState> {

@@ -5063,9 +5063,28 @@ impl CPlayer {
         value1: i32,
         value2: i32,
         sufferer_is_gm: bool,
+        started_at_ms: u32,
     ) -> Option<super::scriptstate::ScriptMoveState> {
         self.move_shape
-            .add_script_state(state_id, value1, value2, sufferer_is_gm)
+            .add_script_state(state_id, value1, value2, sufferer_is_gm, started_at_ms)
+    }
+
+    pub(crate) fn script_move_state(
+        &self,
+        index: usize,
+    ) -> Option<super::scriptstate::ScriptMoveState> {
+        self.move_shape.script_state(index)
+    }
+
+    pub(crate) fn remove_script_move_state_at(
+        &mut self,
+        index: usize,
+    ) -> Option<super::scriptstate::ScriptMoveState> {
+        let removed = self.move_shape.remove_script_state_at(index)?;
+        if removed.is_auto_protect() {
+            self.auto_protected = false;
+        }
+        Some(removed)
     }
 
     pub(crate) fn script_move_state_count(&self, state_id: i32) -> u32 {

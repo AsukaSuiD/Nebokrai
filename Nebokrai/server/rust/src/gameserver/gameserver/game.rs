@@ -5550,8 +5550,15 @@ impl CGame {
         value2: i32,
     ) -> i32 {
         let sufferer_is_gm = self.script_player_gm_level(player_id).unwrap_or(0) != 0;
+        let started_at_ms = game_tick_milliseconds();
         let Some(state) = self.find_player_mut(player_id).and_then(|player| {
-            player.add_script_move_state(state_id, value1, value2, sufferer_is_gm)
+            player.add_script_move_state(
+                state_id,
+                value1,
+                value2,
+                sufferer_is_gm,
+                started_at_ms,
+            )
         }) else {
             return 0;
         };
@@ -27100,6 +27107,43 @@ impl CGame {
         ended
     }
 
+    /// Исполняет общий virtual `AI` семи состояний `CMoveShape::AddState`.
+    /// После удаления размер вектора меняется, но исходный индекс всё равно
+    /// увеличивается, поэтому сдвинувшийся сосед обрабатывается лишь в следующий
+    /// проход `UpdateAbnormality`.
+    fn update_player_script_move_states<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        now_ms: u32,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let mut ended = 0usize;
+        let mut index = 0usize;
+        loop {
+            let Some(state) = self
+                .find_player(player_id)
+                .and_then(|player| player.script_move_state(index))
+            else {
+                break;
+            };
+            if !state.expired(now_ms) {
+                index = index.wrapping_add(1);
+                continue;
+            }
+            let removed = self
+                .find_player_mut(player_id)
+                .and_then(|player| player.remove_script_move_state_at(index));
+            let Some(removed) = removed else {
+                break;
+            };
+            let _ = self.send_script_move_state_visual(player_id, removed, false);
+            let _ = self.update_player_properties(player_id, runtime);
+            ended = ended.wrapping_add(1);
+            index = index.wrapping_add(1);
+        }
+        ended
+    }
+
     /// Материализованная часть `CMoveShape::UpdateAbnormality` для player:
     /// завершение состояний, периодический расход предметов, визуальные эффекты
     /// и эффекты свойств, а также проверка ездового снаряжения выполняются из
@@ -27120,6 +27164,8 @@ impl CGame {
             self.update_player_particular_states(player_id, now_ms);
         let team_recruitment_states_ended =
             self.update_player_team_recruitment_states(player_id, now_ms, runtime);
+        let script_move_states_ended =
+            self.update_player_script_move_states(player_id, now_ms, runtime);
         let _ = expire_player_pillar_state(self, player_id, now_ms);
         let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_rush_2_state(self, player_id, now_ms);
@@ -27231,6 +27277,7 @@ impl CGame {
             battle_fairy_attribute_states_ended,
             particular_states_ended,
             team_recruitment_states_ended,
+            script_move_states_ended,
             "обновлены временные состояния игрока"
         );
         Some(())

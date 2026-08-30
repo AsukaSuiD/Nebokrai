@@ -4,7 +4,9 @@
 //! Этот модуль сохраняет её диапазон и порядок живого списка, но не содержит
 //! формул: каждый вариант делегирует расчёт исходному владельцу состояния.
 //! `CanonicalStateStorage` владеет экземплярами, а `CGame` только отправляет
-//! построенное здесь общее визуальное сообщение `0xBFE03/0xBFE04`.
+//! построенное здесь общее визуальное сообщение `0xBFE03/0xBFE04`. Момент
+//! `Begin` и `DWORD`-срок хранятся у общего адаптера: все семь vtable используют
+//! один strict wrapping gate `started + keep < timeGetTime()` перед `End`.
 
 use super::autoprotectstate::{AutoProtectState, AUTO_PROTECT_STATE_ID};
 use super::improveexpstate::{ImproveExpState, IMPROVE_EXP_STATE_ID};
@@ -44,6 +46,8 @@ enum ScriptStateKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ScriptMoveState {
     kind: ScriptStateKind,
+    started_at_ms: u32,
+    time_to_keep_ms: u32,
     visual_pending: bool,
 }
 
@@ -55,6 +59,7 @@ impl ScriptMoveState {
         value1: i32,
         value2: i32,
         sufferer_is_gm: bool,
+        started_at_ms: u32,
     ) -> Option<Self> {
         let keep_time = value1 as u32;
         let coefficient = value2 as u32;
@@ -84,6 +89,8 @@ impl ScriptMoveState {
             _ => return None,
         };
         Some(Self {
+            started_at_ms,
+            time_to_keep_ms: keep_time,
             visual_pending: !matches!(kind, ScriptStateKind::AutoProtect(_)),
             kind,
         })
@@ -103,6 +110,12 @@ impl ScriptMoveState {
 
     pub(crate) const fn is_auto_protect(self) -> bool {
         matches!(self.kind, ScriptStateKind::AutoProtect(_))
+    }
+
+    /// Exact общий AI-gate сценарных состояний. Сложение и сравнение остаются
+    /// `DWORD`, а равенство deadline текущему tick ещё не завершает состояние.
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.time_to_keep_ms) < now_ms
     }
 
     pub(crate) fn apply_properties(
