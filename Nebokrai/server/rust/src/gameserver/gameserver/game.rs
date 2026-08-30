@@ -5607,7 +5607,12 @@ impl CGame {
         begin: bool,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
         let player = self.find_player(player_id)?;
-        let message = script_state_visual_message(player.shape(), state, begin);
+        let message = script_state_visual_message(
+            player.shape(),
+            state,
+            begin,
+            game_tick_milliseconds,
+        );
         self.send_player_shape_around(player_id, None, &message)
     }
 

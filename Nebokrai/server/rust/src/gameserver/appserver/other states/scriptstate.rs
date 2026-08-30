@@ -7,6 +7,9 @@
 //! построенное здесь общее визуальное сообщение `0xBFE03/0xBFE04`. Момент
 //! `Begin` и `DWORD`-срок хранятся у общего адаптера: все семь vtable используют
 //! один strict wrapping gate `started + keep < timeGetTime()` перед `End`.
+//! Vtable-аудит exact EXE отдельно подтверждает `CBlindState::GetRemainedTime`
+//! (`0x005F2CD0`) у AutoProtect и пяти `UseGoodsEnlarge*`; `ImproveExp`
+//! сохраняет базовую нулевую client-проекцию.
 
 use super::autoprotectstate::{AutoProtectState, AUTO_PROTECT_STATE_ID};
 use super::improveexpstate::{ImproveExpState, IMPROVE_EXP_STATE_ID};
@@ -26,6 +29,9 @@ use super::usegoodsenlargemaxhpstate::{
 };
 use super::usegoodsenlargemaxmpstate::{
     UseGoodsEnlargeMaxMpState, USE_GOODS_ENLARGE_MAX_MP_STATE_ID,
+};
+use crate::gameserver::appserver::states::state::{
+    default_client_state_time, timed_client_state_time,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -112,6 +118,25 @@ impl ScriptMoveState {
         matches!(self.kind, ScriptStateKind::AutoProtect(_))
     }
 
+    pub(crate) fn client_state_time(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> i32 {
+        match self.kind {
+            ScriptStateKind::ImproveExp(_) => default_client_state_time(),
+            ScriptStateKind::EnlargeMaxHp(_)
+            | ScriptStateKind::EnlargeMaxMp(_)
+            | ScriptStateKind::EnlargeDefense(_)
+            | ScriptStateKind::EnlargeElementDefense(_)
+            | ScriptStateKind::EnlargeFullMiss(_)
+            | ScriptStateKind::AutoProtect(_) => timed_client_state_time(
+                self.started_at_ms,
+                self.time_to_keep_ms,
+                now_milliseconds,
+            ) as i32,
+        }
+    }
+
     /// Exact общий AI-gate сценарных состояний. Сложение и сравнение остаются
     /// `DWORD`, а равенство deadline текущему tick ещё не завершает состояние.
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
@@ -152,6 +177,7 @@ pub(crate) fn script_state_visual_message(
     sufferer: &CShape,
     state: ScriptMoveState,
     begin: bool,
+    now_milliseconds: impl FnMut() -> u32,
 ) -> CMessage {
     let identity = sufferer.identity();
     let mut message = CMessage::new(if begin {
@@ -163,9 +189,7 @@ pub(crate) fn script_state_visual_message(
     message.add_long(identity.id);
     message.add_long(state.state_id());
     if begin {
-        // Достигнутый путь исполнения до переноса публиковал базовые нулевые
-        // значения; перенос не расширяет пока не подключённые виртуальные методы.
-        message.add_long(0);
+        message.add_long(state.client_state_time(now_milliseconds));
         message.add_long(0);
     }
     message
