@@ -917,7 +917,7 @@ where
             let change = game
                 .set_player_yuan_bao(player_id, requested, created_currency)
                 .expect("auction YuanBao player проверен перед mutation");
-            game.send_player_yuan_bao_change(&change, runtime);
+            game.send_player_yuan_bao_change(&change);
             tracing::trace!(player_id, requested, previous, ?change, "YuanBao игрока изменены");
             Some(Ok(()))
         }

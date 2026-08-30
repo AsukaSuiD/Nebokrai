@@ -74,10 +74,10 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMess
     context: &mut Context,
 ) -> Option<Result<(), IncrementShopBillingMessageError>> {
     if message.message_type() == BILLING_AUTH_RESPONSE {
-        return Some(dispatch_billing_auth(message, game, context));
+        return Some(dispatch_billing_auth(message, game));
     }
     if message.message_type() == BILLING_REFRESH_RESPONSE {
-        return Some(dispatch_billing_refresh(message, game, context));
+        return Some(dispatch_billing_refresh(message, game));
     }
     if message.message_type() == BILLING_TRADE_RESPONSE {
         let unread = message.unread_bytes();
@@ -96,7 +96,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMess
             return Some(dispatch_personal_shop_billing_trade(message, game, context));
         }
         if trade_type == 3 {
-            return Some(dispatch_auction_billing_trade(message, game, context));
+            return Some(dispatch_auction_billing_trade(message, game));
         }
         return None;
     }
@@ -168,7 +168,7 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMess
     let yuan_bao_change = game
         .set_player_yuan_bao(player_id, last_point, currency_created)
         .expect("UniBill player проверен перед balance mutation");
-    let _ = game.send_player_yuan_bao_change(&yuan_bao_change, context);
+    let _ = game.send_player_yuan_bao_change(&yuan_bao_change);
 
     let created = game.create_goods_batch(goods_id, goods_amount);
     if created.is_empty() {
@@ -239,10 +239,9 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMess
     Some(Ok(()))
 }
 
-fn dispatch_billing_auth<Context: GameContainerMessageRuntime>(
+fn dispatch_billing_auth(
     message: &mut CMessage,
     game: &mut CGame,
-    context: &mut Context,
 ) -> Result<(), IncrementShopBillingMessageError> {
     let player_id = read_billing_long(message, "billing auth player id")?;
     if game.find_player(player_id).is_none() {
@@ -256,15 +255,14 @@ fn dispatch_billing_auth<Context: GameContainerMessageRuntime>(
     let current = read_billing_long(message, "billing auth yuan bao")? as u32;
     let change = set_billing_yuan_bao(game, player_id, current)
         .expect("billing auth player проверен перед balance mutation");
-    let _ = game.send_player_yuan_bao_change(&change, context);
+    let _ = game.send_player_yuan_bao_change(&change);
     debug!(player_id, current, "баланс YuanBao применён после авторизации Billing");
     Ok(())
 }
 
-fn dispatch_billing_refresh<Context: GameContainerMessageRuntime>(
+fn dispatch_billing_refresh(
     message: &mut CMessage,
     game: &mut CGame,
-    context: &mut Context,
 ) -> Result<(), IncrementShopBillingMessageError> {
     let account = message.base_mut().get_str_bytes(0x40).ok_or(
         IncrementShopBillingMessageError::MissingField("billing refresh account"),
@@ -283,15 +281,14 @@ fn dispatch_billing_refresh<Context: GameContainerMessageRuntime>(
     let current = read_billing_long(message, "billing refresh yuan bao")? as u32;
     let change = set_billing_yuan_bao(game, player_id, current)
         .expect("billing refresh account lookup вернул canonical player");
-    let _ = game.send_player_yuan_bao_change(&change, context);
+    let _ = game.send_player_yuan_bao_change(&change);
     debug!(player_id, current, "баланс YuanBao обновлён по ответу Billing");
     Ok(())
 }
 
-fn dispatch_auction_billing_trade<Context: GameContainerMessageRuntime>(
+fn dispatch_auction_billing_trade(
     message: &mut CMessage,
     game: &mut CGame,
-    context: &mut Context,
 ) -> Result<(), IncrementShopBillingMessageError> {
     let buyer_id = read_billing_long(message, "auction buyer id")?;
     let seller_id = read_billing_long(message, "auction seller id")?;
@@ -338,13 +335,13 @@ fn dispatch_auction_billing_trade<Context: GameContainerMessageRuntime>(
 
     let buyer_change = set_billing_yuan_bao(game, buyer_id, buyer_yuan_bao)
         .expect("Billing auction buyer проверен перед balance");
-    let _ = game.send_player_yuan_bao_change(&buyer_change, context);
+    let _ = game.send_player_yuan_bao_change(&buyer_change);
 
     let seller_online = game.find_player(seller_id).is_some();
     if seller_online {
         let seller_change = set_billing_yuan_bao(game, seller_id, seller_yuan_bao)
             .expect("online auction seller проверен перед mutation");
-        let _ = game.send_player_yuan_bao_change(&seller_change, context);
+        let _ = game.send_player_yuan_bao_change(&seller_change);
     } else {
         let mut offline = CMessage::new(0x0006_0814);
         offline.base_mut().add_long(seller_id);
@@ -377,10 +374,10 @@ fn dispatch_player_billing_trade<Context: GameContainerMessageRuntime>(
 
     let payer_change = set_billing_yuan_bao(game, payer_id, payer_yuan_bao)
         .expect("Billing trade payer проверен перед balance mutation");
-    let _ = game.send_player_yuan_bao_change(&payer_change, context);
+    let _ = game.send_player_yuan_bao_change(&payer_change);
     let receiver_change = set_billing_yuan_bao(game, receiver_id, receiver_yuan_bao)
         .expect("Billing trade receiver проверен перед balance mutation");
-    let _ = game.send_player_yuan_bao_change(&receiver_change, context);
+    let _ = game.send_player_yuan_bao_change(&receiver_change);
 
     let session_id = read_billing_long(message, "player trade session id")?;
     let plug_id = read_billing_long(message, "player trade plug id")?;
@@ -428,10 +425,10 @@ fn dispatch_personal_shop_billing_trade<Context: GameContainerMessageRuntime>(
     }
     let buyer_change = set_billing_yuan_bao(game, buyer_id, buyer_yuan_bao)
         .expect("Billing personal-shop buyer проверен перед balance");
-    let _ = game.send_player_yuan_bao_change(&buyer_change, context);
+    let _ = game.send_player_yuan_bao_change(&buyer_change);
     let seller_change = set_billing_yuan_bao(game, seller_id, seller_yuan_bao)
         .expect("Billing personal-shop seller проверен перед balance");
-    let _ = game.send_player_yuan_bao_change(&seller_change, context);
+    let _ = game.send_player_yuan_bao_change(&seller_change);
 
     let session_id = read_billing_long(message, "personal-shop session id")?;
     let buyer_plug_id = read_billing_long(message, "personal-shop buyer plug id")?;

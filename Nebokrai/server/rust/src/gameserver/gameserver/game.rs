@@ -31245,11 +31245,7 @@ impl CGame {
     /// Замыкает listener-tail `CYuanBao` после Billing/World balance mutation.
     /// Extend ID `5` отличает этот однослотовый currency owner от wallet `4`;
     /// create требует тот же old-client goods codec, amount/delete — нет.
-    pub(crate) fn send_player_yuan_bao_change<Context>(
-        &self,
-        change: &PlayerYuanBaoChange,
-        _context: &mut Context,
-    ) {
+    pub(crate) fn send_player_yuan_bao_change(&self, change: &PlayerYuanBaoChange) {
         use crate::gameserver::appserver::container::cwallet::{
             CurrencyDecreaseOutcome, CurrencyIncreaseOutcome,
         };
