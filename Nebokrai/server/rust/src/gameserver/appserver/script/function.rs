@@ -450,8 +450,8 @@ use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlug
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     BattleFairyScriptAction, CGame, CiQingComposeContext, GameClockContext,
-    GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext, MonsterDeathContext,
-    NationCombatContext, PlayerReliveContext,
+    GameContainerMessageRuntime, GameKickAroundOutcome, MonsterDeathContext, NationCombatContext,
+    PlayerReliveContext,
     RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
     ScriptRegionChangeContext, ScriptTimedGoodsParameters, ServerRegionOwner,
     colored_player_notice_message, colored_text_message, format_legacy_text_fields,
@@ -847,7 +847,6 @@ pub(crate) trait ScriptFunctionRuntime:
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
     + CityGateRuntimeContext
-    + GodsBattleDeathContext
     + RealmAppellationScriptContext
     + ScriptAwardAuthenticationContext
     + MoveShapeCommandContext
@@ -864,7 +863,6 @@ impl<T> ScriptFunctionRuntime for T where
         + GameContainerMessageRuntime
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
-        + GodsBattleDeathContext
         + RealmAppellationScriptContext
         + ScriptAwardAuthenticationContext
         + MoveShapeCommandContext

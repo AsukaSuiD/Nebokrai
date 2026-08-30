@@ -3111,16 +3111,6 @@ pub(crate) struct GroundCurrencyRemoval {
     pub(crate) kind: GroundCurrencyRemovalKind,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GodsBattleTeamSnapshot {
-    pub(crate) teammate_amount: u32,
-    pub(crate) player_ids: Vec<i32>,
-}
-
-pub(crate) trait GodsBattleDeathContext {
-    fn gods_battle_team_snapshot(&mut self, team_id: i32) -> Option<GodsBattleTeamSnapshot>;
-}
-
 pub(crate) trait GodsBattleNpcContendContext:
     ServerRegionMonsterContext + ScriptFunctionRuntime + GameClockContext
 {
@@ -24727,14 +24717,14 @@ impl CGame {
             victim_szl,
         );
         let team = (killer_team != 0)
-            .then(|| context.gods_battle_team_snapshot(killer_team))
+            .then(|| self.gods_battle_team_snapshot(killer_team))
             .flatten();
         let mut updates = 0usize;
-        if let Some(team) = &team {
-            if team.teammate_amount != 0 {
-                let share = gods_battle_team_szl_share(gain.value, team.teammate_amount);
+        if let Some((teammate_amount, player_ids)) = &team {
+            if *teammate_amount != 0 {
+                let share = gods_battle_team_szl_share(gain.value, *teammate_amount);
                 if share != 0 {
-                    for player_id in &team.player_ids {
+                    for player_id in player_ids {
                         let eligible = self.find_player(*player_id).is_some_and(|player| {
                             player.gods_battle_faction() != victim_faction
                                 && player.server_region_id() == Some(killer_region)
@@ -24795,7 +24785,7 @@ impl CGame {
             victim_id,
             ?gain,
             ?loss,
-            team_players = team.as_ref().map_or(0, |team| team.player_ids.len()),
+            team_players = team.as_ref().map_or(0, |(_, player_ids)| player_ids.len()),
             updates,
             ?region_notice_delivery,
             "SZL после смерти в битве богов применён"
@@ -29838,6 +29828,19 @@ impl CGame {
 
     pub(crate) fn get_team_session_id(&self, team_id: u32) -> i32 {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
+    }
+
+    /// `CPlayer::OnDied` получает команду через тот же process-owned
+    /// `team_id -> session_id`, который обслуживает team dispatcher. Размер
+    /// сохраняет все plugs снимка, а локальность проверяется уже при раздаче.
+    fn gods_battle_team_snapshot(&self, team_id: i32) -> Option<(u32, Vec<i32>)> {
+        let session_id = self.get_team_session_id(team_id as u32);
+        if session_id == 0 {
+            return None;
+        }
+        let player_ids = self.session_factory.team_player_ids(session_id)?;
+        let teammate_amount = u32::try_from(player_ids.len()).unwrap_or(u32::MAX);
+        Some((teammate_amount, player_ids))
     }
 
     fn script_team_session_id(&self, player_id: i32) -> Option<i32> {
