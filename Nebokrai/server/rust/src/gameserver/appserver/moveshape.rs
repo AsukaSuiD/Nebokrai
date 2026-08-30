@@ -28,6 +28,9 @@
 //! Оглушения `RushState` и `Rush2State` также имеют здесь независимые
 //! канонические сроки и через общие счётчики управляют запретами движения и
 //! боя для игрока либо регионального монстра.
+//! `CNotDisappearAfterDead` использует точный client-time override
+//! `CExStateNew::GetRemainedTime`: нулевой срок и достигнутый wrapping deadline
+//! дают `0`, иначе публикуется оставшийся DWORD.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
 //! остаются у этого владельца.
@@ -218,11 +221,11 @@ impl UndeadState {
     }
 
     pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
-        if self.keep_time_ms == 0 {
+        let deadline = self.started_ms.wrapping_add(self.keep_time_ms);
+        if self.keep_time_ms == 0 || deadline <= now_ms {
             0
         } else {
-            self.keep_time_ms
-                .saturating_sub(now_ms.wrapping_sub(self.started_ms))
+            deadline.wrapping_sub(now_ms)
         }
     }
 
