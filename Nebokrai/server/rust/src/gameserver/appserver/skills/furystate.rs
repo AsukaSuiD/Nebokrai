@@ -6,9 +6,12 @@
 //! Округление использует исходное
 //! правило дробной части `> 0.5`, а визуальные начало/завершение сохраняют
 //! `0xBFE03/04`.
+//! `GetRemainedTime` разделяет exact-тело `CFuryState` по `0x00605E10`:
+//! положительный остаток вычисляется после отдельного второго чтения часов.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -42,13 +45,8 @@ impl FuryState {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms {
-            0
-        } else {
-            deadline.wrapping_sub(now_ms) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 
     pub(crate) fn apply_to_monster_max_attack(self, maximum: u32) -> u32 {
@@ -99,7 +97,7 @@ pub(crate) fn send_fury_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);

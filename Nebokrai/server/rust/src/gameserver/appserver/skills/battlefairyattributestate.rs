@@ -6,10 +6,13 @@
 //! добавляет новую в хвост. Пакет начала передаёт исходные длительность и
 //! отметку времени, а не вычисленный остаток. Формулы игрока и монстра
 //! разделены, поскольку часть ослаблений в оригинале не поддерживала монстров.
+//! Все восемь concrete vtable (`Pojia..Yufa`) направляют клиентский срок на
+//! `CFuryState::GetRemainedTime` по `0x00605E10` с двумя чтениями часов.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -69,6 +72,10 @@ impl BattleFairyAttributeState {
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
+    }
+
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
     }
 
     pub(crate) fn apply_to_player(self, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {

@@ -6,8 +6,11 @@
 //! максимальную атаку и сохраняет исходное округление с границей дробной
 //! части `> 0.5`. Для игрока прибавка сужается до `WORD` и ограничивается
 //! суммой `0xFFFF`; начало и завершение публикуются как `0xBFE03/04`.
+//! Клиентский `GetRemainedTime` подтверждён ссылкой vtable на общее тело
+//! `CFuryState` по `0x00605E10` и сохраняет два чтения wrapping clock.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -31,9 +34,8 @@ impl RageBreakState {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    pub(crate) const fn remaining_ms(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 
     fn rounded_gain(self, maximum: u32) -> i32 {
@@ -66,7 +68,7 @@ pub(crate) fn send_rage_break_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.remaining_ms(now_ms));
+        message.add_long(state.client_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
