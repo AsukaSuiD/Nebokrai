@@ -1470,7 +1470,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
                 return Some(Ok(()));
             }
-            let (identity, payload, mutated) = {
+            let (identity, goods, mutated) = {
                 let goods = game
                     .find_player_mut(player_id)
                     .expect("expired-equipment player сохранён после context lookup")
@@ -1479,10 +1479,11 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 let mutated = goods.set_addon_property_modifier_core(GAP_EQUIP_STATE, 1, 3);
                 (
                     goods.identity(),
-                    runtime.encode_goods_for_old_client(goods),
+                    goods.clone(),
                     mutated,
                 )
             };
+            let payload = game.encode_goods_for_old_client(&goods);
             tracing::trace!(
                 message_type,
                 player_id,

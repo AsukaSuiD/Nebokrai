@@ -2048,11 +2048,7 @@ pub(crate) struct GameWarStartupOwners {
     pub(crate) four_nation: CFourNationWarSys,
 }
 
-pub(crate) trait OldClientGoodsCodec {
-    fn encode_goods_for_old_client(&mut self, goods: &CGoods) -> Vec<u8>;
-}
-
-pub(crate) trait CiQingComposeContext: OldClientGoodsCodec {
+pub(crate) trait CiQingComposeContext {
     fn clone_ci_qing_hand_goods(&mut self, goods: &CGoods) -> Option<CGoods>;
     fn mount_ci_qing_equipment(
         &mut self,
@@ -2097,9 +2093,9 @@ pub(crate) fn game_wall_time_seconds() -> u64 {
 
 pub(crate) trait FairyContext: BattleFairyDeathContext + GameClockContext {}
 
-pub(crate) trait PlayerEquipmentInspectionContext: OldClientGoodsCodec {}
+pub(crate) trait PlayerEquipmentInspectionContext {}
 
-impl<T: OldClientGoodsCodec> PlayerEquipmentInspectionContext for T {}
+impl<T> PlayerEquipmentInspectionContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueuedSkillExecutionState {
@@ -2136,7 +2132,7 @@ pub(crate) trait EquipmentComposeContext: GameContainerMessageRuntime {}
 
 impl<T: GameContainerMessageRuntime> EquipmentComposeContext for T {}
 
-pub(crate) trait EquipmentDaKongContext: OldClientGoodsCodec {}
+pub(crate) trait EquipmentDaKongContext {}
 
 pub(crate) trait EquipmentUpgradeContext: GameContainerMessageRuntime {}
 
@@ -2201,9 +2197,9 @@ pub(crate) struct GoodsDestroyAuditLog {
     pub(crate) tile_y: Result<i32, ShapeCoordinateBlock>,
 }
 
-pub(crate) trait SynthesisContext: OldClientGoodsCodec {}
+pub(crate) trait SynthesisContext {}
 
-impl<T: OldClientGoodsCodec> SynthesisContext for T {}
+impl<T> SynthesisContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SynthesisOpenOutcome {
@@ -2276,7 +2272,7 @@ struct PlayerTradeAuditParty {
 /// Battle-fairy death/equipment transitions используют runtime только для
 /// точного old-client goods codec; player property state и `0xBF721` принадлежат
 /// `CGame/CPlayer` и не передаются через этот context.
-pub(crate) trait BattleFairyDeathContext: OldClientGoodsCodec {}
+pub(crate) trait BattleFairyDeathContext {}
 
 /// Единая runtime-граница virtual `CPlayer::UpdateProperty`. Все reached
 /// callers применяют один полный snapshot независимо от причины mutation;
@@ -2294,7 +2290,6 @@ pub(crate) trait PlayerPropertyContext {
 /// регион используют одних владельцев и не расходятся по двум реализациям.
 pub(crate) trait MonsterDeathContext:
     GameClockContext
-    + OldClientGoodsCodec
     + ServerRegionMembershipContext
     + PlayerPropertyContext
     + NationCombatContext
@@ -2303,7 +2298,6 @@ pub(crate) trait MonsterDeathContext:
 
 impl<T> MonsterDeathContext for T where
     T: GameClockContext
-        + OldClientGoodsCodec
         + ServerRegionMembershipContext
         + PlayerPropertyContext
         + NationCombatContext
@@ -2366,7 +2360,7 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext {
 /// recompute получают тот же live runtime в исходном порядке. GoodsAI tree
 /// принадлежит canonical player и заполняется после успешной регистрации.
 pub(crate) trait GamePlayerLoginContext:
-    NationCombatContext + OldClientGoodsCodec + PlayerPropertyContext
+    NationCombatContext + PlayerPropertyContext
 {
     fn publish_initial_player_client_snapshot(
         &mut self,
@@ -2494,7 +2488,7 @@ pub(crate) enum CiQingOtherPersonTarget {
 /// runtime fact. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
-    OldClientGoodsCodec + GameClockContext + PlayerPropertyContext + ServerRegionMembershipContext
+    GameClockContext + PlayerPropertyContext + ServerRegionMembershipContext
 {
     fn enhancement_equipment_remove_facts(
         &mut self,
@@ -4534,6 +4528,31 @@ pub(crate) struct CGame {
     next_summon_shape_id: NextSummonShapeId,
 }
 
+#[derive(Clone)]
+struct OldClientGoodsEncoder {
+    factory: CGoodsFactory,
+    da_kong_enabled: bool,
+}
+
+impl OldClientGoodsEncoder {
+    fn new(factory: &CGoodsFactory, da_kong_enabled: bool) -> Self {
+        Self {
+            factory: factory.clone(),
+            da_kong_enabled,
+        }
+    }
+
+    fn encode(&self, goods: &CGoods) -> Vec<u8> {
+        let mut payload = Vec::new();
+        let _ = goods.serialize_for_old_client(
+            &mut payload,
+            &self.factory,
+            self.da_kong_enabled,
+        );
+        payload
+    }
+}
+
 impl CGame {
     /// Linux operator-projection reached `RefeashInfoText`. Публикуются только
     /// live owners; неперенесённые GUI throughput/peak counters не подменяются
@@ -4962,7 +4981,8 @@ impl CGame {
                 .players
                 .get_mut(&buyer.owner_id())
                 .expect("buyer проверен перед packet add");
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             buyer_player.add_traded_goods_to_packet(vec![removed], &self.goods_factory, &mut encode)
         };
         self.deliver_particular_state_begins(buyer.owner_id(), begun_states);
@@ -4985,7 +5005,8 @@ impl CGame {
                 .players
                 .get_mut(&seller_id)
                 .expect("seller остаётся online для legacy packet rollback");
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let (rollback, _, begun_states) = seller_player.add_traded_goods_to_packet(
                 if rejected.is_empty() {
                     vec![original]
@@ -5518,6 +5539,14 @@ impl CGame {
 
     pub(crate) const fn goods_factory_mut(&mut self) -> &mut CGoodsFactory {
         &mut self.goods_factory
+    }
+
+    /// Единственная old-client проекция предмета использует live каталог и
+    /// текущий `DaKong` gate самого `CGame`; process runtime не хранит копию
+    /// resource owner-а. Неизвестный catalog index сохраняет прежний пустой
+    /// результат вызывающей границы.
+    pub(crate) fn encode_goods_for_old_client(&self, goods: &CGoods) -> Vec<u8> {
+        OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods)
     }
 
     pub(crate) fn apply_recomputed_player_properties(
@@ -6242,7 +6271,11 @@ impl CGame {
                 let cell = BattleFairyCell::from_position(source_position)
                     .expect("battle-fairy source position проверена");
                 let coefficients = self.globe_setup.player_property_coefficients();
-                let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+                let encoder = OldClientGoodsEncoder::new(
+                    &self.goods_factory,
+                    self.globe_setup.da_kong_key(),
+                );
+                let mut encode = move |goods: &CGoods| encoder.encode(goods);
                 let mut report = player.take_battle_fairy_goods(
                     cell,
                     amount,
@@ -8069,7 +8102,8 @@ impl CGame {
                 });
             };
             let coefficients = self.globe_setup.player_property_coefficients();
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let mut report = player.take_battle_fairy_goods(
                 cell,
                 amount,
@@ -8240,7 +8274,8 @@ impl CGame {
                 player.current_progress(),
                 PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
             );
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let mut report = if position == u32::MAX {
                 player.add_battle_fairy_goods_auto(
                     incoming,
@@ -8627,7 +8662,8 @@ impl CGame {
                 });
             };
             let coefficients = self.globe_setup.player_property_coefficients();
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let mut report = player.take_battle_fairy_goods(
                 cell,
                 amount,
@@ -8869,7 +8905,8 @@ impl CGame {
                 player.current_progress(),
                 PlayerProgress::OpenStall | PlayerProgress::Trading | PlayerProgress::Upgrade
             );
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let mut report = if position == u32::MAX {
                 player.add_battle_fairy_goods_auto(
                     incoming,
@@ -10432,7 +10469,7 @@ impl CGame {
         let goods = detached.identity();
         let particular_attribute =
             detached.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
-        let old_client_payload = context.encode_goods_for_old_client(&detached);
+        let old_client_payload = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(&detached);
         let now_ms = context.now_milliseconds();
         let (area_width, area_height) = self.area_dimensions();
         if let Err((error, detached)) = owner.base_mut().add_owned_ground_goods(
@@ -11560,7 +11597,7 @@ impl CGame {
         mut evaluate_sockets: EvaluateSockets,
     ) -> i32
     where
-        Context: OldClientGoodsCodec,
+        Context: ?Sized,
         EvaluateSockets: FnMut(&mut Self, &mut Context) -> Option<[(i32, i32); 10]>,
     {
         if !self.players.contains_key(&player_id) {
@@ -11575,7 +11612,11 @@ impl CGame {
                     let player = players
                         .get_mut(&player_id)
                         .expect("игрок проверен перед LoadBFDefualtProperty");
-                    let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+                    let encoder = OldClientGoodsEncoder::new(
+                        &self.goods_factory,
+                        self.globe_setup.da_kong_key(),
+                    );
+                    let mut encode = move |goods: &CGoods| encoder.encode(goods);
                     player.initialize_script_battle_fairy_goods(
                         &mut goods,
                         factory,
@@ -11693,7 +11734,8 @@ impl CGame {
 
             goods.set_goods_time_type(parameters.time_type);
             goods.set_goods_lifetime(parameters.lifetime);
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let Some((additions, _rejected)) =
                 self.add_goods_to_player_packet(player_id, vec![goods], &mut encode)
             else {
@@ -14558,7 +14600,8 @@ impl CGame {
                 return false;
             };
             let originals = goods.clone();
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let (additions, rejected, begun_states) =
                 player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
             self.deliver_particular_state_begins(receiver.owner_id, begun_states);
@@ -14788,7 +14831,7 @@ impl CGame {
         &mut self,
         parties: &[PlayerTradePartySnapshot; 2],
         mut goods_by_plug: BTreeMap<i32, Vec<CGoods>>,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         for party in parties {
             let goods = goods_by_plug.remove(&party.plug_id).unwrap_or_default();
@@ -14798,7 +14841,8 @@ impl CGame {
             let Some(player) = self.players.get_mut(&party.owner_id) else {
                 continue;
             };
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             let (additions, unrecoverable, begun_states) =
                 player.add_traded_goods_to_packet(goods, &self.goods_factory, &mut encode);
             self.deliver_particular_state_begins(party.owner_id, begun_states);
@@ -14824,11 +14868,11 @@ impl CGame {
         }
     }
 
-    pub(crate) fn send_player_money_increase<Context: OldClientGoodsCodec>(
+    pub(crate) fn send_player_money_increase<Context>(
         &self,
         player_id: i32,
         outcome: &crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         use crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome;
         match outcome {
@@ -14845,7 +14889,7 @@ impl CGame {
                 message.set_destination_container(added.owner_type, added.owner_id, 0);
                 message.set_destination_container_extend_id(4);
                 message.set_destination_object(added.identity.object_type, added.identity.ex_id);
-                message.set_object_stream(context.encode_goods_for_old_client(goods));
+                message.set_object_stream(OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods));
                 let delivery = message.send_to_player(self, player_id);
                 tracing::trace!(
                     player_id,
@@ -19046,14 +19090,14 @@ impl CGame {
         &self,
         player: &CPlayer,
         equipment_id: CGuid,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(goods) = player.get_goods_by_id(equipment_id) else {
             return;
         };
         let player_id = player.player_id();
         let goods = goods.identity();
-        let old_client_payload = context.encode_goods_for_old_client(
+        let old_client_payload = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(
             player
                 .get_goods_by_id(equipment_id)
                 .expect("оборудование проверено"),
@@ -19522,7 +19566,7 @@ impl CGame {
                         .find(added.identity.ex_id)
                         .expect("успешный packet add сохранил compose result");
                     (
-                        Some(context.encode_goods_for_old_client(stored)),
+                        Some(OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(stored)),
                         Some(stored.amount()),
                     )
                 }
@@ -19755,7 +19799,7 @@ impl CGame {
         player_id: i32,
         session_id: i32,
         requested_plug_id: i32,
-        runtime: &mut Runtime,
+        _runtime: &mut Runtime,
     ) {
         if self.session_factory.query_session(session_id).is_none() {
             tracing::trace!(
@@ -19830,7 +19874,7 @@ impl CGame {
         let update = EquipmentDaKongClientUpdate {
             player_id,
             goods: goods.identity(),
-            old_client_payload: runtime.encode_goods_for_old_client(goods),
+            old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
         };
         let mut message = CMessage::new(0x0b_f918);
         message.add_long(update.player_id);
@@ -19970,7 +20014,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         kind: EquipmentDaKongScriptModifyKind,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         const COST_ORIGINAL_NAME: &[u8] = b"GMXF18";
         if !self.da_kong_xiang_qian.key() {
@@ -20069,7 +20113,7 @@ impl CGame {
         let update = EquipmentDaKongClientUpdate {
             player_id,
             goods: equipment.identity(),
-            old_client_payload: context.encode_goods_for_old_client(equipment),
+            old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(equipment),
         };
         let client_update_delivery = self.send_equipment_da_kong_update(&update);
         let text = self.get_string_by_id(b"GS1059");
@@ -20090,7 +20134,7 @@ impl CGame {
         &mut self,
         player: &mut CPlayer,
         cost_original_name: &[u8],
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
             GAP_DAKONG_1, GAP_DAKONG_EXTERN_1, GAP_DAKONG_EXTERN_2, GAP_DAKONG_EXTERN_3,
@@ -20240,7 +20284,7 @@ impl CGame {
         let update = EquipmentDaKongClientUpdate {
             player_id: player.player_id(),
             goods: equipment.identity(),
-            old_client_payload: context.encode_goods_for_old_client(equipment),
+            old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(equipment),
         };
         let client_update_delivery = self.send_equipment_da_kong_update(&update);
         tracing::trace!(
@@ -20336,14 +20380,14 @@ impl CGame {
 
     fn equipment_da_kong_publish_update<Context: EquipmentDaKongContext>(
         &self,
-        context: &mut Context,
+        _context: &mut Context,
         player_id: i32,
         goods: &CGoods,
     ) {
         let update = EquipmentDaKongClientUpdate {
             player_id,
             goods: goods.identity(),
-            old_client_payload: context.encode_goods_for_old_client(goods),
+            old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
         };
         let delivery = self.send_equipment_da_kong_update(&update);
         tracing::trace!(player_id, goods = ?update.goods, delivery, "отправлено обновление оборудования DaKong");
@@ -20609,7 +20653,7 @@ impl CGame {
                     let Some(old_client_payload) = player
                         .depot()
                         .get_goods(position)
-                        .map(|goods| runtime.encode_goods_for_old_client(goods))
+                        .map(|goods| OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods))
                     else {
                         continue;
                     };
@@ -20812,11 +20856,11 @@ impl CGame {
     fn mutate_script_selected_goods<Context, ResultValue, Mutate>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
         mutate: Mutate,
     ) -> Option<ResultValue>
     where
-        Context: OldClientGoodsCodec,
+        Context: ?Sized,
         Mutate: FnOnce(&CGoodsFactory, &mut u32, &mut CGoods) -> (ResultValue, bool),
     {
         let mut player = self.players.remove(&player_id)?;
@@ -20825,7 +20869,7 @@ impl CGame {
             let goods = player.get_goods_by_id_mut(goods_id)?;
             let (result, publish) = mutate(&self.goods_factory, &mut self.random_state, goods);
             let update =
-                publish.then(|| (goods.identity(), context.encode_goods_for_old_client(goods)));
+                publish.then(|| (goods.identity(), OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods)));
             Some((result, update))
         })();
         self.players.insert(player_id, player);
@@ -20845,12 +20889,12 @@ impl CGame {
     /// снимается до изменения полей и восстанавливается после него. Для
     /// предмета, находящегося в своей ячейке экипировки, типы 2 и 4 начинают
     /// отсчёт заново с текущего серверного времени.
-    pub(crate) fn modify_script_selected_goods_time<Context: OldClientGoodsCodec>(
+    pub(crate) fn modify_script_selected_goods_time<Context>(
         &mut self,
         player_id: i32,
         lifetime: u32,
         time_type: Option<u32>,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(mut player) = self.players.remove(&player_id) else {
             return;
@@ -20887,7 +20931,7 @@ impl CGame {
             let _ = player.register_goods_ai_by_id(goods_id, &self.goods_factory, now_seconds);
             let payload = player
                 .get_goods_by_id(goods_id)
-                .map(|goods| context.encode_goods_for_old_client(goods))?;
+                .map(|goods| OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods))?;
             Some((identity, payload))
         })();
         self.players.insert(player_id, player);
@@ -20902,7 +20946,7 @@ impl CGame {
         }
     }
 
-    pub(crate) fn upgrade_script_selected_equipment<Context: OldClientGoodsCodec>(
+    pub(crate) fn upgrade_script_selected_equipment<Context>(
         &mut self,
         player_id: i32,
         level_delta: i32,
@@ -20923,7 +20967,7 @@ impl CGame {
         .unwrap_or(0)
     }
 
-    pub(crate) fn set_script_selected_goods_property<Context: OldClientGoodsCodec>(
+    pub(crate) fn set_script_selected_goods_property<Context>(
         &mut self,
         player_id: i32,
         property: i32,
@@ -20955,7 +20999,7 @@ impl CGame {
             .map_or(-1, |goods| goods.set_fu_mo_property(property_type, value))
     }
 
-    pub(crate) fn recreate_script_selected_goods_addons<Context: OldClientGoodsCodec>(
+    pub(crate) fn recreate_script_selected_goods_addons<Context>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -21994,10 +22038,10 @@ impl CGame {
     /// Полный player query `goodsmessage 0x8FC2F`. Первый непустой old-client
     /// preview сохраняет подтверждённый ранний return EXE; create miss либо
     /// пустой payload позволяют перейти к следующему ordered set entry.
-    pub(crate) fn query_ci_qing_goods<Context: OldClientGoodsCodec>(
+    pub(crate) fn query_ci_qing_goods<Context>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let base_indices: Vec<_> = self.find_player(player_id)?.ci_qing_list().collect();
         let mut sent = 0_usize;
@@ -22021,7 +22065,7 @@ impl CGame {
             let Some(goods) = created else {
                 continue;
             };
-            let old_client_payload = context.encode_goods_for_old_client(&goods);
+            let old_client_payload = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(&goods);
             let mut message = CMessage::new(0x0c_010c);
             message.base_mut().add(&old_client_payload);
             let delivery = message.send_to_player(self.net_server(), player_id);
@@ -22044,11 +22088,11 @@ impl CGame {
 
     /// Сценарный `PushItemToCiQing` добавляет только подтверждённый базовый
     /// предмет татуировки и затем заново публикует весь упорядоченный список.
-    pub(crate) fn push_script_ci_qing_item<Context: OldClientGoodsCodec>(
+    pub(crate) fn push_script_ci_qing_item<Context>(
         &mut self,
         player_id: i32,
         original_name: &[u8],
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let base_index = self
             .goods_factory
@@ -22086,7 +22130,7 @@ impl CGame {
             let Some(goods) = created else {
                 continue;
             };
-            let old_client_payload = context.encode_goods_for_old_client(&goods);
+            let old_client_payload = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(&goods);
             let mut message = CMessage::new(0x0c_010c);
             message.base_mut().add(&old_client_payload);
             let delivery = message.send_to_player(self.net_server(), player_id);
@@ -22164,12 +22208,12 @@ impl CGame {
     /// Resource logs предшествуют каждому DeleteGoods-effect; финальный
     /// positive log сохраняет странный native count оставшихся в vector-е
     /// (то есть не добавленных), после чего всегда отправляется `0xBF932`.
-    pub(crate) fn make_ci_qing_node<Context: OldClientGoodsCodec>(
+    pub(crate) fn make_ci_qing_node<Context>(
         &mut self,
         player_id: i32,
         base_index: u32,
         amount: u32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let player = self.find_player(player_id)?;
         if !player.ci_qing_list().any(|entry| entry == base_index) {
@@ -22304,7 +22348,8 @@ impl CGame {
                 .players
                 .get_mut(&player_id)
                 .expect("player проверен до CiQing packet add");
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             player.add_goods_to_packet(created, goods_factory, &mut encode)
         };
         self.deliver_particular_state_begins(player_id, begun_states);
@@ -22506,7 +22551,11 @@ impl CGame {
                         .players
                         .get_mut(&player_id)
                         .expect("player проверен до CiQing result add");
-                    let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+                    let encoder = OldClientGoodsEncoder::new(
+                        &self.goods_factory,
+                        self.globe_setup.da_kong_key(),
+                    );
+                    let mut encode = move |goods: &CGoods| encoder.encode(goods);
                     player.add_goods_to_ci_qing(created, 2, true, goods_factory, &mut encode)
                 };
                 if addition.resulting_amount.is_some() {
@@ -22793,7 +22842,11 @@ impl CGame {
                     .players
                     .get_mut(&player_id)
                     .expect("player проверен до CiQing mounted clone add");
-                let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+                let encoder = OldClientGoodsEncoder::new(
+                    &self.goods_factory,
+                    self.globe_setup.da_kong_key(),
+                );
+                let mut encode = move |goods: &CGoods| encoder.encode(goods);
                 player.add_goods_to_ci_qing(
                     cloned_hand_goods.expect("успешная ветвь проверила native Clone"),
                     position,
@@ -22862,7 +22915,7 @@ impl CGame {
         &mut self,
         requester_id: i32,
         target: CiQingOtherPersonTarget,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let target_player_id = match &target {
             CiQingOtherPersonTarget::Id(player_id) => {
@@ -22891,7 +22944,7 @@ impl CGame {
         writer.write_u32(player.ci_qing_goods_amount(&self.goods_factory));
         for position in 0..8 {
             if let Some(goods) = player.ci_qing_goods(position) {
-                writer.write_bytes(&context.encode_goods_for_old_client(goods));
+                writer.write_bytes(&OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods));
             }
         }
         writer.write_u32(player.ci_qing_property_snapshot().2);
@@ -24598,7 +24651,7 @@ impl CGame {
         &self,
         requester_id: i32,
         target_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(target) = self.find_player(target_id) else {
             tracing::trace!(
@@ -24636,7 +24689,7 @@ impl CGame {
             response.add_byte(slot as u8);
             response
                 .base_mut()
-                .add(&context.encode_goods_for_old_client(goods));
+                .add(&OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods));
         }
         let delivery = response.send_to_player(self.net_server(), requester_id);
         tracing::trace!(
@@ -24716,11 +24769,11 @@ impl CGame {
         })
     }
 
-    pub(crate) fn get_precious_box_item<Context: OldClientGoodsCodec>(
+    pub(crate) fn get_precious_box_item<Context>(
         &mut self,
         player_id: i32,
         box_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> i32 {
         if self.find_player(player_id).is_none() {
             return -1;
@@ -24747,7 +24800,8 @@ impl CGame {
             let player = players
                 .get_mut(&player_id)
                 .expect("PreciousBox player проверен до packet add");
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             player.add_precious_box_goods_to_packet(created, factory, &mut encode)
         };
         self.deliver_particular_state_begins(player_id, begun_states);
@@ -25311,7 +25365,7 @@ impl CGame {
             let context_cell = std::cell::RefCell::new(&mut *context);
             let mut current_tick = || context_cell.borrow_mut().now_milliseconds();
             let mut encode =
-                |goods: &CGoods| context_cell.borrow_mut().encode_goods_for_old_client(goods);
+                |goods: &CGoods| OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods);
             player.fairy_container_mut().check_hatcher(
                 &mut current_tick,
                 hatch_duration,
@@ -25344,7 +25398,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         requested_vigour: u32,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(player) = self.find_player(player_id) else {
             tracing::trace!(
@@ -25454,7 +25508,8 @@ impl CGame {
                     .next()
             };
             let mut threshold = |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level);
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             player.fairy_container_mut().implant_exp(
                 experience,
                 grow_log_enabled,
@@ -25550,7 +25605,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         property: FairySyncreticProperty,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let (experience, money, vigour) = {
             let player = self.find_player(player_id)?;
@@ -25608,7 +25663,8 @@ impl CGame {
                     .next()
             };
             let mut threshold = |equip_level, level| fairy_exp_conf.dw_exp_up(equip_level, level);
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             player.fairy_container_mut().fairy_syncretize(
                 property,
                 successful_roll,
@@ -25765,7 +25821,7 @@ impl CGame {
         player_id: i32,
         synthesis_index: u32,
         amount: u32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let mut result_amount = amount;
         let Some(recipe) = self
@@ -25915,7 +25971,8 @@ impl CGame {
         let (additions, rejected, begun_states) = {
             let (players, goods_factory) = (&mut self.players, &self.goods_factory);
             let player = players.get_mut(&player_id)?;
-            let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode = move |goods: &CGoods| encoder.encode(goods);
             player.add_goods_to_packet(created, goods_factory, &mut encode)
         };
         self.deliver_particular_state_begins(player_id, begun_states);
@@ -29464,7 +29521,7 @@ impl CGame {
                     pending_equipment_state_updates.push((
                         location,
                         goods.identity(),
-                        context.encode_goods_for_old_client(goods),
+                        OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
                     ));
                 }
                 true
@@ -31180,10 +31237,10 @@ impl CGame {
     /// Замыкает listener-tail `CYuanBao` после Billing/World balance mutation.
     /// Extend ID `5` отличает этот однослотовый currency owner от wallet `4`;
     /// create требует тот же old-client goods codec, amount/delete — нет.
-    pub(crate) fn send_player_yuan_bao_change<Context: OldClientGoodsCodec>(
+    pub(crate) fn send_player_yuan_bao_change<Context>(
         &self,
         change: &PlayerYuanBaoChange,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         use crate::gameserver::appserver::container::cwallet::{
             CurrencyDecreaseOutcome, CurrencyIncreaseOutcome,
@@ -31208,7 +31265,7 @@ impl CGame {
                 message.set_destination_container(added.owner_type, added.owner_id, added.position);
                 message.set_destination_container_extend_id(YUAN_BAO_EXTEND_ID);
                 message.set_destination_object(added.identity.object_type, added.identity.ex_id);
-                message.set_object_stream(context.encode_goods_for_old_client(goods));
+                message.set_object_stream(OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods));
                 let _ = message.send_to_player(self, change.player_id);
             }
             PlayerYuanBaoChangeOutcome::Increased(CurrencyIncreaseOutcome::Increased(amount)) => {
@@ -31309,22 +31366,26 @@ impl CGame {
         Some((additions, remaining))
     }
 
-    pub(crate) fn add_npc_shop_goods_to_packet<Context: OldClientGoodsCodec>(
+    pub(crate) fn add_npc_shop_goods_to_packet<Context>(
         &mut self,
         player_id: i32,
         goods: Vec<CGoods>,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<(Vec<CiQingPacketAddition>, Vec<CGoods>)> {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let player = players.get_mut(&player_id)?;
-        let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+        let encoder = OldClientGoodsEncoder::new(
+            &self.goods_factory,
+            self.globe_setup.da_kong_key(),
+        );
+        let mut encode = move |goods: &CGoods| encoder.encode(goods);
         let (additions, remaining, states) =
             player.add_shop_goods_to_packet(goods, goods_factory, &mut encode);
         self.deliver_particular_state_begins(player_id, states);
         Some((additions, remaining))
     }
 
-    pub(crate) fn increase_player_money<Context: OldClientGoodsCodec>(
+    pub(crate) fn increase_player_money<Context>(
         &mut self,
         player_id: i32,
         amount: u32,
@@ -31487,7 +31548,7 @@ impl CGame {
         Some(created.id)
     }
 
-    pub(crate) fn submit_region_tax_session_result<Context: OldClientGoodsCodec>(
+    pub(crate) fn submit_region_tax_session_result<Context>(
         &mut self,
         player_id: i32,
         session_id: i64,
@@ -31592,7 +31653,7 @@ impl CGame {
         let _ = prompt.send_to_player(self.net_server(), player_id);
     }
 
-    fn apply_region_tax_session_effects<Context: OldClientGoodsCodec>(
+    fn apply_region_tax_session_effects<Context>(
         &mut self,
         context: &mut Context,
     ) {
@@ -31648,7 +31709,7 @@ impl CGame {
         }
     }
 
-    fn apply_region_tax_payment<Context: OldClientGoodsCodec>(
+    fn apply_region_tax_payment<Context>(
         &mut self,
         player_id: i32,
         region_id: i32,
@@ -32367,7 +32428,7 @@ impl CGame {
         let created_amount = created.len();
         let mut placed_amount = 0usize;
         for goods in created.drain(..) {
-            let old_client_payload = runtime.encode_goods_for_old_client(&goods);
+            let old_client_payload = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(&goods);
             let item_amount = goods.amount();
             let particular_attribute =
                 goods.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
@@ -32798,10 +32859,10 @@ impl CGame {
     /// Отсутствующий player, как и исходный outer lookup, не посылает packet.
     /// Old-client serializer остаётся explicit transport boundary: его нельзя
     /// заменить пустым payload без изменения `OT_NEW_OBJECT/0xbf918`.
-    pub(crate) fn combine_battle_fairy<Context: OldClientGoodsCodec>(
+    pub(crate) fn combine_battle_fairy<Context>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let maximum_fetch_power = self.globe_setup.maximum_fetch_power();
@@ -32834,7 +32895,8 @@ impl CGame {
             )
         };
         let mut report = {
-            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode_old_client = move |goods: &CGoods| encoder.encode(goods);
             player.combine_battle_fairy(
                 battle_fairy_enabled,
                 maximum_fetch_power,
@@ -33518,13 +33580,14 @@ impl CGame {
         &mut self,
         player_id: i32,
         allocations: &[(i32, i32)],
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let coefficients = self.globe_setup.player_property_coefficients();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
-            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode_old_client = move |goods: &CGoods| encoder.encode(goods);
             player.allocate_battle_fairy_potential(
                 enabled,
                 allocations,
@@ -33583,10 +33646,10 @@ impl CGame {
     /// Полный runtime entry point goods-message `0x8FC28`: общий Game RNG,
     /// live log gates, factory, player wallet и positional BF-container
     /// исполняются в одном mutable snapshot-е.
-    pub(crate) fn upgrade_battle_fairy_equipment<Context: OldClientGoodsCodec>(
+    pub(crate) fn upgrade_battle_fairy_equipment<Context>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let log_gates = crate::gameserver::appserver::player::BattleFairyUpgradeLogGates {
             success: self.log_system.goods_upgrade_success_enabled(),
@@ -33601,7 +33664,8 @@ impl CGame {
             );
             let player = players.get_mut(&player_id)?;
             let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
-            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode_old_client = move |goods: &CGoods| encoder.encode(goods);
             player.upgrade_battle_fairy_equipment(
                 goods_factory,
                 log_gates,
@@ -33724,7 +33788,7 @@ impl CGame {
     /// wallet остаётся canonical state owner-ом, а CGame публикует соответствующий
     /// create/amount/delete packet с extend ID 4. Как и оригинал, caller считает
     /// найденного игрока успехом даже при отказе wallet создать currency object.
-    pub(crate) fn set_script_player_money<Context: OldClientGoodsCodec>(
+    pub(crate) fn set_script_player_money<Context>(
         &mut self,
         player_id: i32,
         requested: u32,
@@ -33757,7 +33821,7 @@ impl CGame {
     /// `SetMoney(max(signed(result), 0))`. Обычная положительная плата идёт
     /// через тот же wallet/container wire, что остальные gameplay debits;
     /// отрицательный legacy параметр сохраняет историческое пополнение.
-    pub(crate) fn apply_war_application_money<Context: OldClientGoodsCodec>(
+    pub(crate) fn apply_war_application_money<Context>(
         &mut self,
         player_id: i32,
         fee: i32,
@@ -33934,12 +33998,13 @@ impl CGame {
     pub(crate) fn reset_battle_fairy_potential<Context: BattleFairyDeathContext>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
-            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode_old_client = move |goods: &CGoods| encoder.encode(goods);
             player.reset_battle_fairy_potential(
                 enabled,
                 &self.goods_factory,
@@ -34012,7 +34077,7 @@ impl CGame {
         context: &mut Context,
     ) -> Option<BattleFairySkillResetReport>
     where
-        Context: BattleFairySkillResetContext + OldClientGoodsCodec,
+        Context: BattleFairySkillResetContext,
     {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
@@ -34024,7 +34089,8 @@ impl CGame {
             );
             let player = players.get_mut(&player_id)?;
             let mut random = |upper_bound| game_legacy_random(random_state, upper_bound);
-            let mut encode_old_client = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+            let encoder = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key());
+            let mut encode_old_client = move |goods: &CGoods| encoder.encode(goods);
             player.reset_battle_fairy_skill(
                 enabled,
                 position,
@@ -34252,7 +34318,7 @@ impl CGame {
             });
             let update = ripe_id
                 .is_none()
-                .then(|| (goods.identity(), context.encode_goods_for_old_client(goods)));
+                .then(|| (goods.identity(), OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods)));
             (exp, ripe_id, update)
         };
 
@@ -34348,7 +34414,7 @@ impl CGame {
         if !removed {
             let update = player
                 .get_goods_by_id(goods_id)
-                .map(|goods| (goods.identity(), context.encode_goods_for_old_client(goods)));
+                .map(|goods| (goods.identity(), OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods)));
             self.players.insert(player_id, player);
             if let Some((goods, payload)) = update {
                 let mut message = CMessage::new(0x0b_f918);
@@ -34366,7 +34432,7 @@ impl CGame {
         let (additions, _rejected, begun_states) = player.add_script_fairy_goods_to_packet(
             vec![replacement],
             &self.goods_factory,
-            &mut |goods| context.encode_goods_for_old_client(goods),
+            &mut |goods| OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
         );
         let mut goods_ai_ids = Vec::new();
         for addition in &additions {
@@ -34480,6 +34546,10 @@ impl CGame {
                 let Some(position) = position.filter(|position| (0..=6).contains(position)) else {
                     return legacy_return;
                 };
+                let encoder = OldClientGoodsEncoder::new(
+                    &self.goods_factory,
+                    self.globe_setup.da_kong_key(),
+                );
                 let update = {
                     let player = self
                         .find_player_mut(player_id)
@@ -34501,7 +34571,7 @@ impl CGame {
                         message_type: 0x0b_f918,
                         player_id,
                         goods: goods.identity(),
-                        old_client_payload: context.encode_goods_for_old_client(goods),
+                        old_client_payload: encoder.encode(goods),
                     }
                 };
                 let _ = self.send_battle_fairy_goods_update(&update);
@@ -34591,7 +34661,7 @@ impl CGame {
                             message_type: 0x0b_f918,
                             player_id,
                             goods: goods.identity(),
-                            old_client_payload: context.encode_goods_for_old_client(goods),
+                            old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
                         }
                     };
                     let _ = self.send_battle_fairy_goods_update(&update);
@@ -34638,6 +34708,10 @@ impl CGame {
                 let Some(player_id) = target_id(self, &player_name) else {
                     return 0;
                 };
+                let encoder = OldClientGoodsEncoder::new(
+                    &self.goods_factory,
+                    self.globe_setup.da_kong_key(),
+                );
                 let update = {
                     let Some(player) = self.find_player_mut(player_id) else {
                         return 0;
@@ -34654,7 +34728,7 @@ impl CGame {
                         message_type: 0x0b_f918,
                         player_id,
                         goods: goods.identity(),
-                        old_client_payload: context.encode_goods_for_old_client(goods),
+                        old_client_payload: encoder.encode(goods),
                     }
                 };
                 let _ = self.send_battle_fairy_goods_update(&update);
@@ -34690,7 +34764,7 @@ impl CGame {
                             message_type: 0x0b_f918,
                             player_id,
                             goods: goods.identity(),
-                            old_client_payload: context.encode_goods_for_old_client(goods),
+                            old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
                         }
                     })
                 });
@@ -34749,7 +34823,7 @@ impl CGame {
                             message_type: 0x0b_f918,
                             player_id: target_player_id,
                             goods: goods.identity(),
-                            old_client_payload: context.encode_goods_for_old_client(goods),
+                            old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
                         };
                     (report, update)
                 };
@@ -34793,7 +34867,7 @@ impl CGame {
                         message_type: 0x0b_f918,
                         player_id: target_player_id,
                         goods: goods.identity(),
-                        old_client_payload: context.encode_goods_for_old_client(goods),
+                        old_client_payload: OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods),
                     }
                 };
                 if let Some(player) = self.find_player(target_player_id) {
@@ -35952,7 +36026,7 @@ impl CGame {
                         game_legacy_random(random_state, upper_bound)
                     });
                 }
-                let old_client_payload = runtime.encode_goods_for_old_client(&goods);
+                let old_client_payload = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(&goods);
                 let item_amount = goods.amount();
                 let particular_attribute =
                     goods.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1)
@@ -40915,13 +40989,13 @@ impl CGame {
             .unwrap_or(0)
     }
 
-    pub(crate) fn upgrade_script_player_equipment<Context: OldClientGoodsCodec>(
+    pub(crate) fn upgrade_script_player_equipment<Context>(
         &mut self,
         script_player_id: Option<i32>,
         player_name: &[u8],
         position: i32,
         level_delta: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> i32 {
         let target_id = if player_name.is_empty() {
             script_player_id.filter(|player_id| self.find_player(*player_id).is_some())
@@ -40943,7 +41017,7 @@ impl CGame {
         );
         let update = upgraded.and_then(|identity| {
             let goods = player.get_goods_by_id(identity.ex_id)?;
-            Some((identity, context.encode_goods_for_old_client(goods)))
+            Some((identity, OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods)))
         });
         self.players.insert(target_id, player);
         let Some((identity, payload)) = update else {

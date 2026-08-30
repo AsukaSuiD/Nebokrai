@@ -360,7 +360,17 @@ where
             audit.base_mut().add_ulong(player.client_ip());
             let _ = audit.send(game, false);
         }
-        let mut encode = |goods: &CGoods| runtime.encode_goods_for_old_client(goods);
+        let goods_factory = game.goods_factory().clone();
+        let da_kong_enabled = game.globe_setup().da_kong_key();
+        let mut encode = |goods: &CGoods| {
+            let mut payload = Vec::new();
+            let _ = goods.serialize_for_old_client(
+                &mut payload,
+                &goods_factory,
+                da_kong_enabled,
+            );
+            payload
+        };
         let (additions, rejected) = game
             .add_goods_to_player_packet(player_id, created, &mut encode)
             .expect("player существует до extension packet add");
@@ -601,7 +611,7 @@ fn auction_yuan_listing_fee(
 
 fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     game: &mut CGame,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
     player_id: i32,
     gate: Option<AuctionListingGate>,
     fresh_request: bool,
@@ -656,7 +666,7 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     let goods = game
         .decode_auction_goods(node.goods_bytes())
         .expect("только что сериализованный listing goods обязан декодироваться");
-    let old_client_payload = runtime.encode_goods_for_old_client(&goods);
+    let old_client_payload = game.encode_goods_for_old_client(&goods);
     let mut client = CMessage::new(CLIENT_AUCTION_LIST_RESULT_MESSAGE);
     client.base_mut().add_long(1);
     client.base_mut().add_ulong(node.auction_time());

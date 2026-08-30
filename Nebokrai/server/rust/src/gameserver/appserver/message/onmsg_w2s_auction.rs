@@ -284,7 +284,7 @@ where
             };
             let incoming_amount = incoming.amount();
             let incoming_index = incoming.base_properties_index();
-            let pre_bind_payload = runtime.encode_goods_for_old_client(&incoming);
+            let pre_bind_payload = game.encode_goods_for_old_client(&incoming);
             let mut audit = CMessage::new(WORLD_AUCTION_RETURN_LOG_MESSAGE);
             audit.base_mut().add_long(player_id);
             audit.base_mut().add_ulong(incoming_amount);
@@ -323,7 +323,7 @@ where
                             added.identity.ex_id,
                         );
                         move_message.set_destination_object_amount(added.amount);
-                        move_message.set_object_stream(runtime.encode_goods_for_old_client(stored));
+                        move_message.set_object_stream(game.encode_goods_for_old_client(stored));
                         let _ = move_message.send_to_player(game, player_id);
                     }
                     CurrencyIncreaseOutcome::Increased(change) => {
@@ -396,7 +396,7 @@ where
                         .find_player(player_id)
                         .and_then(|player| player.get_goods_by_id(identity.ex_id))
                         .expect("успешно возвращённый goods хранится в auction container");
-                    let payload = runtime.encode_goods_for_old_client(stored);
+                    let payload = game.encode_goods_for_old_client(stored);
                     let mut update = CMessage::new(CLIENT_GOODS_UPDATE_MESSAGE);
                     update.base_mut().add_long(player_id);
                     update.base_mut().add_guid(identity.ex_id);
@@ -706,7 +706,7 @@ where
                             return Some(Err(WorldAuctionMessageError::ListGoodsDecode(error)));
                         }
                     };
-                    runtime.encode_goods_for_old_client(&goods)
+                    game.encode_goods_for_old_client(&goods)
                 };
                 response.base_mut().add_ulong(remaining);
                 response.base_mut().add_ulong(u32::from(node.money_type()));
@@ -797,7 +797,7 @@ where
                 response.base_mut().add_long(1);
                 response
                     .base_mut()
-                    .add(&runtime.encode_goods_for_old_client(&goods));
+                    .add(&game.encode_goods_for_old_client(&goods));
                 response.base_mut().add_long(second);
                 response.base_mut().add_long(third);
                 created_goods += 1;

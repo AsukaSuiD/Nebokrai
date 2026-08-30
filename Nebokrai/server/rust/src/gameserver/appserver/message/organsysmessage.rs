@@ -39,7 +39,7 @@ use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, GameWarRegionHandle, OldClientGoodsCodec,
+    CGame, GameContainerMessageRuntime, GameWarRegionHandle,
     ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
     format_legacy_text_fields,
 };
@@ -309,7 +309,7 @@ fn dispatch_game_player_run_script(
 
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
 pub(crate) fn dispatch_game_organizing_message<
-    Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext + OldClientGoodsCodec,
+    Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext,
 >(
     message: &mut CMessage,
     game: &mut CGame,
@@ -485,7 +485,7 @@ fn dispatch_faction_billboard_response(
     Ok(())
 }
 
-fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCodec>(
+fn dispatch_region_tax_message<Runtime: RegionRandomContext>(
     opcode: u32,
     message: &mut CMessage,
     game: &mut CGame,
@@ -565,7 +565,7 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext + OldClientGoodsCode
     }
 }
 
-fn dispatch_village_war_application_response<Runtime: OldClientGoodsCodec>(
+fn dispatch_village_war_application_response<Runtime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -573,7 +573,7 @@ fn dispatch_village_war_application_response<Runtime: OldClientGoodsCodec>(
     dispatch_war_application_response(message, game, runtime)
 }
 
-fn dispatch_war_application_response<Runtime: OldClientGoodsCodec>(
+fn dispatch_war_application_response<Runtime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,

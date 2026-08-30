@@ -25,7 +25,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
 };
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::gameserver::game::{
-    CGame, OldClientGoodsCodec, colored_player_notice_message,
+    CGame, colored_player_notice_message,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -55,7 +55,7 @@ pub(crate) enum ShopMessageError {
     MissingRepairSlot,
 }
 
-pub(crate) fn dispatch_shop_message<Context: OldClientGoodsCodec>(
+pub(crate) fn dispatch_shop_message<Context>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -110,7 +110,7 @@ pub(crate) fn dispatch_shop_message<Context: OldClientGoodsCodec>(
     Some(outcome)
 }
 
-fn handle_buy<Context: OldClientGoodsCodec>(
+fn handle_buy<Context>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
@@ -258,7 +258,7 @@ fn handle_buy<Context: OldClientGoodsCodec>(
     Ok(())
 }
 
-fn handle_sell<Context: OldClientGoodsCodec>(
+fn handle_sell<Context>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,

@@ -359,7 +359,7 @@ fn personal_shop_goods_live(game: &CGame, seller_plug_id: i32, goods_id: CGuid) 
 fn personal_shop_goods_list<Context: GameContainerMessageRuntime>(
     game: &CGame,
     session_id: i32,
-    context: &mut Context,
+    _context: &mut Context,
 ) -> Vec<u8> {
     let Some(seller_plug_id) = game
         .session_factory()
@@ -391,7 +391,7 @@ fn personal_shop_goods_list<Context: GameContainerMessageRuntime>(
                     previous.goods_position,
                     *goods_id,
                 )?;
-            Some((position, context.encode_goods_for_old_client(goods), *price))
+            Some((position, game.encode_goods_for_old_client(goods), *price))
         })
         .collect();
     let mut wire = Vec::new();

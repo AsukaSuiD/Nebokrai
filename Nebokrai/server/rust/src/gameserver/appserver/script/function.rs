@@ -4152,7 +4152,7 @@ fn script_selected_goods(game: &CGame, player_id: i32) -> Option<&CGoods> {
 
 fn run_goods_item_script_function<Runtime: ScriptFunctionRuntime>(
     game: &mut CGame,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
     script_player_id: Option<i32>,
     used_item_id: Option<CGuid>,
     function_id: i32,
@@ -4236,9 +4236,10 @@ fn run_goods_item_script_function<Runtime: ScriptFunctionRuntime>(
                 let goods = player.packet_mut().base_mut().find_mut(goods_id)?;
                 goods
                     .set_addon_property_modifier_core(property, value_id, modifier)
-                    .then(|| (goods.identity(), runtime.encode_goods_for_old_client(goods)))
+                    .then(|| (goods.identity(), goods.clone()))
             });
-            if let Some((goods, payload)) = update {
+            if let Some((goods, stored)) = update {
+                let payload = game.encode_goods_for_old_client(&stored);
                 send_script_goods_update(game, player_id, goods, &payload);
                 GoodsItemScriptFunctionOutcome::Handled(1)
             } else {
@@ -4281,11 +4282,11 @@ fn run_goods_item_script_function<Runtime: ScriptFunctionRuntime>(
                 .and_then(|player| player.get_goods_by_id_mut(goods_id))
                 .map_or((-1, None), |goods| {
                     let updated = goods.set_current_durability(requested);
-                    let update = (updated != -1)
-                        .then(|| (goods.identity(), runtime.encode_goods_for_old_client(goods)));
+                    let update = (updated != -1).then(|| (goods.identity(), goods.clone()));
                     (updated, update)
                 });
-            if let Some((goods, payload)) = update {
+            if let Some((goods, stored)) = update {
+                let payload = game.encode_goods_for_old_client(&stored);
                 send_script_goods_update(game, player_id, goods, &payload);
             }
             GoodsItemScriptFunctionOutcome::Handled(updated)
@@ -7715,7 +7716,17 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 upgrade_level,
                 particular_attribute,
             );
-            let mut encode = |goods: &CGoods| runtime.encode_goods_for_old_client(goods);
+            let goods_factory = game.goods_factory().clone();
+            let da_kong_enabled = game.globe_setup().da_kong_key();
+            let mut encode = |goods: &CGoods| {
+                let mut payload = Vec::new();
+                let _ = goods.serialize_for_old_client(
+                    &mut payload,
+                    &goods_factory,
+                    da_kong_enabled,
+                );
+                payload
+            };
             if let Some((additions, _rejected)) =
                 game.add_goods_to_player_packet(player_id, created, &mut encode)
             {

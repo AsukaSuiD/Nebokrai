@@ -1577,7 +1577,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             });
         let payload = source_goods
             .as_ref()
-            .map(|goods| context.encode_goods_for_old_client(goods))
+            .map(|goods| game.encode_goods_for_old_client(goods))
             .unwrap_or_default();
         let owners = game.player_trade_owner_ids(request.destination_container_id);
         if let Some(removed) = &added.replaced {
@@ -1847,7 +1847,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             .find_player(player_id)
             .and_then(|player| player.get_goods_by_id(selection.goods.ex_id))
             .expect("equipment-session shadow сохраняет live source goods");
-        let old_client_payload = context.encode_goods_for_old_client(goods);
+        let old_client_payload = game.encode_goods_for_old_client(goods);
         let add_shadow_delivery = send_shadow_presence(
             game,
             player_id,
@@ -1889,7 +1889,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             .find_player(player_id)
             .and_then(|player| player.get_goods_by_id(selection.goods.ex_id))
             .expect("personal-shop shadow сохраняет live source goods");
-        let old_client_payload = context.encode_goods_for_old_client(goods);
+        let old_client_payload = game.encode_goods_for_old_client(goods);
         let add_shadow_delivery = send_shadow_presence(
             game,
             player_id,
@@ -1928,7 +1928,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         .find_player(player_id)
         .and_then(|player| player.get_goods_by_id(selection.goods.ex_id))
         .expect("enhancement shadow сохраняет live source goods");
-    let old_client_payload = context.encode_goods_for_old_client(goods);
+    let old_client_payload = game.encode_goods_for_old_client(goods);
     let add_shadow_delivery = send_add_shadow(game, player_id, &selection, &old_client_payload);
     let move_delivery = send_move_result(game, player_id, request, &selection);
     tracing::trace!(

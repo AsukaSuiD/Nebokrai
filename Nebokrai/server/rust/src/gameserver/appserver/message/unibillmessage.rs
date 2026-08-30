@@ -183,7 +183,17 @@ pub(crate) fn dispatch_increment_shop_billing_message<Context: GameContainerMess
         .last()
         .map(|goods| goods.name().to_vec())
         .unwrap_or_default();
-    let mut encode = |goods: &CGoods| context.encode_goods_for_old_client(goods);
+    let goods_factory = game.goods_factory().clone();
+    let da_kong_enabled = game.globe_setup().da_kong_key();
+    let mut encode = |goods: &CGoods| {
+        let mut payload = Vec::new();
+        let _ = goods.serialize_for_old_client(
+            &mut payload,
+            &goods_factory,
+            da_kong_enabled,
+        );
+        payload
+    };
     let (additions, rejected) = game
         .add_increment_shop_goods_to_packet(player_id, created, &mut encode)
         .expect("UniBill player проверен перед packet add");
