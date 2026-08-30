@@ -34,6 +34,8 @@
 //! запуск complete/abandon scripts из canonical `CQuestSystem`.
 //! Остальная client relay-семья `0x90102`, `0x90107..0x90121` сохраняет исходное
 //! соответствие World opcodes, payload и позицию дописанного player ID.
+//! World responses `0x7FE02..0x7FE05` сохраняют исходный buffer, включая уже
+//! прочитанный address ID, меняют только type на `0xBFF02..0xBFF05`.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -155,6 +157,7 @@ pub(crate) enum GameOrganizingMessageError {
     HonorRanks(FactionLifecycleDispatchError),
     QuestActions(FactionLifecycleDispatchError),
     ClientRelay(FactionLifecycleDispatchError),
+    ClientResponse(FactionLifecycleDispatchError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -496,6 +499,24 @@ fn dispatch_organizing_client_relay(
     Ok(())
 }
 
+fn dispatch_organizing_client_response(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &CGame,
+) -> Result<(), FactionLifecycleDispatchError> {
+    let player_id = message
+        .base_mut()
+        .get_long()
+        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+            field: "client response player ID",
+        })?;
+    let output_opcode = 0x000b_ff02 + (opcode - 0x7fe02);
+    message.set_message_type(output_opcode as i32);
+    let delivery = message.send_to_player(game.net_server(), player_id);
+    trace!(opcode, output_opcode, player_id, delivery, "OrganSys ответ отправлен игроку");
+    Ok(())
+}
+
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
 pub(crate) fn dispatch_game_organizing_message<
     Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext,
@@ -520,6 +541,7 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x90124..=0x90128
             | 0x9012a..=0x9012d
             | 0x7fe01
+            | 0x7fe02..=0x7fe05
             | 0x7fe06
             | 0x7fe07
             | 0x7fe18
@@ -545,6 +567,13 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe46..=0x7fe4a
     ) {
         return None;
+    }
+
+    if matches!(opcode, 0x7fe02..=0x7fe05) {
+        return Some(
+            dispatch_organizing_client_response(opcode, message, game)
+                .map_err(GameOrganizingMessageError::ClientResponse),
+        );
     }
 
     if matches!(
