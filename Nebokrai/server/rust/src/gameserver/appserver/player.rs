@@ -5077,8 +5077,17 @@ impl CPlayer {
         sufferer_is_gm: bool,
         started_at_ms: u32,
     ) -> Option<super::scriptstate::ScriptMoveState> {
-        self.move_shape
-            .add_script_state(state_id, value1, value2, sufferer_is_gm, started_at_ms)
+        let state = self.move_shape.add_script_state(
+            state_id,
+            value1,
+            value2,
+            sufferer_is_gm,
+            started_at_ms,
+        )?;
+        if state.is_auto_protect() {
+            self.auto_protected = true;
+        }
+        Some(state)
     }
 
     pub(crate) fn script_move_state(
@@ -5109,6 +5118,30 @@ impl CPlayer {
             .take_first_script_state(super::autoprotectstate::AUTO_PROTECT_STATE_ID)?;
         self.auto_protected = false;
         Some(removed)
+    }
+
+    /// Exact tail `CPlayer::ChangeRegion`: завершает первый живой skill-state
+    /// `110000`, затем безусловно пытается добавить новый AutoProtect с
+    /// длительностью из `CGlobeSetup`. GM получает только завершение старого
+    /// состояния, потому что factory исходно отклоняет новое.
+    pub(crate) fn refresh_region_auto_protect(
+        &mut self,
+        time_to_keep_ms: u32,
+        sufferer_is_gm: bool,
+        started_at_ms: u32,
+    ) -> (
+        Option<super::scriptstate::ScriptMoveState>,
+        Option<super::scriptstate::ScriptMoveState>,
+    ) {
+        let ended = self.end_auto_protect_state();
+        let begun = self.add_script_move_state(
+            super::autoprotectstate::AUTO_PROTECT_STATE_ID,
+            time_to_keep_ms as i32,
+            0,
+            sufferer_is_gm,
+            started_at_ms,
+        );
+        (ended, begun)
     }
 
     pub(crate) const fn is_auto_protected(&self) -> bool {

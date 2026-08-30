@@ -2295,7 +2295,7 @@ impl<T> MonsterDeathContext for T where
 /// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
 pub(crate) trait RealmAppellationScriptContext: PlayerPropertyContext {}
 
-/// Нематериализованные virtual owners skill-state остаются на
+/// Нематериализованные virtual owners companions остаются на
 /// runtime-границе. Player GameSave, live pet/carriage snapshots,
 /// region/player maps, session state и message wire исполняет `CGame`.
 pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
@@ -2309,8 +2309,6 @@ pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
         carriage_distance: i32,
         changing_server: bool,
     );
-
-    fn refresh_script_region_auto_protect(&mut self, player: &mut CPlayer);
 }
 
 pub(crate) trait GameRegionEnterContext: NationCombatContext {
@@ -5591,6 +5589,26 @@ impl CGame {
         debug_assert_eq!(state.state_id(), AUTO_PROTECT_STATE_ID);
         let _ = self.send_script_move_state_visual(player_id, state, false);
         true
+    }
+
+    /// Публикует сетевую половину exact `End -> AddState` region tail уже
+    /// после возврата detached player в canonical map. Между мутацией и этой
+    /// публикацией нет иных wire-effects; порядок end/begin/state сохраняется.
+    fn publish_region_auto_protect_refresh(
+        &mut self,
+        player_id: i32,
+        ended: Option<ScriptMoveState>,
+        begun: Option<ScriptMoveState>,
+    ) {
+        if let Some(state) = ended {
+            debug_assert_eq!(state.state_id(), AUTO_PROTECT_STATE_ID);
+            let _ = self.send_script_move_state_visual(player_id, state, false);
+        }
+        if let Some(state) = begun {
+            debug_assert_eq!(state.state_id(), AUTO_PROTECT_STATE_ID);
+            let _ = self.send_script_move_state_visual(player_id, state, true);
+            let _ = self.publish_player_states(player_id);
+        }
     }
 
     pub(crate) fn decode_auction_goods(&self, source: &[u8]) -> Result<CGoods, GoodsDecodeError> {
@@ -16553,6 +16571,7 @@ impl CGame {
                 )
             })
             .expect("region-change player проверен до source snapshot");
+        let sufferer_is_gm = self.script_player_gm_level(player_id).unwrap_or(0) != 0;
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
             tracing::debug!(
                 player_id,
@@ -16652,9 +16671,18 @@ impl CGame {
                 tile_x,
                 tile_y,
             );
-            context.refresh_script_region_auto_protect(&mut player);
+            let (ended_auto_protect, begun_auto_protect) = player.refresh_region_auto_protect(
+                self.globe_setup.auto_protect_time_ms(),
+                sufferer_is_gm,
+                game_tick_milliseconds(),
+            );
             self.restore_region_owner(source_owner);
             self.players.insert(player_id, player);
+            self.publish_region_auto_protect_refresh(
+                player_id,
+                ended_auto_protect,
+                begun_auto_protect,
+            );
             tracing::debug!(
                 player_id,
                 source_region_id,
@@ -16752,10 +16780,19 @@ impl CGame {
                 tile_x,
                 tile_y,
             );
-            context.refresh_script_region_auto_protect(&mut player);
+            let (ended_auto_protect, begun_auto_protect) = player.refresh_region_auto_protect(
+                self.globe_setup.auto_protect_time_ms(),
+                sufferer_is_gm,
+                game_tick_milliseconds(),
+            );
             self.restore_region_owner(target_owner);
             self.restore_region_owner(source_owner);
             self.players.insert(player_id, player);
+            self.publish_region_auto_protect_refresh(
+                player_id,
+                ended_auto_protect,
+                begun_auto_protect,
+            );
             tracing::debug!(
                 player_id,
                 source_region_id,
@@ -16817,9 +16854,18 @@ impl CGame {
             tile_x,
             tile_y,
         );
-        context.refresh_script_region_auto_protect(&mut player);
+        let (ended_auto_protect, begun_auto_protect) = player.refresh_region_auto_protect(
+            self.globe_setup.auto_protect_time_ms(),
+            sufferer_is_gm,
+            game_tick_milliseconds(),
+        );
         self.restore_region_owner(source_owner);
         self.players.insert(player_id, player);
+        self.publish_region_auto_protect_refresh(
+            player_id,
+            ended_auto_protect,
+            begun_auto_protect,
+        );
         let delivered = matches!(&world_delivery, Some(Ok(value)) if *value != 0);
         tracing::debug!(
             player_id,

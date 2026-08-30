@@ -34,7 +34,8 @@
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
-//! `lDiedStateTime +0x56C` из того же snapshot.
+//! `lDiedStateTime +0x56C` из того же snapshot. Смена региона обновляет
+//! `STATE_AUTO_PROTECT` с точной длительностью `dwAutoProtectTime +0x804`.
 
 use crate::setup::regionrouter::{
     RegionRouter, RegionRouterDecodeError, RegionRouterSerializeError,
@@ -59,6 +60,7 @@ const BASE_RP_LEVEL_2_OFFSET: usize = 0x3F2;
 const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
 const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
+const AUTO_PROTECT_TIME_OFFSET: usize = 0x804;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
 const ALLOW_CLIENT_CHANGE_POSITION_OFFSET: usize = 0x50D;
 const ROTATION_OFFSET: usize = 0xC48;
@@ -316,6 +318,10 @@ impl GlobeSetupSnapshot {
 
     pub(crate) fn pet_translate_distance(&self) -> f32 {
         self.read_f32(PET_TRANSLATE_DISTANCE_OFFSET)
+    }
+
+    pub(crate) fn auto_protect_time_ms(&self) -> u32 {
+        self.read_u32(AUTO_PROTECT_TIME_OFFSET)
     }
 
     pub(crate) fn carriage_stop_distance(&self) -> u32 {
