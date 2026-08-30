@@ -45337,25 +45337,37 @@ fn trace_region_ai_pass(
     );
 }
 
-/// Безопасная принадлежащая процессу замена `GameThreadFunc`: системное время
-/// и начальное значение последовательностей берутся у общих владельцев часов,
-/// а `CGame` всегда проходит `Release` даже после неуспешного `Init`, как
-/// исходный ненулевой одиночный владелец `GetGame`. COM не нужен сетевым и
-/// DB-владельцам Rust; событие выхода Win32 и `WM_CLOSE` заменены прямым
-/// ожиданием и возвратом этой функции после `Release`.
+/// Итог process-owned `GameThreadFunc` после обязательного `Release`.
+/// Инициализационная ошибка сохраняется как наблюдаемый результат, а не
+/// пропускает освобождение уже опубликованных владельцев.
+#[derive(Debug)]
+pub(crate) struct GameThreadReport {
+    pub(crate) main_loop_calls: usize,
+    pub(crate) initialization: Result<(), GameInitializationThroughBillingError>,
+}
+
+/// Безопасная принадлежащая процессу замена `GameThreadFunc` и глобальной пары
+/// `CreateGame/DeleteGame`: единственный `CGame` создаётся внутри функции,
+/// никогда не публикуется вторым глобальным указателем и уничтожается только
+/// после `Release`. Системное время и начальное значение последовательностей
+/// берутся у общих владельцев часов. COM не нужен сетевым и DB-владельцам
+/// Rust; событие выхода Win32 и `WM_CLOSE` заменены прямым ожиданием и
+/// возвратом этой функции после освобождения объекта.
 pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
-    game: &mut CGame,
     runtime: &mut Runtime,
-) -> Result<(), GameInitializationThroughBillingError> {
+) -> GameThreadReport {
+    let mut game = CGame::new();
     let paths = runtime.runtime_paths();
     let wall_time_seconds = game_wall_time_seconds() as u32;
     let sequence_seed_ms = runtime.now_milliseconds();
-    let initialization = game.init(&paths, wall_time_seconds, sequence_seed_ms).await;
+    let initialization = game
+        .init(&paths, wall_time_seconds, sequence_seed_ms)
+        .await;
 
     let mut main_loop_calls = 0usize;
     if initialization.is_ok() {
         loop {
-            runtime.process_network_turn(game).await;
+            runtime.process_network_turn(&mut game).await;
             let turn = game.main_loop(runtime);
             main_loop_calls = main_loop_calls.wrapping_add(1);
             match turn {
@@ -45376,7 +45388,10 @@ pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
 
     game.release(runtime).await;
     tracing::debug!(main_loop_calls, "завершён поток GameServer");
-    initialization
+    GameThreadReport {
+        main_loop_calls,
+        initialization,
+    }
 }
 
 impl Default for CGame {
