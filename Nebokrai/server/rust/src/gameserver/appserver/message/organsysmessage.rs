@@ -34,8 +34,9 @@
 //! запуск complete/abandon scripts из canonical `CQuestSystem`.
 //! Остальная client relay-семья `0x90102`, `0x90107..0x90121` сохраняет исходное
 //! соответствие World opcodes, payload и позицию дописанного player ID.
-//! World responses `0x7FE02..0x7FE05` сохраняют исходный buffer, включая уже
-//! прочитанный address ID, меняют только type на `0xBFF02..0xBFF05`.
+//! World responses `0x7FE02..0x7FE17` сохраняют исходный buffer, включая уже
+//! прочитанный address ID; `0x7FE09` использует attached player context, а
+//! `0x7FE16/17` сохраняют legacy-пропуск client opcode `0xBFF16`.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -504,13 +505,26 @@ fn dispatch_organizing_client_response(
     message: &mut CMessage,
     game: &CGame,
 ) -> Result<(), FactionLifecycleDispatchError> {
-    let player_id = message
-        .base_mut()
-        .get_long()
-        .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
-            field: "client response player ID",
-        })?;
-    let output_opcode = 0x000b_ff02 + (opcode - 0x7fe02);
+    let player_id = if opcode == 0x7fe09 {
+        message.resolve_player_context(game);
+        let Some(player_id) = message.player_id() else {
+            trace!(opcode, "OrganSys context-ответ не имеет игрока");
+            return Ok(());
+        };
+        player_id
+    } else {
+        message
+            .base_mut()
+            .get_long()
+            .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+                field: "client response player ID",
+            })?
+    };
+    let output_opcode = match opcode {
+        0x7fe02..=0x7fe05 | 0x7fe08..=0x7fe15 => 0x000b_ff00 + (opcode & 0xff),
+        0x7fe16..=0x7fe17 => 0x000b_ff17 + (opcode - 0x7fe16),
+        _ => unreachable!("client response opcode проверен dispatcher-ом"),
+    };
     message.set_message_type(output_opcode as i32);
     let delivery = message.send_to_player(game.net_server(), player_id);
     trace!(opcode, output_opcode, player_id, delivery, "OrganSys ответ отправлен игроку");
@@ -544,6 +558,7 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe02..=0x7fe05
             | 0x7fe06
             | 0x7fe07
+            | 0x7fe08..=0x7fe17
             | 0x7fe18
             | 0x7fe19
             | 0x7fe1d
@@ -569,7 +584,7 @@ pub(crate) fn dispatch_game_organizing_message<
         return None;
     }
 
-    if matches!(opcode, 0x7fe02..=0x7fe05) {
+    if matches!(opcode, 0x7fe02..=0x7fe05 | 0x7fe08..=0x7fe17) {
         return Some(
             dispatch_organizing_client_response(opcode, message, game)
                 .map_err(GameOrganizingMessageError::ClientResponse),
