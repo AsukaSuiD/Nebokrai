@@ -271,6 +271,8 @@ impl CServerCityRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        area_width: i32,
+        area_height: i32,
         monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
@@ -281,6 +283,8 @@ impl CServerCityRegion {
                 source,
                 cursor,
                 include_child,
+                area_width,
+                area_height,
                 monster_registry,
                 skill_factory,
                 context,
@@ -296,16 +300,17 @@ impl CServerCityRegion {
         for _ in 0..gate_count.max(0) {
             let build =
                 read_city_gate_build(source, cursor).map_err(CityRegionDecodeError::Input)?;
-            self.add_city_gate(build, context);
+            self.add_city_gate(build, area_width, area_height);
         }
         self.defence_side_faction_id = self.war.base.param.owned_faction_id;
         Ok(true)
     }
 
-    pub(crate) fn add_city_gate<Context: CityRegionDecodeContext>(
+    pub(crate) fn add_city_gate(
         &mut self,
         build: CityGateBuild,
-        context: &mut Context,
+        area_width: i32,
+        area_height: i32,
     ) -> Option<i32> {
         let city_gate_id = self.war.base.take_child_id();
         let gate = CCityGate::from_created(CityGateInit {
@@ -324,7 +329,6 @@ impl CServerCityRegion {
             element_resistance: build.element_resistance,
             script: build.script,
         });
-        let (area_width, area_height) = context.area_dimensions();
         if self
             .war
             .base

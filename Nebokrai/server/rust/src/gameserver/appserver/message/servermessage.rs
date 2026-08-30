@@ -2530,6 +2530,7 @@ where
         Ok(subtype) => subtype,
         Err(error) => return Some(Err(InitialRegionStartupError::SubtypeInput(error))),
     };
+    let (area_width, area_height) = game.area_dimensions();
     let owner = match subtype {
         0 => {
             let mut region = CServerRegion::default();
@@ -2537,6 +2538,8 @@ where
                 source,
                 cursor,
                 true,
+                area_width,
+                area_height,
                 game.monster_registry(),
                 game.skill_factory(),
                 context,
@@ -2551,6 +2554,8 @@ where
                 source,
                 cursor,
                 true,
+                area_width,
+                area_height,
                 game.monster_registry(),
                 game.skill_factory(),
                 context,
@@ -2565,6 +2570,8 @@ where
                 source,
                 cursor,
                 true,
+                area_width,
+                area_height,
                 game.monster_registry(),
                 game.skill_factory(),
                 context,
@@ -2579,6 +2586,8 @@ where
                 source,
                 cursor,
                 true,
+                area_width,
+                area_height,
                 game.monster_registry(),
                 game.skill_factory(),
                 context,
@@ -2593,6 +2602,8 @@ where
                 source,
                 cursor,
                 true,
+                area_width,
+                area_height,
                 game.monster_registry(),
                 game.skill_factory(),
                 context,

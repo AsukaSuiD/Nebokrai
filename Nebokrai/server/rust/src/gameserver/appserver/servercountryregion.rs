@@ -327,6 +327,8 @@ impl CServerCountryRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        area_width: i32,
+        area_height: i32,
         monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
@@ -338,15 +340,17 @@ impl CServerCountryRegion {
                 source,
                 cursor,
                 include_child,
+                area_width,
+                area_height,
                 monster_registry,
                 skill_factory,
                 context,
             )
             .map_err(CountryRegionDecodeError::Base)?;
-        self.decode_gate_section(source, cursor, WC_DEFEND, context)?;
-        self.decode_gate_section(source, cursor, WC_ATTACK, context)?;
-        self.decode_flag_section(source, cursor, WC_DEFEND, context)?;
-        self.decode_flag_section(source, cursor, WC_ATTACK, context)?;
+        self.decode_gate_section(source, cursor, WC_DEFEND, area_width, area_height)?;
+        self.decode_gate_section(source, cursor, WC_ATTACK, area_width, area_height)?;
+        self.decode_flag_section(source, cursor, WC_DEFEND, area_width, area_height)?;
+        self.decode_flag_section(source, cursor, WC_ATTACK, area_width, area_height)?;
         self.decode_area_section(source, cursor, WC_DEFEND)?;
         self.decode_area_section(source, cursor, WC_ATTACK)?;
         Ok(true)
@@ -1023,28 +1027,30 @@ impl CServerCountryRegion {
         }
     }
 
-    fn decode_gate_section<Context: CountryRegionDecodeContext>(
+    fn decode_gate_section(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
         camp: i32,
-        context: &mut Context,
+        area_width: i32,
+        area_height: i32,
     ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError>> {
         let count = read_country_i32(source, cursor, country_gate_count_field(camp))
             .map_err(CountryRegionDecodeError::Input)?;
         for _ in 0..count.max(0) {
             let build =
                 read_country_gate_build(source, cursor).map_err(CountryRegionDecodeError::Input)?;
-            self.add_country_gate(camp, build, context);
+            self.add_country_gate(camp, build, area_width, area_height);
         }
         Ok(())
     }
 
-    fn add_country_gate<Context: CountryRegionDecodeContext>(
+    fn add_country_gate(
         &mut self,
         camp: i32,
         build: CountryGateBuild,
-        context: &mut Context,
+        area_width: i32,
+        area_height: i32,
     ) -> Option<i32> {
         let city_gate_id = self.base.take_child_id();
         let gate = CCityGate::from_created(CityGateInit {
@@ -1063,7 +1069,6 @@ impl CServerCountryRegion {
             element_resistance: build.element_resistance,
             script: build.script,
         });
-        let (area_width, area_height) = context.area_dimensions();
         if self
             .base
             .register_stationary_child(gate.shape_view(), area_width, area_height)
@@ -1080,28 +1085,30 @@ impl CServerCountryRegion {
         Some(city_gate_id)
     }
 
-    fn decode_flag_section<Context: CountryRegionDecodeContext>(
+    fn decode_flag_section(
         &mut self,
         source: &[u8],
         cursor: &mut usize,
         camp: i32,
-        context: &mut Context,
+        area_width: i32,
+        area_height: i32,
     ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError>> {
         let count = read_country_i32(source, cursor, country_flag_count_field(camp))
             .map_err(CountryRegionDecodeError::Input)?;
         for _ in 0..count.max(0) {
             let build =
                 read_country_flag_build(source, cursor).map_err(CountryRegionDecodeError::Input)?;
-            self.add_country_flag(camp, build, context);
+            self.add_country_flag(camp, build, area_width, area_height);
         }
         Ok(())
     }
 
-    fn add_country_flag<Context: CountryRegionDecodeContext>(
+    fn add_country_flag(
         &mut self,
         camp: i32,
         build: CountryFlagBuild,
-        context: &mut Context,
+        area_width: i32,
+        area_height: i32,
     ) -> Option<i32> {
         let flag_id = self.base.take_child_id();
         let flag = CBuild::from_created(BuildInit {
@@ -1119,7 +1126,6 @@ impl CServerCountryRegion {
             element_resistance: build.element_resistance,
             script: build.script,
         });
-        let (area_width, area_height) = context.area_dimensions();
         if self
             .base
             .register_stationary_child(flag.shape_view(), area_width, area_height)

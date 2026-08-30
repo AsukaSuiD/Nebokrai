@@ -538,7 +538,6 @@ pub(crate) enum ServerRegionWeatherTick {
 pub(crate) trait ServerRegionDecodeContext:
     ServerRegionNpcContext + ServerRegionMonsterContext
 {
-    fn area_dimensions(&self) -> (i32, i32);
     fn now_millis(&mut self) -> u32;
 }
 
@@ -2889,6 +2888,8 @@ impl CServerRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        area_width: i32,
+        area_height: i32,
         monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
@@ -2897,6 +2898,8 @@ impl CServerRegion {
             source,
             cursor,
             include_child,
+            area_width,
+            area_height,
             monster_registry,
             skill_factory,
             context,
@@ -2911,6 +2914,8 @@ impl CServerRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        area_width: i32,
+        area_height: i32,
         monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
@@ -2935,7 +2940,6 @@ impl CServerRegion {
             .map_err(ServerRegionDecodeError::Input)?
             != 0;
 
-        let (area_width, area_height) = context.area_dimensions();
         self.create_area_array(area_width, area_height)
             .map_err(ServerRegionDecodeError::AreaGrid)?;
 

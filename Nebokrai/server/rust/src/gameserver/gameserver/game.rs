@@ -23459,12 +23459,15 @@ impl CGame {
     where
         Context: WarRegionDecodeContext + GodsBattleNpcContendContext,
     {
+        let (area_width, area_height) = self.area_dimensions();
         let monster_registry = self.monster_registry.clone();
         let skill_factory = self.skill_factory.clone();
         region.decord_from_byte_array_with_npc_entry(
             source,
             cursor,
             include_child,
+            area_width,
+            area_height,
             &monster_registry,
             &skill_factory,
             context,
