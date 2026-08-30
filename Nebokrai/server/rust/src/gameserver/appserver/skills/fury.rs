@@ -115,7 +115,9 @@ fn remove_reached_conflict_states(
                 Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().unwrap_or_default(), monster.move_shape().shape().get_tile_y().unwrap_or_default()))
             });
             if let Some((state, identity, tile_x, tile_y)) = removed {
-                send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+                send_seal_state_visual(
+                    game, region.id, identity, tile_x, tile_y, state, false, || now_ms,
+                );
             }
         } else if state_id == super::spiderpoison::SPIDER_POISON_SKILL_ID {
             let removed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {

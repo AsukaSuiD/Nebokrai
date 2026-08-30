@@ -255,7 +255,9 @@ fn finish_monster_curable_state(
     game.restore_region_owner(owner);
     let Some((removed, identity, tile_x, tile_y)) = removed else { return false };
     match removed {
-        RemovedMonsterCurableState::Seal(state) => send_seal_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
+        RemovedMonsterCurableState::Seal(state) => send_seal_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
+        ),
         RemovedMonsterCurableState::SpiderPoison(state) => send_spider_poison_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpriteBurn(state) => send_sprite_burn_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpiderWeb(state) => send_spider_web_state_visual(

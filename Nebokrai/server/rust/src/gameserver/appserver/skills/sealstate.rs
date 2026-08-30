@@ -6,11 +6,13 @@
 //! `CBlindState` таймер, `End` и реакция на защиту снимают оба запрета и
 //! публикуют `0xBFE04`; беззнаковая строгая проверка срока и порядок вставки
 //! сохраняются каноническим хранилищем. Конструктор по умолчанию и
-//! координатные перегрузки остаются в RAW ниже.
+//! координатные перегрузки остаются в RAW ниже. Унаследованный клиентский срок
+//! использует общее тело `CBlindState` по `0x005F2CD0`.
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const SEAL_STATE_ID: u32 = 0x138;
@@ -34,13 +36,8 @@ impl SealState {
         now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms {
-            0
-        } else {
-            self.keep_time_ms.wrapping_sub(elapsed) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 }
 
@@ -53,14 +50,14 @@ pub(crate) fn send_seal_state_visual(
     tile_y: i32,
     state: SealState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
@@ -90,9 +87,13 @@ pub(crate) fn replace_monster_seal_state(
         return false;
     };
     if let Some(previous) = previous {
-        send_seal_state_visual(game, region.id, identity, tile_x, tile_y, previous, false, now_ms);
+        send_seal_state_visual(
+            game, region.id, identity, tile_x, tile_y, previous, false, || now_ms,
+        );
     }
-    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, true, now_ms);
+    send_seal_state_visual(
+        game, region.id, identity, tile_x, tile_y, state, true, game_tick_milliseconds,
+    );
     true
 }
 
@@ -116,7 +117,7 @@ pub(crate) fn expire_monster_seal_state(
     let Some((state, identity, tile_x, tile_y)) = finished else {
         return false;
     };
-    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, || now_ms);
     true
 }
 
@@ -140,7 +141,7 @@ pub(crate) fn finish_monster_seal_state_on_defense(
     let Some((state, identity, tile_x, tile_y)) = finished else {
         return false;
     };
-    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, || now_ms);
     true
 }
 
