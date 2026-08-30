@@ -1227,7 +1227,7 @@ pub(crate) enum GodsBattleScalarScriptFunctionOutcome {
     Handled { legacy_return: i32 },
 }
 
-pub(crate) fn run_gods_battle_scalar_script_function<Runtime: GodsBattleDeathContext>(
+pub(crate) fn run_gods_battle_scalar_script_function<Runtime: ScriptFunctionRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
     script_player_id: Option<i32>,

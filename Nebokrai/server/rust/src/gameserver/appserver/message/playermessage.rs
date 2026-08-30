@@ -1532,15 +1532,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                     "appellation request tail",
                 )));
             };
-            game.find_player_mut(player_id)
-                .expect("appellation player сохранён после context lookup")
-                .request_change_appellation_state(appellation_id as u32);
-            let _ = game.run_script_file(
-                b"scripts/circle/honorrank/changeappellation.script",
-                ScriptExecutionContext {
-                    player_id: Some(player_id),
-                    ..ScriptExecutionContext::default()
-                },
+            let _ = game.request_player_change_appellation(
+                player_id,
+                appellation_id as u32,
                 runtime,
             );
             trace_player_message_outcome(message_type, Some(player_id), "смена титула запрошена");

@@ -5920,10 +5920,6 @@ impl CPlayer {
         self.attempt_appellation_id
     }
 
-    pub(crate) const fn clear_attempt_appellation(&mut self) {
-        self.attempt_appellation_id = 0;
-    }
-
     pub(crate) const fn set_gods_battle_faction(&mut self, faction: i32) {
         self.base_properties.gods_battle_faction = faction;
     }

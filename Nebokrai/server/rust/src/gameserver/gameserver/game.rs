@@ -3119,7 +3119,6 @@ pub(crate) struct GodsBattleTeamSnapshot {
 
 pub(crate) trait GodsBattleDeathContext {
     fn gods_battle_team_snapshot(&mut self, team_id: i32) -> Option<GodsBattleTeamSnapshot>;
-    fn request_gods_battle_change_appellation(&mut self, player_id: i32, appellation_id: u32);
 }
 
 pub(crate) trait GodsBattleNpcContendContext:
@@ -15850,6 +15849,27 @@ impl CGame {
         self.queue_script_file(path, context)
     }
 
+    /// Общий достигнутый путь `CPlayer::RequestChangeAppellation`: сначала
+    /// сохраняет запрошенный титул, затем запускает тот же сценарий как для
+    /// клиентского `0x8FA18`, так и для автоматического снятия GodsBattle.
+    pub(crate) fn request_player_change_appellation<Runtime: ScriptFunctionRuntime>(
+        &mut self,
+        player_id: i32,
+        appellation_id: u32,
+        runtime: &mut Runtime,
+    ) -> Option<i32> {
+        self.find_player_mut(player_id)?
+            .request_change_appellation_state(appellation_id);
+        self.run_script_file(
+            b"scripts/circle/honorrank/changeappellation.script",
+            ScriptExecutionContext {
+                player_id: Some(player_id),
+                ..ScriptExecutionContext::default()
+            },
+            runtime,
+        )
+    }
+
     pub(crate) fn queue_player_script(&mut self, player_id: i32, path: &[u8]) -> Option<i32> {
         let region_id = self.find_player(player_id)?.server_region_id();
         self.queue_script_file(
@@ -24658,13 +24678,11 @@ impl CGame {
     }
 
     /// Достигнутый GodsBattle-tail `CPlayer::OnDied` после общих death effects.
-    pub(crate) fn apply_gods_battle_death_szl<
-        Context: GodsBattleDeathContext + RealmAppellationScriptContext,
-    >(
+    pub(crate) fn apply_gods_battle_death_szl<Runtime: ScriptFunctionRuntime>(
         &mut self,
         killer_id: i32,
         victim_id: i32,
-        context: &mut Context,
+        context: &mut Runtime,
     ) -> Option<()> {
         let (killer_level, killer_szl, killer_faction, killer_team, killer_region) =
             self.find_player(killer_id).map(|player| {
@@ -24785,11 +24803,11 @@ impl CGame {
         Some(())
     }
 
-    fn update_gods_battle_player_szl<Context: GodsBattleDeathContext>(
+    fn update_gods_battle_player_szl<Runtime: ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         current: u32,
-        context: &mut Context,
+        context: &mut Runtime,
     ) {
         let (previous, attempt_appellation_id) = {
             let player = self
@@ -24810,10 +24828,7 @@ impl CGame {
             && self.gods_battle_mgr.szl_level(current).unwrap_or(0)
                 < attempt_appellation_id % 40_000
         {
-            self.find_player_mut(player_id)
-                .expect("player сохранён после SZL publication")
-                .clear_attempt_appellation();
-            context.request_gods_battle_change_appellation(player_id, 0);
+            let _ = self.request_player_change_appellation(player_id, 0, context);
             Some(attempt_appellation_id)
         } else {
             None
@@ -24836,11 +24851,11 @@ impl CGame {
 
     /// Script scalar `11128 / ChangePlayerSZL`: вычисляется только первый
     /// аргумент; negative и parser sentinel являются успешным no-op.
-    pub(crate) fn script_change_player_szl<Context: GodsBattleDeathContext>(
+    pub(crate) fn script_change_player_szl<Runtime: ScriptFunctionRuntime>(
         &mut self,
         player_id: i32,
         value: i32,
-        context: &mut Context,
+        context: &mut Runtime,
     ) -> Option<()> {
         if value < 0 || value == SCRIPT_SCALAR_ERROR || self.find_player(player_id).is_none() {
             return None;
