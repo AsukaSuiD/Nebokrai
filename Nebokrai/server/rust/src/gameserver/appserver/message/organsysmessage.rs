@@ -22,6 +22,8 @@
 //! region spawn owners без прежних monster/spawn callbacks runtime-а.
 //! `0x7FE24` аналогично передаёт полный city player/gate проход `CGame`, не
 //! оставляя возврат игроков внешнему callback-у.
+//! Village timeout сохраняет `0x60136 → GS0240`: первый эффект отправляет
+//! `CGame`, второй остаётся у достигнутого war-log sink.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -1654,14 +1656,34 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        let Some(region) = self.game.find_region_mut(region_id) else {
+        let Some(owner) = self.game.take_region_owner(region_id) else {
             return;
         };
-        match region {
-            ServerRegionOwner::Village(region) => region.on_war_time_out(war_number, self.runtime),
-            ServerRegionOwner::City(region) => region.on_war_time_out(war_number, self.runtime),
-            region => region.base_mut().on_war_time_out(war_number),
-        }
+        let ServerRegionOwner::Village(region) = &owner else {
+            self.game.restore_region_owner(owner);
+            let Some(region) = self.game.find_region_mut(region_id) else {
+                return;
+            };
+            match region {
+                ServerRegionOwner::City(region) => {
+                    region.on_war_time_out(war_number, self.runtime)
+                }
+                region => region.base_mut().on_war_time_out(war_number),
+            }
+            return;
+        };
+        let effect = region.on_war_time_out(war_number);
+        self.game.restore_region_owner(owner);
+        self.game.send_village_timeout(
+            effect.war_number,
+            effect.region_id,
+            effect.flag_owner_faction_id,
+        );
+        VillageRegionContext::write_war_log(
+            self.runtime,
+            "GS0240",
+            &effect.region_name,
+        );
     }
 
     fn on_war_end(&mut self, region: GameWarRegionHandle, war_number: i32) {

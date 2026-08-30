@@ -12,10 +12,13 @@
 //! `m_lFlagOwnerFacID +0x27C`.
 //!
 //! Timeout намеренно игнорирует аргумент и шлёт текущие `(war, region,
-//! flag-owner, 0)` как `0x60136`. End сначала сбрасывает war-state, затем
+//! flag-owner, 0)` как `0x60136`; snapshot исполняет канонический `CGame`
+//! перед `GS0240` log. `OnFactionVictory` вызывает тот же доказанный no-op
+//! `0x004A8750`, поэтому отдельного callback-а у него нет. End сначала
+//! сбрасывает war-state, затем
 //! очищает contenders/goods, ставит 60-секундное вытеснение и лишь после этого
-//! обнуляет country/ownership/flag-owner. Message, player и goods side effects
-//! остаются явным context-контрактом до своих owners; прочие функции ниже raw.
+//! обнуляет country/ownership/flag-owner. Player и goods side effects остаются
+//! явным context-контрактом до своих owners; прочие функции ниже raw.
 //! Inherited `CServerWarRegion::AI` вызывается реальным `CGame::AI` через
 //! Village adapter с canonical player/state/network effects.
 
@@ -39,13 +42,16 @@ pub(crate) trait VillageRegionContext: WarRegionContext {
     /// Пишет localized template в канал `war` с аргументом region name.
     fn write_war_log(&mut self, string_id: &'static str, region_name: &str);
 
-    fn on_one_message_size_over(&mut self, faction_id: i32, union_id: i32);
-
-    /// Шлёт `0x60136(war, region, flag-owner, 0)` в server channel.
-    fn send_village_timeout(&mut self, war_number: i32, region_id: i32, flag_owner_faction_id: i32);
-
     fn delete_good_from_all_players(&mut self, region_id: i32, good_name: &str);
     fn now_millis(&mut self) -> u32;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VillageTimeoutEffect {
+    pub(crate) war_number: i32,
+    pub(crate) region_id: i32,
+    pub(crate) flag_owner_faction_id: i32,
+    pub(crate) region_name: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -129,17 +135,13 @@ impl CServerVillageRegion {
         context.write_war_log("GS0239", &self.war.base.name);
     }
 
-    pub(crate) fn on_war_time_out<Context: VillageRegionContext>(
-        &mut self,
-        _war_number: i32,
-        context: &mut Context,
-    ) {
-        context.send_village_timeout(
-            self.war.base.war_number,
-            self.war.base.id,
-            self.flag_owner_faction_id,
-        );
-        context.write_war_log("GS0240", &self.war.base.name);
+    pub(crate) fn on_war_time_out(&self, _war_number: i32) -> VillageTimeoutEffect {
+        VillageTimeoutEffect {
+            war_number: self.war.base.war_number,
+            region_id: self.war.base.id,
+            flag_owner_faction_id: self.flag_owner_faction_id,
+            region_name: self.war.base.name.clone(),
+        }
     }
 
     pub(crate) fn on_war_end<Context: VillageRegionContext>(
@@ -155,17 +157,6 @@ impl CServerVillageRegion {
         self.war.base.country = 0;
         self.war.base.set_owned_city_org(0, 0);
         self.flag_owner_faction_id = 0;
-    }
-
-    pub(crate) fn on_faction_victory<Context: VillageRegionContext>(
-        &mut self,
-        faction_id: i32,
-        union_id: i32,
-        context: &mut Context,
-    ) {
-        if self.war.base.city_state != 0 {
-            context.on_one_message_size_over(faction_id, union_id);
-        }
     }
 
     pub(crate) fn clear_region<Context: VillageRegionContext>(&mut self, context: &mut Context) {

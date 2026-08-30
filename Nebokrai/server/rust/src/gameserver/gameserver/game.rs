@@ -45184,6 +45184,28 @@ impl CGame {
         );
     }
 
+    /// Публикует точный server-channel кадр timeout деревенской войны.
+    pub(crate) fn send_village_timeout(
+        &mut self,
+        war_number: i32,
+        region_id: i32,
+        flag_owner_faction_id: i32,
+    ) {
+        let mut message = CMessage::new(0x0006_0136);
+        message.add_long(war_number);
+        message.add_long(region_id);
+        message.add_long(flag_owner_faction_id);
+        message.add_long(0);
+        let delivery = message.send(self, false);
+        tracing::trace!(
+            war_number,
+            region_id,
+            flag_owner_faction_id,
+            ?delivery,
+            "отправлен timeout деревенской войны"
+        );
+    }
+
     /// Полный city `OnClearOtherPlayer`: сначала возвращает всех игроков без
     /// faction либо не из владеющей faction, затем обновляет, закрывает и
     /// публикует ворота в исходном map-order.
