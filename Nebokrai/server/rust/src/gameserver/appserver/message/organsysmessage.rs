@@ -32,7 +32,7 @@
 //! и публикуют исходные client frames `0xBFF32..0xBFF35` через `CGame`.
 //! Quest-команды `0x90124..0x90128` сохраняют World forwarding и state-zero
 //! запуск complete/abandon scripts из canonical `CQuestSystem`.
-//! Остальная client relay-семья `0x90107..0x90121` сохраняет исходное
+//! Остальная client relay-семья `0x90102`, `0x90107..0x90121` сохраняет исходное
 //! соответствие World opcodes, payload и позицию дописанного player ID.
 
 use std::ffi::CString;
@@ -434,6 +434,7 @@ fn dispatch_organizing_client_relay(
         return Ok(());
     };
     let output_opcode = match opcode {
+        0x90102 => 0x0006_0104,
         0x90107..=0x90116 => 0x0006_010a + (opcode - 0x90107),
         0x90117..=0x90119 => 0x0006_011b + (opcode - 0x90117),
         0x9011c => 0x0006_0120,
@@ -476,7 +477,7 @@ fn dispatch_organizing_client_relay(
             request.add_long(value);
             request.send(game, false)
         }
-        0x9010a | 0x9010b | 0x9010e | 0x9010f => {
+        0x90102 | 0x9010a | 0x9010b | 0x9010e | 0x9010f => {
             let mut request = CMessage::new(output_opcode as i32);
             request.add_long(player_id);
             request.send(game, false)
@@ -507,6 +508,7 @@ pub(crate) fn dispatch_game_organizing_message<
     if !matches!(
         opcode,
         0x90101
+            | 0x90102
             | 0x90105
             | 0x90106
             | 0x90107..=0x90119
@@ -545,7 +547,10 @@ pub(crate) fn dispatch_game_organizing_message<
         return None;
     }
 
-    if matches!(opcode, 0x90107..=0x90119 | 0x9011c..=0x90121) {
+    if matches!(
+        opcode,
+        0x90102 | 0x90107..=0x90119 | 0x9011c..=0x90121
+    ) {
         return Some(
             dispatch_organizing_client_relay(opcode, message, game)
                 .map_err(GameOrganizingMessageError::ClientRelay),
