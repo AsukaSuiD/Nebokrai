@@ -168,6 +168,45 @@ impl CVariableList {
         }
     }
 
+    /// Exact `AddVar(name, value)`: существующее имя проверяется побайтно,
+    /// иначе новая scalar-запись добавляется в конец insertion-order списка.
+    pub(crate) fn add_integer(
+        &mut self,
+        name: &[u8],
+        value: i32,
+    ) -> GameVariableMutationOutcome {
+        if self.variables.iter().any(|variable| variable.name == name) {
+            return self.set_integer(name, 0, value);
+        }
+        let variable_index = self.variables.len();
+        self.variables.push(GameVariable {
+            name: name.to_vec(),
+            value: GameVariableValue::Integer(value),
+        });
+        GameVariableMutationOutcome::UpdatedInteger { variable_index }
+    }
+
+    /// Строковая перегрузка `AddVar` сохраняет тот же exact-name append и
+    /// штатную смену типа уже существующей записи через `SetVarValue`.
+    pub(crate) fn add_string(
+        &mut self,
+        name: &[u8],
+        value: &[u8],
+    ) -> GameVariableMutationOutcome {
+        if self.variables.iter().any(|variable| variable.name == name) {
+            return self.set_string(name, value);
+        }
+        let variable_index = self.variables.len();
+        self.variables.push(GameVariable {
+            name: name.to_vec(),
+            value: GameVariableValue::String(value.to_vec()),
+        });
+        GameVariableMutationOutcome::UpdatedString {
+            variable_index,
+            retyped: false,
+        }
+    }
+
     pub(crate) fn decode_world_snapshot(
         &mut self,
         definitions: Option<&[u8]>,

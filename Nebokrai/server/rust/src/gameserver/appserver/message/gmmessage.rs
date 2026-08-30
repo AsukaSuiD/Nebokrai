@@ -58,7 +58,14 @@
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
 //! расхождение между двумя зависящими от времени проходами. Непокрытые
 //! селекторы GM остаются в сохранённом RAW ниже.
+//! `ParseGMCommand` сохраняет двухуровневую авторизацию, legacy-разбор четырёх
+//! параметров, upsert сценарных переменных и отложенный запуск
+//! `scripts/gm/{command}.script` через канонический script owner.
 
+use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
+use crate::gameserver::appserver::script::script::{
+    ScriptExecutionContext, legacy_atoi,
+};
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameKickAroundOutcome, RealmAppellationScriptContext,
     ScriptRegionChangeContext, colored_text_message,
@@ -810,6 +817,111 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
         .unwrap_or(value.len())]
 }
 
+/// Точный reached helper `ParseGMCommand`, вызываемый каналом чата `8`.
+/// Возвращает `false` только для неавторизованного/запрещённого запроса или
+/// traversal-команды; отсутствие script resource и duplicate уже принадлежат
+/// отложенному `CGame::run_script_file` и не отменяют факт принятия команды.
+pub(crate) fn parse_gm_command<Runtime: ScriptFunctionRuntime>(
+    game: &mut CGame,
+    runtime: &mut Runtime,
+    player_id: i32,
+    region_id: i32,
+    command_line: &mut [u8],
+) -> bool {
+    let Some(player_name) = game
+        .find_player(player_id)
+        .map(|player| player.player_name().to_vec())
+    else {
+        return false;
+    };
+    let player_gm = game.gm_list().player_gm_info().get(&player_name);
+    let gm = game.gm_list().gm_info().get(&player_name);
+    let (gm_level, restricted) = match (gm, player_gm) {
+        (Some(gm), _) => (gm.level, false),
+        (None, Some(player_gm)) => (player_gm.level, true),
+        (None, None) => return false,
+    };
+
+    if restricted {
+        command_line.make_ascii_lowercase();
+        if !command_line.starts_with(b"silence")
+            && !command_line.starts_with(b"move")
+            && !command_line.starts_with(b"teleplayer")
+        {
+            return false;
+        }
+    }
+
+    let mut command = Vec::with_capacity(0x20);
+    let mut parameters: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::with_capacity(0x80));
+    let mut field = 0usize;
+    for &byte in command_line.iter() {
+        if byte == b' ' {
+            command.make_ascii_lowercase();
+            if command == b"say" && field == 1 {
+                if parameters[0].len() < 0x80 {
+                    parameters[0].push(byte);
+                }
+                continue;
+            }
+            field = field.saturating_add(1);
+            continue;
+        }
+        if field == 0 {
+            if command.len() < 0x20 {
+                command.push(byte);
+            }
+        } else if let Some(parameter) = parameters.get_mut(field - 1)
+            && parameter.len() < 0x80
+        {
+            parameter.push(byte);
+        }
+    }
+    command.make_ascii_lowercase();
+
+    let integer_parameters = parameters.each_ref().map(|value| legacy_atoi(value));
+    let Some(player) = game.find_player_mut(player_id) else {
+        return false;
+    };
+    let _ = player.add_integer_variable(b"$GMLevel", gm_level);
+    for (index, value) in parameters.iter().enumerate() {
+        let name = [
+            b"#GMParam1".as_slice(),
+            b"#GMParam2".as_slice(),
+            b"#GMParam3".as_slice(),
+            b"#GMParam4".as_slice(),
+        ][index];
+        let _ = player.add_string_variable(name, value);
+    }
+    for (index, value) in integer_parameters.into_iter().enumerate() {
+        let name = [
+            b"$GMParam1".as_slice(),
+            b"$GMParam2".as_slice(),
+            b"$GMParam3".as_slice(),
+            b"$GMParam4".as_slice(),
+        ][index];
+        let _ = player.add_integer_variable(name, value);
+    }
+
+    if command.windows(2).any(|window| window == b"..") {
+        return false;
+    }
+    let mut path = Vec::with_capacity(b"scripts/gm/".len() + command.len() + b".script".len());
+    path.extend_from_slice(b"scripts/gm/");
+    path.extend_from_slice(&command);
+    path.extend_from_slice(b".script");
+    let _ = game.run_script_file(
+        &path,
+        ScriptExecutionContext {
+            player_id: Some(player_id),
+            region_id: Some(region_id),
+            ..ScriptExecutionContext::default()
+        },
+        runtime,
+    );
+    true
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
@@ -830,18 +942,5 @@ fn legacy_c_string_prefix(value: &[u8]) -> &[u8] {
 //
 //
 
-// ============================================================================
-// FUNCTION: ParseGMCommand
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\gmmessage.cpp:591
-// RVA: 0x0009C7F0
-// ADDRESS: 0049c7f0
-// PROTOTYPE: bool __cdecl ParseGMCommand(CMessage * param_1, char * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
 // COMPONENT_VARIANT_END: GameServer
+

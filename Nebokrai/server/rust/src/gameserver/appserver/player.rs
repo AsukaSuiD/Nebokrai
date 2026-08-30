@@ -8647,6 +8647,22 @@ impl CPlayer {
         self.variable_list.set_integer(name, element_index, value)
     }
 
+    pub(crate) fn add_integer_variable(
+        &mut self,
+        name: &[u8],
+        value: i32,
+    ) -> GameVariableMutationOutcome {
+        self.variable_list.add_integer(name, value)
+    }
+
+    pub(crate) fn add_string_variable(
+        &mut self,
+        name: &[u8],
+        value: &[u8],
+    ) -> GameVariableMutationOutcome {
+        self.variable_list.add_string(name, value)
+    }
+
     pub(crate) fn clear_all_enhancement_selection(&mut self) -> usize {
         self.enhancement.clear()
     }

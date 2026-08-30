@@ -5,6 +5,8 @@
 //! байты сообщений, порядок клиентских и межсерверных отправок, ограничения
 //! чата, частичные списания публичного чата, сценарные ответы, переименование,
 //! межсерверные изменения навыков и уровня, а также обновление LeiTing.
+//! Канал чата `8` связан с `ParseGMCommand`: сохраняются две GM-карты,
+//! script variables, файловый GMLog и условный World-аудит `0x6020B`.
 //!
 //! Все наблюдаемые эффекты выполняются синхронно в исходных ветвях. Результаты
 //! отправок не управляют дальнейшим выполнением и фиксируются через `tracing`;
@@ -13,13 +15,15 @@
 //! не используется. Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::player::{PlayerLeiTingDecodeBlock, PlayerTalkChannel};
-use crate::gameserver::appserver::script::script::legacy_atoi;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
+use crate::gameserver::appserver::message::gmmessage::parse_gm_command;
+use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
+use crate::gameserver::appserver::script::script::legacy_atoi;
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, colored_player_notice_message, player_skill_learned_message,
+    CGame, colored_player_notice_message, player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
-use crate::public::tools::add_game_error_log_text;
+use crate::public::tools::{add_game_error_log_text, put_string_to_file};
 
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
@@ -222,6 +226,114 @@ fn public_talk_failure_message(country: bool) -> CMessage {
     let mut response = CMessage::new(if country { 0x000b_f815 } else { 0x000b_f814 });
     response.base_mut().add_byte(0);
     response
+}
+
+fn format_gm_command_log(
+    player_name: &[u8],
+    player_level: u8,
+    region_id: i32,
+    command: &[u8],
+    localized: &[u8],
+) -> Vec<u8> {
+    let mut text = Vec::with_capacity(
+        player_name.len() + command.len() + localized.len() + 48,
+    );
+    text.push(b'\'');
+    text.extend_from_slice(player_name);
+    text.extend_from_slice(b"' (lvl:");
+    text.extend_from_slice(player_level.to_string().as_bytes());
+    text.extend_from_slice(b" map:");
+    text.extend_from_slice(region_id.to_string().as_bytes());
+    text.extend_from_slice(b") => ");
+    text.extend_from_slice(command);
+    text.extend_from_slice(b" [");
+    text.extend_from_slice(localized.split(|byte| *byte == 0).next().unwrap_or_default());
+    text.push(b']');
+    text
+}
+
+fn dispatch_gm_chat<Runtime: ScriptFunctionRuntime>(
+    message: &mut CMessage,
+    game: &mut CGame,
+    runtime: &mut Runtime,
+) -> Result<(), GameOtherMessageError> {
+    let message_type = PLAYER_CHAT_REQUEST;
+    message.resolve_player_context(game);
+    let Some(player_id) = message.player_id() else {
+        tracing::trace!(message_type, "у GM-команды нет игрока");
+        return Ok(());
+    };
+    let Some(region_id) = message
+        .region_id()
+        .filter(|region_id| game.find_region(*region_id).is_some())
+    else {
+        tracing::trace!(message_type, player_id, "у GM-команды нет live-региона");
+        return Ok(());
+    };
+    let Some(player) = game.find_player_mut(player_id) else {
+        tracing::trace!(message_type, player_id, "игрок GM-команды не найден");
+        return Ok(());
+    };
+    if player.is_in_silence(runtime.now_milliseconds()) {
+        let _ = colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GS0330"))
+            .send_to_player(game.net_server(), player_id);
+        tracing::trace!(message_type, player_id, "GM-команда запрещена молчанием");
+        return Ok(());
+    }
+
+    let channel = read_long(message, "chat channel")?;
+    debug_assert_eq!(channel, 8);
+    let _owner_type = read_long(message, "chat owner type")?;
+    let _owner_id = read_long(message, "chat owner id")?;
+    let _sender_name = read_string(message, 0x200);
+    let mut command = read_string(message, 0x200);
+    if !parse_gm_command(game, runtime, player_id, region_id, &mut command) {
+        tracing::trace!(message_type, player_id, "GM-команда отклонена");
+        return Ok(());
+    }
+
+    let (player_name, player_level, tile_x, tile_y) = {
+        let player = game
+            .find_player(player_id)
+            .expect("GM-command player остаётся live после script queue");
+        (
+            player.player_name().to_vec(),
+            player.level(),
+            player.shape().get_tile_x().unwrap_or_default(),
+            player.shape().get_tile_y().unwrap_or_default(),
+        )
+    };
+    let gm_level = game
+        .gm_list()
+        .player_gm_info()
+        .get(&player_name)
+        .or_else(|| game.gm_list().gm_info().get(&player_name))
+        .map(|info| info.level)
+        .unwrap_or_default();
+    if gm_level != 100 {
+        let log = format_gm_command_log(
+            &player_name,
+            player_level,
+            region_id,
+            &command,
+            game.get_string_by_id(b"GS0044"),
+        );
+        put_string_to_file("GMLog", &log);
+        if game.log_system().gm_command_enabled() {
+            let _ = send_player_chat_log(
+                game,
+                player_id,
+                region_id,
+                tile_x,
+                tile_y,
+                6,
+                &command,
+                None,
+            );
+        }
+    }
+    tracing::trace!(message_type, player_id, gm_level, "GM-команда принята");
+    Ok(())
 }
 
 fn dispatch_player_chat(
@@ -557,7 +669,7 @@ fn dispatch_public_talk(
     Ok(())
 }
 
-pub(crate) fn dispatch_game_other_message<Runtime: GameContainerMessageRuntime>(
+pub(crate) fn dispatch_game_other_message<Runtime: ScriptFunctionRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -638,6 +750,9 @@ pub(crate) fn dispatch_game_other_message<Runtime: GameContainerMessageRuntime>(
     }
     if message_type == PLAYER_CHAT_REQUEST {
         let channel = peek_long(message)?;
+        if channel == 8 {
+            return Some(dispatch_gm_chat(message, game, runtime));
+        }
         if matches!(channel, 0 | 1 | 2 | 4) {
             return Some(dispatch_player_chat(message, game, || {
                 runtime.now_milliseconds()

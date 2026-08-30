@@ -21,6 +21,8 @@
 //! уровня игрока использует позиционный байт `24`, названный `bLevelLog`.
 //! `CPlayer::ChangeRegion` читает соседние байты `51..53`, названные
 //! `bChMap0/1/2`, для трёх путей аудита `0x6020C`.
+//! GM-команды используют подтверждённый positional byte `50`, `bGMCommand`,
+//! для межсерверного аудита `0x6020B`.
 
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use std::collections::BTreeSet;
@@ -242,6 +244,10 @@ impl CLogSystem {
 
     pub(crate) fn private_chat_enabled(&self) -> bool {
         self.setting(49)
+    }
+
+    pub(crate) fn gm_command_enabled(&self) -> bool {
+        self.setting(50)
     }
 
     pub(crate) fn change_region_log_enabled(&self, kind: u8) -> bool {
