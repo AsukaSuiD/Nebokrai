@@ -3711,9 +3711,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
             current_owner
         } else {
             self.defence_side_faction_id = faction_id;
-            CityRegionContext::on_one_message_size_over(self.runtime, faction_id, union_id);
-            CityRegionContext::send_city_victory(
-                self.runtime,
+            self.game.send_city_victory(
                 self.war_number,
                 self.region.id,
                 faction_id,
@@ -45159,6 +45157,30 @@ impl CGame {
             targets.monster_ids,
             targets.spawn_indices,
             runtime,
+        );
+    }
+
+    /// Публикует точный server-channel кадр победы городской faction.
+    pub(crate) fn send_city_victory(
+        &mut self,
+        war_number: i32,
+        region_id: i32,
+        faction_id: i32,
+        union_id: i32,
+    ) {
+        let mut message = CMessage::new(0x0006_0138);
+        message.add_long(war_number);
+        message.add_long(region_id);
+        message.add_long(faction_id);
+        message.add_long(union_id);
+        let delivery = message.send(self, false);
+        tracing::trace!(
+            war_number,
+            region_id,
+            faction_id,
+            union_id,
+            ?delivery,
+            "отправлен результат победы в городской войне"
         );
     }
 
