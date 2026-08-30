@@ -4184,20 +4184,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Разрешает state ground goods и прочих external shape owners, которых
-    /// нет в player/monster/NPC Rust storage.
-    fn external_region_shape_change_state(
-        &mut self,
-        game: &mut CGame,
-        region: &mut CServerRegion,
-        identity: ShapeIdentity,
-    ) -> Option<i32>;
-    fn reset_external_region_shape_change_state(
-        &mut self,
-        game: &mut CGame,
-        region: &mut CServerRegion,
-        identity: ShapeIdentity,
-    );
     /// Virtual shape `AI` вызывается только для state `CS_NONE`; новое state
     /// исходник увидит на следующем region tick.
     fn run_region_active_shape_ai(
@@ -4206,12 +4192,6 @@ pub(crate) trait GameMainLoopRuntime:
         region: &mut CServerRegion,
         identity: ShapeIdentity,
     );
-    fn remove_external_region_shape(
-        &mut self,
-        game: &mut CGame,
-        region: &mut CServerRegion,
-        identity: ShapeIdentity,
-    ) -> Option<Result<bool, RegionMembershipBlock>>;
 }
 
 struct GameAreaAiContext<'a, Runtime> {
@@ -43489,11 +43469,10 @@ impl CGame {
         true
     }
 
-    fn region_shape_change_state<Runtime: GameMainLoopRuntime>(
+    fn region_shape_change_state(
         &mut self,
         region: &mut CServerRegion,
         identity: ShapeIdentity,
-        runtime: &mut Runtime,
     ) -> Option<i32> {
         match identity.object_type {
             PLAYER_TYPE => self
@@ -43502,17 +43481,18 @@ impl CGame {
             MONSTER_TYPE | NPC_TYPE | GOODS_TYPE | SUMMON_SHAPE_TYPE => {
                 region.owned_shape_change_state(identity)
             }
-            _ => runtime.external_region_shape_change_state(self, region, identity),
+            // В region registry входят только пять canonical категорий выше.
+            // Неизвестный тип не имеет владельца, поэтому его membership stale.
+            _ => None,
         }
     }
 
-    fn reset_region_shape_change_state<Runtime: GameMainLoopRuntime>(
+    fn reset_region_shape_change_state(
         &mut self,
         region: &mut CServerRegion,
         identity: ShapeIdentity,
-        runtime: &mut Runtime,
     ) {
-        let reset = match identity.object_type {
+        match identity.object_type {
             PLAYER_TYPE => self.find_player_mut(identity.id).is_some_and(|player| {
                 player
                     .movement_shape_mut()
@@ -43524,9 +43504,6 @@ impl CGame {
             }
             _ => false,
         };
-        if !reset {
-            runtime.reset_external_region_shape_change_state(self, region, identity);
-        }
     }
 
     fn run_region_npc_ai(
@@ -43654,7 +43631,7 @@ impl CGame {
                 );
             }
             for identity in region.active_shape_candidates(area_index) {
-                let Some(change_state) = self.region_shape_change_state(region, identity, runtime)
+                let Some(change_state) = self.region_shape_change_state(region, identity)
                 else {
                     region.forget_unresolved_active_shape(area_index, identity);
                     stale_memberships = stale_memberships.wrapping_add(1);
@@ -43705,7 +43682,7 @@ impl CGame {
                     }
                 };
                 if reset {
-                    self.reset_region_shape_change_state(region, identity, runtime);
+                    self.reset_region_shape_change_state(region, identity);
                 }
             }
         }
@@ -44675,7 +44652,10 @@ impl CGame {
                         }
                         Some(result)
                     }
-                    _ => runtime.remove_external_region_shape(self, owner.base_mut(), identity),
+                    // Ни один иной shape type не может иметь canonical owner в
+                    // текущем region registry; stale запись остаётся для
+                    // диагностики и не подменяется успешным удалением.
+                    _ => None,
                 };
                 removals = removals.wrapping_add(1);
                 tracing::trace!(
