@@ -17,8 +17,9 @@
 //! switch-vector `+0x88` (`_Myfirst +0x8C`). Constructor ставит object type
 //! `200`, region/resource/size и notify timestamps в `0`, scale в `1.0`, но не
 //! инициализирует country/notify; достигнутый Rust prefix хранит их как
-//! `Option`, а полный constructor остаётся RAW вместе с недостигнутой base
-//! child-tree. `New` сначала
+//! `Option`. `with_constructor_defaults` вместе с `Default` выражает весь
+//! достигнутый constructor `0x000F0D90`; `Vec` и автоматический `Drop`
+//! сохраняют destructor `0x000F0750` без ручной STL/SEH механики. `New` сначала
 //! освобождает старые cells/switches, затем создаёт zero-filled block и
 //! возвращает `1`; ошибочные ранние `return` raw-декомпилята опровергнуты
 //! последовательным EXE control flow `0x004F06C0..0x004F0742`.
@@ -51,8 +52,9 @@
 //! границей самостоятельной death/PK механики. Отдельные тела STL,
 //! `Catch/Unwind`, STL vector internals и deleting-thunks сняты общей
 //! технической классификацией после переноса их ownership/codec effects;
-//! посторонний domain destructor `CPlayerList::tagPropertiesUpgrade` не
-//! затрагивался.
+//! Посторонний domain destructor `CPlayerList::tagPropertiesUpgrade`, который
+//! дизассемблер приписал этому translation unit, не является частью `CRegion`
+//! и остаётся у своего недостигнутого owner-а.
 //! Random-position сохраняет нормализацию/расширение прямоугольника, ровно
 //! 1000 random-попыток, затем x-major linear scan и финальную random-позицию с
 //! `false`, когда проходимой клетки нет во всём регионе. Исторический RNG
@@ -692,7 +694,9 @@ fn read_region_i32(
     field: &'static str,
 ) -> Result<i32, RegionDecodeError> {
     let mut reader = region_reader(source, *cursor, 4, field)?;
-    let value = reader.read_i32().map_err(|block| region_read_error(field, block))?;
+    let value = reader
+        .read_i32()
+        .map_err(|block| region_read_error(field, block))?;
     *cursor = reader.position();
     Ok(value)
 }
@@ -703,7 +707,9 @@ fn read_region_u32(
     field: &'static str,
 ) -> Result<u32, RegionDecodeError> {
     let mut reader = region_reader(source, *cursor, 4, field)?;
-    let value = reader.read_u32().map_err(|block| region_read_error(field, block))?;
+    let value = reader
+        .read_u32()
+        .map_err(|block| region_read_error(field, block))?;
     *cursor = reader.position();
     Ok(value)
 }
@@ -714,7 +720,9 @@ fn read_region_u8(
     field: &'static str,
 ) -> Result<u8, RegionDecodeError> {
     let mut reader = region_reader(source, *cursor, 1, field)?;
-    let value = reader.read_u8().map_err(|block| region_read_error(field, block))?;
+    let value = reader
+        .read_u8()
+        .map_err(|block| region_read_error(field, block))?;
     *cursor = reader.position();
     Ok(value)
 }
@@ -845,35 +853,14 @@ fn region_read_error(
 
 // IMPLEMENTED: `CRegion::New` материализован выше; покрытый raw-блок удалён.
 
-// ============================================================================
-// FUNCTION: CRegion::~CRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\region.cpp:24
-// RVA: 0x000F0750
-// ADDRESS: 004f0750
-// PROTOTYPE: void __thiscall ~CRegion(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `CRegion::~CRegion` RVA `0x000F0750` покрыт автоматическим `Drop`: filename,
+// cells и switches освобождаются их стандартными владельцами, затем base-field.
 
 // IMPLEMENTED: `CRegion::Save` материализован выше; покрытый raw-блок удалён.
 
-// ============================================================================
-// FUNCTION: CRegion::CRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\region.cpp:11
-// RVA: 0x000F0D90
-// ADDRESS: 004f0d90
-// PROTOTYPE: undefined __thiscall CRegion(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `CRegion::CRegion` RVA `0x000F0D90` материализован выше как
+// `with_constructor_defaults`; неинициализированные country/notify сохранены
+// явными `Option`, а все достигнутые нули, type `200` и scale `1.0` точны.
 
 // IMPLEMENTED: `CRegion::Load` материализован выше; покрытый raw-блок удалён.
 
