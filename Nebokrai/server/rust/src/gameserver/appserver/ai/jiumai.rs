@@ -109,6 +109,7 @@ pub(crate) fn ensure_jiumai_twin<Runtime: GameMainLoopRuntime>(
                 u32::MAX,
                 area_width,
                 area_height,
+                game.skill_factory(),
                 runtime,
                 |runtime| runtime.now_milliseconds(),
             )

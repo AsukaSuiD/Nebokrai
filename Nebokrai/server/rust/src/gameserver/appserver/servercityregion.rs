@@ -65,6 +65,7 @@ use super::region::{
     RegionSecurity,
 };
 use super::serverregion::{ServerRegionDecodeError, ServerReturnPlayer, ServerReturnSetupBlock};
+use super::skills::skillfactory::CSkillFactory;
 use super::serverwarregion::{
     CServerWarRegion, ContendState, RegionDecodeInputBlock, WarContendContext, WarRegionContext,
     WarRegionDecodeContext, WarRegionDecodeError, read_region_array,
@@ -270,11 +271,12 @@ impl CServerCityRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, CityRegionDecodeError<ServerRegionDecodeError>> {
         let _ = self
             .war
-            .decord_from_byte_array(source, cursor, include_child, context)
+            .decord_from_byte_array(source, cursor, include_child, skill_factory, context)
             .map_err(CityRegionDecodeError::War)?;
 
         let defence = read_region_array::<0x20>(source, cursor, "m_DefenceSideRS")

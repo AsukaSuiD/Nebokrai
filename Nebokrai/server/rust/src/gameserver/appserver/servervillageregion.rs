@@ -30,6 +30,7 @@
 
 use super::organizingsystem::villagewarsys::CVillageWarSys;
 use super::serverregion::ServerRegionDecodeError;
+use super::skills::skillfactory::CSkillFactory;
 use super::serverwarregion::{
     CServerWarRegion, ContendState, WarContendContext, WarRegionContext, WarRegionDecodeContext,
     WarRegionDecodeError,
@@ -76,11 +77,12 @@ impl CServerVillageRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>> {
         let _ = self
             .war
-            .decord_from_byte_array(source, cursor, include_child, context)?;
+            .decord_from_byte_array(source, cursor, include_child, skill_factory, context)?;
         Ok(true)
     }
 

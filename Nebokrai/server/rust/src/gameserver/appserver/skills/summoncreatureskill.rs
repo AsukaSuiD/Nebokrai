@@ -173,7 +173,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
             let mut tile_y = 0;
             if let Ok(position) = owner.base_mut().region.get_random_pos_in_range(source_x.wrapping_sub(4), source_y.wrapping_sub(4), 8, 8, runtime) && position.found { tile_x = position.x; tile_y = position.y; }
             if let Some(property) = property.as_ref() {
-                let _ = owner.base_mut().add_summoned_creature(property, master, tile_x, tile_y, -1, lifetime_ms, area_width, area_height, runtime, |runtime| runtime.now_milliseconds());
+                let _ = owner.base_mut().add_summoned_creature(property, master, tile_x, tile_y, -1, lifetime_ms, area_width, area_height, game.skill_factory(), runtime, |runtime| runtime.now_milliseconds());
             }
         }
         game.restore_region_owner(owner);
@@ -326,7 +326,7 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
             if let Some(property) = property {
                 let _ = region.add_summoned_creature(
                     &property, master, tile_x, tile_y, -1, lifetime_ms,
-                    area_width, area_height, runtime, |runtime| runtime.now_milliseconds(),
+                    area_width, area_height, game.skill_factory(), runtime, |runtime| runtime.now_milliseconds(),
                 );
             }
         }

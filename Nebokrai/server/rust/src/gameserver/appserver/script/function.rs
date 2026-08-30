@@ -5494,6 +5494,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     runtime.now_milliseconds(),
                     area_width,
                     area_height,
+                    game.skill_factory(),
                     runtime,
                 );
                 let Ok(monster_id) = spawn else {

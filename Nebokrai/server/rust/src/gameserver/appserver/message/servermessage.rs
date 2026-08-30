@@ -864,6 +864,7 @@ where
                             now_ms(script_context),
                             area_width,
                             area_height,
+                            game.skill_factory(),
                             script_context,
                         ) {
                             Ok(monster_id) => {
@@ -2532,35 +2533,65 @@ where
     let owner = match subtype {
         0 => {
             let mut region = CServerRegion::default();
-            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+            if let Err(error) = region.decord_from_byte_array(
+                source,
+                cursor,
+                true,
+                game.skill_factory(),
+                context,
+            ) {
                 return Some(Err(InitialRegionStartupError::Base(error)));
             }
             ServerRegionOwner::Base(region)
         }
         1 => {
             let mut region = CServerVillageRegion::default();
-            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+            if let Err(error) = region.decord_from_byte_array(
+                source,
+                cursor,
+                true,
+                game.skill_factory(),
+                context,
+            ) {
                 return Some(Err(InitialRegionStartupError::War(error)));
             }
             ServerRegionOwner::Village(region)
         }
         2 => {
             let mut region = CServerCityRegion::default();
-            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+            if let Err(error) = region.decord_from_byte_array(
+                source,
+                cursor,
+                true,
+                game.skill_factory(),
+                context,
+            ) {
                 return Some(Err(InitialRegionStartupError::City(error)));
             }
             ServerRegionOwner::City(region)
         }
         3 => {
             let mut region = CServerCountryRegion::default();
-            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+            if let Err(error) = region.decord_from_byte_array(
+                source,
+                cursor,
+                true,
+                game.skill_factory(),
+                context,
+            ) {
                 return Some(Err(InitialRegionStartupError::Country(error)));
             }
             ServerRegionOwner::Country(region)
         }
         4 => {
             let mut region = ServerNationRegion::default();
-            if let Err(error) = region.decord_from_byte_array(source, cursor, true, context) {
+            if let Err(error) = region.decord_from_byte_array(
+                source,
+                cursor,
+                true,
+                game.skill_factory(),
+                context,
+            ) {
                 return Some(Err(InitialRegionStartupError::War(error)));
             }
             ServerRegionOwner::Nation(region)

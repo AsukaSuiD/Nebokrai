@@ -241,7 +241,7 @@ fn summon<Runtime: GameMainLoopRuntime>(
     let Some(mut owner) = game.take_region_owner(region_id) else { return };
     let _ = owner.base_mut().add_summoned_creature(
         &property, master, x, y, direction, lifetime, area_width, area_height,
-        runtime, |runtime| runtime.now_milliseconds(),
+        game.skill_factory(), runtime, |runtime| runtime.now_milliseconds(),
     );
     game.restore_region_owner(owner);
 }

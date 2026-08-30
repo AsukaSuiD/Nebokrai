@@ -589,10 +589,6 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
     /// Возвращает snapshot текущего reloadable `CMonsterList` по original name.
     fn monster_property(&mut self, origin_name: &[u8]) -> Option<MonsterProperties>;
 
-    /// Возвращает read-only snapshot уже декодированного process-level
-    /// `CSkillFactory`. Копия нужна только для раздельного заимствования RNG.
-    fn monster_skill_factory_snapshot(&self) -> CSkillFactory;
-
     /// Virtual `+0x9C(monsterID)` до speed/direction/AddObject для AI 10/11.
     fn initialize_guard_monster(&mut self, monster_id: i32);
 
@@ -1020,13 +1016,14 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, ServerRegionMonsterRectBlock> {
         let period = (1_000i32 / tick_interval_ms) as u32;
         if ai_tick % period != 0 {
             return Ok(false);
         }
-        self.refresh_monster_groups(now_ms, area_width, area_height, context)?;
+        self.refresh_monster_groups(now_ms, area_width, area_height, skill_factory, context)?;
         Ok(true)
     }
 
@@ -1037,6 +1034,7 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
         let move_existing = self
@@ -1076,6 +1074,7 @@ impl CServerRegion {
                 now_ms,
                 area_width,
                 area_height,
+                skill_factory,
                 context,
             )?;
         }
@@ -1097,6 +1096,7 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, ServerRegionMonsterRectBlock> {
         let Some(setup_index) = self
@@ -1120,6 +1120,7 @@ impl CServerRegion {
                 now_ms,
                 area_width,
                 area_height,
+                skill_factory,
                 context,
             )?;
         }
@@ -1135,6 +1136,7 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
         if remember_setup {
@@ -1197,6 +1199,7 @@ impl CServerRegion {
                     now_ms,
                     area_width,
                     area_height,
+                    skill_factory,
                     context,
                 )
                 .map_err(ServerRegionMonsterRectBlock::Membership)?;
@@ -1249,13 +1252,13 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<i32, RegionMembershipBlock> {
         let id = self.next_monster_id.take();
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
-        let skill_factory = context.monster_skill_factory_snapshot();
-        monster.initialize_skills(property, &skill_factory, &mut |bound| {
+        monster.initialize_skills(property, skill_factory, &mut |bound| {
             context.random_below(bound)
         });
         monster.initialize_ai(property, now_ms);
@@ -1328,14 +1331,14 @@ impl CServerRegion {
         lifetime_ms: u32,
         area_width: i32,
         area_height: i32,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
         mut now_ms: impl FnMut(&mut Context) -> u32,
     ) -> Result<i32, RegionMembershipBlock> {
         let id = self.next_monster_id.take();
         let mut monster = CBaseObject::create_monster(id);
         monster.bind_spawn_property(property);
-        let skill_factory = context.monster_skill_factory_snapshot();
-        monster.initialize_skills(property, &skill_factory, &mut |bound| {
+        monster.initialize_skills(property, skill_factory, &mut |bound| {
             context.random_below(bound)
         });
         let special_ai_started_at_ms = if property.ai == 0x68 {
@@ -2869,12 +2872,14 @@ impl CServerRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, ServerRegionDecodeError> {
         self.decord_from_byte_array_with_npc_entry(
             source,
             cursor,
             include_child,
+            skill_factory,
             context,
             |_, _, _| {},
         )
@@ -2887,6 +2892,7 @@ impl CServerRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        skill_factory: &CSkillFactory,
         context: &mut Context,
         mut after_npc_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
     ) -> Result<bool, ServerRegionDecodeError> {
@@ -3027,6 +3033,7 @@ impl CServerRegion {
                 now_ms,
                 area_width,
                 area_height,
+                skill_factory,
                 context,
             )
             .map_err(ServerRegionDecodeError::Monster)?;

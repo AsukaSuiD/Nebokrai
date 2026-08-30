@@ -120,8 +120,9 @@
 //! `CHonorRanks` хранит четыре rank-type × четыре country snapshots; поля
 //! полного игрока для total-reset остаются отдельной assembly-границей.
 //! `CSkillFactory` принадлежит `CGame`: startup selector `0x06` заменяет весь
-//! composite-key registry, а будущие skill/state owners получают те же runtime
-//! lookup-ы без process-global raw pointers.
+//! composite-key registry; startup region, respawn и summon передают тому же
+//! `CMonster::InitSkill` прямую read-only ссылку, не заставляя process runtime
+//! владеть второй фабрикой.
 //! `CGoodsFactory` аналогично хранит startup selector `0x00`, включая оба
 //! byte-name index-а для последующего container/goods lifecycle.
 //! Goods, monster и skill registries `0x00/0x02/0x06` теперь публикуются из
@@ -4130,8 +4131,8 @@ struct GameMainLoopState {
 /// мере их материализации. Обе очереди навыков уже целиком исполняются своими
 /// владельцами, а неизвестный ID или неподдерживаемая перегрузка синхронно
 /// отклоняются диспетчером. Маршрутизацию сообщений уже исполняет `CGame`, а
-/// декодер региона получает тот же актуальный контекст фабрик без отдельного
-/// теневого состояния.
+/// region monster lifecycle получает каноническую `CSkillFactory` отдельным
+/// read-only аргументом, не через process context.
 pub(crate) trait GameExitRuntime {
     fn exit_requested(&self) -> bool;
 }
@@ -12989,6 +12990,7 @@ impl CGame {
             context.now_milliseconds(),
             area_width,
             area_height,
+            &self.skill_factory,
             context,
         ) {
             Ok(monster_id) => tracing::debug!(
@@ -23457,10 +23459,12 @@ impl CGame {
     where
         Context: WarRegionDecodeContext + GodsBattleNpcContendContext,
     {
+        let skill_factory = self.skill_factory.clone();
         region.decord_from_byte_array_with_npc_entry(
             source,
             cursor,
             include_child,
+            &skill_factory,
             context,
             |base, faction_npcs, npc_id, context| {
                 self.finish_gods_battle_npc_entry(
@@ -23682,6 +23686,7 @@ impl CGame {
                 context.now_milliseconds(),
                 area_width,
                 area_height,
+                &self.skill_factory,
                 context,
             );
             if let Err(block) = spawn {
@@ -28987,6 +28992,7 @@ impl CGame {
                 context.now_milliseconds(),
                 area_width,
                 area_height,
+                &self.skill_factory,
                 context,
             ) {
                 Ok(monster_id) => monster_id,
@@ -29152,6 +29158,7 @@ impl CGame {
                     context.now_milliseconds(),
                     self.area_width,
                     self.area_height,
+                    &self.skill_factory,
                     context,
                 )
                 .ok()
@@ -29320,6 +29327,7 @@ impl CGame {
                 context.now_milliseconds(),
                 self.area_width,
                 self.area_height,
+                &self.skill_factory,
                 context,
             )
             .ok();
@@ -40054,6 +40062,7 @@ impl CGame {
                 now_ms,
                 self.area_width,
                 self.area_height,
+                &self.skill_factory,
                 runtime,
             );
         }
@@ -44247,6 +44256,7 @@ impl CGame {
                 now_ms,
                 self.globe_setup.area_width(),
                 self.globe_setup.area_height(),
+                &self.skill_factory,
                 runtime,
             )?;
         }
@@ -45637,6 +45647,7 @@ impl CGame {
                 now_ms,
                 area_width,
                 area_height,
+                &self.skill_factory,
                 runtime,
             );
             self.restore_region_owner(owner);
