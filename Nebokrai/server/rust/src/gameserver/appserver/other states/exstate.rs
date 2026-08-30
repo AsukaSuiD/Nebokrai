@@ -5,6 +5,9 @@
 //! `CMoveShape::Add/Del/GetExState*`. Rust enum заменяет два raw `CState*`, но
 //! сохраняет state ID `0x32/0x33`, byte-layout `40/52`, wrapping DWORD clock,
 //! replacement по type/level, property overlay и periodic item consumption.
+//! Client-time различает два exact vtable-owner-а: original `CExState`
+//! разделяет `CHBYState::GetRemainedTime` и возвращает `1` после истечения
+//! ненулевого срока, а `CExStateNew` возвращает `0`.
 //! Сырой псевдокод ниже остаётся локальным provenance реализованного owner-а.
 //! Little-endian поля читает и пишет общий legacy codec поверх `bytes`.
 
@@ -195,11 +198,25 @@ impl ExtendedState {
     }
 
     pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
-        if self.keep_time_ms == 0 {
-            return 0;
+        let deadline = self.started_ms.wrapping_add(self.keep_time_ms);
+        match self.kind {
+            ExtendedStateKind::Original => {
+                if self.keep_time_ms != 0 && deadline <= now_ms {
+                    1
+                } else if deadline <= now_ms {
+                    0
+                } else {
+                    deadline.wrapping_sub(now_ms)
+                }
+            }
+            ExtendedStateKind::New => {
+                if self.keep_time_ms == 0 || deadline <= now_ms {
+                    0
+                } else {
+                    deadline.wrapping_sub(now_ms)
+                }
+            }
         }
-        self.keep_time_ms
-            .saturating_sub(now_ms.wrapping_sub(self.started_ms))
     }
 
     pub(crate) fn item_due(&self, now_ms: u32) -> bool {

@@ -208,14 +208,13 @@ impl ChangeBodyState {
     }
 
     pub(crate) fn remaining_time_ms(&self, now_ms: u32) -> u32 {
-        if self.keep_time_ms == 0 {
-            return 0;
-        }
-        let elapsed = now_ms.wrapping_sub(self.started_ms);
-        if self.keep_time_ms <= elapsed {
+        let deadline = self.started_ms.wrapping_add(self.keep_time_ms);
+        if self.keep_time_ms != 0 && deadline <= now_ms {
             1
+        } else if deadline <= now_ms {
+            0
         } else {
-            self.keep_time_ms.wrapping_sub(elapsed)
+            deadline.wrapping_sub(now_ms)
         }
     }
 
