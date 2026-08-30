@@ -42,7 +42,10 @@
 //! победителя нет, сохраняется действующий owner faction/union. Guard refresh
 //! возвращает ordered monster/spawn snapshot, который `CGame/CMonster`
 //! исполняют через канонические region и wire owners. Message, localized
-//! war-log, gate и player-transition эффекты остаются точным context-контрактом.
+//! `OnClearOtherPlayer` возвращает ordered player snapshot владельцу `CGame`,
+//! который применяет точный faction-фильтр и обычную смену региона до
+//! принадлежащего city-owner-у прохода ворот. Message, localized war-log и
+//! остальные player-transition эффекты остаются точным context-контрактом.
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -155,8 +158,6 @@ pub(crate) enum CityEntryError {
 pub(crate) trait CityRegionContext: WarRegionContext + CityGateRuntimeContext {
     /// Пишет localized template в канал `war` с аргументами `(war, region name)`.
     fn write_war_log(&mut self, string_id: &'static str, war_number: i32, region_name: &str);
-
-    fn kick_out_all_players_except_owner(&mut self, region_id: i32, owner_faction_id: i32);
 
     fn on_one_message_size_over(&mut self, faction_id: i32, union_id: i32);
 
@@ -449,15 +450,10 @@ impl CServerCityRegion {
         context.write_war_log("GS0225", war_number, &self.war.base.name);
     }
 
-    pub(crate) fn on_clear_other_player<Context: CityRegionContext>(
+    pub(crate) fn refresh_and_close_gates<Context: CityGateRuntimeContext>(
         &mut self,
-        _war_number: i32,
         context: &mut Context,
     ) {
-        context.kick_out_all_players_except_owner(
-            self.war.base.id,
-            self.war.base.param.owned_faction_id,
-        );
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
             let _ = self.operator_city_gate(logical_id, OC_REFRESH, context);
@@ -1018,7 +1014,8 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // RVA: 0x001CF730
 //
-// IMPLEMENTED выше: kick boundary и ordered gate 2/1/update; технические STL/SEH детали удалены.
+// IMPLEMENTED выше через `CGame`: faction-filtered return и ordered gate
+// 2/1/update; технические STL/SEH детали удалены.
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::RefreshGuard

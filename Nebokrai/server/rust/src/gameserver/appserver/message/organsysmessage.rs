@@ -20,6 +20,8 @@
 //! не возвращаются деревьями отчётов.
 //! `0x7FE25` замыкает city guard snapshot через реальные `CGame/CMonster` и
 //! region spawn owners без прежних monster/spawn callbacks runtime-а.
+//! `0x7FE24` аналогично передаёт полный city player/gate проход `CGame`, не
+//! оставляя возврат игроков внешнему callback-у.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -44,8 +46,8 @@ use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameContainerMessageRuntime, GameWarRegionHandle,
-    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
-    format_legacy_text_fields,
+    RealmAppellationScriptContext, ScriptRegionChangeContext, ServerRegionOwner,
+    colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
@@ -61,6 +63,7 @@ pub(crate) trait GameOrganizingWarRuntime:
     + GameContainerMessageRuntime
     + ServerRegionMonsterContext
     + GameClockContext
+    + RealmAppellationScriptContext
 {
 }
 
@@ -1967,9 +1970,8 @@ impl<Runtime: GameOrganizingWarRuntime> AttackCityPhaseContext
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        if let Some(ServerRegionOwner::City(region)) = self.game.find_region_mut(region_id) {
-            region.on_clear_other_player(war_number, self.runtime);
-        }
+        self.game
+            .clear_city_other_players(region_id, war_number, self.runtime);
     }
 
     fn on_refresh_region(&mut self, region: Self::Region, war_number: i32) {

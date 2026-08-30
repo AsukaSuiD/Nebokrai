@@ -45162,6 +45162,51 @@ impl CGame {
         );
     }
 
+    /// Полный city `OnClearOtherPlayer`: сначала возвращает всех игроков без
+    /// faction либо не из владеющей faction, затем обновляет, закрывает и
+    /// публикует ворота в исходном map-order.
+    pub(crate) fn clear_city_other_players<Runtime>(
+        &mut self,
+        region_id: i32,
+        _war_number: i32,
+        runtime: &mut Runtime,
+    ) where
+        Runtime: CityRegionContext
+            + RegionRandomContext
+            + ScriptRegionChangeContext
+            + RealmAppellationScriptContext,
+    {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        let ServerRegionOwner::City(region) = &owner else {
+            self.restore_region_owner(owner);
+            return;
+        };
+        let owner_faction_id = region.war.base.param.owned_faction_id;
+        let player_ids = region.war.base.registered_player_ids();
+        self.restore_region_owner(owner);
+
+        for player_id in player_ids {
+            let should_return = self.find_player(player_id).is_some_and(|player| {
+                player.faction_id() == 0 || player.faction_id() != owner_faction_id
+            });
+            if should_return {
+                self.return_region_player(region_id, player_id, runtime);
+            }
+        }
+
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        let ServerRegionOwner::City(region) = &mut owner else {
+            self.restore_region_owner(owner);
+            return;
+        };
+        region.refresh_and_close_gates(runtime);
+        self.restore_region_owner(owner);
+    }
+
     fn refresh_region_guards<Runtime>(
         &mut self,
         region_id: i32,
