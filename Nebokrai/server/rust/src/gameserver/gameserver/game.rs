@@ -2196,10 +2196,6 @@ pub(crate) struct GoodsDestroyAuditLog {
     pub(crate) tile_y: Result<i32, ShapeCoordinateBlock>,
 }
 
-pub(crate) trait SynthesisContext {}
-
-impl<T> SynthesisContext for T {}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SynthesisOpenOutcome {
     UnsafeRegion = 1,
@@ -25816,12 +25812,11 @@ impl CGame {
         })
     }
 
-    pub(crate) fn compose_synthesis<Context: SynthesisContext>(
+    pub(crate) fn compose_synthesis(
         &mut self,
         player_id: i32,
         synthesis_index: u32,
         amount: u32,
-        _context: &mut Context,
     ) -> Option<()> {
         let mut result_amount = amount;
         let Some(recipe) = self

@@ -32,7 +32,7 @@ use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongOperation;
 use crate::gameserver::gameserver::game::{
     CGame, CiQingComposeContext, CiQingOtherPersonTarget, EquipmentComposeContext,
-    EquipmentUpgradeContext, GameContainerMessageRuntime, SynthesisContext,
+    EquipmentUpgradeContext, GameContainerMessageRuntime,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -86,7 +86,6 @@ pub(crate) trait GameGoodsMessageRuntime:
     + EquipmentComposeContext
     + EquipmentUpgradeContext
     + GameContainerMessageRuntime
-    + SynthesisContext
 {
 }
 
@@ -411,7 +410,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value as u32,
                 Err(error) => return Some(Err(error)),
             };
-            let Some(()) = game.compose_synthesis(player_id, synthesis_index, amount, runtime)
+            let Some(()) = game.compose_synthesis(player_id, synthesis_index, amount)
             else {
                 return Some(Ok(()));
             };
