@@ -16598,6 +16598,43 @@ impl CGame {
         let _ = message.send_to_player(self.net_server(), player_id);
     }
 
+    /// Exact client quest terminal actions `0x90127/0x90128`: сценарий
+    /// разрешается только для существующего задания в состоянии `0` и
+    /// получает обычный player/region script context.
+    pub(crate) fn queue_player_quest_complete_script(
+        &mut self,
+        player_id: i32,
+        quest_id: u16,
+    ) -> Option<i32> {
+        self.queue_player_quest_terminal_script(player_id, quest_id, true)
+    }
+
+    pub(crate) fn queue_player_quest_abandon_script(
+        &mut self,
+        player_id: i32,
+        quest_id: u16,
+    ) -> Option<i32> {
+        self.queue_player_quest_terminal_script(player_id, quest_id, false)
+    }
+
+    fn queue_player_quest_terminal_script(
+        &mut self,
+        player_id: i32,
+        quest_id: u16,
+        complete: bool,
+    ) -> Option<i32> {
+        if self.find_player(player_id)?.quest_state(quest_id) != 0 {
+            return None;
+        }
+        let path = if complete {
+            self.quest_system.complete_script_by_id(quest_id)
+        } else {
+            self.quest_system.disband_script_by_id(quest_id)
+        }?
+        .to_vec();
+        self.queue_player_script(player_id, &path)
+    }
+
     pub(crate) fn update_script_player_quest_position(
         &self,
         player_id: i32,
