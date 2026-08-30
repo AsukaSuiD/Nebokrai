@@ -19,7 +19,6 @@ impl CGame {
         source_player_id: i32,
         target: ShapeIdentity,
         state: BossBlueQuakeState,
-        now_ms: u32,
         destination_x: i32,
         destination_y: i32,
         duration_ms: u32,
@@ -28,7 +27,9 @@ impl CGame {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        replace_quake_state(self, owner.base_mut(), target, state, now_ms);
+        replace_quake_state(self, owner.base_mut(), target, state, || {
+            runtime.now_milliseconds()
+        });
         self.damage_player_weapon(source_player_id, runtime);
         let _ = self.force_move_owned_shape(
             owner.base_mut(),

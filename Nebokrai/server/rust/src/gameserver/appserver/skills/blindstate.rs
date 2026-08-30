@@ -208,6 +208,7 @@
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -255,13 +256,8 @@ impl BlindState {
 
     /// Exact `GetRemainedTime`: deadline-check и положительный остаток читают
     /// wrapping clock независимо.
-    pub(crate) fn client_state_time(self, mut now_milliseconds: impl FnMut() -> u32) -> u32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_milliseconds() {
-            0
-        } else {
-            deadline.wrapping_sub(now_milliseconds())
-        }
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
     }
 }
 

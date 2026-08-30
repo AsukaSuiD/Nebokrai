@@ -18,6 +18,22 @@ pub(crate) const fn default_additional_data() -> u32 {
     0
 }
 
+/// Exact общее тело `CBlindState::GetRemainedTime` по адресу `0x005F2CD0`.
+/// Проверка deadline и вычисление положительного остатка независимо читают
+/// wrapping clock; второе чтение не выполняется на уже истёкшем состоянии.
+pub(crate) fn timed_client_state_time(
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
+) -> u32 {
+    let deadline = started_at_ms.wrapping_add(keep_time_ms);
+    if deadline <= now_milliseconds() {
+        0
+    } else {
+        deadline.wrapping_sub(now_milliseconds())
+    }
+}
+
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E

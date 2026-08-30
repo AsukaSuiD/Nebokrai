@@ -5,9 +5,12 @@
 //! `CanonicalStateStorage`: замена сначала завершает прежнюю блокировку, затем
 //! запрещает движение и бой до строгой границы срока. Пакеты начала и завершения
 //! сохраняют `0xBFE03/04`; истечение для игрока и монстра, а также снятие
-//! очищением проходят через того же канонического владельца.
+//! очищением проходят через того же канонического владельца. Vtable exact EXE
+//! направляет `GetRemainedTime` на общее тело `CBlindState` по `0x005F2CD0`:
+//! положительный остаток использует отдельное второе чтение системных часов.
 
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -30,9 +33,8 @@ impl BossBlueQuakeState {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 }
 
@@ -45,14 +47,14 @@ pub(crate) fn send_boss_blue_quake_state_visual(
     tile_y: i32,
     state: BossBlueQuakeState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
@@ -67,7 +69,7 @@ pub(crate) fn expire_player_boss_blue_quake_state(
         let state = player.take_expired_boss_blue_quake_state(now_ms)?;
         Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, state))
     }) else { return false };
-    send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms);
+    send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_skill_fightable(true);
@@ -84,7 +86,7 @@ pub(crate) fn finish_player_boss_blue_quake_state_on_cure(
         let state = player.take_boss_blue_quake_state()?;
         Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, state))
     }) else { return false };
-    send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms);
+    send_boss_blue_quake_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_skill_fightable(true);
@@ -102,7 +104,7 @@ pub(crate) fn expire_monster_boss_blue_quake_state(
         let state = monster.move_shape_mut().take_expired_boss_blue_quake_state(now_ms)?;
         Some((monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?, state))
     }) else { return false };
-    send_boss_blue_quake_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
+    send_boss_blue_quake_state_visual(game, region.id, identity, tile_x, tile_y, state, false, || now_ms);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().set_moveable(true);
         monster.move_shape_mut().set_fightable(true);

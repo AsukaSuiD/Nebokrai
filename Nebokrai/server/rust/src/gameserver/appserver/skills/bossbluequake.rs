@@ -557,7 +557,6 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
             player_id,
             target,
             BossBlueQuakeState::new(state_now_ms, duration),
-            state_now_ms,
             destination_x,
             destination_y,
             move_speed.wrapping_mul(moved),
@@ -607,7 +606,7 @@ pub(crate) fn replace_quake_state(
     region: &mut CServerRegion,
     identity: ShapeIdentity,
     state: BossBlueQuakeState,
-    now_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) {
     let Some((tile_x, tile_y, previous)) = (if identity.object_type == PLAYER_TYPE {
         game.find_player_mut(identity.id).and_then(|target| {
@@ -625,7 +624,16 @@ pub(crate) fn replace_quake_state(
         })
     }) else { return };
     if let Some(previous) = previous {
-        send_boss_blue_quake_state_visual(game, region.id, identity, tile_x, tile_y, previous, false, now_ms);
+        send_boss_blue_quake_state_visual(
+            game,
+            region.id,
+            identity,
+            tile_x,
+            tile_y,
+            previous,
+            false,
+            || now_milliseconds(),
+        );
     }
     if identity.object_type == PLAYER_TYPE {
         if let Some(target) = game.find_player_mut(identity.id) {
@@ -648,7 +656,16 @@ pub(crate) fn replace_quake_state(
         target.move_shape_mut().set_moveable(false);
         target.move_shape_mut().set_fightable(false);
     }
-    send_boss_blue_quake_state_visual(game, region.id, identity, tile_x, tile_y, state, true, now_ms);
+    send_boss_blue_quake_state_visual(
+        game,
+        region.id,
+        identity,
+        tile_x,
+        tile_y,
+        state,
+        true,
+        now_milliseconds,
+    );
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет формулу, состояние и ForceMove одной цели")]
@@ -749,7 +766,13 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             (persist as f32 * properties.query_property(SKILL_USAGE_TIME_PERCENT) as f32 * 0.01)
                 .round_ties_even() as u32
         };
-        replace_quake_state(game, region, identity, BossBlueQuakeState::new(now_ms, duration), now_ms);
+        replace_quake_state(
+            game,
+            region,
+            identity,
+            BossBlueQuakeState::new(now_ms, duration),
+            || runtime.now_milliseconds(),
+        );
 
         let Ok(target_x) = target.shape.get_tile_x() else { return };
         let Ok(target_y) = target.shape.get_tile_y() else { return };
