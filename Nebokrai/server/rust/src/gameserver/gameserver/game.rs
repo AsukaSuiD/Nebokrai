@@ -5590,7 +5590,7 @@ impl CGame {
             send_callosity_state_begin(self, player_id, state);
         }
         if let Some(state) = pass.hearten_visual {
-            send_hearten_state_visual(self, player_id, state, true, game_tick_milliseconds());
+            send_hearten_state_visual(self, player_id, state, true, game_tick_milliseconds);
         }
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let Some(player) = players.get_mut(&player_id) else {

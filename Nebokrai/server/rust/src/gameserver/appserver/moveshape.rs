@@ -707,7 +707,7 @@ impl CMoveShape {
     pub(crate) fn serialized_ex_states(
         &self,
         now_ms: u32,
-        mut blind_now_milliseconds: impl FnMut() -> u32,
+        mut timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Vec<u8> {
         let mut payload = self.ex_states.to_vec();
         for state in &self.change_body_states {
@@ -736,7 +736,7 @@ impl CMoveShape {
                 write_u32(
                     &mut payload,
                     offset + 4,
-                    state.client_state_time(&mut blind_now_milliseconds),
+                    state.client_state_time(&mut timed_state_now_milliseconds),
                 );
             }
         }
@@ -744,7 +744,7 @@ impl CMoveShape {
             update_known_state_record(
                 &mut payload,
                 state.skill_id(),
-                &state.encoded(now_ms),
+                &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
         for state in &self.heal_states {

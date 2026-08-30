@@ -2629,7 +2629,7 @@ impl CPlayer {
         destination: &mut Vec<u8>,
         goods_factory: &CGoodsFactory,
         now_ms: u32,
-        blind_now_milliseconds: impl FnMut() -> u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
         one_pk_count_time_ms: u32,
         pets: &[PlayerUncreatedPet],
         carriage: &PlayerUncreatedCarriage,
@@ -2661,7 +2661,7 @@ impl CPlayer {
         }
         let ex_states = self
             .move_shape
-            .serialized_ex_states(now_ms, blind_now_milliseconds);
+            .serialized_ex_states(now_ms, timed_state_now_milliseconds);
         append_player_game_save_count(destination, "m_vExStates length", ex_states.len())?;
         destination.extend_from_slice(&ex_states);
         append_player_game_save_count(destination, "m_listFriend", self.friends.len())?;

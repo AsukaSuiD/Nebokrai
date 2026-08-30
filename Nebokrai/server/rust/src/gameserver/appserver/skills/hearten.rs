@@ -252,7 +252,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         ))
     });
     if let Some(state) = removed {
-        send_hearten_state_visual(game, target_id, state, false, 0);
+        send_hearten_state_visual(game, target_id, state, false, || 0);
     }
     let _ = game.publish_player_states(target_id);
     if let Some(state) = player_ai.hearten_mut() {

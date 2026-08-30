@@ -4,10 +4,12 @@
 //! максимальному HP через `u32`, затем ограничивает результат `i32::MAX`.
 //! Начальный визуальный пакет повторяется при каждом пересчёте свойств;
 //! завершение публикуется при замене или строгом истечении срока. DB-запись
-//! хранит остаток срока и знаковую прибавку максимального HP.
+//! хранит остаток срока и знаковую прибавку максимального HP. Vtable exact EXE
+//! направляет `GetRemainedTime` на общее тело `CBlindState` по `0x005F2CD0`.
 
 use super::hearten::HEARTEN_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -30,9 +32,8 @@ impl HeartenState {
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
     pub(crate) const fn apply(self, value: u32) -> u32 {
         let result = value.wrapping_add(self.max_hp_gain as u32);
@@ -55,11 +56,18 @@ impl HeartenState {
         Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?))
     }
 
-    pub(crate) fn encoded(self, now_ms: u32) -> [u8; HEARTEN_STATE_BYTES] {
+    pub(crate) fn encoded(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> [u8; HEARTEN_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
+    }
+
+    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; HEARTEN_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(HEARTEN_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(HEARTEN_SKILL_ID);
-        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_u32(remaining_time_ms);
         writer.write_i32(self.max_hp_gain);
         bytes
             .try_into()
@@ -67,7 +75,7 @@ impl HeartenState {
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; HEARTEN_STATE_BYTES] {
-        self.encoded(self.started_at_ms)
+        self.encoded_with_remaining(self.keep_time_ms)
     }
 
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
@@ -80,7 +88,7 @@ pub(crate) fn send_hearten_state_visual(
     player_id: i32,
     state: HeartenState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let Some(player) = game.find_player(player_id) else {
         return;
@@ -95,7 +103,7 @@ pub(crate) fn send_hearten_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
@@ -112,7 +120,7 @@ pub(crate) fn expire_player_hearten_state(
     else {
         return false;
     };
-    send_hearten_state_visual(game, player_id, state, false, now_ms);
+    send_hearten_state_visual(game, player_id, state, false, || now_ms);
     let _ = game.publish_player_states(player_id);
     true
 }
