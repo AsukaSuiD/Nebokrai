@@ -618,6 +618,19 @@ impl CServerCityRegion {
             .map(|gate| gate.name.as_slice())
     }
 
+    /// Exact virtual `AddGurdMonster`: повторный ID не меняет набор.
+    pub(crate) fn add_gurd_monster(&mut self, monster_id: i32) {
+        self.guard_monsters.insert(monster_id);
+    }
+
+    /// Exact virtual `AddGuardIndex`: первый порядок регистрации сохраняется,
+    /// повторный refresh index не добавляется второй раз.
+    pub(crate) fn add_guard_index(&mut self, refresh_index: i32) {
+        if !self.guard_indices.contains(&refresh_index) {
+            self.guard_indices.push(refresh_index);
+        }
+    }
+
     pub(crate) fn guard_refresh_targets(&self) -> CityGuardRefreshTargets {
         CityGuardRefreshTargets {
             monster_ids: self.guard_monsters.iter().copied().collect(),
@@ -1109,31 +1122,25 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::AddGurdMonster
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servercityregion.cpp:133
 // RVA: 0x001D0360
-// ADDRESS: 005d0360
-// PROTOTYPE: void __thiscall AddGurdMonster(long param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Реализовано выше: ordered set сохраняет уникальность monster ID;
+// технические STL tree lookup/insert детали удалены.
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::AddGuardIndex
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servercityregion.cpp:139
 // RVA: 0x001D0650
-// ADDRESS: 005d0650
-// PROTOTYPE: void __thiscall AddGuardIndex(long param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Реализовано выше: линейная unique-проверка и append сохраняют исходный
+// registration order; технические STL list детали удалены.
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::~CServerCityRegion
