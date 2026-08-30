@@ -11,7 +11,8 @@
 //!
 //! Сохранена неоднозначность кода `0x7FF15`: восьмибайтовый устаревший ответ
 //! распознаётся отдельно, а неопределённое чтение за концом исходного буфера не
-//! воспроизводится. Не реализованные коды этот диспетчер не интерпретирует.
+//! воспроизводится. Все country-селекторы материализованы; `0x7FF20/21`
+//! намеренно принадлежат соседнему reached owner-у `CGoodsWarMember`.
 
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
@@ -295,7 +296,6 @@ fn dispatch_country_quest_reset_message(game: &mut CGame, opcode: u32) {
         }
     }
 }
-
 fn dispatch_country_notice_message(
     message: &mut CMessage,
     game: &CGame,
@@ -1144,25 +1144,3 @@ impl<Context: CountryWarMessageContext> CountryWarVictoryContext
         self.0.set_country_war_result(country, result);
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\countrymessage.cpp
-
-// ============================================================================
-// FUNCTION: OnCountryMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\countrymessage.cpp:22
-// RVA: 0x000997C0
-// ADDRESS: 004997c0
-// PROTOTYPE: void __cdecl OnCountryMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
