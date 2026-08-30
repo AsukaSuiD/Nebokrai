@@ -3,8 +3,7 @@
 //! Источник: `GameServer/gameserver.exe` + `GameServer/GameServer.pdb`,
 //! исходный владелец `appserver/message/organsysmessage.cpp`. Реализованы
 //! жизненный цикл фракций, городские и деревенские войны, FourNation, задания,
-//! сценарии игрока, городские ворота и налоговые сеансы. Остальные функции
-//! сохраняются в `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
+//! сценарии игрока, городские ворота, налоговые сеансы и region-control.
 //!
 //! Обработчик сохраняет точный разбор полей, корреляцию идентификатора и пароля
 //! сеанса, порядок списания денег и предметов, мутации владельцев регионов и
@@ -2513,39 +2512,3 @@ impl<Runtime: GameOrganizingWarRuntime> VillageWarPhaseContext
         }
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp
-
-// ============================================================================
-// FUNCTION: OnOrgasysMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp:28
-// RVA: 0x000895A0
-// ADDRESS: 004895a0
-// PROTOTYPE: void __cdecl OnOrgasysMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0049094e
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\organsysmessage.cpp
-// RVA: 0x0009094E
-// ADDRESS: 0049094e
-// PROTOTYPE: undefined Catch@0049094e()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
