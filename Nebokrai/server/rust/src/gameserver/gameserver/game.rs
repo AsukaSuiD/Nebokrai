@@ -4179,12 +4179,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GodsBattleNpcContendContext
     + ServerRegionAreaTransitionContext
     + GameExitRuntime
-{
-    /// Исполняет только ещё не материализованные state-классы из
-    /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
-    /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
-    fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-}
+{}
 
 struct GameAreaAiContext<'a, Runtime> {
     runtime: &'a mut Runtime,
@@ -43957,7 +43952,6 @@ impl CGame {
                         }
                         self.update_player_automatic_restore_states(player_id, runtime);
                         let _ = self.update_player_consumable_restore_states(player_id, runtime);
-                        runtime.player_move_shape_unmaterialized_state_ai(self, player_id);
                         if self.find_player(player_id).is_some() {
                             if let Some(fight_state) = self.update_player_current_state(
                                 player_id,
