@@ -207,8 +207,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     if let Some(removed) = removed {
         finish_life_shield_state(game, player_id, removed, runtime.now_milliseconds());
     }
-    let state_now_ms = runtime.now_milliseconds();
-    send_life_shield_state_visual(game, player_id, state, true, state_now_ms);
+    send_life_shield_state_visual(game, player_id, state, true, || runtime.now_milliseconds());
     if let Some(state) = player_ai.life_shield_mut() {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);

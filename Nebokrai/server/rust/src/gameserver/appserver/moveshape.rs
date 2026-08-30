@@ -789,7 +789,7 @@ impl CMoveShape {
                     update_known_state_record(
                         &mut payload,
                         state.skill_id(),
-                        &state.encoded(now_ms),
+                        &state.encoded(&mut timed_state_now_milliseconds),
                     );
                 }
                 DefenseShieldState::Promotion(state) => {

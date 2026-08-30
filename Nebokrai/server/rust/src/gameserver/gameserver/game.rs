@@ -29444,7 +29444,7 @@ impl CGame {
                         expected_player_id,
                         state,
                         true,
-                        login_tick_ms,
+                        || context.now_milliseconds(),
                     );
                 }
                 DefenseShieldState::Promotion(state) => {

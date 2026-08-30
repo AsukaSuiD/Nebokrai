@@ -3,7 +3,9 @@
 //! Состояние хранит уровень навыка для обязательного последующего
 //! `CCureState`, проверяет наличие и MP боевого духа, но рассчитанный
 //! `lMPDamage` применяет к MP игрока обычный владелец атаки. DB-запись
-//! сохраняет уровень, остаток срока, прочность и два WORD-фактора.
+//! сохраняет уровень, остаток срока, прочность и два WORD-фактора. Vtable
+//! exact EXE направляет `GetRemainedTime` на общее тело `CBlindState` по
+//! `0x005F2CD0` с условным вторым чтением clock.
 
 use super::curestate::{send_cure_state_visual, CureState};
 use super::lifeshield::{
@@ -14,6 +16,7 @@ use super::manashieldstate::{
 };
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::attackpower::AttackPower;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -81,13 +84,8 @@ impl LifeShieldState {
             }
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms {
-            0
-        } else {
-            deadline.wrapping_sub(now_ms) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 
     pub(crate) fn decode(
@@ -114,12 +112,19 @@ impl LifeShieldState {
         ))
     }
 
-    pub(crate) fn encoded(self, now_ms: u32) -> [u8; LIFE_SHIELD_STATE_BYTES] {
+    pub(crate) fn encoded(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> [u8; LIFE_SHIELD_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
+    }
+
+    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; LIFE_SHIELD_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(LIFE_SHIELD_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(LIFE_SHIELD_SKILL_ID);
         writer.write_i32(self.skill_level);
-        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_u32(remaining_time_ms);
         writer.write_i32(self.life);
         writer.write_u16(self.hp_factor);
         writer.write_u16(self.mp_factor);
@@ -129,7 +134,7 @@ impl LifeShieldState {
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; LIFE_SHIELD_STATE_BYTES] {
-        self.encoded(self.started_at_ms)
+        self.encoded_with_remaining(self.keep_time_ms)
     }
 
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
@@ -186,7 +191,7 @@ pub(crate) fn send_life_shield_state_visual(
     player_id: i32,
     state: LifeShieldState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let Some(player) = game.find_player(player_id) else {
         return;
@@ -201,7 +206,7 @@ pub(crate) fn send_life_shield_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(state.life());
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
@@ -219,7 +224,7 @@ pub(crate) fn finish_life_shield_state(
         .is_some()
     {
         let Some(identity) = game.find_player(player_id).map(|player| player.shape().identity()) else {
-            send_life_shield_state_visual(game, player_id, state, false, now_ms);
+            send_life_shield_state_visual(game, player_id, state, false, || now_ms);
             return;
         };
         let cure = CureState::new(identity, identity);
@@ -232,7 +237,7 @@ pub(crate) fn finish_life_shield_state(
         send_cure_state_visual(game, player_id, cure, true);
         let _ = game.publish_player_states(player_id);
     }
-    send_life_shield_state_visual(game, player_id, state, false, now_ms);
+    send_life_shield_state_visual(game, player_id, state, false, || now_ms);
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
