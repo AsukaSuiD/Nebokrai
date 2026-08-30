@@ -414,6 +414,10 @@ pub(crate) mod appserver {
         pub(crate) mod teammessage;
         pub(crate) mod unibillmessage;
     }
+    pub(crate) mod listener {
+        pub(crate) mod cgoodsrepairlistener;
+        pub(crate) mod cgoodsrepairpricelistener;
+    }
     #[path = "message packaging/cs2ccontainerobjectamountchange.rs"]
     pub(crate) mod cs2ccontainerobjectamountchange;
     #[path = "message packaging/cs2ccontainerobjectmove.rs"]

@@ -23,6 +23,8 @@ use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_PARTICULAR_ATTRIBUTE, GOODS_TYPE_EQUIPMENT,
 };
+use crate::gameserver::appserver::listener::cgoodsrepairlistener::repair_visited_goods;
+use crate::gameserver::appserver::listener::cgoodsrepairpricelistener::GoodsRepairPrice;
 use crate::gameserver::appserver::player::PlayerProgress;
 use crate::gameserver::gameserver::game::{
     CGame, colored_player_notice_message,
@@ -463,25 +465,21 @@ fn handle_repair_all(
         .expect("shop player live")
         .packet()
         .size();
-    let mut slots = Vec::new();
+    let mut repair_slots = Vec::new();
+    let mut repair_price = GoodsRepairPrice::default();
     for slot in 0..packet_slots + EQUIPMENT_REPAIR_SLOTS {
-        if let Some(goods) = repair_slot(game, player_id, slot as u8)
-            .filter(|goods| goods.can_repair(game.goods_factory()))
-        {
-            slots.push((
-                slot as u8,
-                game.goods_factory()
-                    .calculate_repair_price(goods, repair_factor),
-            ));
+        if let Some(goods) = repair_slot(game, player_id, slot as u8) {
+            let _ = repair_price.visit(game.goods_factory(), goods, repair_factor);
+            if goods.can_repair(game.goods_factory()) {
+                repair_slots.push(slot as u8);
+            }
         }
     }
-    if slots.is_empty() {
+    if repair_price.equipment_count() == 0 {
         notice(game, player_id, "GS0089");
         return Ok(());
     }
-    let base_price = slots
-        .iter()
-        .fold(0u32, |total, (_, price)| total.wrapping_add(*price));
+    let base_price = repair_price.price();
     let multiplier = (game
         .find_region(region_id)
         .expect("region checked")
@@ -507,10 +505,10 @@ fn handle_repair_all(
     response.add_byte(b':');
     response.add_ulong(price);
     let _ = response.send_to_player(game.net_server(), player_id);
-    for (slot, _) in &slots {
+    for slot in &repair_slots {
         let _ = repair_slot_mut(game, player_id, *slot);
     }
-    debug!(player_id, region_id, count = slots.len(), price, "все подходящие предметы отремонтированы");
+    debug!(player_id, region_id, count = repair_price.equipment_count(), price, "все подходящие предметы отремонтированы");
     Ok(())
 }
 
@@ -590,7 +588,11 @@ fn repair_slot_mut(game: &mut CGame, player_id: i32, slot: u8) -> bool {
             .equipment_mut()
             .get_goods_mut(position - packet_slots)
     };
-    goods.is_some_and(|goods| factory.repair_equipment(goods))
+    goods.is_some_and(|goods| {
+        let repairable = goods.can_repair(&factory);
+        let _ = repair_visited_goods(&factory, goods);
+        repairable
+    })
 }
 
 fn cancel(game: &mut CGame, player_id: i32, string_id: Option<&'static str>) {
