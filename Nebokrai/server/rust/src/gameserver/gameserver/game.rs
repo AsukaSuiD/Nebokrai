@@ -1494,6 +1494,7 @@ const GAME_RELEASE_REGION_SAVE_MESSAGE: i32 = 0x0005_FA07;
 const GAME_RELEASE_PLAYER_SAVE_MESSAGE: i32 = 0x0005_FB02;
 const GAME_AUCTION_GOODS_SYNC_MESSAGE: i32 = 0x0006_0807;
 const GAME_AUCTION_STATE_REQUEST_MESSAGE: i32 = 0x0006_0808;
+const GAME_PLAYER_SNAPSHOT_UPDATE_MESSAGE: i32 = 0x0006_080e;
 /// Exact process-global `g_ms`, подтверждённый combat/AI ABI и pacing caller-ами.
 const GAME_TICK_INTERVAL_MS: u32 = 80;
 const RECONNECT_RETRY_DELAY: Duration = Duration::from_millis(8_000);
@@ -5800,7 +5801,7 @@ impl CGame {
         )
     }
 
-    pub(crate) fn encode_player_game_save<Context: ScriptRegionChangeContext>(
+    pub(crate) fn encode_player_game_save<Context: GameClockContext>(
         &self,
         player: &CPlayer,
         destination: &mut Vec<u8>,
@@ -5864,6 +5865,25 @@ impl CGame {
                 recreate_carriage,
             )
             .unwrap_or(false)
+    }
+
+    /// Exact `CPlayer::AddByteGS2WS`: player id предшествует полному
+    /// persisted GameSave snapshot, после чего кадр `0x6080E` уходит World.
+    pub(crate) fn send_player_snapshot_update<Context: GameClockContext>(
+        &self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<Result<i32, SendMessageError>> {
+        let player = self.find_player(player_id)?;
+        let mut snapshot = Vec::new();
+        if !self.encode_player_game_save(player, &mut snapshot, context) {
+            return None;
+        }
+        let mut update = CMessage::new(GAME_PLAYER_SNAPSHOT_UPDATE_MESSAGE);
+        update.add_long(player_id);
+        update.base_mut().add(&snapshot);
+        update.base_mut().update();
+        Some(update.send(self, false))
     }
 
     pub(crate) fn select_player_enhancement_goods(

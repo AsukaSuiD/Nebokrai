@@ -15022,20 +15022,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::AddByteGS2WS
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13511
-// RVA: 0x00033E40
-// ADDRESS: 00433e40
-// PROTOTYPE: void __thiscall AddByteGS2WS(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::IsAttackAble
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

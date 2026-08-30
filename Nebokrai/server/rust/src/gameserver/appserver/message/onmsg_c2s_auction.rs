@@ -624,7 +624,16 @@ fn dispatch_auction_listing<Runtime, Tick>(
         debug_assert!(stored);
     }
 
-    finish_current_auction_listing(game, runtime, player_id, gate, !had_pending)
+    let fresh_request = !had_pending;
+    finish_current_auction_listing(game, runtime, player_id, gate, fresh_request);
+    if fresh_request {
+        let snapshot_delivery = game.send_player_snapshot_update(player_id, runtime);
+        tracing::trace!(
+            player_id,
+            ?snapshot_delivery,
+            "свежий запрос аукциона обновил снимок игрока в World"
+        );
+    }
 }
 
 fn auction_yuan_listing_fee(
@@ -646,7 +655,7 @@ fn auction_yuan_listing_fee(
 
 fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     game: &mut CGame,
-    _runtime: &mut Runtime,
+    runtime: &mut Runtime,
     player_id: i32,
     gate: Option<AuctionListingGate>,
     fresh_request: bool,
@@ -722,7 +731,6 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     let notice_delivery =
         colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM016"))
             .send_to_player(game.net_server(), player_id);
-    // `AddItemToAuction` вызывает `AddByteGS2WS`; свежий запрос затем делает
-    // это повторно. Полный снимок игрока остаётся владельцу границы `0x6080E`.
-    tracing::trace!(player_id, ?gate, ?add_delivery, ?sale_log_delivery, client_delivery, notice_delivery, snapshot_refreshes = 1 + u8::from(fresh_request), "лот выставлен");
+    let snapshot_delivery = game.send_player_snapshot_update(player_id, runtime);
+    tracing::trace!(player_id, ?gate, ?add_delivery, ?sale_log_delivery, client_delivery, notice_delivery, ?snapshot_delivery, snapshot_refreshes = 1 + u8::from(fresh_request), "лот выставлен");
 }

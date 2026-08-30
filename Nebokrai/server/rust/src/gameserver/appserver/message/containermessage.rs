@@ -10,8 +10,8 @@
 //! не возвращаются накопительными отчётами. Отложенных эффектов в этом владельце
 //! нет, поэтому `GameEffectJournal` здесь намеренно не используется.
 //!
-//! Неизвестным остаётся полный снимок игрока `0x6080E`: его исходный владелец пока
-//! недоступен, поэтому диспетчер не имитирует эту отправку.
+//! Переход аукционного slot 0 из empty в occupied завершает исходный
+//! `AddByteGS2WS`: World получает `0x6080E` с полным persisted GameSave snapshot.
 
 use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
 use crate::gameserver::appserver::container::ccontainer::PreviousContainer;
@@ -1044,6 +1044,11 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
     }
 
     if route == EnhancementMessageRoute::HandAuctionListingTransfer {
+        let snapshot_refresh_required = request.destination_container_extend_id == 13
+            && request.destination_position == 0
+            && game
+                .find_player(player_id)
+                .is_some_and(|player| player.auction_listing().get_goods(0).is_none());
         let transfer = game.transfer_hand_auction_listing_goods(
             player_id,
             request.source_container_extend_id,
@@ -1054,10 +1059,16 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             request.destination_position,
         );
         match transfer {
-            Ok(()) => tracing::trace!(
-                outcome = "HandAuctionListingMoved",
-                "перемещение контейнера выполнено"
-            ),
+            Ok(()) => {
+                let snapshot_delivery = snapshot_refresh_required
+                    .then(|| game.send_player_snapshot_update(player_id, context));
+                tracing::trace!(
+                    outcome = "HandAuctionListingMoved",
+                    snapshot_refresh_required,
+                    ?snapshot_delivery,
+                    "перемещение контейнера выполнено"
+                );
+            }
             Err(reason) => {
                 let notice_id: Option<&[u8]> = match &reason {
                     HandAuctionListingBlock::PartialMoveBusy(PlayerProgress::OpenStall) => {
@@ -1457,10 +1468,13 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         let move_delivery = send_auction_listing_move_moved(game, player_id, request, &transfer);
         let snapshot_refresh_required =
             transfer.listing_slot_zero_was_empty && request.destination_position == 0;
+        let snapshot_delivery = snapshot_refresh_required
+            .then(|| game.send_player_snapshot_update(player_id, context));
         tracing::trace!(
             ?transfer,
             move_delivery,
             snapshot_refresh_required,
+            ?snapshot_delivery,
             "лот перемещён"
         );
         return Some(Ok(()));
@@ -2214,54 +2228,3 @@ fn send_move_result(
     // GUID; exact `NormalizeSelfMove` сворачивает его в однобайтовый rollback.
     send_rollback(game, player_id)
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp
-
-// ============================================================================
-// FUNCTION: OnContainerMessage
-// STATUS: PARTIAL_IMPLEMENTATION
-// MATERIALIZED: полные packet/equipment ↔ enhancement, equipment-session upgrade/DaKong/compose и двусторонние auction-listing routes `0x90301`; остальные routes RAW ниже
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp:14
-// RVA: 0x00086240
-// ADDRESS: 00486240
-// PROTOTYPE: void __cdecl OnContainerMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@00499691
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp
-// RVA: 0x00099691
-// ADDRESS: 00499691
-// PROTOTYPE: undefined Catch@00499691()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004997a1
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\containermessage.cpp
-// RVA: 0x000997A1
-// ADDRESS: 004997a1
-// PROTOTYPE: undefined Catch@004997a1()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer

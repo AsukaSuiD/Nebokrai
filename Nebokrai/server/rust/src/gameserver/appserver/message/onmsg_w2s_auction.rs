@@ -355,6 +355,7 @@ where
 
             let goods_return = game.return_player_auction_goods(player_id, incoming, bind_type);
             let snapshot_refresh_required = goods_return.is_some();
+            let mut snapshot_delivery = None;
             if let Some(returned) = &goods_return {
                 match &returned.outcome {
                     VolumeGoodsAddOutcome::Added(added) => {
@@ -431,11 +432,9 @@ where
                     }
                     let _ = scale.send_to_player(game.net_server(), player_id);
                 }
-                // `AddByteGS2WS` требует полный persisted player snapshot.
-                // Его RAW owner сохранён в player.rs; посылать частичный
-                // `0x6080E` здесь было бы wire-несовместимой заглушкой.
+                snapshot_delivery = Some(game.send_player_snapshot_update(player_id, runtime));
             }
-            tracing::trace!(player_id, ?goods_id, bind_type, declared_size, ?log_delivery, returned = goods_return.is_some(), snapshot_refresh_required, "лот возвращён игроку");
+            tracing::trace!(player_id, ?goods_id, bind_type, declared_size, ?log_delivery, returned = goods_return.is_some(), snapshot_refresh_required, ?snapshot_delivery, "лот возвращён игроку");
             Some(Ok(()))
         }
         WORLD_AUCTION_REFRESH_SELF_GOODS_MESSAGE => {
