@@ -65,14 +65,16 @@
 //! `ReConnectWorldServer/BillingServer` RVA `0x0000B7B0/0x0000B8D0`, retry
 //! entries RVA `0x0000BAD0/0x0000BB80` и task owners RVA
 //! `0x0000BDA0/0x0000BE10` также материализованы через общий Linux transport;
-//! точный return listener-а подтверждён машинным кодом. Из `Release` RVA
-//! `0x00009FD0` перенесён только начальный stop/join reconnect workers. Полный
+//! точный return listener-а подтверждён машинным кодом. `Release` RVA
+//! `0x00009FD0` перенесён полностью, включая stop/join reconnect workers,
+//! сохранение игроков/регионов и ordered teardown. Полный
 //! позиционный разбор `LoadSetup/LoadSetupEx` RVA `0x00009960/0x00009160`
 //! материализован с исходными defaults, частичной мутацией и игнорированием
-//! labels. Открытие listener-а заменяет поздней проверкой bind старый
+//! labels; `ReLoadSetup/ReloadSetupEx` повторно применяют только подтверждённые
+//! восемь transport-полей либо два accept-limit поля к живому listener-у.
+//! Открытие listener-а заменяет поздней проверкой bind старый
 //! `FindWindow` single-instance guard; недоказанный default billing bind-port
-//! остаётся typed-границей. `Release` и остальные resource/runtime owners ниже
-//! остаются RAW;
+//! остаётся typed-границей.
 //! `Init` связан через обязательный World client, общий MSVCRT RNG и sequence
 //! registry до необязательной Billing-попытки, затем создаёт DupliRegion,
 //! move-check, ranks и GoodsWar owners. GodsBattle startup snapshot хранится
@@ -5289,6 +5291,63 @@ impl CGame {
         }
         self.network_setup = Some(self.setup.network_setup(&self.setup_ex)?);
         Ok(())
+    }
+
+    /// Exact `ReLoadSetup`: попытка чтения всегда завершается legacy `true`,
+    /// даже когда файл недоступен; в этом случае живому server-owner-у повторно
+    /// применяются прежние восемь transport-полей. Listener port, local IP и
+    /// два `SetupEx` поля эта ветвь намеренно не меняет.
+    pub(crate) fn reload_runtime_setup(&mut self, paths: &GameRuntimePaths) -> bool {
+        match fs::read(&paths.setup) {
+            Ok(bytes) => self.setup.parse_positional(&bytes),
+            Err(source) => tracing::warn!(
+                path = %paths.setup.display(),
+                error = %source,
+                "не удалось повторно прочитать setup.ini GameServer"
+            ),
+        }
+
+        if let Some(server) = self.net_server.as_mut() {
+            server.configure_after_host(
+                self.setup.check_network,
+                self.setup.maximum_in_flight_sends,
+                self.setup.maximum_bytes_per_second,
+                self.setup.maximum_clients,
+                self.setup.check_message_content,
+                self.setup.forbid_time_ms,
+                self.setup.maximum_message_length,
+                self.setup.permitted_send_bytes,
+            );
+        }
+        if let Ok(network_setup) = self.setup.network_setup(&self.setup_ex) {
+            self.network_setup = Some(network_setup);
+        }
+        true
+    }
+
+    /// Exact `ReloadSetupEx`: как и native owner, игнорирует результат чтения,
+    /// возвращает `true` и применяет к живому listener-у только backlog и
+    /// timeout первого пакета.
+    pub(crate) fn reload_runtime_setup_ex(&mut self, paths: &GameRuntimePaths) -> bool {
+        match fs::read(&paths.setup_ex) {
+            Ok(bytes) => self.setup_ex.parse_positional(&bytes),
+            Err(source) => tracing::warn!(
+                path = %paths.setup_ex.display(),
+                error = %source,
+                "не удалось повторно прочитать setupex.ini GameServer"
+            ),
+        }
+
+        if let Some(server) = self.net_server.as_mut() {
+            server.configure_accept_limits_after_host(
+                self.setup_ex.maximum_block_connections,
+                self.setup_ex.first_receive_timeout_ms,
+            );
+        }
+        if let Ok(network_setup) = self.setup.network_setup(&self.setup_ex) {
+            self.network_setup = Some(network_setup);
+        }
+        true
     }
 
     /// Выполняет достигнутый `Init` от первого RNG seed до Billing-попытки.
