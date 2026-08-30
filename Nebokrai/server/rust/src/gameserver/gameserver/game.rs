@@ -33056,8 +33056,9 @@ impl CGame {
         self.restore_region_owner(owner);
     }
 
-    /// `3301 / NpcTalk` получает принадлежащего региону NPC и доставляет
-    /// сформированный его владельцем кадр через обычную рассылку вокруг формы.
+    /// `3301 / NpcTalk` получает принадлежащего региону NPC, обходит девять
+    /// соседних area и после этого сохраняет дополнительный strict coordinate-
+    /// filter native `CNpc::Talk`.
     pub(crate) fn script_npc_talk(
         &mut self,
         region_id: i32,
@@ -33068,17 +33069,37 @@ impl CGame {
         let owner = self.take_region_owner(region_id)?;
         let result = (|| {
             let npc = owner.base().find_npc_by_id(npc_id)?;
-            let shape = npc.move_shape().shape();
+            let view = npc.shape_view()?;
             let message = npc.build_script_talk_message(name, text);
-            let runtime = GameServerAroundRuntime::new(
-                self,
-                &self.session_factory,
-                self.globe_setup.area_width(),
-                self.globe_setup.area_height(),
-            )?;
-            message
-                .send_to_around(Some(owner.base()), shape, None, &runtime)
-                .ok()
+            let area_width = self.globe_setup.area_width();
+            let area_height = self.globe_setup.area_height();
+            if area_width <= 0 || area_height <= 0 {
+                return Some(0);
+            }
+            let center_x = view.tile_x / area_width;
+            let center_y = view.tile_y / area_height;
+            let mut player_ids = Vec::new();
+            for (offset_x, offset_y) in crate::nets::netserver::message::AROUND_SEND_AREA_OFFSETS {
+                owner.base().find_player_ids_in_area(
+                    center_x.wrapping_add(offset_x),
+                    center_y.wrapping_add(offset_y),
+                    &mut player_ids,
+                );
+            }
+            let mut delivered = 0;
+            for player_id in player_ids {
+                let Some(player_view) = self.find_player(player_id).and_then(CPlayer::shape_view)
+                else {
+                    continue;
+                };
+                if player_view.tile_x.wrapping_sub(view.tile_x).wrapping_abs() < area_width
+                    && player_view.tile_y.wrapping_sub(view.tile_y).wrapping_abs() < area_height
+                {
+                    let _ = message.send_to_player(self.net_server(), player_id);
+                    delivered += 1;
+                }
+            }
+            Some(delivered)
         })();
         self.restore_region_owner(owner);
         result

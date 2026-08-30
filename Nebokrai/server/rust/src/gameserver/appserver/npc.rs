@@ -1,25 +1,19 @@
-//! Достигнутая storage/lifetime-часть `CNpc` исторического GameServer.
+//! Concrete `CNpc` исторического GameServer.
 //!
-//! Constructor `CNpc::CNpc` и пустой decoder подтверждены точной парой
-//! `GameServer/gameserver.exe + GameServer/GameServer.pdb`; исходный owner —
-//! `server/gameserver/appserver/npc.h/.cpp`. Constructor создаёт `CMoveShape`,
-//! назначает type `500`, пустой byte-string script и `show-list = true`.
-//! Остальные scalar-поля constructor не записывает: safe Rust хранит live/born
-//! как `Option`, а region spawn обязан назначить live-time до публикации NPC.
-//! Это явно сохраняет неизвестность вместо выдуманного нулевого default-а.
+//! Источник: `GameServer/gameserver.exe + GameServer/GameServer.pdb`, исходный
+//! owner `server/gameserver/appserver/npc.h/.cpp`. Constructor создаёт
+//! `CMoveShape`, назначает type `500`, пустой byte-string script и
+//! `show-list = true`. Остальные scalar-поля constructor не записывает: Rust
+//! хранит live/born как `Option`, а region spawn назначает их до публикации.
+//! `LossHP` всегда возвращает ноль; decoder ничего не читает и возвращает true.
+//! `Vec`/`Drop` заменяют SSO/destructor без дополнительного поведения.
 //!
-//! Специализированная ветвь `CBaseObject::CreateObject(500,id)` живёт у factory
-//! owner-а в `baseobject.rs`. `Vec<u8>` сохраняет legacy script без UTF-8.
-//! Player interaction использует owned script path и immutable shape-view;
-//! NPC virtual figure для distance остаётся нулевой, как достигнутый base shape.
-//! Клиентский снимок `CNpc::AddToByteArray` точно совпадает с базовым shape-
-//! префиксом и формируется здесь, у владельца конкретной категории.
-//! Сценарный `NpcTalk` также формирует свой точный `0xBF801` здесь; `CGame`
-//! оставляет за собой только spatial delivery вокруг принадлежащего региону NPC.
-//! `AI` lifetime predicate вызывается из row-major active-shape scan; `CGame`
-//! публикует `0xBF504(type,id,0)` и сразу удаляет NPC из region owner-а, как
-//! virtual `DeleteChildObject` исходника. Полная shape serialization и Talk
-//! для остальных категорий и Talk остаются RAW до подключения их цепочек.
+//! `Talk` формирует `0xBF801` и выбирает игроков из девяти соседних area, после
+//! чего применяет строгий coordinate-filter `abs(dx) < AREA_WIDTH` и
+//! `abs(dy) < AREA_HEIGHT`; storage traversal и доставка остаются у `CGame`.
+//! `AI` сохраняет wrapping lifetime predicate, around delete-wire и немедленное
+//! удаление из region owner-а. Клиентский snapshot совпадает с базовым shape-
+//! префиксом и не добавляет NPC-specific полей.
 
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{ShapeFigure, ShapeView};
@@ -91,9 +85,8 @@ impl CNpc {
         })
     }
 
-    /// Формирует точный кадр сценарной функции `3301 / NpcTalk`. Переданное
-    /// сценарием имя является частью wire и намеренно не заменяется именем
-    /// объекта из region storage.
+    /// Формирует точный `CNpc::Talk`/script `3301` кадр. Переданное сценарием
+    /// имя сохраняется как wire-поле; обычный native caller передаёт `name()`.
     pub(crate) fn build_script_talk_message(&self, name: &[u8], text: &[u8]) -> CMessage {
         let identity = self.move_shape.shape().identity();
         let mut message = CMessage::new(0x000b_f801);
@@ -107,10 +100,6 @@ impl CNpc {
         message
     }
 
-    /// Точный виртуальный `CNpc::AddToByteArray`: NPC не добавляет полей к
-    /// базовому shape-префиксу. Параметр дочерних данных сохраняется для
-    /// контракта виртуальной цепочки, хотя достигнутые базовые owners его не
-    /// используют.
     pub(crate) fn encode_client_snapshot(&self, include_child: bool) -> Option<Vec<u8>> {
         let mut payload = Vec::new();
         self.move_shape
@@ -119,9 +108,6 @@ impl CNpc {
             .then_some(payload)
     }
 
-    /// Факты для виртуального `CMoveShape::SetTileXY`: NPC всегда занимает
-    /// новую клетку независимо от здоровья, что отдельно учитывает общий
-    /// позиционный механизм для типа `500`.
     pub(crate) fn movement_position_facts(
         &self,
         area_width: i32,
@@ -160,8 +146,6 @@ impl CNpc {
         self.born_time_ms
     }
 
-    /// Сохраняет wrapping `GetTickCount` и строгое сравнение `live < elapsed`.
-    /// До region spawn live-time неинициализирован и predicate не применяется.
     pub(crate) const fn lifetime_expired(&self, now_ms: u32) -> bool {
         match (self.live_time_ms, self.born_time_ms) {
             (Some(live_time), Some(born_time)) if live_time != 0 => {
@@ -171,7 +155,11 @@ impl CNpc {
         }
     }
 
-    /// Exact `CNpc::DecordFromByteArray` ничего не читает и возвращает true.
+    /// Exact virtual `LossHP`: NPC не получает урон через combat-chain.
+    pub(crate) const fn loss_hp(&mut self, _amount: i32, _source: Option<&CMoveShape>) -> u16 {
+        0
+    }
+
     pub(crate) const fn decord_from_byte_array(
         &mut self,
         _source: &[u8],
@@ -181,98 +169,3 @@ impl CNpc {
         true
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.h
-
-// ============================================================================
-// FUNCTION: CNpc::AI
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// IMPLEMENTED: scalar predicate — `lifetime_expired`, wire/removal caller —
-// `CGame::run_region_npc_ai`.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:62
-// RVA: 0x001D3DD0
-// ADDRESS: 005d3dd0
-// PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNpc::CNpc
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:17
-// RVA: 0x001D3E90
-// ADDRESS: 005d3e90
-// PROTOTYPE: undefined __thiscall CNpc(void)
-//
-// /* public: __thiscall CNpc::CNpc(void) */
-//
-// IMPLEMENTED выше; ABI/vtable и MSVC SSO заменены typed composition/`Vec`.
-
-// ============================================================================
-// FUNCTION: CNpc::LossHP
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.h:42
-// RVA: 0x001D3ED0
-// ADDRESS: 005d3ed0
-// PROTOTYPE: ushort __thiscall LossHP(long param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNpc::~CNpc
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:23
-// RVA: 0x001D3EE0
-// ADDRESS: 005d3ee0
-// PROTOTYPE: void __thiscall ~CNpc(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNpc::Talk
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:38
-// RVA: 0x001D3F50
-// ADDRESS: 005d3f50
-// PROTOTYPE: void __thiscall Talk(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CNpc::DecordFromByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\npc.cpp:33
-// RVA: 0x001E9840
-// ADDRESS: 005e9840
-// PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
-//
-// /* public: virtual bool __thiscall CNpc::DecordFromByteArray(unsigned char *,long &,bool) */
-//
-// IMPLEMENTED выше: source/cursor/include-child намеренно не читаются.
-
-// COMPONENT_VARIANT_END: GameServer

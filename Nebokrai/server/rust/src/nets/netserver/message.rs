@@ -82,7 +82,7 @@ const SERVER_ENVELOPE_LEN: usize = 12;
 const OVERSIZED_MESSAGE_LENGTH: usize = 0x80000;
 const SMALL_RLE_INPUT_LIMIT: usize = 0x10_0001;
 const SMALL_RLE_OUTPUT_CAPACITY: usize = 0x80_0000;
-const AROUND_SEND_AREA_OFFSETS: [(i32, i32); 9] = [
+pub(crate) const AROUND_SEND_AREA_OFFSETS: [(i32, i32); 9] = [
     (-1, -1),
     (0, -1),
     (1, -1),
