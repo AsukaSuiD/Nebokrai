@@ -2492,20 +2492,38 @@ pub(crate) enum CiQingOtherPersonTarget {
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
     GameClockContext + PlayerPropertyContext + ServerRegionMembershipContext
-{
-    fn enhancement_equipment_remove_facts(
-        &mut self,
-        player: &CPlayer,
-        goods: &CGoods,
-        pack_add_enabled: bool,
-    ) -> PlayerEquipmentRemoveRuntimeFacts;
+{}
 
-    fn enhancement_equipment_add_facts(
-        &mut self,
-        player: &CPlayer,
-        goods: &CGoods,
-        pack_add_enabled: bool,
-    ) -> PlayerEquipmentAddRuntimeFacts;
+/// Runtime facts equipment-container-а выводятся только из canonical player,
+/// live goods и `GlobeSetup`; process runtime не владеет их теневой копией.
+fn player_equipment_remove_runtime_facts(
+    factory: &CGoodsFactory,
+    player: &CPlayer,
+    goods: &CGoods,
+    pack_add_enabled: bool,
+) -> PlayerEquipmentRemoveRuntimeFacts {
+    let player_goods_package_extension = (pack_add_enabled
+        && goods.query_attribute(GAP_GOODS_PACKAGE_EXTENTION)
+        && goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 1) == 2)
+        .then(|| {
+            goods.addon_property_value(factory, GAP_GOODS_PACKAGE_EXTENTION, 2) as u32
+        });
+    PlayerEquipmentRemoveRuntimeFacts {
+        pack_add_enabled,
+        player_goods_package_extension,
+        active_war_soul_blocks_headgear: player.war_soul_state() == 1,
+    }
+}
+
+fn player_equipment_add_runtime_facts(
+    _player: &CPlayer,
+    _goods: &CGoods,
+    pack_add_enabled: bool,
+) -> PlayerEquipmentAddRuntimeFacts {
+    PlayerEquipmentAddRuntimeFacts {
+        pack_add_enabled,
+        now: game_wall_time_seconds(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4926,7 +4944,8 @@ impl CGame {
                     _ => None,
                 })
         } else if previous.container_extend_id == 2 {
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &seller_player,
                 &goods,
                 self.globe_setup.pack_add_enabled(),
@@ -6342,8 +6361,12 @@ impl CGame {
                 )
             }
             2 => {
-                let remove_facts =
-                    context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
+                let remove_facts = player_equipment_remove_runtime_facts(
+                    &self.goods_factory,
+                    player,
+                    goods,
+                    pack_add_enabled,
+                );
                 let mut recompute =
                     |player: &CPlayer| context.recompute_enhancement_player_properties(player);
                 let mut report = player.remove_equipment_goods(
@@ -6928,7 +6951,8 @@ impl CGame {
                 .equipment()
                 .get_goods(source_position)
                 .expect("equipment source проверен до player removal");
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
@@ -7251,7 +7275,8 @@ impl CGame {
                 .equipment()
                 .get_goods(source_position)
                 .expect("equipment source проверен до remove");
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
@@ -7477,7 +7502,8 @@ impl CGame {
                 .equipment()
                 .get_goods(source_position)
                 .expect("equipment source проверен до remove");
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
@@ -7944,7 +7970,8 @@ impl CGame {
                 .equipment()
                 .get_goods(source_position)
                 .expect("equipment source проверен до remove");
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
@@ -8504,7 +8531,8 @@ impl CGame {
                 .equipment()
                 .get_goods(source_position)
                 .expect("equipment source проверен до remove");
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
@@ -9966,7 +9994,8 @@ impl CGame {
                 return None;
             }
         }
-        let remove_facts = context.enhancement_equipment_remove_facts(
+        let remove_facts = player_equipment_remove_runtime_facts(
+            &self.goods_factory,
             player,
             &old_goods,
             self.globe_setup.pack_add_enabled(),
@@ -10268,8 +10297,12 @@ impl CGame {
             }
         } else if source_extend_id == 2 {
             let pack_add_enabled = self.globe_setup.pack_add_enabled();
-            let remove_facts =
-                context.enhancement_equipment_remove_facts(&player, &source, pack_add_enabled);
+            let remove_facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
+                &player,
+                &source,
+                pack_add_enabled,
+            );
             let mut recompute =
                 |player: &CPlayer| context.recompute_enhancement_player_properties(player);
             let mut report = player.remove_equipment_goods(
@@ -11205,8 +11238,12 @@ impl CGame {
             };
             (removal, Some(removed.goods))
         } else {
-            let remove_facts =
-                context.enhancement_equipment_remove_facts(player, goods, pack_add_enabled);
+            let remove_facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
+                player,
+                goods,
+                pack_add_enabled,
+            );
             let mut recompute =
                 |player: &CPlayer| context.recompute_enhancement_player_properties(player);
             let mut report = player.remove_equipment_goods(
@@ -11374,8 +11411,12 @@ impl CGame {
                     Some(removed.goods),
                 )
             } else {
-                let remove_facts =
-                    context.enhancement_equipment_remove_facts(&player, goods, pack_add_enabled);
+                let remove_facts = player_equipment_remove_runtime_facts(
+                    &self.goods_factory,
+                    &player,
+                    goods,
+                    pack_add_enabled,
+                );
                 let mut recompute =
                     |player: &CPlayer| context.recompute_enhancement_player_properties(player);
                 let mut report = player.remove_equipment_goods(
@@ -11491,7 +11532,7 @@ impl CGame {
             self.publish_player_packet_add(player, &mut outcome);
             return EnhancementTransferAddition::Packet(outcome);
         }
-        let add_facts = context.enhancement_equipment_add_facts(
+        let add_facts = player_equipment_add_runtime_facts(
             player,
             incoming
                 .as_ref()
@@ -14532,7 +14573,8 @@ impl CGame {
                     tracing::trace!(player_id = party.owner_id, goods = ?consumption.goods, ?deliveries, "предмет обмена удалён из инвентаря");
                     removed_goods.push(detached_goods);
                 } else if offer.original_container_extend_id == 2 {
-                    let facts = context.enhancement_equipment_remove_facts(
+                    let facts = player_equipment_remove_runtime_facts(
+                        &self.goods_factory,
                         &player,
                         &source,
                         self.globe_setup.pack_add_enabled(),
@@ -19153,7 +19195,8 @@ impl CGame {
                 None => false,
             }
         } else if let Some(goods) = player.equipment().find(goods_id) {
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
@@ -19730,7 +19773,8 @@ impl CGame {
                 None => false,
             }
         } else if let Some(goods) = player.equipment().find(goods_id) {
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &player,
                 goods,
                 self.globe_setup.pack_add_enabled(),
@@ -20541,7 +20585,8 @@ impl CGame {
                 let Some(goods) = player.equipment().find(identity.ex_id) else {
                     continue;
                 };
-                let facts = runtime.enhancement_equipment_remove_facts(
+                let facts = player_equipment_remove_runtime_facts(
+                    &self.goods_factory,
                     &player,
                     goods,
                     self.globe_setup.pack_add_enabled(),
@@ -21041,7 +21086,8 @@ impl CGame {
                 self.players.insert(player_id, player);
                 return;
             };
-            let facts = context.enhancement_equipment_remove_facts(
+            let facts = player_equipment_remove_runtime_facts(
+                &self.goods_factory,
                 &player,
                 &goods,
                 self.globe_setup.pack_add_enabled(),
@@ -26111,7 +26157,8 @@ impl CGame {
                 self.players.insert(request.player_id, player);
                 deletion
             } else {
-                let facts = context.enhancement_equipment_remove_facts(
+                let facts = player_equipment_remove_runtime_facts(
+                    &self.goods_factory,
                     &player,
                     &goods,
                     self.globe_setup.pack_add_enabled(),
@@ -34393,7 +34440,8 @@ impl CGame {
                 let goods = player
                     .get_goods_by_id(goods_id)
                     .expect("equipment fairy проверена до remove facts");
-                context.enhancement_equipment_remove_facts(
+                player_equipment_remove_runtime_facts(
+                    &self.goods_factory,
                     &player,
                     goods,
                     self.globe_setup.pack_add_enabled(),
@@ -41409,7 +41457,8 @@ impl CGame {
             let deletion = if location.extend_id == 2 {
                 let mut player = self.players.remove(&player_id)?;
                 let goods = player.equipment().find(*goods_id)?.clone();
-                let facts = runtime.enhancement_equipment_remove_facts(
+                let facts = player_equipment_remove_runtime_facts(
+                    &self.goods_factory,
                     &player,
                     &goods,
                     self.globe_setup.pack_add_enabled(),
