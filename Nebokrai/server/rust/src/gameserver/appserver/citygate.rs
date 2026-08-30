@@ -14,6 +14,8 @@
 //! attacker set и combat callbacks ниже пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use super::build::{BuildBlockUpdate, legacy_build_title_tile};
+use super::shape::{ShapeFigure, ShapeIdentity, ShapeView};
+use crate::public::guid::CGuid;
 
 pub(crate) const CITY_GATE_OBJECT_TYPE: u32 = 0x4B0;
 
@@ -124,6 +126,41 @@ impl CCityGate {
             width_increment: self.width_increment as u8,
             height_increment: self.height_increment as u8,
             block: 0,
+        }
+    }
+
+    pub(crate) fn shape_view(&self) -> ShapeView {
+        ShapeView {
+            identity: ShapeIdentity {
+                object_type: self.object_type as i32,
+                id: self.id,
+                ex_id: CGuid::GUID_INVALID,
+            },
+            tile_x: self.tile_x,
+            tile_y: self.tile_y,
+            pos_x_bits: (self.tile_x as f32).to_bits(),
+            pos_y_bits: (self.tile_y as f32).to_bits(),
+            figure: ShapeFigure::from_directions([
+                self.height_increment as u8,
+                self.height_increment as u8,
+                self.width_increment as u8,
+                self.width_increment as u8,
+            ]),
+        }
+    }
+
+    pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
+        BuildBlockUpdate {
+            region_id: self.region_id,
+            tile_x: self.tile_x,
+            tile_y: self.tile_y,
+            width_increment: self.width_increment as u8,
+            height_increment: self.height_increment as u8,
+            block: if self.action == 6 || self.action == 7 {
+                0
+            } else {
+                3
+            },
         }
     }
 }

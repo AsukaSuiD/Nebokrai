@@ -13,9 +13,14 @@
 //! обычный `CBuild` освобождает клетку только action `6`, тогда как subclass
 //! `CCityGate` также освобождает её при `7`. x87 `i32 -> f32 -> trunc i32`
 //! для title coordinates сохранён общим helper-ом этого владельца. Owned
-//! `Vec<u8>` и `Drop` заменяют `std::string`/destructor noise. AI, combat,
-//! client serialization и остальная поверхность ниже остаются
+//! `Vec<u8>` и `Drop` заменяют `std::string`/destructor noise. `GetFigure`
+//! материализован в общий `ShapeView`, поэтому country flags участвуют в
+//! region membership и общем поиске боевых целей. AI, combat, client
+//! serialization и остальная поверхность ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
+
+use super::shape::{ShapeFigure, ShapeIdentity, ShapeView};
+use crate::public::guid::CGuid;
 
 pub(crate) const BUILD_OBJECT_TYPE: u32 = 0x44C;
 
@@ -163,6 +168,37 @@ impl CBuild {
     pub(crate) fn element_resistance(&self) -> u32 {
         self.element_resistance
     }
+
+    pub(crate) fn shape_view(&self) -> ShapeView {
+        ShapeView {
+            identity: ShapeIdentity {
+                object_type: self.object_type as i32,
+                id: self.id,
+                ex_id: CGuid::GUID_INVALID,
+            },
+            tile_x: self.tile_x,
+            tile_y: self.tile_y,
+            pos_x_bits: (self.tile_x as f32).to_bits(),
+            pos_y_bits: (self.tile_y as f32).to_bits(),
+            figure: ShapeFigure::from_directions([
+                self.height_increment as u8,
+                self.height_increment as u8,
+                self.width_increment as u8,
+                self.width_increment as u8,
+            ]),
+        }
+    }
+
+    pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
+        BuildBlockUpdate {
+            region_id: self.region_id,
+            tile_x: self.tile_x,
+            tile_y: self.tile_y,
+            width_increment: self.width_increment as u8,
+            height_increment: self.height_increment as u8,
+            block: if self.action == 6 { 0 } else { 3 },
+        }
+    }
 }
 
 pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
@@ -264,17 +300,13 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 
 // ============================================================================
 // FUNCTION: CBuild::GetFigure
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:277
 // RVA: 0x001DD280
-// ADDRESS: 005dd280
-// PROTOTYPE: uchar __thiscall GetFigure(eDIR param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Реализовано выше в `shape_view`: directions `0/1` используют младший byte
+// `height_increment`, `2/3` — `width_increment`, остальные дают ноль.
 
 // ============================================================================
 // FUNCTION: CBuild::SetTileXY

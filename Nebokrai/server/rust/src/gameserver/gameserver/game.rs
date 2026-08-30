@@ -4213,6 +4213,33 @@ impl ServerRegionOwner {
         }
     }
 
+    /// Возвращает тот же concrete build/gate, который derived region хранит
+    /// в своей ordered map и base region регистрирует как child shape.
+    pub(crate) fn stationary_shape_view(&self, identity: ShapeIdentity) -> Option<ShapeView> {
+        match self {
+            Self::City(region) => region
+                .city_gates
+                .values()
+                .find(|state| state.gate.id == identity.id)
+                .map(|state| state.gate.shape_view())
+                .filter(|view| view.identity == identity),
+            Self::Country(region) => region
+                .defend_gates
+                .get(&identity.id)
+                .or_else(|| region.attack_gates.get(&identity.id))
+                .map(|gate| gate.shape_view())
+                .or_else(|| {
+                    region
+                        .defend_flags
+                        .get(&identity.id)
+                        .or_else(|| region.attack_flags.get(&identity.id))
+                        .map(|flag| flag.shape_view())
+                })
+                .filter(|view| view.identity == identity),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn region_id(&self) -> i32 {
         self.base().id
     }
@@ -46971,7 +46998,10 @@ impl ShapeResolver for CGame {
                     .find_map(|region| region.base().find_skill_phalanx(identity.id))?;
                 shape_view(phalanx.shape(), ShapeFigure::default())
             }
-            _ => None,
+            _ => self
+                .regions
+                .values()
+                .find_map(|region| region.stationary_shape_view(identity)),
         }
     }
 }

@@ -8,7 +8,8 @@
 //! `0x001CAAA0/0x001CF370..0x001CF640`, clear `0x001CF970`, guard refresh
 //! `0x001CF7C0` и direct timeout-forwarding `0x001CFEB0` имеют статус
 //! `IMPLEMENTED`; gate IDs, message layout, decoder/factory returns и фазовый
-//! call order также `VERIFIED_DISASSEMBLY`. Исходники
+//! call order, child-ID `+0x158` и base-region registration также
+//! `VERIFIED_DISASSEMBLY`. Исходники
 //! `servercityregion.h/.cpp`, точная пара GameServer. PDB подтверждает
 //! наследование `CServerWarRegion`, ordered
 //! `m_CityGates +0x274`, guard set/list `+0x2A0/+0x2AC` и defender faction
@@ -19,8 +20,8 @@
 //! C-строки в старых `char[256]`; missing NUL/overflow остаются локальными
 //! safe-блоками. Exact EXE подтвердил normal `true`, layout gate-полей и
 //! pointer-return factory. Gate map хранит logical/runtime IDs, имя и concrete
-//! `CCityGate`; factory child-registration и send-around остаются
-//! owner-context границами.
+//! `CCityGate`; safe owner сам выдаёт legacy child-ID и регистрирует тот же
+//! gate в base region/area, а send-around остаётся context-границей.
 //! Inherited `CServerWarRegion::AI` вызывается реальным `CGame::AI` через City
 //! adapter с weekly membership, defender/owner и network/log effects.
 //! Rust name/ID queries используют `Option` вместо pointer/sentinel формы и не
@@ -117,15 +118,11 @@ pub(crate) enum CityRegionDecodeError<BaseError> {
     Input(RegionDecodeInputBlock),
 }
 
-pub(crate) trait CityRegionDecodeContext: WarRegionDecodeContext {
-    /// Сначала инкрементирует legacy child-ID региона, затем пытается создать
-    /// type `0x4B0`. На успехе выставляет max/current HP, defence/size/element,
-    /// direction, state `0`, integer-title как два `f32` и `u16` action; script
-    /// задаёт лишь когда он не пуст и не равен byte-exact `"0"`. Возвращает
-    /// runtime child-ID успешно созданного объекта. Owned `CCityGate` в map
-    /// заменяет старый pointer; boundary сохраняет выдачу ID, child-регистрацию
-    /// и начальный tile-map эффект factory.
-    fn create_city_gate(&mut self, region_id: i32, build: &CityGateBuild) -> Option<i32>;
+pub(crate) trait CityRegionDecodeContext: WarRegionDecodeContext + BuildRuntimeContext {}
+
+impl<Context: WarRegionDecodeContext + BuildRuntimeContext + ?Sized> CityRegionDecodeContext
+    for Context
+{
 }
 
 pub(crate) trait CityGateRuntimeContext: BuildRuntimeContext {
@@ -300,7 +297,7 @@ impl CServerCityRegion {
         build: CityGateBuild,
         context: &mut Context,
     ) -> Option<i32> {
-        let city_gate_id = context.create_city_gate(self.war.base.id, &build)?;
+        let city_gate_id = self.war.base.take_child_id();
         let gate = CCityGate::from_created(CityGateInit {
             id: city_gate_id,
             graphics_id: build.picture_id,
@@ -317,6 +314,16 @@ impl CServerCityRegion {
             element_resistance: build.element_resistance,
             script: build.script,
         });
+        let (area_width, area_height) = context.area_dimensions();
+        if self
+            .war
+            .base
+            .register_stationary_child(gate.shape_view(), area_width, area_height)
+            .is_err()
+        {
+            return None;
+        }
+        context.apply_build_block(gate.current_block_update());
         self.city_gates.insert(
             build.logical_id,
             CityGateState {

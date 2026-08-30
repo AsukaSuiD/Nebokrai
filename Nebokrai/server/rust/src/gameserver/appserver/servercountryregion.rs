@@ -19,7 +19,9 @@
 //! `VERIFIED_DISASSEMBLY`.
 //!
 //! В отличие от city-owner, обе country gate-карты индексируются runtime
-//! child-ID, а `tagGate.field_28` decoder читает, но не применяет. `BTreeMap`
+//! child-ID, а `tagGate.field_28` decoder читает, но не применяет. Общий
+//! base-region owner выдаёт exact child-ID и регистрирует тот же gate/flag в
+//! child/area membership. `BTreeMap`
 //! сохраняет порядок `std::map`. Flags являются обычными `CBuild` type `0x44C`:
 //! wire `field_24` не применяется, initial action остаётся `0`, а refresh
 //! меняет только HP до обязательного `0xBF60F`. Area lookup сохраняет
@@ -163,13 +165,11 @@ pub(crate) enum CountryEntryError {
     Cell(RegionCellAccessBlock),
 }
 
-pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext {
-    /// Сначала выдаёт следующий legacy child-ID, затем пытается создать type
-    /// `0x4B0`; возвращает runtime ID только успешно созданного gate.
-    fn create_country_gate(&mut self, region_id: i32, build: &CountryGateBuild) -> Option<i32>;
+pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext + BuildRuntimeContext {}
 
-    /// Аналогичная factory-граница для обычного `CBuild` type `0x44C`.
-    fn create_country_flag(&mut self, region_id: i32, build: &CountryFlagBuild) -> Option<i32>;
+impl<Context: ServerRegionDecodeContext + BuildRuntimeContext + ?Sized> CountryRegionDecodeContext
+    for Context
+{
 }
 
 pub(crate) trait CountryRegionRuntimeContext:
@@ -1003,7 +1003,7 @@ impl CServerCountryRegion {
         build: CountryGateBuild,
         context: &mut Context,
     ) -> Option<i32> {
-        let city_gate_id = context.create_country_gate(self.base.id, &build)?;
+        let city_gate_id = self.base.take_child_id();
         let gate = CCityGate::from_created(CityGateInit {
             id: city_gate_id,
             graphics_id: build.picture_id,
@@ -1020,6 +1020,15 @@ impl CServerCountryRegion {
             element_resistance: build.element_resistance,
             script: build.script,
         });
+        let (area_width, area_height) = context.area_dimensions();
+        if self
+            .base
+            .register_stationary_child(gate.shape_view(), area_width, area_height)
+            .is_err()
+        {
+            return None;
+        }
+        context.apply_build_block(gate.current_block_update());
         // VERIFIED_DISASSEMBLY: country map key — `CCityGate::m_lID +8`, не
         // `tagGate.field_00`/logical ID, который использует city-owner.
         self.gates_mut(camp)
@@ -1051,7 +1060,7 @@ impl CServerCountryRegion {
         build: CountryFlagBuild,
         context: &mut Context,
     ) -> Option<i32> {
-        let flag_id = context.create_country_flag(self.base.id, &build)?;
+        let flag_id = self.base.take_child_id();
         let flag = CBuild::from_created(BuildInit {
             id: flag_id,
             graphics_id: build.picture_id,
@@ -1067,6 +1076,15 @@ impl CServerCountryRegion {
             element_resistance: build.element_resistance,
             script: build.script,
         });
+        let (area_width, area_height) = context.area_dimensions();
+        if self
+            .base
+            .register_stationary_child(flag.shape_view(), area_width, area_height)
+            .is_err()
+        {
+            return None;
+        }
+        context.apply_build_block(flag.current_block_update());
         self.flags_mut(camp)
             .expect("decoder передаёт только доказанный camp")
             .insert(flag_id, flag);

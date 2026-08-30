@@ -669,6 +669,17 @@ impl NextMonsterId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NextChildId(i32);
+
+impl NextChildId {
+    fn take(&mut self) -> i32 {
+        let id = self.0;
+        self.0 = self.0.wrapping_add(1);
+        id
+    }
+}
+
 impl Default for NextMonsterId {
     fn default() -> Self {
         Self(1)
@@ -676,6 +687,12 @@ impl Default for NextMonsterId {
 }
 
 impl Default for NextNpcId {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+impl Default for NextChildId {
     fn default() -> Self {
         Self(1)
     }
@@ -789,6 +806,7 @@ pub(crate) struct CServerRegion {
     owned_npcs: BTreeMap<i32, CNpc>,
     total_spawned_npcs: i32,
     next_npc_id: NextNpcId,
+    next_child_id: NextChildId,
     owned_goods: BTreeMap<CGuid, CGoods>,
     owned_skill_phalanxes: BTreeMap<i32, SummonedSkillShape>,
     delete_shapes: IndexSet<ShapeIdentity>,
@@ -814,6 +832,13 @@ pub(crate) struct CServerRegion {
 }
 
 impl CServerRegion {
+    /// RVA `0x000852B0` и `AddCityGate` `0x001D0F00`: constructor начинает
+    /// `m_lChildID` с `1`, factory получает текущее значение, а owner заранее
+    /// сохраняет следующее с wrapping `long`-семантикой.
+    pub(crate) fn take_child_id(&mut self) -> i32 {
+        self.next_child_id.take()
+    }
+
     /// Строит подтверждённый прямой путь навыка с исходным округлением и
     /// снимком блоков; решение об отказе остаётся у конкретного навыка.
     pub(crate) fn straight_skill_path(
@@ -3340,6 +3365,33 @@ impl CServerRegion {
     /// напрямую, не через area scan `FindAllPlayer`.
     pub(crate) fn registered_player_ids(&self) -> Vec<i32> {
         self.registry.players.clone()
+    }
+
+    /// Регистрирует уже созданный factory-объект без выдуманного второго
+    /// `CShape`. В оригинале virtual factory региона создавал объект и сразу
+    /// проводил его через `AddObject`; derived city/country owners затем лишь
+    /// сохраняли тот же pointer в своих ordered maps.
+    pub(crate) fn register_stationary_child(
+        &mut self,
+        view: ShapeView,
+        area_width: i32,
+        area_height: i32,
+    ) -> Result<(), RegionMembershipBlock> {
+        validate_area_span(area_width, area_height)?;
+        let facts = ShapeRuntimeFacts {
+            figure: view.figure,
+            ..ShapeRuntimeFacts::default()
+        };
+        self.registry.add(view.identity, facts);
+        if let Some(area_index) =
+            self.area_index_for_tile(view.tile_x, view.tile_y, area_width, area_height)
+        {
+            self.areas[area_index].add_object(view.identity, facts, 0);
+            Ok(())
+        } else {
+            self.registry.remove(view.identity);
+            Ok(())
+        }
     }
 
     /// Owned identity snapshot для проверки полноты resolver-а перед
