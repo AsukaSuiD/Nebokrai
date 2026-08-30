@@ -5,12 +5,14 @@
 //! уменьшает обе границы физической атаки и дополнительную стихийную атаку,
 //! ограничивая каждое уменьшение текущим значением. Визуальные сообщения
 //! сохраняют `0xBFE03/0xBFE04`; порядок относительно других достигнутых
-//! состояниями свойств принадлежит `CanonicalStateStorage`.
+//! состояниями свойств принадлежит `CanonicalStateStorage`. Vtable exact EXE
+//! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0`.
 //!
 //! Не достигнуто: восстановление `CRoarState::Unserialize` из старого DB-потока.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -32,9 +34,8 @@ impl RoarState {
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
     }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) as i32 }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
     pub(crate) fn apply_to_player(self, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
         let attack_loss = self.attack_loss.max(0) as u32;
@@ -65,14 +66,14 @@ pub(crate) fn send_roar_state_visual(
     y: i32,
     state: RoarState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(ROAR_STATE_ID as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, x, y, &message);
@@ -95,7 +96,7 @@ pub(crate) fn finish_player_roar<Runtime: GameMainLoopRuntime>(
     let Some((region_id, x, y, identity, state)) = ended else {
         return false;
     };
-    send_roar_state_visual(game, region_id, identity, x, y, state, false, now_ms);
+    send_roar_state_visual(game, region_id, identity, x, y, state, false, || now_ms);
     let _ = game.update_player_properties(player_id, runtime);
     true
 }
@@ -125,7 +126,7 @@ pub(crate) fn finish_monster_roar(
     let Some((x, y, identity, state)) = ended else {
         return false;
     };
-    send_roar_state_visual(game, region_id, identity, x, y, state, false, now_ms);
+    send_roar_state_visual(game, region_id, identity, x, y, state, false, || now_ms);
     true
 }
 

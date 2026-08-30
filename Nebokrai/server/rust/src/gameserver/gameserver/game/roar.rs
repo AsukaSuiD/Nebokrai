@@ -35,11 +35,28 @@ impl CGame {
             _ => None,
         };
         let Some((x, y, previous)) = changed else { return false };
-        let now_ms = runtime.now_milliseconds();
         if let Some(previous) = previous {
-            send_roar_state_visual(self, region_id, target, x, y, previous, false, now_ms);
+            send_roar_state_visual(
+                self,
+                region_id,
+                target,
+                x,
+                y,
+                previous,
+                false,
+                || runtime.now_milliseconds(),
+            );
         }
-        send_roar_state_visual(self, region_id, target, x, y, state, true, now_ms);
+        send_roar_state_visual(
+            self,
+            region_id,
+            target,
+            x,
+            y,
+            state,
+            true,
+            || runtime.now_milliseconds(),
+        );
         if target.object_type == PLAYER_TYPE {
             let _ = self.update_player_properties(target.id, runtime);
         }
