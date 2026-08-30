@@ -31365,11 +31365,10 @@ impl CGame {
         Some((additions, remaining))
     }
 
-    pub(crate) fn add_npc_shop_goods_to_packet<Context>(
+    pub(crate) fn add_npc_shop_goods_to_packet(
         &mut self,
         player_id: i32,
         goods: Vec<CGoods>,
-        _context: &mut Context,
     ) -> Option<(Vec<CiQingPacketAddition>, Vec<CGoods>)> {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let player = players.get_mut(&player_id)?;

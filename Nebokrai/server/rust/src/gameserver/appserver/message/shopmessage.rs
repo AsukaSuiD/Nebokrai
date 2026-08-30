@@ -92,7 +92,7 @@ pub(crate) fn dispatch_shop_message<Context>(
     };
 
     let outcome = match message_type {
-        BUY => handle_buy(message, game, context, player_id, region_id),
+        BUY => handle_buy(message, game, player_id, region_id),
         SELL => handle_sell(message, game, context, player_id, region_id),
         REPAIR_ONE => handle_repair_one(message, game, player_id, region_id),
         REPAIR_ALL => handle_repair_all(message, game, player_id, region_id),
@@ -110,10 +110,9 @@ pub(crate) fn dispatch_shop_message<Context>(
     Some(outcome)
 }
 
-fn handle_buy<Context>(
+fn handle_buy(
     message: &mut CMessage,
     game: &mut CGame,
-    context: &mut Context,
     player_id: i32,
     region_id: i32,
 ) -> Result<(), ShopMessageError> {
@@ -228,7 +227,7 @@ fn handle_buy<Context>(
         .unwrap_or_default()
         .to_vec();
     let (additions, rejected) = game
-        .add_npc_shop_goods_to_packet(player_id, created, context)
+        .add_npc_shop_goods_to_packet(player_id, created)
         .expect("shop player live");
     for addition in &additions {
         let _ = game.send_player_packet_addition(addition);
