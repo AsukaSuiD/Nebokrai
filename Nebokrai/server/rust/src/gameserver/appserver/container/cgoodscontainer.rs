@@ -1,6 +1,6 @@
 //! Базовый derived lifecycle `CGoodsContainer` исторического GameServer.
 //!
-//! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный owner
 //! `server/gameserver/appserver/container/cgoodscontainer.cpp`. Constructor,
 //! destructor и `Release` RVA `0x001DB840/0x001DB860/0x001DB8C0` сохраняют
 //! owner type/id и mode в нуле, причём `Release` также освобождает listener
@@ -9,12 +9,13 @@
 //! `0x001DB8F0` — именно `CGoodsContainer::SetContainerMode`.
 //!
 //! Default `Add(CBaseObject*)` и `Clear` являются намеренными no-op virtual
-//! slots (`xor eax,eax; ret 0xC` и `ret 4`). Rust derived owners не вызывают
-//! искусственную base-заглушку: они реализуют typed storage напрямую. Четыре
-//! `Find/Remove` overload-а были только переходами в `CContainer` thunks и
-//! аналогично поглощены typed API concrete container-ов. Сложные stack merge/
-//! split `Add(position, CGoods*)` и `Remove(position, amount)` ниже остаются
-//! RAW до materialization `CGoods` и listener callbacks.
+//! slots. Четыре `Find/Remove` overload-а были переходами в `CContainer` и
+//! поглощены typed API concrete container-ов. Общая stack-ветка `Add(position,
+//! CGoods*)` живёт здесь; storage lookup и listener reports принадлежат derived
+//! owners. `Remove(position, amount)` материализован в amount-limit и wallet
+//! owners: exact full/split правила, addon copy, mutation order и callbacks
+//! сохранены их typed reports. Случайно попавший сюда `tagGoodsShadow::operator=`
+//! заменён `Copy`/присваиванием у его настоящего owner-а.
 
 use super::ccontainer::CContainer;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
@@ -92,7 +93,8 @@ impl CGoodsContainer {
 
     /// Общая stack-ветка exact `Add(position, CGoods*)` RVA `0x001DB970`.
     /// Проверка player progress выполнялась перед stack compatibility и
-    /// передаётся уже вычисленным owner policy.
+    /// передаётся уже вычисленным owner policy. Derived owner после `Merged`
+    /// публикует snapshot своих listener-ов с target и присоединённым amount.
     pub(crate) fn merge_stack(
         &self,
         target: &mut CGoods,
@@ -130,53 +132,3 @@ impl CGoodsContainer {
         }
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp
-
-// ============================================================================
-// FUNCTION: CGoodsShadowContainer::tagGoodsShadow::operator=
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp
-// RVA: 0x000DF630
-// ADDRESS: 004df630
-// PROTOTYPE: tagGoodsShadow * __thiscall operator=(tagGoodsShadow * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Add
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:63
-// RVA: 0x001DB970
-// ADDRESS: 005db970
-// PROTOTYPE: int __thiscall Add(ulong param_1, CGoods * param_2, tagPreviousContainer * param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsContainer::Remove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\container\cgoodscontainer.cpp:186
-// RVA: 0x001DBB60
-// ADDRESS: 005dbb60
-// PROTOTYPE: CBaseObject * __thiscall Remove(ulong param_1, ulong param_2, void * param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
