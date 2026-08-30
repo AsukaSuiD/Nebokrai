@@ -24,6 +24,8 @@
 //! оставляя возврат игроков внешнему callback-у.
 //! Village timeout сохраняет `0x60136 → GS0240`: первый эффект отправляет
 //! `CGame`, второй остаётся у достигнутого war-log sink.
+//! Village end передаёт `goods × players` snapshot владельцу `CGame` и
+//! возвращает region owner только для финального таймера/ownership reset.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -1689,13 +1691,18 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
     fn on_war_end(&mut self, region: GameWarRegionHandle, war_number: i32) {
         match region {
             GameWarRegionHandle::Local(region_id) => {
+                if matches!(
+                    self.game.find_region(region_id),
+                    Some(ServerRegionOwner::Village(_))
+                ) {
+                    self.game
+                        .end_village_war(region_id, war_number, self.runtime);
+                    return;
+                }
                 let Some(region) = self.game.find_region_mut(region_id) else {
                     return;
                 };
                 match region {
-                    ServerRegionOwner::Village(region) => {
-                        region.on_war_end(war_number, self.runtime)
-                    }
                     ServerRegionOwner::City(region) => region.on_war_end(war_number, self.runtime),
                     ServerRegionOwner::Nation(region) => region.war.on_war_end(war_number),
                     ServerRegionOwner::GodsBattle(region) => region.war.on_war_end(war_number),

@@ -16,9 +16,10 @@
 //! перед `GS0240` log. `OnFactionVictory` вызывает тот же доказанный no-op
 //! `0x004A8750`, поэтому отдельного callback-а у него нет. End сначала
 //! сбрасывает war-state, затем
-//! очищает contenders/goods, ставит 60-секундное вытеснение и лишь после этого
-//! обнуляет country/ownership/flag-owner. Player и goods side effects остаются
-//! явным context-контрактом до своих owners; прочие функции ниже raw.
+//! очищает contenders, после чего `CGame` удаляет предметы в порядке
+//! `goods × players`; только затем owner ставит 60-секундное вытеснение и
+//! обнуляет country/ownership/flag-owner. Остальные player effects остаются
+//! явным context-контрактом; прочие функции ниже raw.
 //! Inherited `CServerWarRegion::AI` вызывается реальным `CGame::AI` через
 //! Village adapter с canonical player/state/network effects.
 
@@ -42,7 +43,6 @@ pub(crate) trait VillageRegionContext: WarRegionContext {
     /// Пишет localized template в канал `war` с аргументом region name.
     fn write_war_log(&mut self, string_id: &'static str, region_name: &str);
 
-    fn delete_good_from_all_players(&mut self, region_id: i32, good_name: &str);
     fn now_millis(&mut self) -> u32;
 }
 
@@ -52,6 +52,13 @@ pub(crate) struct VillageTimeoutEffect {
     pub(crate) region_id: i32,
     pub(crate) flag_owner_faction_id: i32,
     pub(crate) region_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VillageWarEndTargets {
+    pub(crate) region_id: i32,
+    pub(crate) player_ids: Vec<i32>,
+    pub(crate) goods: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -144,28 +151,28 @@ impl CServerVillageRegion {
         }
     }
 
-    pub(crate) fn on_war_end<Context: VillageRegionContext>(
+    pub(crate) fn begin_war_end<Context: WarRegionContext>(
         &mut self,
         war_number: i32,
         context: &mut Context,
-    ) {
+    ) -> Option<VillageWarEndTargets> {
         if self.war.base.war_number != war_number || self.war.base.city_state == 0 {
-            return;
+            return None;
         }
         self.war.on_war_end(war_number);
-        self.clear_region(context);
+        self.war.clear_region(context);
+        Some(VillageWarEndTargets {
+            region_id: self.war.base.id,
+            player_ids: self.war.base.registered_player_ids(),
+            goods: self.goods.clone(),
+        })
+    }
+
+    pub(crate) fn finish_war_end(&mut self, now_ms: u32) {
+        self.war.base.start_clear_player_out_at(60_000, now_ms);
         self.war.base.country = 0;
         self.war.base.set_owned_city_org(0, 0);
         self.flag_owner_faction_id = 0;
-    }
-
-    pub(crate) fn clear_region<Context: VillageRegionContext>(&mut self, context: &mut Context) {
-        self.war.clear_region(context);
-        for good_name in &self.goods {
-            context.delete_good_from_all_players(self.war.base.id, good_name);
-        }
-        let now_ms = context.now_millis();
-        self.war.base.start_clear_player_out_at(60_000, now_ms);
     }
 }
 
@@ -224,7 +231,8 @@ impl CServerVillageRegion {
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // RVA: 0x001D1310
 //
-// IMPLEMENTED выше: war/state gates, clear и ownership reset; технические STL/SEH детали удалены.
+// IMPLEMENTED выше через `CGame`: war/state gates, ordered goods deletion,
+// clear timer и ownership reset; технические STL/SEH детали удалены.
 
 // ============================================================================
 // FUNCTION: CServerVillageRegion::ClearRegion
@@ -233,7 +241,8 @@ impl CServerVillageRegion {
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // RVA: 0x001D1370
 //
-// IMPLEMENTED выше: war clear, ordered goods removal и 60000 ms timer; технические STL/SEH детали удалены.
+// IMPLEMENTED выше как точная begin/finish граница вокруг принадлежащего
+// `CGame` ordered goods removal и последующего 60000 ms timer.
 
 // ============================================================================
 // FUNCTION: CServerVillageRegion::OnWarDeclare

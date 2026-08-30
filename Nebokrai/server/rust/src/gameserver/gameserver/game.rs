@@ -754,7 +754,9 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome, ServerRegionWeather,
     ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
-use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
+use crate::gameserver::appserver::servervillageregion::{
+    CServerVillageRegion, VillageRegionContext,
+};
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, SymbolCaptureLog, WarContendContext, WarContendEntryContext,
     WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError, WarRegionOwnership,
@@ -45204,6 +45206,61 @@ impl CGame {
             ?delivery,
             "отправлен timeout деревенской войны"
         );
+    }
+
+    /// Замыкает полный `CServerVillageRegion::OnWarEnd`: после inherited
+    /// очистки удаляет по одному первому совпавшему предмету каждого имени у
+    /// каждого region-player, затем запускает 60-секундное вытеснение и
+    /// сбрасывает ownership.
+    pub(crate) fn end_village_war<Runtime>(
+        &mut self,
+        region_id: i32,
+        war_number: i32,
+        runtime: &mut Runtime,
+    ) where
+        Runtime: VillageRegionContext,
+    {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        let ServerRegionOwner::Village(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return;
+        };
+        let targets = region.begin_war_end(war_number, runtime);
+        self.restore_region_owner(ServerRegionOwner::Village(region));
+        let Some(targets) = targets else {
+            return;
+        };
+
+        for good_name in targets.goods {
+            let base_index = self
+                .goods_factory
+                .query_goods_id_by_original_name(Some(good_name.as_bytes()));
+            if base_index == 0 {
+                continue;
+            }
+            for &player_id in &targets.player_ids {
+                let consumptions = self
+                    .find_player_mut(player_id)
+                    .map(|player| player.remove_item_in_packet(base_index, 1))
+                    .unwrap_or_default();
+                for consumption in consumptions {
+                    let _ = self.send_player_packet_consumption(&consumption);
+                }
+            }
+        }
+
+        let now_ms = VillageRegionContext::now_millis(runtime);
+        let Some(owner) = self.take_region_owner(targets.region_id) else {
+            return;
+        };
+        let ServerRegionOwner::Village(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return;
+        };
+        region.finish_war_end(now_ms);
+        self.restore_region_owner(ServerRegionOwner::Village(region));
     }
 
     /// Полный city `OnClearOtherPlayer`: сначала возвращает всех игроков без
