@@ -3538,9 +3538,24 @@ impl CPlayer {
     ) {
         self.in_changing_server = false;
         self.in_changing_region = true;
-        self.recreate_carriage = false;
         self.movement_shape_mut()
             .stage_region_change(region_id, tile_x, tile_y, direction);
+    }
+
+    pub(crate) fn begin_cross_region_companion_change(&mut self) {
+        self.recreate_carriage = false;
+        self.uncreated_carriage = PlayerUncreatedCarriage::default();
+    }
+
+    /// Снимки companion-ов принадлежат игроку между выходом из исходного
+    /// region owner-а и созданием новых monster-owner-ов в назначении.
+    pub(crate) fn store_uncreated_region_pets(&mut self, pets: Vec<PlayerUncreatedPet>) {
+        self.uncreated_pets = pets;
+    }
+
+    pub(crate) fn store_uncreated_region_carriage(&mut self, carriage: PlayerUncreatedCarriage) {
+        self.uncreated_carriage = carriage;
+        self.recreate_carriage = true;
     }
 
     /// Same-region `ChangeRegion` не пересоздаёт повозку: возможный перенос

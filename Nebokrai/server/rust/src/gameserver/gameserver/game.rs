@@ -366,8 +366,9 @@
 //! ещё универсальные skill/state/spatial owner-ы заданы обязательным runtime
 //! context, а не подменены пустым успехом.
 //! Same-region `ChangeRegion` уже напрямую переносит близкую активную повозку
-//! через её region monster-owner; только cross-region companion snapshot/delete
-//! остаётся обязательной runtime-границей.
+//! через её region monster-owner. Cross-region departure теперь сохраняет
+//! pet/carriage snapshots и ставит прежних monster-owner-ов в `CS_DELETE`;
+//! только прочие player virtual callbacks остаются runtime-границей.
 //! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
 //! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
@@ -2298,11 +2299,11 @@ impl<T> MonsterDeathContext for T where
 /// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
 pub(crate) trait RealmAppellationScriptContext: PlayerPropertyContext {}
 
-/// Нематериализованные virtual owners companions остаются на
+/// Нематериализованные cross-region virtual player callbacks остаются на
 /// runtime-границе. Player GameSave, live pet/carriage snapshots,
 /// region/player maps, session state и message wire исполняет `CGame`.
 pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
-    fn prepare_script_cross_region_companions(
+    fn prepare_script_cross_region_player(
         &mut self,
         player: &mut CPlayer,
         source_region_id: i32,
@@ -5670,6 +5671,97 @@ impl CGame {
             self.area_width,
             self.area_height,
         )
+    }
+
+    fn stage_cross_region_player_carriage(
+        &mut self,
+        source_owner: &mut ServerRegionOwner,
+        player: &mut CPlayer,
+        carriage_distance: i32,
+    ) -> Option<(i32, Option<Result<i32, SendMessageError>>)> {
+        if carriage_distance == 0 || player.active_carriage_id() == 0 {
+            return None;
+        }
+        let carriage_id = player.active_carriage_id();
+        let snapshot = {
+            let carriage = source_owner.base().find_monster_by_id(carriage_id)?;
+            let property = self
+                .find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+            if !carriage.is_carriage(property) {
+                return None;
+            }
+            (
+                property.index,
+                carriage.move_shape().shape().clone(),
+                carriage.shape_view(property)?.distance(player.shape_view()?),
+                PlayerUncreatedCarriage {
+                    original_name: carriage.original_name().to_vec(),
+                    script: carriage.script_file().to_vec(),
+                    health: carriage.hit_points(),
+                },
+            )
+        };
+        if snapshot.2 > carriage_distance {
+            source_owner
+                .base_mut()
+                .find_monster_by_id_mut(carriage_id)?
+                .set_carriage_action(CARRIAGE_STAYING);
+            return Some((carriage_id, None));
+        }
+        player.store_uncreated_region_carriage(snapshot.3);
+        let audit = self.send_carriage_log_snapshot(
+            player.player_id(),
+            snapshot.0,
+            source_owner.region_id(),
+            snapshot.1.get_tile_x().unwrap_or_default(),
+            snapshot.1.get_tile_y().unwrap_or_default(),
+            6,
+        );
+        source_owner
+            .base_mut()
+            .find_monster_by_id_mut(carriage_id)
+            .expect("cross-region carriage snapshot сохраняет monster owner")
+            .stage_for_delete();
+        Some((carriage_id, audit))
+    }
+
+    fn stage_cross_region_player_pets(
+        source_owner: &mut ServerRegionOwner,
+        player: &mut CPlayer,
+        persist_records: bool,
+    ) -> usize {
+        let pet_ids = player
+            .active_pets()
+            .iter()
+            .map(|pet| pet.id)
+            .collect::<Vec<_>>();
+        let records = persist_records.then(|| {
+            pet_ids
+                .iter()
+                .filter_map(|pet_id| {
+                    let pet = source_owner.base().find_monster_by_id(*pet_id)?;
+                    pet.base_property_key()?;
+                    let (level, experience) = pet.pet_progress();
+                    Some(PlayerUncreatedPet {
+                        original_name: pet.original_name().to_vec(),
+                        health: pet.hit_points(),
+                        level,
+                        experience,
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+        let mut staged = 0usize;
+        for pet_id in pet_ids {
+            if let Some(pet) = source_owner.base_mut().find_monster_by_id_mut(pet_id) {
+                pet.stage_for_delete();
+                staged += 1;
+            }
+        }
+        if let Some(records) = records {
+            player.store_uncreated_region_pets(records);
+        }
+        staged
     }
 
     pub(crate) fn decode_auction_goods(&self, source: &[u8]) -> Result<CGoods, GoodsDecodeError> {
@@ -16763,7 +16855,8 @@ impl CGame {
         }
 
         if let Some(target_owner) = self.take_region_owner(target_region_id) {
-            context.prepare_script_cross_region_companions(
+            player.begin_cross_region_companion_change();
+            context.prepare_script_cross_region_player(
                 &mut player,
                 source_region_id,
                 target_region_id,
@@ -16811,6 +16904,14 @@ impl CGame {
                 None,
                 &changed,
             ));
+
+            let staged_pets =
+                Self::stage_cross_region_player_pets(&mut source_owner, &mut player, true);
+            let carriage_transition = self.stage_cross_region_player_carriage(
+                &mut source_owner,
+                &mut player,
+                carriage_distance,
+            );
 
             player.stage_local_region_change(target_region_id, tile_x, tile_y, direction);
             if player.faction_id() > 0 {
@@ -16868,12 +16969,14 @@ impl CGame {
                 ?faction_delivery,
                 ?team_delivery,
                 ?change_log_delivery,
+                staged_pets,
+                ?carriage_transition,
                 "игрок переведён в локальный регион"
             );
             return PlayerRegionChangeOutcome::LocalRegion;
         }
 
-        context.prepare_script_cross_region_companions(
+        context.prepare_script_cross_region_player(
             &mut player,
             source_region_id,
             target_region_id,
@@ -16883,6 +16986,11 @@ impl CGame {
             true,
         );
         player.begin_server_region_change();
+        let carriage_transition = self.stage_cross_region_player_carriage(
+            &mut source_owner,
+            &mut player,
+            carriage_distance,
+        );
         let mut snapshot = Vec::new();
         if self.encode_player_game_save(&player, &mut snapshot, context) {
             let mut request = CMessage::new(0x0005_fa02);
@@ -16903,6 +17011,8 @@ impl CGame {
         } else {
             player.cancel_server_region_change();
         }
+        let staged_pets =
+            Self::stage_cross_region_player_pets(&mut source_owner, &mut player, false);
         let change_log_delivery = self.send_player_change_region_log(
             2,
             player_id,
@@ -16941,6 +17051,8 @@ impl CGame {
             ?player_snapshot_size,
             ?world_delivery,
             ?change_log_delivery,
+            staged_pets,
+            ?carriage_transition,
             delivered,
             "игрок передан на другой сервер"
         );
