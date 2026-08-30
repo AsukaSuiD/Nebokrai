@@ -18,6 +18,8 @@
 //! выполняются синхронно и в журнал не копируются. Диагностические сведения о
 //! корреляции и доставке публикуются через `tracing` в месте возникновения и
 //! не возвращаются деревьями отчётов.
+//! `0x7FE25` замыкает city guard snapshot через реальные `CGame/CMonster` и
+//! region spawn owners без прежних monster/spawn callbacks runtime-а.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -33,13 +35,15 @@ use super::super::organizingsystem::villagewarsys::{
 };
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
 use super::super::servercityregion::CityRegionContext;
-use super::super::serverregion::{RegionMembershipBlock, RegionTaxSessionKind};
+use super::super::serverregion::{
+    RegionMembershipBlock, RegionTaxSessionKind, ServerRegionMonsterContext,
+};
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
-    CGame, GameContainerMessageRuntime, GameWarRegionHandle,
+    CGame, GameClockContext, GameContainerMessageRuntime, GameWarRegionHandle,
     ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
     format_legacy_text_fields,
 };
@@ -55,6 +59,8 @@ pub(crate) trait GameOrganizingWarRuntime:
     + RegionRandomContext
     + ScriptRegionChangeContext
     + GameContainerMessageRuntime
+    + ServerRegionMonsterContext
+    + GameClockContext
 {
 }
 
@@ -1970,9 +1976,17 @@ impl<Runtime: GameOrganizingWarRuntime> AttackCityPhaseContext
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        if let Some(ServerRegionOwner::City(region)) = self.game.find_region_mut(region_id) {
-            region.on_refresh_region(war_number, self.runtime);
-        }
+        let Some(owner) = self.game.take_region_owner(region_id) else {
+            return;
+        };
+        let ServerRegionOwner::City(region) = &owner else {
+            self.game.restore_region_owner(owner);
+            return;
+        };
+        let targets = region.on_refresh_region(war_number);
+        self.game.restore_region_owner(owner);
+        self.game
+            .refresh_city_region_guards(region_id, targets, self.runtime);
     }
 }
 

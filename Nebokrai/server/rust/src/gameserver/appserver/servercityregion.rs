@@ -39,10 +39,11 @@
 //! классифицировались этим sweep.
 //! Timeout агрегирует владельцев
 //! symbols по faction ID и выбирает первый достаточный ID в map-order; если
-//! победителя нет, сохраняется действующий owner faction/union. Message,
-//! localized war-log, gate, monster и player-transition эффекты выражены
-//! точным context-контрактом до реализации соответствующих owners. Остальная
-//! поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! победителя нет, сохраняется действующий owner faction/union. Guard refresh
+//! возвращает ordered monster/spawn snapshot, который `CGame/CMonster`
+//! исполняют через канонические region и wire owners. Message, localized
+//! war-log, gate и player-transition эффекты остаются точным context-контрактом.
+//! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -167,12 +168,12 @@ pub(crate) trait CityRegionContext: WarRegionContext + CityGateRuntimeContext {
         faction_id: i32,
         union_id: i32,
     );
+}
 
-    /// Восстанавливает HP/state одного найденного guard и шлёт `0xBF60F` вокруг него.
-    fn refresh_guard_monster(&mut self, region_id: i32, monster_id: i32);
-
-    /// Обновляет spawn tick и добавляет недостающих guard-monsters одной записи.
-    fn refresh_guard_spawn(&mut self, region_id: i32, spawn_index: i32);
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CityGuardRefreshTargets {
+    pub(crate) monster_ids: Vec<i32>,
+    pub(crate) spawn_indices: Vec<i32>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -465,12 +466,8 @@ impl CServerCityRegion {
         }
     }
 
-    pub(crate) fn on_refresh_region<Context: CityRegionContext>(
-        &mut self,
-        _war_number: i32,
-        context: &mut Context,
-    ) {
-        self.refresh_guard(context);
+    pub(crate) fn on_refresh_region(&self, _war_number: i32) -> CityGuardRefreshTargets {
+        self.guard_refresh_targets()
     }
 
     pub(crate) fn on_faction_victory<Context: CityRegionContext>(
@@ -600,12 +597,10 @@ impl CServerCityRegion {
             .map(|gate| gate.name.as_slice())
     }
 
-    pub(crate) fn refresh_guard<Context: CityRegionContext>(&mut self, context: &mut Context) {
-        for &monster_id in &self.guard_monsters {
-            context.refresh_guard_monster(self.war.base.id, monster_id);
-        }
-        for &spawn_index in &self.guard_indices {
-            context.refresh_guard_spawn(self.war.base.id, spawn_index);
+    pub(crate) fn guard_refresh_targets(&self) -> CityGuardRefreshTargets {
+        CityGuardRefreshTargets {
+            monster_ids: self.guard_monsters.iter().copied().collect(),
+            spawn_indices: self.guard_indices.clone(),
         }
     }
 }

@@ -22,8 +22,9 @@
 //! ставит следующий `Stand` на 1000 мс только при пустом результате основного
 //! прохода и отсутствии цели; `CPlayerAI` применяет эту границу после своих
 //! typed очередей. Общий runtime не вызывает очереди и `OnSchedule`, пока этот
-//! владелец спит. Country guard refresh также достигает точный `Clear` обычных
-//! active/passive очередей и dormancy-флага без затрагивания war-soul FIFO.
+//! владелец спит. City/country guard refresh также достигает точный `Clear`
+//! обычных active/passive очередей и dormancy-флага без затрагивания war-soul
+//! FIFO.
 //! Указатель владельца, остальные действия и обработчики ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
@@ -106,10 +107,10 @@ impl CBaseAI {
     }
 
     /// Точный наблюдаемый участок `CBaseAI::Clear`, вызываемый при обновлении
-    /// country guard: очищает обычные active/passive FIFO и снимает сон.
+    /// city/country guard: очищает обычные active/passive FIFO и снимает сон.
     /// Исходный owner не очищает отдельную war-soul очередь и не обнуляет
     /// сохранённые времена сна, поэтому Rust сохраняет это различие.
-    pub(crate) fn clear_country_guard_state(&mut self) {
+    pub(crate) fn clear_guard_refresh_state(&mut self) {
         self.active_actions.clear();
         self.passive_actions.clear();
         self.is_dormant = false;

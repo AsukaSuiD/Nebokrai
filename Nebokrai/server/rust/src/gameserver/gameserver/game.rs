@@ -731,8 +731,8 @@ use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use crate::gameserver::appserver::servercityregion::{
-    CServerCityRegion, CityGateRuntimeContext, CityRegionContext, CityReturnPointContext,
-    CityReturnPointError,
+    CServerCityRegion, CityGateRuntimeContext, CityGuardRefreshTargets, CityRegionContext,
+    CityReturnPointContext, CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
@@ -45111,8 +45111,6 @@ impl CGame {
             + ScriptRegionChangeContext
             + RealmAppellationScriptContext,
     {
-        let area_width = self.globe_setup.area_width();
-        let area_height = self.globe_setup.area_height();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
         };
@@ -45123,36 +45121,13 @@ impl CGame {
         let guard_targets = region.refresh_for_clear(runtime);
         self.restore_region_owner(owner);
 
-        for monster_id in guard_targets.monster_ids {
-            self.refresh_country_guard_monster(region_id, monster_id);
-        }
-        for spawn_index in guard_targets.spawn_indices {
-            let now_ms = runtime.now_milliseconds();
-            let Some(mut owner) = self.take_region_owner(region_id) else {
-                return;
-            };
-            let result = match &mut owner {
-                ServerRegionOwner::Country(region) => region.base.refresh_monster_group_by_index(
-                    spawn_index,
-                    now_ms,
-                    area_width,
-                    area_height,
-                    runtime,
-                ),
-                _ => {
-                    self.restore_region_owner(owner);
-                    return;
-                }
-            };
-            self.restore_region_owner(owner);
-            if let Err(error) = result {
-                tracing::warn!(
-                    region_id,
-                    spawn_index,
-                    ?error,
-                    "не обновлена country guard spawn-группа"
-                );
-            }
+        if !self.refresh_region_guards(
+            region_id,
+            guard_targets.monster_ids,
+            guard_targets.spawn_indices,
+            runtime,
+        ) {
+            return;
         }
 
         let Some(owner) = self.take_region_owner(region_id) else {
@@ -45171,10 +45146,66 @@ impl CGame {
         }
     }
 
-    /// Материализует точный monster-участок country `RefreshGuard`:
+    pub(crate) fn refresh_city_region_guards<Runtime>(
+        &mut self,
+        region_id: i32,
+        targets: CityGuardRefreshTargets,
+        runtime: &mut Runtime,
+    ) where
+        Runtime: ServerRegionMonsterContext + GameClockContext,
+    {
+        let _ = self.refresh_region_guards(
+            region_id,
+            targets.monster_ids,
+            targets.spawn_indices,
+            runtime,
+        );
+    }
+
+    fn refresh_region_guards<Runtime>(
+        &mut self,
+        region_id: i32,
+        monster_ids: Vec<i32>,
+        spawn_indices: Vec<i32>,
+        runtime: &mut Runtime,
+    ) -> bool
+    where
+        Runtime: ServerRegionMonsterContext + GameClockContext,
+    {
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        for monster_id in monster_ids {
+            self.refresh_guard_monster(region_id, monster_id);
+        }
+        for spawn_index in spawn_indices {
+            let now_ms = runtime.now_milliseconds();
+            let Some(mut owner) = self.take_region_owner(region_id) else {
+                return false;
+            };
+            let result = owner.base_mut().refresh_monster_group_by_index(
+                spawn_index,
+                now_ms,
+                area_width,
+                area_height,
+                runtime,
+            );
+            self.restore_region_owner(owner);
+            if let Err(error) = result {
+                tracing::warn!(
+                    region_id,
+                    spawn_index,
+                    ?error,
+                    "не обновлена guard spawn-группа региона"
+                );
+            }
+        }
+        true
+    }
+
+    /// Материализует точный monster-участок city/country `RefreshGuard`:
     /// `SetHP(GetMaxHP)`, conditional `CBaseAI::Clear`, затем один круговой
     /// `0xBF60F(type,id,action,max_hp,hp)` вокруг той же формы.
-    fn refresh_country_guard_monster(&mut self, region_id: i32, monster_id: i32) {
+    fn refresh_guard_monster(&mut self, region_id: i32, monster_id: i32) {
         let Some(property) = self
             .find_region(region_id)
             .and_then(|owner| owner.base().find_monster_by_id(monster_id))
@@ -45192,7 +45223,7 @@ impl CGame {
                 self.restore_region_owner(owner);
                 return;
             };
-            monster.refresh_country_guard(property.maximum_hp);
+            monster.refresh_war_guard(property.maximum_hp);
             (
                 monster.move_shape().shape().identity(),
                 monster.move_shape().shape().get_action(),
