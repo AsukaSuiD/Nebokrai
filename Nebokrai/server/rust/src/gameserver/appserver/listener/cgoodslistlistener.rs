@@ -1,54 +1,44 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Visitor списка GUID товаров GameServer.
+//!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
+//! `appserver/listener/cgoodslistlistener.cpp`. Новый listener имеет пустой
+//! ordered vector и `is_all_goods_exist = true`; каждый встреченный `CGoods`
+//! добавляет свой GUID и всегда продолжает traversal. MSVC vector/vtable и
+//! явный destructor заменены `Vec`/`Drop`.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\listener\cgoodslistlistener.cpp
+use crate::gameserver::appserver::goods::cgoods::CGoods;
+use crate::public::guid::CGuid;
 
-// ============================================================================
-// FUNCTION: CGoodsListListener::~CGoodsListListener
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\listener\cgoodslistlistener.cpp:18
-// RVA: 0x000ED0C0
-// ADDRESS: 004ed0c0
-// PROTOTYPE: void __thiscall ~CGoodsListListener(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GoodsListListener {
+    goods_ids: Vec<CGuid>,
+    is_all_goods_exist: bool,
+}
 
-// ============================================================================
-// FUNCTION: CGoodsListListener::CGoodsListListener
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\listener\cgoodslistlistener.cpp:13
-// RVA: 0x000ED120
-// ADDRESS: 004ed120
-// PROTOTYPE: undefined __thiscall CGoodsListListener(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl Default for GoodsListListener {
+    fn default() -> Self {
+        Self {
+            goods_ids: Vec::new(),
+            is_all_goods_exist: true,
+        }
+    }
+}
 
-// ============================================================================
-// FUNCTION: CGoodsListListener::OnTraversingContainer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\listener\cgoodslistlistener.cpp:23
-// RVA: 0x000ED140
-// ADDRESS: 004ed140
-// PROTOTYPE: int __thiscall OnTraversingContainer(CContainer * param_1, CBaseObject * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+impl GoodsListListener {
+    pub(crate) fn goods_ids(&self) -> &[CGuid] {
+        &self.goods_ids
+    }
 
+    pub(crate) const fn is_all_goods_exist(&self) -> bool {
+        self.is_all_goods_exist
+    }
 
-// COMPONENT_VARIANT_END: GameServer
+    pub(crate) const fn set_all_goods_exist(&mut self, value: bool) {
+        self.is_all_goods_exist = value;
+    }
+
+    pub(crate) fn visit(&mut self, goods: &CGoods) -> bool {
+        self.goods_ids.push(goods.identity().ex_id);
+        true
+    }
+}

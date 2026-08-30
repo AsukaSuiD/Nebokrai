@@ -24,6 +24,7 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
     GAP_GOODS_UPGRADE_PRICE,
 };
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
+use crate::gameserver::appserver::listener::cupgradepricelistener::UpgradePriceListener;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::public::guid::CGuid;
 
@@ -120,12 +121,11 @@ impl CEquipmentUpgrade {
     where
         Resolve: FnMut(CGuid) -> i32,
     {
-        self.upgrade_container
-            .positions()
-            .values()
-            .fold(0u32, |price, goods_id| {
-                price.wrapping_add(resolve(*goods_id) as u32)
-            })
+        let mut listener = UpgradePriceListener::default();
+        for goods_id in self.upgrade_container.positions().values() {
+            listener.add_property_value(resolve(*goods_id));
+        }
+        listener.price()
     }
 
     pub(crate) fn probability<Resolve>(&self, mut resolve: Resolve) -> u32
