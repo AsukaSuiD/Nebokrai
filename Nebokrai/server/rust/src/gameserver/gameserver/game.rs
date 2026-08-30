@@ -4184,14 +4184,6 @@ pub(crate) trait GameMainLoopRuntime:
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
     fn player_move_shape_unmaterialized_state_ai(&mut self, game: &mut CGame, player_id: i32);
-    /// Virtual shape `AI` вызывается только для state `CS_NONE`; новое state
-    /// исходник увидит на следующем region tick.
-    fn run_region_active_shape_ai(
-        &mut self,
-        game: &mut CGame,
-        region: &mut CServerRegion,
-        identity: ShapeIdentity,
-    );
 }
 
 struct GameAreaAiContext<'a, Runtime> {
@@ -43662,6 +43654,9 @@ impl CGame {
                                     removed_npcs.push(identity.id);
                                 }
                             }
+                        } else if identity.object_type == PLAYER_TYPE {
+                            // Concrete CPlayer/CMoveShape body уже исполнен в
+                            // player pass этого же CGame::AI до region scan.
                         } else if identity.object_type == SUMMON_SHAPE_TYPE
                             && region.find_skill_phalanx(identity.id).is_some()
                         {
@@ -43674,8 +43669,13 @@ impl CGame {
                         {
                             // Concrete base-attack owner уже исполнился перед
                             // virtual region scan этого же AI tick.
+                        } else if identity.object_type == MONSTER_TYPE {
+                            // Остальной concrete CMonster body также исполнен
+                            // в monster pass до region scan; отсутствие base
+                            // attack tick не создаёт второго virtual вызова.
                         } else {
-                            runtime.run_region_active_shape_ai(self, region, identity);
+                            // NPC обработан выше, ground goods достигает scan
+                            // только с CS_DELETE, иных canonical типов нет.
                         }
                         shape_ai_calls = shape_ai_calls.wrapping_add(1);
                         false
