@@ -31,9 +31,9 @@ use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
 use crate::gameserver::appserver::session::cequipmentdakong::EquipmentDaKongOperation;
 use crate::gameserver::gameserver::game::{
-    BattleFairyDeathContext, CGame, CiQingComposeContext, CiQingOtherPersonTarget,
-    EquipmentComposeContext, EquipmentDaKongContext, EquipmentUpgradeContext, FairyContext,
-    GameContainerMessageRuntime, SynthesisContext,
+    CGame, CiQingComposeContext, CiQingOtherPersonTarget, EquipmentComposeContext,
+    EquipmentDaKongContext, EquipmentUpgradeContext, GameContainerMessageRuntime,
+    SynthesisContext,
 };
 use crate::nets::netserver::message::CMessage;
 
@@ -83,13 +83,11 @@ const END_GOODS_SESSION: u32 = 0x0008_fc25;
 
 pub(crate) trait GameGoodsMessageRuntime:
     ScriptFunctionRuntime
-    + BattleFairyDeathContext
     + CiQingComposeContext
     + EquipmentComposeContext
     + EquipmentDaKongContext
     + EquipmentUpgradeContext
     + GameContainerMessageRuntime
-    + FairyContext
     + SynthesisContext
 {
 }
@@ -297,7 +295,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 } else {
                     0
                 };
-                game.implant_fairy_experience(player_id, requested_vigour, runtime);
+                game.implant_fairy_experience(player_id, requested_vigour);
             }
         }
         SYNCRETIZE_FAIRY => {
@@ -312,7 +310,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                     Ok(_) => FairySyncreticProperty::GrowingRate,
                     Err(error) => return Some(Err(error)),
                 };
-                game.syncretize_fairy(player_id, property, runtime)
+                game.syncretize_fairy(player_id, property)
                     .expect("игрок с доступным контейнером феи остаётся зарегистрирован при обработке сообщения");
             }
         }
@@ -627,11 +625,11 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 };
                 allocations.push((property, points));
             }
-            game.allocate_battle_fairy_potential(player_id, &allocations, runtime)
+            game.allocate_battle_fairy_potential(player_id, &allocations)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         RESET_BATTLE_FAIRY_POTENTIAL => {
-            game.reset_battle_fairy_potential(player_id, runtime)
+            game.reset_battle_fairy_potential(player_id)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         SUMMON_BATTLE_FAIRY | RECALL_BATTLE_FAIRY => {

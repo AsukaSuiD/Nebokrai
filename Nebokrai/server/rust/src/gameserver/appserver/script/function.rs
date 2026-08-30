@@ -449,8 +449,7 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
-    BattleFairyDeathContext, BattleFairyScriptAction, CGame, CiQingComposeContext,
-    EquipmentDaKongContext, GameClockContext,
+    BattleFairyScriptAction, CGame, CiQingComposeContext, EquipmentDaKongContext, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     MonsterDeathContext, NationCombatContext, PlayerReliveContext,
     RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
@@ -847,7 +846,6 @@ pub(crate) trait ScriptFunctionRuntime:
     + CiQingComposeContext
     + EquipmentDaKongContext
     + GameContainerMessageRuntime
-    + BattleFairyDeathContext
     + ScriptRegionChangeContext
     + CityGateRuntimeContext
     + GodsBattleDeathContext
@@ -866,7 +864,6 @@ impl<T> ScriptFunctionRuntime for T where
         + CiQingComposeContext
         + EquipmentDaKongContext
         + GameContainerMessageRuntime
-        + BattleFairyDeathContext
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
         + GodsBattleDeathContext

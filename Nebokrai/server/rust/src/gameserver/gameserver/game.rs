@@ -2094,8 +2094,6 @@ pub(crate) fn game_wall_time_seconds() -> u64 {
         .as_secs()
 }
 
-pub(crate) trait FairyContext: BattleFairyDeathContext + GameClockContext {}
-
 pub(crate) trait PlayerEquipmentInspectionContext {}
 
 impl<T> PlayerEquipmentInspectionContext for T {}
@@ -2272,11 +2270,6 @@ struct PlayerTradeAuditParty {
     name: Vec<u8>,
 }
 
-/// Battle-fairy death/equipment transitions используют runtime только для
-/// точного old-client goods codec; player property state и `0xBF721` принадлежат
-/// `CGame/CPlayer` и не передаются через этот context.
-pub(crate) trait BattleFairyDeathContext {}
-
 /// Единая runtime-граница virtual `CPlayer::UpdateProperty`. Все reached
 /// callers применяют один полный snapshot независимо от причины mutation;
 /// локальные `CGame` owners сохраняют собственный порядок publication и
@@ -2310,9 +2303,7 @@ impl<T> MonsterDeathContext for T where
 /// Exact virtual `CPlayer::UpdateProperty` после realm hidden-skill mutation.
 /// Runtime владеет ещё не сведёнными equipment/state/GlobeSetup источниками;
 /// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
-pub(crate) trait RealmAppellationScriptContext:
-    BattleFairyDeathContext + PlayerPropertyContext
-{}
+pub(crate) trait RealmAppellationScriptContext: PlayerPropertyContext {}
 
 /// Нематериализованные virtual owners skill-state остаются на
 /// runtime-границе. Player GameSave, live pet/carriage snapshots,
@@ -15943,7 +15934,7 @@ impl CGame {
         context: &mut Context,
     ) -> Option<i32>
     where
-        Context: GameContainerMessageRuntime + BattleFairyDeathContext + NationCombatContext,
+        Context: GameContainerMessageRuntime + NationCombatContext,
     {
         let (region_id, identity) = self
             .find_player(player_id)
@@ -16083,7 +16074,7 @@ impl CGame {
         context: &mut Context,
     ) -> Option<i32>
     where
-        Context: GameContainerMessageRuntime + BattleFairyDeathContext + NationCombatContext,
+        Context: GameContainerMessageRuntime + NationCombatContext,
     {
         let player_id = self.find_player_by_name(player_name)?.player_id();
         let applied = self
@@ -16115,7 +16106,7 @@ impl CGame {
         context: &mut Context,
     ) -> Option<i32>
     where
-        Context: GameContainerMessageRuntime + BattleFairyDeathContext + NationCombatContext,
+        Context: GameContainerMessageRuntime + NationCombatContext,
     {
         let player_id = self.find_player_by_name(player_name)?.player_id();
         let applied = self
@@ -25271,7 +25262,7 @@ impl CGame {
         tracing::trace!(player_id = log.player_id, ?delivery, "журнал соединения фей отправлен");
     }
 
-    pub(crate) fn update_fairy_hatch_state<Context: FairyContext>(
+    pub(crate) fn update_fairy_hatch_state<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         slot: u32,
@@ -25342,7 +25333,7 @@ impl CGame {
     /// Вызывающая сторона передаёт ровно текущего игрока после проверки связи
     /// и счётчика смерти на войне наций, сохраняя таймер, замену, перемещение
     /// объекта и журнал инкубации в том же проходе ИИ игрока.
-    pub(crate) fn run_fairy_hatcher<Context: FairyContext>(
+    pub(crate) fn run_fairy_hatcher<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -25415,11 +25406,10 @@ impl CGame {
         Some(())
     }
 
-    pub(crate) fn implant_fairy_experience<Context: FairyContext>(
+    pub(crate) fn implant_fairy_experience(
         &mut self,
         player_id: i32,
         requested_vigour: u32,
-        _context: &mut Context,
     ) {
         let Some(player) = self.find_player(player_id) else {
             tracing::trace!(
@@ -25622,11 +25612,10 @@ impl CGame {
         );
     }
 
-    pub(crate) fn syncretize_fairy<Context: FairyContext>(
+    pub(crate) fn syncretize_fairy(
         &mut self,
         player_id: i32,
         property: FairySyncreticProperty,
-        _context: &mut Context,
     ) -> Option<()> {
         let (experience, money, vigour) = {
             let player = self.find_player(player_id)?;
@@ -33626,11 +33615,10 @@ impl CGame {
 
     /// Исполняемый entry point goods-message `0x8FC2A`; decoder передаёт пары
     /// property/client-points без предварительного масштабирования.
-    pub(crate) fn allocate_battle_fairy_potential<Context: BattleFairyDeathContext>(
+    pub(crate) fn allocate_battle_fairy_potential(
         &mut self,
         player_id: i32,
         allocations: &[(i32, i32)],
-        _context: &mut Context,
     ) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let coefficients = self.globe_setup.player_property_coefficients();
@@ -34045,11 +34033,7 @@ impl CGame {
 
     /// Исполняемый entry point goods-message `0x8FC2B`: reset item ищется и
     /// расходуется в owned player packet до potential/player mutations.
-    pub(crate) fn reset_battle_fairy_potential<Context: BattleFairyDeathContext>(
-        &mut self,
-        player_id: i32,
-        _context: &mut Context,
-    ) -> Option<()> {
+    pub(crate) fn reset_battle_fairy_potential(&mut self, player_id: i32) -> Option<()> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let player = self.players.get_mut(&player_id)?;
