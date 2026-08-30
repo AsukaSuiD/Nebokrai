@@ -32,6 +32,8 @@
 //! и публикуют исходные client frames `0xBFF32..0xBFF35` через `CGame`.
 //! Quest-команды `0x90124..0x90128` сохраняют World forwarding и state-zero
 //! запуск complete/abandon scripts из canonical `CQuestSystem`.
+//! Остальная client relay-семья `0x90107..0x90121` сохраняет исходное
+//! соответствие World opcodes, payload и позицию дописанного player ID.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -152,6 +154,7 @@ pub(crate) enum GameOrganizingMessageError {
     RegionTax(FactionLifecycleDispatchError),
     HonorRanks(FactionLifecycleDispatchError),
     QuestActions(FactionLifecycleDispatchError),
+    ClientRelay(FactionLifecycleDispatchError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -420,6 +423,78 @@ fn dispatch_client_quest_action(
     Ok(())
 }
 
+fn dispatch_organizing_client_relay(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &CGame,
+) -> Result<(), FactionLifecycleDispatchError> {
+    message.resolve_player_context(game);
+    let Some(player_id) = message.player_id() else {
+        trace!(opcode, "OrganSys relay не имеет игрока");
+        return Ok(());
+    };
+    let output_opcode = match opcode {
+        0x90107..=0x90116 => 0x0006_010a + (opcode - 0x90107),
+        0x90117..=0x90119 => 0x0006_011b + (opcode - 0x90117),
+        0x9011c => 0x0006_0120,
+        0x9011d => 0x0006_0121,
+        0x9011e => 0x0006_0122,
+        0x9011f => 0x0006_0123,
+        0x90120 => 0x0006_0124,
+        0x90121 => 0x0006_0128,
+        _ => unreachable!("relay opcode проверен dispatcher-ом"),
+    };
+    let delivery = match opcode {
+        0x90107 => {
+            let first = message
+                .base_mut()
+                .get_long()
+                .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+                    field: "relay first value",
+                })?;
+            let second = message
+                .base_mut()
+                .get_long()
+                .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+                    field: "relay second value",
+                })?;
+            let mut request = CMessage::new(output_opcode as i32);
+            request.add_long(player_id);
+            request.add_long(second);
+            request.add_long(first);
+            request.send(game, false)
+        }
+        0x90108 | 0x90109 | 0x9010c | 0x9010d | 0x90113 | 0x90115 => {
+            let value = message
+                .base_mut()
+                .get_long()
+                .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+                    field: "relay value",
+                })?;
+            let mut request = CMessage::new(output_opcode as i32);
+            request.add_long(player_id);
+            request.add_long(value);
+            request.send(game, false)
+        }
+        0x9010a | 0x9010b | 0x9010e | 0x9010f => {
+            let mut request = CMessage::new(output_opcode as i32);
+            request.add_long(player_id);
+            request.send(game, false)
+        }
+        0x90110..=0x90112
+        | 0x90114
+        | 0x90116..=0x90119
+        | 0x9011c..=0x90121 => {
+            message.add_long(player_id);
+            message.set_message_type(output_opcode as i32);
+            message.send(game, false)
+        }
+        _ => unreachable!("relay wire-form проверен dispatcher-ом"),
+    };
+    trace!(opcode, output_opcode, player_id, ?delivery, "OrganSys команда передана WorldServer");
+    Ok(())
+}
+
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
 pub(crate) fn dispatch_game_organizing_message<
     Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext,
@@ -434,8 +509,10 @@ pub(crate) fn dispatch_game_organizing_message<
         0x90101
             | 0x90105
             | 0x90106
+            | 0x90107..=0x90119
             | 0x9011a
             | 0x9011b
+            | 0x9011c..=0x90121
             | 0x90122
             | 0x90123
             | 0x90124..=0x90128
@@ -466,6 +543,13 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe46..=0x7fe4a
     ) {
         return None;
+    }
+
+    if matches!(opcode, 0x90107..=0x90119 | 0x9011c..=0x90121) {
+        return Some(
+            dispatch_organizing_client_relay(opcode, message, game)
+                .map_err(GameOrganizingMessageError::ClientRelay),
+        );
     }
 
     if matches!(opcode, 0x9012a..=0x9012d) {
