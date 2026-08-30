@@ -28,6 +28,8 @@
 //! возвращает region owner только для финального таймера/ownership reset.
 //! City timeout аналогично сохраняет `ownership → 0x60138 → war-log`, причём
 //! сетевой кадр больше не является runtime callback-ом.
+//! Honor-list команды `0x9012A..0x9012D` читают тот же `CHonorRanks` snapshot
+//! и публикуют исходные client frames `0xBFF32..0xBFF35` через `CGame`.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -146,6 +148,7 @@ pub(crate) enum GameOrganizingMessageError {
     PlayerQuest(GamePlayerQuestCommandError),
     PlayerRunScript(FactionLifecycleDispatchError),
     RegionTax(FactionLifecycleDispatchError),
+    HonorRanks(FactionLifecycleDispatchError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -318,6 +321,42 @@ fn dispatch_game_player_run_script(
     Ok(())
 }
 
+fn dispatch_honor_rank_message(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &CGame,
+) -> Result<(), FactionLifecycleDispatchError> {
+    let requested_country = if opcode == 0x9012d {
+        Some(
+            message
+                .base_mut()
+                .get_long()
+                .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+                    field: "honor rank country",
+                })?,
+        )
+    } else {
+        None
+    };
+    message.resolve_player_context(game);
+    let Some(player_id) = message.player_id() else {
+        trace!(opcode, ?requested_country, "Honor-list команда не имеет игрока");
+        return Ok(());
+    };
+    let sent = match opcode {
+        0x9012a..=0x9012c => {
+            game.send_player_honor_ranks(player_id, (opcode - 0x9012a) as i32)
+        }
+        0x9012d => game.send_total_honor_ranks_for_country(
+            player_id,
+            requested_country.expect("country прочитан для 0x9012D"),
+        ),
+        _ => unreachable!("honor-list opcode проверен dispatcher-ом"),
+    };
+    trace!(opcode, player_id, ?requested_country, sent, "Опубликован рейтинг чести");
+    Ok(())
+}
+
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
 pub(crate) fn dispatch_game_organizing_message<
     Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext,
@@ -336,6 +375,7 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x9011b
             | 0x90122
             | 0x90123
+            | 0x9012a..=0x9012d
             | 0x7fe01
             | 0x7fe06
             | 0x7fe07
@@ -362,6 +402,13 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe46..=0x7fe4a
     ) {
         return None;
+    }
+
+    if matches!(opcode, 0x9012a..=0x9012d) {
+        return Some(
+            dispatch_honor_rank_message(opcode, message, game)
+                .map_err(GameOrganizingMessageError::HonorRanks),
+        );
     }
 
     if matches!(opcode, 0x7fe38 | 0x7fe39) {

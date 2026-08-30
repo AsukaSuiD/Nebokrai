@@ -26721,6 +26721,70 @@ impl CGame {
         )
     }
 
+    /// Exact `0x9012A..0x9012C`: страна берётся из player snapshot, а тип
+    /// рейтинга одновременно выбирает client opcode `0xBFF32..0xBFF34`.
+    pub(crate) fn send_player_honor_ranks(&self, player_id: i32, rank_type: i32) -> bool {
+        let Some(player) = self.find_player(player_id) else {
+            return false;
+        };
+        let message_type = match rank_type {
+            0 => 0x000b_ff32,
+            1 => 0x000b_ff33,
+            2 => 0x000b_ff34,
+            _ => return false,
+        };
+        self.send_honor_rank_payload(
+            player_id,
+            message_type,
+            rank_type,
+            i32::from(player.country()).wrapping_sub(1),
+            None,
+        )
+    }
+
+    /// Exact `0x9012D`: запрошенная страна остаётся первым DWORD ответа, а
+    /// последующий список всегда сериализуется как honor rank type `3`.
+    pub(crate) fn send_total_honor_ranks_for_country(
+        &self,
+        player_id: i32,
+        country: i32,
+    ) -> bool {
+        self.send_honor_rank_payload(
+            player_id,
+            0x000b_ff35,
+            3,
+            country.wrapping_sub(1),
+            Some(country),
+        )
+    }
+
+    fn send_honor_rank_payload(
+        &self,
+        player_id: i32,
+        message_type: i32,
+        rank_type: i32,
+        country_index: i32,
+        country_prefix: Option<i32>,
+    ) -> bool {
+        if self.find_player(player_id).is_none() {
+            return false;
+        }
+        let mut payload = Vec::new();
+        if !self
+            .honor_ranks
+            .add_to_byte_array(&mut payload, rank_type, country_index)
+        {
+            return false;
+        }
+        let mut message = CMessage::new(message_type);
+        if let Some(country) = country_prefix {
+            message.add_long(country);
+        }
+        message.base_mut().add(&payload);
+        let _ = message.send_to_player(self.net_server(), player_id);
+        true
+    }
+
     /// Exact `SendTotalHonorRanks`: country DWORD precedes type-3 country
     /// payload, а malformed country останавливает отправку целиком.
     pub(crate) fn send_script_total_honor_ranks(&self, player_id: i32) -> i32 {
@@ -26728,17 +26792,7 @@ impl CGame {
             return 0;
         };
         let country = i32::from(player.country());
-        let mut payload = Vec::new();
-        if !self
-            .honor_ranks
-            .add_to_byte_array(&mut payload, 3, country.wrapping_sub(1))
-        {
-            return 0;
-        }
-        let mut message = CMessage::new(0x0b_ff35);
-        message.add_long(country);
-        message.base_mut().add(&payload);
-        let _ = message.send_to_player(self.net_server(), player_id);
+        let _ = self.send_total_honor_ranks_for_country(player_id, country);
         0
     }
 
