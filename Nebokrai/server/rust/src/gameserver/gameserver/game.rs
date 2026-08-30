@@ -368,6 +368,8 @@
 //! Same-region `ChangeRegion` уже напрямую переносит близкую активную повозку
 //! через её region monster-owner. Cross-region departure теперь сохраняет
 //! pet/carriage snapshots и ставит прежних monster-owner-ов в `CS_DELETE`;
+//! PDB slots `+0x16C/+0x90` подтверждены как `OnExitRegion/SetBlock` и напрямую
+//! выполняют сброс особых предметов с очисткой исходного footprint;
 //! `8F801` entry восстанавливает их между подтверждёнными частями
 //! `CPlayer::OnEnterRegion`. Только прочие player virtual callbacks остаются
 //! runtime-границей.
@@ -2301,21 +2303,14 @@ impl<T> MonsterDeathContext for T where
 /// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
 pub(crate) trait RealmAppellationScriptContext: PlayerPropertyContext {}
 
-/// Нематериализованные cross-region virtual player callbacks остаются на
-/// runtime-границе. Player GameSave, live pet/carriage snapshots,
-/// region/player maps, session state и message wire исполняет `CGame`.
-pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
-    fn prepare_script_cross_region_player(
-        &mut self,
-        player: &mut CPlayer,
-        source_region_id: i32,
-        target_region_id: i32,
-        target_tile_x: i32,
-        target_tile_y: i32,
-        carriage_distance: i32,
-        changing_server: bool,
-    );
+/// ChangeRegion использует только уже материализованные clock, spatial,
+/// container и property owners вызывающей среды.
+pub(crate) trait ScriptRegionChangeContext:
+    NationCombatContext + GameContainerMessageRuntime
+{
 }
+
+impl<T> ScriptRegionChangeContext for T where T: NationCombatContext + GameContainerMessageRuntime {}
 
 pub(crate) trait GameRegionEnterContext: NationCombatContext + ServerRegionMonsterContext {
     /// Первая часть `CPlayer::OnEnterRegion`: base move-shape, router,
@@ -16738,6 +16733,22 @@ impl CGame {
             })
             .expect("region-change player проверен до source snapshot");
         let sufferer_is_gm = self.script_player_gm_level(player_id).unwrap_or(0) != 0;
+        self.finish_player_business(player_id);
+        if self.find_region(source_region_id).is_none() {
+            tracing::debug!(
+                player_id,
+                source_region_id,
+                target_region_id,
+                "смена региона отклонена: исходный регион отсутствует"
+            );
+            return PlayerRegionChangeOutcome::MissingSourceRegion;
+        }
+        if !(0..8).contains(&direction) {
+            direction = context.random_below(8);
+        }
+        if target_region_id != source_region_id {
+            self.drop_particular_goods_before_recall(player_id, context);
+        }
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
             tracing::debug!(
                 player_id,
@@ -16747,15 +16758,23 @@ impl CGame {
             );
             return PlayerRegionChangeOutcome::MissingSourceRegion;
         };
-        self.finish_player_business(player_id);
         let mut player = self
             .players
             .remove(&player_id)
             .expect("region-change player проверен перед business mutation");
 
-        if !(0..8).contains(&direction) {
-            direction = context.random_below(8);
-        }
+        let source_block_clear = (target_region_id != source_region_id).then(|| {
+            player
+                .shape()
+                .set_block(
+                    &mut source_owner.base_mut().region,
+                    source_tile_x,
+                    source_tile_y,
+                    0,
+                    player.figure(),
+                )
+        });
+
         if target_region_id == source_region_id {
             let carriage_relocation = self.move_same_region_player_carriage(
                 &mut source_owner,
@@ -16869,15 +16888,6 @@ impl CGame {
 
         if let Some(target_owner) = self.take_region_owner(target_region_id) {
             player.begin_cross_region_companion_change();
-            context.prepare_script_cross_region_player(
-                &mut player,
-                source_region_id,
-                target_region_id,
-                tile_x,
-                tile_y,
-                carriage_distance,
-                false,
-            );
             if tile_x == -1 && tile_y == -1 {
                 if let Ok(position) = target_owner.base().region.get_random_pos(context) {
                     tile_x = position.x;
@@ -16984,20 +16994,12 @@ impl CGame {
                 ?change_log_delivery,
                 staged_pets,
                 ?carriage_transition,
+                ?source_block_clear,
                 "игрок переведён в локальный регион"
             );
             return PlayerRegionChangeOutcome::LocalRegion;
         }
 
-        context.prepare_script_cross_region_player(
-            &mut player,
-            source_region_id,
-            target_region_id,
-            tile_x,
-            tile_y,
-            carriage_distance,
-            true,
-        );
         player.begin_server_region_change();
         let carriage_transition = self.stage_cross_region_player_carriage(
             &mut source_owner,
@@ -17066,6 +17068,7 @@ impl CGame {
             ?change_log_delivery,
             staged_pets,
             ?carriage_transition,
+            ?source_block_clear,
             delivered,
             "игрок передан на другой сервер"
         );
