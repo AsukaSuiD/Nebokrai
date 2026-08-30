@@ -20,6 +20,13 @@
 //! context-контрактом; city weekly membership продолжает возвращать `Result`.
 //! Base AI также возвращает typed monster-spawn block: при нём weather и
 //! contender tail не выполняются.
+//! `OnPlayerDamage` сохраняет исходную f32/x87 цепочку
+//! `max_time * (damage / max_hp * fDecTimeParam)`, signed clamp и публикацию
+//! процента. NaN/inf/out-of-range `fistp` остаются явным локальным блоком.
+//! Конструктор `0x001D3740` создаёт base-region, пустые ordered contender/map
+//! и нулевые counters; `Default`, `Vec` и `BTreeMap` выражают это буквально.
+//! Деструктор `0x001D3060` освобождает map и base-object, что безопасно и без
+//! дополнительной семантики выполняют автоматические `Drop` полей.
 //! Decoder сначала делегирует сырому `CServerRegion` через узкий context, затем
 //! читает три signed little-endian DWORD и обновляет только keys `0..total`:
 //! старые map-keys за новым total оригинал не очищает. Безразмерный legacy read
@@ -27,8 +34,8 @@
 
 use std::collections::BTreeMap;
 
-use super::servercountryregion::is_player_contend_symbol;
 use super::legacycodec::LegacyReader;
+use super::servercountryregion::is_player_contend_symbol;
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerRegionMonsterRectBlock,
 };
@@ -79,6 +86,28 @@ pub(crate) struct WarRegionOwnership {
 pub(crate) struct ContendArithmeticBlock {
     pub(crate) current_time: i32,
     pub(crate) max_time: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct WarDamagePlayer {
+    pub(crate) player_id: i32,
+    pub(crate) max_hp: u32,
+}
+
+/// BLOCKED_MISSING_FACT: для NaN/inf/out-of-range x87 `fistp i32` точная
+/// реакция процесса не доказана; safe Rust не назначает ей saturating cast.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WarDamageArithmeticBlock {
+    pub(crate) max_time: i32,
+    pub(crate) damage: i32,
+    pub(crate) max_hp: u32,
+    pub(crate) dec_time_param_bits: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WarDamageError {
+    X87(WarDamageArithmeticBlock),
+    Percentage(ContendArithmeticBlock),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -373,6 +402,36 @@ impl CServerWarRegion {
         Ok(())
     }
 
+    pub(crate) fn on_player_damage<Context: WarRegionContext>(
+        &mut self,
+        player: Option<WarDamagePlayer>,
+        damage: i32,
+        dec_time_param: f32,
+        context: &mut Context,
+    ) -> Result<(), WarDamageError> {
+        let Some(player) = player else {
+            return Ok(());
+        };
+        if damage <= 0 {
+            return Ok(());
+        }
+        let Some(contender) = self
+            .contenders
+            .iter_mut()
+            .find(|contender| contender.player_id == player.player_id)
+        else {
+            return Ok(());
+        };
+        let decrement =
+            legacy_war_damage_decrement(contender.max_time, damage, player.max_hp, dec_time_param)
+                .map_err(WarDamageError::X87)?;
+        contender.current_time = contender.current_time.wrapping_sub(decrement).max(0);
+        let percentage = contend_percentage(contender.current_time, contender.max_time)
+            .map_err(WarDamageError::Percentage)?;
+        context.send_contend_time(contender.player_id, percentage);
+        Ok(())
+    }
+
     pub(crate) fn get_is_faction_win_symbol(&self, faction_id: i32, symbol_id: i32) -> bool {
         self.faction_win_symbol.get(&symbol_id) == Some(&faction_id)
     }
@@ -567,6 +626,33 @@ fn contend_percentage(current_time: i32, max_time: i32) -> Result<i32, ContendAr
         })
 }
 
+fn legacy_war_damage_decrement(
+    max_time: i32,
+    damage: i32,
+    max_hp: u32,
+    dec_time_param: f32,
+) -> Result<i32, WarDamageArithmeticBlock> {
+    let block = || WarDamageArithmeticBlock {
+        max_time,
+        damage,
+        max_hp,
+        dec_time_param_bits: dec_time_param.to_bits(),
+    };
+
+    // VERIFIED_DISASSEMBLY RVA 0x001D2510: damage и unsigned MaxHP сначала
+    // становятся f32; ratio сохраняется как f32, затем x87 умножает его на
+    // signed max_time и выгружает i32 с установленным процессом truncation RC.
+    let damage_as_float = damage as f32;
+    let max_hp_as_float = max_hp as f32;
+    let ratio = ((f64::from(damage_as_float) / f64::from(max_hp_as_float))
+        * f64::from(dec_time_param)) as f32;
+    let scaled = f64::from(max_time) * f64::from(ratio);
+    if !scaled.is_finite() || scaled < f64::from(i32::MIN) || scaled >= 2_147_483_648.0_f64 {
+        return Err(block());
+    }
+    Ok(scaled.trunc() as i32)
+}
+
 pub(crate) fn read_region_array<const N: usize>(
     source: &[u8],
     cursor: &mut usize,
@@ -580,14 +666,14 @@ pub(crate) fn read_region_array<const N: usize>(
             available: block.available,
         }
     })?;
-    let bytes = reader.read_bytes(N).map_err(|block| {
-        RegionDecodeInputBlock::UnexpectedEnd {
+    let bytes = reader
+        .read_bytes(N)
+        .map_err(|block| RegionDecodeInputBlock::UnexpectedEnd {
             field,
             offset: block.offset,
             needed: block.needed,
             available: block.available,
-        }
-    })?;
+        })?;
     *cursor = reader.position();
     Ok(bytes.try_into().expect("прочитано точное число байт"))
 }
@@ -605,235 +691,14 @@ fn read_region_i32(
             available: block.available,
         }
     })?;
-    let value = reader.read_i32().map_err(|block| {
-        RegionDecodeInputBlock::UnexpectedEnd {
+    let value = reader
+        .read_i32()
+        .map_err(|block| RegionDecodeInputBlock::UnexpectedEnd {
             field,
             offset: block.offset,
             needed: block.needed,
             available: block.available,
-        }
-    })?;
+        })?;
     *cursor = reader.position();
     Ok(value)
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::UpdateContentTime
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// RVA: 0x001D2470
-//
-// IMPLEMENTED выше: context-send 0xBFF29(time); технические STL/SEH детали удалены.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::OnPlayerDamage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:305
-// RVA: 0x001D2510
-// ADDRESS: 005d2510
-// PROTOTYPE: void __thiscall OnPlayerDamage(CPlayer * param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::DecContendTime
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:335
-// RVA: 0x001D25F0
-//
-// IMPLEMENTED выше: у первой записи player-а выполняются wrapping subtraction,
-// signed clamp к нулю и `0xBFF29(percent)`. `INT_MIN / -1` остаётся локальным
-// `BLOCKED_MISSING_FACT`.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::GetIsFacWinSymbol
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:239
-// RVA: 0x001D2660
-//
-// IMPLEMENTED выше: поиск идёт строго по symbol ID; успех возможен только при
-// равном faction ID.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::OnWarEnd
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// RVA: 0x001D26A0
-//
-// IMPLEMENTED выше: base state reset и symbol-map clear; технические STL/SEH детали удалены.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::OnEnterContend
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:153
-// RVA: 0x001D26F0
-//
-// IMPLEMENTED выше: guards, owner-before-membership, четыре ordered
-// goods-check, cancel/add, `GS0229` и четыре concrete `AddNeedGood` callbacks
-// сохранены буквально.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::CancelContendByPlayerID
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:362
-// RVA: 0x001D2C40
-//
-// IMPLEMENTED выше: exact EXE удаляет все записи player-а, затем сбрасывает его
-// direct state, шлёт `0xBFF29(0)` и возвращает true; null возвращает false.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::ClearRegion
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// RVA: 0x001D2CD0
-//
-// IMPLEMENTED выше: ordered contender reset и list clear; технические STL/SEH детали удалены.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::AddContend
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:265
-// RVA: 0x001D2D80
-//
-// IMPLEMENTED выше: ordered append, direct player-state/message и первый
-// contender faction-а с `GS0246(country, faction, symbol)` сохраняют call order.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::~CServerWarRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:25
-// RVA: 0x001D3060
-// ADDRESS: 005d3060
-// PROTOTYPE: void __thiscall ~CServerWarRegion(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::DecordFromByteArray
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:36
-// RVA: 0x001D3110
-//
-// IMPLEMENTED выше: base decoder вызывается первым, затем три signed DWORD
-// назначаются по порядку; map обновляет только keys `0..total` без
-// предварительного clear.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::AI
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:52
-// RVA: 0x001D31A0
-//
-// IMPLEMENTED выше: base AI, DWORD elapsed, unsigned completion compare,
-// 1000-ms update и gather-before-callback order сохранены. Shared static STL
-// scratch-list заменён локальным `Vec`.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::SetFacWinSymbol
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:215
-// RVA: 0x001D33A0
-//
-// IMPLEMENTED выше: map replace, symbol callback, owner short-circuit, wrapping
-// faction count и signed victory threshold выполняются в исходном порядке.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::CancelContendBySymbolID
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:389
-// RVA: 0x001D3460
-//
-// IMPLEMENTED выше: обрабатывается только первая запись symbol-а; message,
-// optional global player-state и удаление выполняются именно в таком порядке.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::UpdateContendPlayer
-// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// RVA: 0x001D3530
-//
-// IMPLEMENTED выше: Fight-only player/faction filter; после сообщения, сброса
-// player-state и первого erase исходная функция немедленно возвращается.
-// Технические STL/SEH детали удалены.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::OnWarDeclare
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// RVA: 0x001D3610
-//
-// IMPLEMENTED выше: base declare и symbol-owner reset; технические STL/SEH детали удалены.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::ReSetWarState
-// STATUS: IMPLEMENTED
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// RVA: 0x001D36A0
-//
-// IMPLEMENTED выше: state assignment и conditional symbol-owner reset; технические STL/SEH детали удалены.
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::CServerWarRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:17
-// RVA: 0x001D3740
-// ADDRESS: 005d3740
-// PROTOTYPE: undefined __thiscall CServerWarRegion(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CServerWarRegion::OnContendTimeOver
-// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\serverwarregion.cpp:102
-// RVA: 0x001D3820
-//
-// IMPLEMENTED выше: global player/membership guards, cancel, symbol/victory
-// callbacks, `GS0241`, `GS0227` и exact war-log tuple сохраняют side-effect order.
-
-// COMPONENT_VARIANT_END: GameServer
