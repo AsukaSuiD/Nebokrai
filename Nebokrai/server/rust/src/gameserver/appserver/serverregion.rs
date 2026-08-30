@@ -590,8 +590,9 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
 }
 
 pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
-    /// Virtual `+0x9C(monsterID)` до speed/direction/AddObject для AI 10/11.
-    fn initialize_guard_monster(&mut self, monster_id: i32);
+    /// Virtual `AddGurdMonster(monsterID)` до speed/direction/AddObject для
+    /// AI 10/11; concrete war-region сохраняет ID в своём guard owner.
+    fn register_guard_monster(&mut self, monster_id: i32);
 
     fn send_monster_entered_around(&mut self, monster: &CMonster);
 
@@ -599,8 +600,9 @@ pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]);
 
-    /// Virtual `OnRefreshRegion(refreshIndex)` для guard AI 10/11.
-    fn refresh_guard_region(&mut self, refresh_index: i32);
+    /// Virtual `AddGuardIndex(refreshIndex)` после записи refresh metadata
+    /// для guard AI 10/11; это регистрация, не немедленный region refresh.
+    fn register_guard_index(&mut self, refresh_index: i32);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1145,7 +1147,7 @@ impl CServerRegion {
         setup: &ServerRegionMonsterSetup,
         amount: i32,
         remember_setup: bool,
-        suppress_immediate_guard_ai: bool,
+        suppress_guard_registration: bool,
         now_ms: u32,
         area_width: i32,
         area_height: i32,
@@ -1211,7 +1213,7 @@ impl CServerRegion {
                     position.y,
                     direction,
                     remember_setup,
-                    suppress_immediate_guard_ai,
+                    suppress_guard_registration,
                     now_ms,
                     area_width,
                     area_height,
@@ -1238,8 +1240,8 @@ impl CServerRegion {
                 monster.set_script_file(&selected.script);
             }
             created = created.wrapping_add(1);
-            if matches!(property.ai, 10 | 11) && !suppress_immediate_guard_ai {
-                context.refresh_guard_region(refresh_index);
+            if matches!(property.ai, 10 | 11) && !suppress_guard_registration {
+                context.register_guard_index(refresh_index);
             }
             remaining = remaining.wrapping_sub(1);
         }
@@ -1264,7 +1266,7 @@ impl CServerRegion {
         tile_y: i32,
         direction: i32,
         _unused_legacy_flag: bool,
-        suppress_immediate_guard_ai: bool,
+        suppress_guard_registration: bool,
         now_ms: u32,
         area_width: i32,
         area_height: i32,
@@ -1282,8 +1284,8 @@ impl CServerRegion {
             .move_shape_mut()
             .shape_mut()
             .set_pos_xy_move_order(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
-        if matches!(property.ai, 10 | 11) && !suppress_immediate_guard_ai {
-            context.initialize_guard_monster(id);
+        if matches!(property.ai, 10 | 11) && !suppress_guard_registration {
+            context.register_guard_monster(id);
         }
         monster.set_spawn_speed(property);
         let direction = if (0..8).contains(&direction) {
@@ -5205,7 +5207,7 @@ fn shape_covers_tile(shape: ShapeView, tile_x: i32, tile_y: i32) -> bool {
 // FUNCTION: CServerRegion::AddMonsterRect
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // IMPLEMENTED_SUBCHAIN: cumulative selection, fallback position, low-level
-// spawn, living-count, refresh metadata/script и guard refresh реализованы
+// spawn, living-count, refresh metadata/script и guard registration реализованы
 // выше; RAW сохраняет ещё не закрытые refresh scheduler/AI caller details.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
