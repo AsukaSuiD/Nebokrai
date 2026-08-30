@@ -5,8 +5,11 @@
 //! игроку, хранит строгий wrapping-срок и публикует исходные пакеты начала и
 //! завершения. Проверки стрел читают этот единственный типизированный
 //! экземпляр через `GetStateBySkillID`. Общая загрузка списка `CState` пока не
-//! достигнута и остаётся границей будущего владельца фабрики состояний.
+//! достигнута и остаётся границей будущего владельца фабрики состояний. Vtable
+//! exact EXE подтверждает общий с `CBlindState` `GetRemainedTime` по адресу
+//! `0x005F2CD0`, включая отдельное чтение часов для положительного остатка.
 
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -32,9 +35,8 @@ impl DaubPoisonState {
         now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        self.keep_time_ms
-            .saturating_sub(now_ms.wrapping_sub(self.started_at_ms)) as i32
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 }
 
@@ -43,7 +45,7 @@ pub(crate) fn send_daub_poison_state_visual(
     player_id: i32,
     state: DaubPoisonState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let Some(player) = game.find_player(player_id) else { return };
     let identity = player.shape().identity();
@@ -52,7 +54,7 @@ pub(crate) fn send_daub_poison_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
@@ -62,16 +64,16 @@ pub(crate) fn replace_player_daub_poison_state(
     game: &mut CGame,
     player_id: i32,
     state: DaubPoisonState,
-    now_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) -> bool {
     let previous = game
         .find_player_mut(player_id)
         .map(|player| player.replace_daub_poison_state(state));
     let Some(previous) = previous else { return false };
     if let Some(previous) = previous {
-        send_daub_poison_state_visual(game, player_id, previous, false, now_ms);
+        send_daub_poison_state_visual(game, player_id, previous, false, || now_milliseconds());
     }
-    send_daub_poison_state_visual(game, player_id, state, true, now_ms);
+    send_daub_poison_state_visual(game, player_id, state, true, now_milliseconds);
     true
 }
 
@@ -84,6 +86,6 @@ pub(crate) fn expire_player_daub_poison_state(
         .find_player_mut(player_id)
         .and_then(|player| player.take_expired_daub_poison_state(now_ms));
     let Some(state) = state else { return false };
-    send_daub_poison_state_visual(game, player_id, state, false, now_ms);
+    send_daub_poison_state_visual(game, player_id, state, false, || now_ms);
     true
 }

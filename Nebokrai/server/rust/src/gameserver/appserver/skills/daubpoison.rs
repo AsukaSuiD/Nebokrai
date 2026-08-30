@@ -178,7 +178,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
         game,
         player_id,
         DaubPoisonState::new(now_ms, keep_time),
-        now_ms,
+        || runtime.now_milliseconds(),
     );
     if let Some(execution) = player_ai.daub_poison_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
