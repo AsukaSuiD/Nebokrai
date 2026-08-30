@@ -49,13 +49,13 @@ use super::exstate::{
     EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind, ExtendedStateMutation,
 };
 use super::legacycodec::{LegacyReader, LegacyWriter};
-use super::particularstate::ParticularState;
+use super::particularstate::{PARTICULAR_STATE_ID, ParticularState};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::restorestate::{ConsumableRestoreMutation, ConsumableRestoreStateStorage};
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
-use super::teamstate::CTeamState;
+use super::teamstate::{CTeamState, TEAM_STATE_ID};
 use super::shape::{
     CShape, SHAPE_CHANGE_AREA, SHAPE_CHANGE_NONE, ShapeAreaCoordinates, ShapeBlockError,
     ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapePositionDispatch, ShapeResolver,
@@ -1260,7 +1260,9 @@ impl CMoveShape {
         Some(state)
     }
 
-    pub(crate) fn script_state_count(&self, state_id: i32) -> u32 {
+    /// Точный `GetStateNumByStateID`: считает все живые экземпляры с данным
+    /// базовым `CState::m_lID`, независимо от concrete owner-а состояния.
+    pub(crate) fn state_count_by_state_id(&self, state_id: i32) -> u32 {
         let scripted = self
             .script_states
             .iter()
@@ -1279,6 +1281,17 @@ impl CMoveShape {
             .then_some(self.undead_states.len())
             .unwrap_or(0);
         let ride = usize::from(state_id == RIDE_STATE_ID as i32 && self.ride_state.is_some());
+        let automatic_restore = self
+            .automatic_restore_states
+            .iter()
+            .filter(|state| state.state_id() as i32 == state_id)
+            .count();
+        let particular = (state_id == PARTICULAR_STATE_ID as i32)
+            .then_some(self.particular_states.len())
+            .unwrap_or(0);
+        let team_recruitment = (state_id == TEAM_STATE_ID)
+            .then_some(self.team_recruitment_states.len())
+            .unwrap_or(0);
         let callosity = usize::from(
             self.callosity_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
@@ -1376,9 +1389,25 @@ impl CMoveShape {
             self.knock_out_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
+        let blind = usize::from(
+            self.blind_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
         let boa_lock = usize::from(self.boa_lock_state.is_some_and(|state| state.skill_id() as i32 == state_id));
         let rush = usize::from(
             self.rush_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
+        let rush_2 = usize::from(
+            self.rush_2_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
+        let roar = usize::from(
+            self.roar_state
+                .is_some_and(|state| state.skill_id() as i32 == state_id),
+        );
+        let energy_holding = usize::from(
+            self.energy_holding_state
                 .is_some_and(|state| state.skill_id() as i32 == state_id),
         );
         let pillar = usize::from(
@@ -1410,6 +1439,16 @@ impl CMoveShape {
         );
         let strike = self
             .strike_states
+            .iter()
+            .filter(|state| state.skill_id() as i32 == state_id)
+            .count();
+        let swordship = self
+            .swordship_states
+            .iter()
+            .filter(|state| state.skill_id() as i32 == state_id)
+            .count();
+        let wuxing = self
+            .wuxing_states
             .iter()
             .filter(|state| state.skill_id() as i32 == state_id)
             .count();
@@ -1451,8 +1490,12 @@ impl CMoveShape {
             .saturating_add(god_bless)
             .saturating_add(soul_collect)
             .saturating_add(knock_out)
+            .saturating_add(blind)
             .saturating_add(boa_lock)
             .saturating_add(rush)
+            .saturating_add(rush_2)
+            .saturating_add(roar)
+            .saturating_add(energy_holding)
             .saturating_add(pillar)
             .saturating_add(knight_cut)
             .saturating_add(blood_loss)
@@ -1461,8 +1504,13 @@ impl CMoveShape {
             .saturating_add(leaf_cut_3)
             .saturating_add(kerosene)
             .saturating_add(strike)
+            .saturating_add(swordship)
+            .saturating_add(wuxing)
             .saturating_add(battle_fairy_attributes)
             .saturating_add(shields)
+            .saturating_add(automatic_restore)
+            .saturating_add(particular)
+            .saturating_add(team_recruitment)
             .saturating_add(change_body)
             .saturating_add(extended)
             .saturating_add(undead)
@@ -1547,6 +1595,7 @@ impl CMoveShape {
             || self
                 .knock_out_state
                 .is_some_and(|state| state.skill_id() == state_id)
+            || self.blind_state.is_some_and(|state| state.skill_id() == state_id)
             || self.boa_lock_state.is_some_and(|state| state.skill_id() == state_id)
             || self.rush_state.is_some_and(|state| state.skill_id() == state_id)
             || self.rush_2_state.is_some_and(|state| state.skill_id() == state_id)
@@ -1580,6 +1629,10 @@ impl CMoveShape {
                 .iter()
                 .any(|state| state.skill_id() == state_id)
             || self
+                .wuxing_states
+                .iter()
+                .any(|state| state.skill_id() == state_id)
+            || self
                 .battle_fairy_attribute_states
                 .iter()
                 .any(|state| state.skill_id() == state_id)
@@ -1591,19 +1644,23 @@ impl CMoveShape {
                 .script_states
                 .iter()
                 .any(|state| state.state_id() as u32 == state_id)
-            || self.consumable_restore_states.contains(state_id)
             || self
-                .change_body_states
+                .automatic_restore_states
                 .iter()
-                .any(|state| state.level == state_id)
+                .any(|state| state.state_id() == state_id)
+            || (state_id == PARTICULAR_STATE_ID && !self.particular_states.is_empty())
+            || (state_id == TEAM_STATE_ID as u32 && !self.team_recruitment_states.is_empty())
+            || self.consumable_restore_states.contains(state_id)
+            || (state_id == CHANGE_BODY_STATE_ID && !self.change_body_states.is_empty())
             || self
                 .extended_states
                 .iter()
-                .any(|state| state.level == state_id)
+                .any(|state| state.kind.state_id() == state_id)
             || self
                 .undead_states
                 .iter()
                 .any(|state| state.state_id() == state_id)
+            || (state_id == RIDE_STATE_ID && self.ride_state.is_some())
     }
 
     pub(crate) fn callosity_state(&self) -> Option<CallosityFamilyState> {

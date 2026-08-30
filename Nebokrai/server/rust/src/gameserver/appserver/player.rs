@@ -340,7 +340,7 @@ use super::shape::{
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use super::states::automaticrestore::AutomaticRestoreMutation;
 use super::restorestate::ConsumableRestoreMutation;
-use super::teamstate::{CTeamState, TEAM_STATE_ID};
+use super::teamstate::CTeamState;
 use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
@@ -5098,12 +5098,7 @@ impl CPlayer {
     }
 
     pub(crate) fn script_move_state_count(&self, state_id: i32) -> u32 {
-        self.move_shape.script_state_count(state_id).saturating_add(
-            (state_id == TEAM_STATE_ID)
-                .then_some(self.move_shape.team_recruitment_states().len())
-                .unwrap_or(0)
-                .min(u32::MAX as usize) as u32,
-        )
+        self.move_shape.state_count_by_state_id(state_id)
     }
 
     pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::scriptstate::ScriptMoveState> {

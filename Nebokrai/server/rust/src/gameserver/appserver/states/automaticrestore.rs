@@ -54,6 +54,15 @@ impl AutomaticRestoreState {
         ]
     }
 
+    pub(crate) const fn state_id(self) -> u32 {
+        match self.kind {
+            AutomaticRestoreKind::HealthPeace => AUTOMATIC_RESTORE_HP_PEACE_STATE_ID,
+            AutomaticRestoreKind::HealthFight => AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID,
+            AutomaticRestoreKind::ManaPeace => AUTOMATIC_RESTORE_MP_PEACE_STATE_ID,
+            AutomaticRestoreKind::ManaFight => AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID,
+        }
+    }
+
     pub(crate) const fn should_check(
         self,
         dead: bool,
