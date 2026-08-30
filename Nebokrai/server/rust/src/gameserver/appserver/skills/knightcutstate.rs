@@ -4,11 +4,13 @@
 //! `appserver/skills/knightcutstate.cpp`. Состояние запрещает движение и бой,
 //! публикует `0xBFE03/0xBFE04` и завершается по wrapping-часам общего AI.
 //! Известная запись принадлежит только `CanonicalStateStorage`; отдельного
-//! изменяемого RAW-представления для неё нет.
+//! изменяемого RAW-представления для неё нет. Vtable exact EXE подтверждает
+//! общий с `CBlindState` клиентский срок по `0x005F2CD0`.
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const KNIGHT_CUT_STATE_ID: u32 = 0x67;
@@ -20,25 +22,24 @@ impl KnightCutState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self { Self { started_at_ms, keep_time_ms } }
     pub(crate) const fn skill_id(self) -> u32 { KNIGHT_CUT_STATE_ID }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 }
 
 #[allow(clippy::too_many_arguments, reason = "поля задают точную точку круговой доставки состояния")]
-pub(crate) fn send_knight_cut_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KnightCutState, begin: bool, now_ms: u32) {
+pub(crate) fn send_knight_cut_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KnightCutState, begin: bool, now_milliseconds: impl FnMut() -> u32) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    if begin { message.add_long(state.client_time(now_milliseconds)); message.add_long(0); }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
-fn send_owned_monster_visual(game: &CGame, region: &CServerRegion, shape: &crate::gameserver::appserver::shape::CShape, state: KnightCutState, begin: bool, now_ms: u32) {
+fn send_owned_monster_visual(game: &CGame, region: &CServerRegion, shape: &crate::gameserver::appserver::shape::CShape, state: KnightCutState, begin: bool, now_milliseconds: impl FnMut() -> u32) {
     let identity = shape.identity();
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    if begin { message.add_long(state.client_time(now_milliseconds)); message.add_long(0); }
     let _ = game.send_game_shape_around(region, shape, None, &message);
 }
 
@@ -52,8 +53,8 @@ pub(crate) fn replace_player_knight_cut_state(game: &mut CGame, player_id: i32, 
         Some((previous, region_id, identity, tile_x, tile_y))
     });
     let Some((previous, region_id, identity, tile_x, tile_y)) = installed else { return false };
-    if let Some(previous) = previous { send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, previous, false, now_ms); }
-    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now_ms); true
+    if let Some(previous) = previous { send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, previous, false, || now_ms); }
+    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, true, game_tick_milliseconds); true
 }
 
 pub(crate) fn replace_monster_knight_cut_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, state: KnightCutState, now_ms: u32) -> bool {
@@ -63,8 +64,8 @@ pub(crate) fn replace_monster_knight_cut_state(game: &mut CGame, region: &mut CS
         monster.move_shape_mut().set_moveable(false); monster.move_shape_mut().set_fightable(false); (previous, shape)
     });
     let Some((previous, shape)) = installed else { return false };
-    if let Some(previous) = previous { send_owned_monster_visual(game, region, &shape, previous, false, now_ms); }
-    send_owned_monster_visual(game, region, &shape, state, true, now_ms); true
+    if let Some(previous) = previous { send_owned_monster_visual(game, region, &shape, previous, false, || now_ms); }
+    send_owned_monster_visual(game, region, &shape, state, true, game_tick_milliseconds); true
 }
 
 pub(crate) fn expire_player_knight_cut_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
@@ -73,7 +74,7 @@ pub(crate) fn expire_player_knight_cut_state(game: &mut CGame, player_id: i32, n
         Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
     });
     let Some((state, region_id, identity, tile_x, tile_y)) = expired else { return false };
-    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms); true
+    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms); true
 }
 
 pub(crate) fn expire_monster_knight_cut_state(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, now_ms: u32) -> bool {
@@ -81,7 +82,7 @@ pub(crate) fn expire_monster_knight_cut_state(game: &mut CGame, region: &mut CSe
         let state = monster.move_shape_mut().take_expired_knight_cut_state(now_ms)?; monster.move_shape_mut().set_moveable(true); monster.move_shape_mut().set_fightable(true);
         Some((state, monster.move_shape().shape().clone()))
     });
-    let Some((state, shape)) = expired else { return false }; send_owned_monster_visual(game, region, &shape, state, false, now_ms); true
+    let Some((state, shape)) = expired else { return false }; send_owned_monster_visual(game, region, &shape, state, false, || now_ms); true
 }
 
 pub(crate) fn finish_player_knight_cut_state_on_cure(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
@@ -90,5 +91,5 @@ pub(crate) fn finish_player_knight_cut_state_on_cure(game: &mut CGame, player_id
         Some((state, player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
     });
     let Some((state, region_id, identity, tile_x, tile_y)) = finished else { return false };
-    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms); true
+    send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, || now_ms); true
 }

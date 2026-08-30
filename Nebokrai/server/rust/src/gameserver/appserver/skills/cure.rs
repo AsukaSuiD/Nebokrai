@@ -276,7 +276,9 @@ fn finish_monster_curable_state(
             false,
             || now_ms,
         ),
-        RemovedMonsterCurableState::KnightCut(state) => send_knight_cut_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
+        RemovedMonsterCurableState::KnightCut(state) => send_knight_cut_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
+        ),
         RemovedMonsterCurableState::PoisonFog(state) => send_poison_fog_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
     }
     true
