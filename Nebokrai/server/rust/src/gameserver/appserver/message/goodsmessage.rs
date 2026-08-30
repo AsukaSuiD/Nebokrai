@@ -568,11 +568,11 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             game.check_battle_fairy_combine(player_id);
         }
         COMBINE_BATTLE_FAIRY => {
-            game.combine_battle_fairy(player_id, runtime)
+            game.combine_battle_fairy(player_id)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         UPGRADE_BATTLE_FAIRY => {
-            game.upgrade_battle_fairy_equipment(player_id, runtime)
+            game.upgrade_battle_fairy_equipment(player_id)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         RESET_BATTLE_FAIRY_SKILLS => {

@@ -32867,11 +32867,7 @@ impl CGame {
     /// Отсутствующий player, как и исходный outer lookup, не посылает packet.
     /// Old-client serializer остаётся explicit transport boundary: его нельзя
     /// заменить пустым payload без изменения `OT_NEW_OBJECT/0xbf918`.
-    pub(crate) fn combine_battle_fairy<Context>(
-        &mut self,
-        player_id: i32,
-        _context: &mut Context,
-    ) -> Option<()> {
+    pub(crate) fn combine_battle_fairy(&mut self, player_id: i32) -> Option<()> {
         let battle_fairy_enabled = self.globe_setup.battle_fairy_enabled();
         let maximum_fetch_power = self.globe_setup.maximum_fetch_power();
         let (
@@ -33653,11 +33649,7 @@ impl CGame {
     /// Полный runtime entry point goods-message `0x8FC28`: общий Game RNG,
     /// live log gates, factory, player wallet и positional BF-container
     /// исполняются в одном mutable snapshot-е.
-    pub(crate) fn upgrade_battle_fairy_equipment<Context>(
-        &mut self,
-        player_id: i32,
-        _context: &mut Context,
-    ) -> Option<()> {
+    pub(crate) fn upgrade_battle_fairy_equipment(&mut self, player_id: i32) -> Option<()> {
         let log_gates = crate::gameserver::appserver::player::BattleFairyUpgradeLogGates {
             success: self.log_system.goods_upgrade_success_enabled(),
             failure: self.log_system.goods_upgrade_failure_enabled(),
