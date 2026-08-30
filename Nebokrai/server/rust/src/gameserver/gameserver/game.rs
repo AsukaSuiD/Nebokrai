@@ -26940,7 +26940,7 @@ impl CGame {
         message.add_long(player_id);
         message.add_long(RIDE_STATE_ID as i32);
         if begin {
-            message.add_ulong(0); // base `CState::GetClientStateTime()`
+            message.add_long(state.client_state_time());
             message.add_ulong(state.additional_data());
         }
         let _ = self.send_player_shape_around(player_id, None, &message);

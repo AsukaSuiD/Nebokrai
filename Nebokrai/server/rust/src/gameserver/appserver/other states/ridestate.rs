@@ -11,6 +11,7 @@
 //! Wire-примитивы делегированы общему legacy codec поверх `bytes`.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::states::state::default_client_state_time;
 use crate::public::guid::CGuid;
 
 pub(crate) const RIDE_STATE_ID: u32 = 100_004;
@@ -77,6 +78,10 @@ impl RideState {
 
     pub(crate) const fn additional_data(&self) -> u32 {
         self.mount_type.wrapping_shl(16) | self.level
+    }
+
+    pub(crate) const fn client_state_time(&self) -> i32 {
+        default_client_state_time()
     }
 
     /// Exact EXE `timestamp + 10000 <= timeGetTime`; timestamp намеренно не

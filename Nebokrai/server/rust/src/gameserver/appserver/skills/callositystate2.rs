@@ -9,6 +9,9 @@
 
 use super::callosity2::CALLOSITY_2_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::states::state::{
+    default_additional_data, default_client_state_time,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CallosityState2 {
@@ -27,8 +30,8 @@ impl CallosityState2 {
     pub(crate) const fn skill_id(self) -> u32 { CALLOSITY_2_SKILL_ID }
     pub(crate) const fn blast_factor(self) -> u16 { self.blast_factor }
     pub(crate) const fn time_to_keep(self) -> i32 { self.time_to_keep }
-    pub(crate) const fn client_state_time(self) -> i32 { 0 }
-    pub(crate) const fn additional_data(self) -> u32 { 0 }
+    pub(crate) const fn client_state_time(self) -> i32 { default_client_state_time() }
+    pub(crate) const fn additional_data(self) -> u32 { default_additional_data() }
 
     pub(crate) const fn apply_to_player(
         self,

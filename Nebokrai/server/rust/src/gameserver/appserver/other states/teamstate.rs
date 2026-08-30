@@ -11,6 +11,7 @@
 //! Координатные overload-ы `Begin`, базовая сериализация и восстановление из
 //! старого хранилища пока не достигнуты и сохранены в RAW ниже.
 
+use crate::gameserver::appserver::states::state::default_client_state_time;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const TEAM_STATE_ID: i32 = 0x0001_86a6;
@@ -41,7 +42,7 @@ impl CTeamState {
 
     /// Базовый `CState::GetClientStateTime` для этого бессрочного state.
     pub(crate) const fn client_state_time(&self) -> i32 {
-        0
+        default_client_state_time()
     }
 
     /// До создания team session исходный owner сообщает самого лидера как

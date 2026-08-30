@@ -14,6 +14,9 @@
 use super::callosity::CALLOSITY_SKILL_ID;
 use super::callositystate2::CallosityState2;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::states::state::{
+    default_additional_data, default_client_state_time,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -46,11 +49,11 @@ impl CallosityState {
     }
 
     pub(crate) const fn client_state_time(self) -> i32 {
-        0
+        default_client_state_time()
     }
 
     pub(crate) const fn additional_data(self) -> u32 {
-        0
+        default_additional_data()
     }
 
     pub(crate) const fn apply_to_player(

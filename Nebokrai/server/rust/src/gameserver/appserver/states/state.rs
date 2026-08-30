@@ -1,6 +1,22 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Достигнутая базовая client-проекция `CState` GameServer.
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходные owners
+//! `appserver/states/state.h/.cpp`. Vtable-аудит exact EXE подтверждает, что
+//! базовые `GetClientStateTime` и `GetAdditionalData` сведены линкером в одну
+//! функцию RVA `0x00201200`, возвращающую ноль. Конкретные state-классы могут
+//! переопределять каждый getter; поэтому здесь закреплены только базовые
+//! значения, а динамический remaining-time и additional-data остаются у
+//! конкретных владельцев. Остальной корпус сохранён ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+
+/// Exact базовый `CState::GetClientStateTime` для классов без override-а.
+pub(crate) const fn default_client_state_time() -> i32 {
+    0
+}
+
+/// Exact базовый `CState::GetAdditionalData` для классов без override-а.
+pub(crate) const fn default_additional_data() -> u32 {
+    0
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

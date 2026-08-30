@@ -13,6 +13,7 @@
 //! пока не достигнуты и сохранены ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::shape::CShape;
+use crate::gameserver::appserver::states::state::default_client_state_time;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const PARTICULAR_STATE_ID: u32 = 0x186a5;
@@ -58,7 +59,7 @@ pub(crate) fn particular_state_visual_message(
     message.add_long(identity.id);
     message.add_long(PARTICULAR_STATE_ID as i32);
     if begin {
-        message.add_long(0);
+        message.add_long(default_client_state_time());
         message.add_long(state.additional_data() as i32);
     }
     message
