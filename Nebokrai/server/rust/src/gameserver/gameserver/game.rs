@@ -4214,7 +4214,19 @@ pub(crate) trait GameReleaseRuntime {
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
 }
 
-pub(crate) trait GameThreadRuntime: GameMainLoopRuntime + GameReleaseRuntime {
+/// Process-owned nonblocking network turn. Tokio заменяет независимые Win32
+/// accept/IO workers, но публикация их завершившихся событий остаётся перед
+/// очередным игровым ходом и не смешивается с `CGame::ProcessMessage`.
+pub(crate) trait GameNetworkRuntime {
+    fn process_network_turn(
+        &mut self,
+        game: &mut CGame,
+    ) -> impl std::future::Future<Output = ()>;
+}
+
+pub(crate) trait GameThreadRuntime:
+    GameMainLoopRuntime + GameReleaseRuntime + GameNetworkRuntime
+{
     fn runtime_paths(&self) -> GameRuntimePaths;
 }
 
@@ -45181,6 +45193,7 @@ pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
     let mut main_loop_calls = 0usize;
     if initialization.is_ok() {
         loop {
+            runtime.process_network_turn(game).await;
             let turn = game.main_loop(runtime);
             main_loop_calls = main_loop_calls.wrapping_add(1);
             match turn {

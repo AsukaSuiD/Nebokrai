@@ -24,7 +24,7 @@ use crate::nets::servers::{
     AcceptStart, AdmissionOutcome, ServerCommandHandle, ServerIoAction, ServerIoCompletion,
 };
 
-use super::game::{CGame, GameRuntimePaths, game_tick_milliseconds};
+use super::game::{CGame, GameNetworkRuntime, GameRuntimePaths, game_tick_milliseconds};
 
 #[derive(Clone)]
 pub(crate) struct GameProcessControl {
@@ -279,5 +279,41 @@ impl RegionRandomContext for GameProcessRuntime {
             .wrapping_mul(214_013)
             .wrapping_add(2_531_011);
         (((self.random_state >> 16) & 0x7fff) as i32) % bound
+    }
+}
+
+impl GameNetworkRuntime for GameProcessRuntime {
+    fn process_network_turn(
+        &mut self,
+        game: &mut CGame,
+    ) -> impl Future<Output = ()> {
+        async move {
+            match self.run_network_turn(game).await {
+                Ok(turn) => {
+                    for error in &turn.accept_errors {
+                        tracing::warn!(?error, "listener GameServer не принял соединение");
+                    }
+                    for error in &turn.server_errors {
+                        tracing::warn!(error, "сетевой сеанс GameServer завершил операцию с ошибкой");
+                    }
+                    if let Some(Err(error)) = &turn.world {
+                        tracing::warn!(?error, "сетевой ход World-клиента GameServer не завершён");
+                    }
+                    if let Some(Err(error)) = &turn.billing {
+                        tracing::warn!(?error, "сетевой ход Billing-клиента GameServer не завершён");
+                    }
+                    tracing::trace!(
+                        admissions = turn.admissions.len(),
+                        io_completions = turn.io_completions.len(),
+                        world_polled = turn.world.is_some(),
+                        billing_polled = turn.billing.is_some(),
+                        "завершён неблокирующий сетевой ход GameServer"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(?error, "process-owned сетевой ход GameServer прерван");
+                }
+            }
+        }
     }
 }
