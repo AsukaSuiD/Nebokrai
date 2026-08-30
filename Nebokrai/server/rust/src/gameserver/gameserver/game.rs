@@ -31810,6 +31810,46 @@ impl CGame {
         }
     }
 
+    /// Exact `0x7FE26` обходит только локальную `s_mapRegion` в map-order.
+    /// Каждый virtual `CollectTodayTax` пишет `GS0236` и сразу публикует
+    /// авторитетный налоговый снимок обратно WorldServer.
+    pub(crate) fn collect_all_region_today_tax(&mut self) {
+        let region_ids = self.regions.keys().copied().collect::<Vec<_>>();
+        for region_id in region_ids {
+            let Some((region_name, collection)) = self.find_region_mut(region_id).map(|region| {
+                let region_name = region.base().name.as_bytes().to_vec();
+                let collection = region.base_mut().collect_today_tax();
+                (region_name, collection)
+            }) else {
+                continue;
+            };
+            let text = format_legacy_mixed(
+                self.get_string_by_id(b"GS0236"),
+                &[
+                    LegacyFormatArgument::Bytes(&region_name),
+                    LegacyFormatArgument::Unsigned(collection.collected),
+                    LegacyFormatArgument::Unsigned(collection.today_total_tax),
+                ],
+                0xff,
+            );
+            put_string_to_file("war", &text);
+
+            let mut update = CMessage::new(0x0006_012d);
+            update.add_long(collection.region_id);
+            update.add_ulong(collection.today_total_tax);
+            update.add_ulong(collection.total_tax);
+            update.add_long(collection.current_tax_rate);
+            let delivery = update.send(self, false);
+            tracing::trace!(
+                region_id = collection.region_id,
+                collected = collection.collected,
+                total_tax = collection.total_tax,
+                ?delivery,
+                "суточный налог региона собран и отправлен WorldServer"
+            );
+        }
+    }
+
     pub(crate) fn request_script_region_tax_operation(
         &self,
         player_id: i32,

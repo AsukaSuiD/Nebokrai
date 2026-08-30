@@ -38,6 +38,9 @@
 //! исходный buffer, включая уже прочитанный address ID; `0x7FE09` использует
 //! attached player context, а
 //! `0x7FE16/17` сохраняют legacy-пропуск client opcode `0xBFF16`.
+//! Region-control `0x7FE26/27/2B/2C/2D` сохраняет map-order суточного сбора,
+//! приоритет local→proxy для ownership и exact virtual-аргументы, подтверждённые
+//! vtable `CServerRegion` в исходном EXE/PDB.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -156,6 +159,7 @@ pub(crate) enum GameOrganizingMessageError {
     PlayerQuest(GamePlayerQuestCommandError),
     PlayerRunScript(FactionLifecycleDispatchError),
     RegionTax(FactionLifecycleDispatchError),
+    RegionControl(FactionLifecycleDispatchError),
     HonorRanks(FactionLifecycleDispatchError),
     QuestActions(FactionLifecycleDispatchError),
     ClientRelay(FactionLifecycleDispatchError),
@@ -526,6 +530,7 @@ fn dispatch_organizing_client_response(
             0x000b_ff00 + (opcode & 0xff)
         }
         0x7fe16..=0x7fe17 => 0x000b_ff17 + (opcode - 0x7fe16),
+        0x7fe2b => 0x000b_ff27,
         _ => unreachable!("client response opcode проверен dispatcher-ом"),
     };
     message.set_message_type(output_opcode as i32);
@@ -568,6 +573,9 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe1d
             | 0x7fe1e
             | 0x7fe2a
+            | 0x7fe26
+            | 0x7fe27
+            | 0x7fe2b..=0x7fe2d
             | 0x7fe28
             | 0x7fe29
             | 0x7fe2e
@@ -590,7 +598,10 @@ pub(crate) fn dispatch_game_organizing_message<
 
     if matches!(
         opcode,
-        0x7fe02..=0x7fe05 | 0x7fe08..=0x7fe17 | 0x7fe1a..=0x7fe1c
+        0x7fe02..=0x7fe05
+            | 0x7fe08..=0x7fe17
+            | 0x7fe1a..=0x7fe1c
+            | 0x7fe2b
     ) {
         return Some(
             dispatch_organizing_client_response(opcode, message, game)
@@ -640,6 +651,13 @@ pub(crate) fn dispatch_game_organizing_message<
         return Some(
             dispatch_region_tax_message(opcode, message, game, runtime)
                 .map_err(GameOrganizingMessageError::RegionTax),
+        );
+    }
+
+    if matches!(opcode, 0x7fe26 | 0x7fe27 | 0x7fe2c | 0x7fe2d) {
+        return Some(
+            dispatch_region_control_message(opcode, message, game)
+                .map_err(GameOrganizingMessageError::RegionControl),
         );
     }
 
@@ -738,6 +756,68 @@ pub(crate) fn dispatch_game_organizing_message<
     };
     game.restore_war_startup_owners(owners);
     Some(result)
+}
+
+fn dispatch_region_control_message(
+    opcode: u32,
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> Result<(), FactionLifecycleDispatchError> {
+    let read_i32 = |message: &mut CMessage, field| {
+        message
+            .base_mut()
+            .get_long()
+            .ok_or(FactionLifecycleDispatchError::UnexpectedEnd { field })
+    };
+    match opcode {
+        0x7fe26 => {
+            game.collect_all_region_today_tax();
+            trace!(opcode, "Собран суточный налог локальных регионов");
+        }
+        0x7fe27 => {
+            let region_id = read_i32(message, "region ID")?;
+            let faction_id = read_i32(message, "owned faction ID")?;
+            let union_id = read_i32(message, "owned union ID")?;
+            let country = message
+                .base_mut()
+                .get_byte()
+                .ok_or(FactionLifecycleDispatchError::UnexpectedEnd {
+                    field: "region country",
+                })?;
+            let applied = if let Some(region) = game.find_region_mut(region_id) {
+                region.base_mut().set_owned_city_org(faction_id, union_id);
+                region.base_mut().country = country;
+                true
+            } else if let Some(region) = game.find_proxy_region_mut(region_id) {
+                region.set_owned_city_org(faction_id, union_id);
+                region.set_country(country);
+                true
+            } else {
+                false
+            };
+            trace!(opcode, region_id, faction_id, union_id, country, applied, "Обновлён владелец региона");
+        }
+        0x7fe2c => {
+            let region_id = read_i32(message, "region ID")?;
+            let state = read_i32(message, "city state")?;
+            let applied = game.find_region_mut(region_id).is_some_and(|region| {
+                region.base_mut().set_city_state(state);
+                true
+            });
+            trace!(opcode, region_id, state, applied, "Обновлено состояние города");
+        }
+        0x7fe2d => {
+            let region_id = read_i32(message, "region ID")?;
+            let amount = read_i32(message, "tax amount")? as u32;
+            let applied = game.find_region(region_id).is_some();
+            if applied {
+                game.add_region_tax(region_id, amount);
+            }
+            trace!(opcode, region_id, amount, applied, "Налог добавлен владельцу региона");
+        }
+        _ => unreachable!("region-control opcode проверен dispatcher-ом"),
+    }
+    Ok(())
 }
 
 fn dispatch_faction_billboard_response(

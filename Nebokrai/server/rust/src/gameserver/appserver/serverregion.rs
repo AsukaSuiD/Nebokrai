@@ -275,6 +275,15 @@ pub(crate) struct RegionTaxAddition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionTaxCollection {
+    pub(crate) region_id: i32,
+    pub(crate) collected: u32,
+    pub(crate) today_total_tax: u32,
+    pub(crate) total_tax: u32,
+    pub(crate) current_tax_rate: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RegionTaxSessionKind {
     ObtainPayment,
     AdjustRate,
@@ -970,6 +979,26 @@ impl CServerRegion {
             retained,
             superior_region_id,
             superior_share,
+            today_total_tax: self.param.today_total_tax,
+            total_tax: self.param.total_tax,
+            current_tax_rate: self.param.current_tax_rate,
+        }
+    }
+
+    /// Exact `CollectTodayTax`: сначала переносит дневной итог в общий через
+    /// DWORD wrapping-add и legacy clamp, затем обнуляет дневной счётчик.
+    /// Лог и World-публикация принадлежат достигнутому `CGame` caller-у.
+    pub(crate) fn collect_today_tax(&mut self) -> RegionTaxCollection {
+        let collected = self.param.today_total_tax;
+        self.param.total_tax = self
+            .param
+            .total_tax
+            .wrapping_add(collected)
+            .min(4_000_000_000);
+        self.param.today_total_tax = 0;
+        RegionTaxCollection {
+            region_id: self.param.region_id,
+            collected,
             today_total_tax: self.param.today_total_tax,
             total_tax: self.param.total_tax,
             current_tax_rate: self.param.current_tax_rate,
