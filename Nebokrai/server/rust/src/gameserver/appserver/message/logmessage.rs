@@ -6,6 +6,8 @@
 //! маршрута входа, порядок регистрации игрока, его удаления из региона и
 //! client/World/Billing-отправок. Отложенное удаление в боевом состоянии остаётся
 //! частью канонического жизненного цикла `CPlayer`.
+//! Decode-catch сохраняет исходный `ex_decode.log` до World/client reject и
+//! очистки login-route; все селекторы владельца связаны typed dispatcher-ом.
 //!
 //! Все эффекты выполняются синхронно их владельцами. Их результаты публикуются
 //! через `tracing`; диспетчер возвращает только ошибку разбора или семантического
@@ -17,6 +19,7 @@ use crate::gameserver::gameserver::game::{
     colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
+use crate::public::tools::put_string_to_file;
 
 const PLAYER_LOGIN: u32 = 0x0007_f901;
 const PLAYER_KICK: u32 = 0x0007_f903;
@@ -196,6 +199,10 @@ fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
         match game.decode_player_game_save(source, cursor, now_ms) {
             Ok(decoded) => decoded,
             Err(error) => {
+                put_string_to_file(
+                    "ex_decode.log",
+                    format!("playerid: {player_id}\n").as_bytes(),
+                );
                 let _delivery = reject_player_login(game, player_id, true);
                 return Err(GameLogMessageError::PlayerCodec(error));
             }
@@ -230,39 +237,3 @@ fn reject_player_login(game: &mut CGame, player_id: i32, notify_world: bool) -> 
     let _ = game.discard_player_login(player_id);
     delivery
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\logmessage.cpp
-
-// ============================================================================
-// FUNCTION: OnLogMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\logmessage.cpp:30
-// RVA: 0x0009F140
-// ADDRESS: 0049f140
-// PROTOTYPE: void __cdecl OnLogMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@004a0620
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\logmessage.cpp:219
-// RVA: 0x000A0620
-// ADDRESS: 004a0620
-// PROTOTYPE: undefined Catch@004a0620()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
