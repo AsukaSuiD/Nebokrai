@@ -7,13 +7,22 @@
 //! Reached honor NPC scripts материализуют также `GetPlayerPosition` и
 //! `AddToByteArray`: первый сохраняет 1-based snapshot order, второй — exact
 //! count/record payload для адресного client `0xBFF35`.
-//! Точная пара и исходный owner указаны ниже.
+//! Точная пара — `GameServer/gameserver.exe + GameServer/GameServer.pdb`,
+//! исходный owner PDB:
+//! `e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp`.
 //!
 //! `Vec` заменяет только `std::list`; уже очищенные списки и полностью
-//! прочитанный prefix сохраняются при безопасном отказе на обрыве wire. Остальной
-//! сырой C++ ниже остаётся доказательной документацией незакрытых методов.
+//! прочитанный prefix сохраняются при безопасном отказе на обрыве wire.
 //! Последовательный доступ делегирован `LegacyReader` и `LegacyWriter` поверх
 //! `bytes`, а порядок списков и частично прочитанный prefix остаются у owner-а.
+//!
+//! Singleton `getInstance` RVA `0x0000CFA0` технически заменён прямым owned
+//! полем `CGame::honor_ranks`: nullable allocation и error-log невозможны, а
+//! identity snapshot-а остаётся единственной. Его запись текущего дня относится
+//! к отдельной static `m_nSortDate`; достигнутые honor-маршруты её не читают,
+//! поэтому owner не выдаёт её за поле snapshot-а. Деструктор `0x0000D0D0`,
+//! static list initializer `$E4` и compiler sized-delete `$E2` полностью
+//! покрыты `Default`, `Vec` и автоматическим `Drop`; доменной семантики в них нет.
 
 use thiserror::Error;
 
@@ -177,7 +186,12 @@ impl CHonorRanks {
             decoded_countries += 1;
         }
 
-        tracing::trace!(rank_type, decoded_countries, decoded_entries, "рейтинг чести декодирован");
+        tracing::trace!(
+            rank_type,
+            decoded_countries,
+            decoded_entries,
+            "рейтинг чести декодирован"
+        );
         Ok(())
     }
 }
@@ -185,14 +199,12 @@ impl CHonorRanks {
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub(crate) enum HonorRanksDecodeError {
     #[error("CHonorRanks получил rank type {rank_type} вне 0..4")]
-    InvalidRankType {
-        rank_type: i32,
-    },
+    InvalidRankType { rank_type: i32 },
     #[error("CHonorRanks получил country {country} вне 0..4/-1")]
-    InvalidCountry {
-        country: i32,
-    },
-    #[error("CHonorRanks type {rank_type}, country {country}, record {rank_index:?} обрывается на {field} в {offset}: нужно {required}, доступно {available}")]
+    InvalidCountry { country: i32 },
+    #[error(
+        "CHonorRanks type {rank_type}, country {country}, record {rank_index:?} обрывается на {field} в {offset}: нужно {required}, доступно {available}"
+    )]
     UnexpectedEnd {
         field: &'static str,
         rank_type: i32,
@@ -307,7 +319,15 @@ fn read_c_string(
     rank_index: i32,
 ) -> Result<Vec<u8>, HonorRanksDecodeError> {
     let offset = *cursor;
-    let mut reader = honor_reader(source, offset, field, rank_type, country, Some(rank_index), 1)?;
+    let mut reader = honor_reader(
+        source,
+        offset,
+        field,
+        rank_type,
+        country,
+        Some(rank_index),
+        1,
+    )?;
     let maximum = reader.remaining();
     let value = reader.read_c_string(maximum).map_err(|block| {
         let block = LegacyReadBlock { needed: 1, ..block };
@@ -316,85 +336,3 @@ fn read_c_string(
     *cursor = reader.position();
     Ok(value.to_vec())
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp
-
-// ============================================================================
-// FUNCTION: CHonorRanks::getInstance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp:54
-// RVA: 0x0000CFA0
-// ADDRESS: 0040cfa0
-// PROTOTYPE: CHonorRanks * __cdecl getInstance(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// `GetHistoryHonorRanks` материализован выше как checked slice lookup.
-
-// ============================================================================
-// FUNCTION: CHonorRanks::~CHonorRanks
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp:43
-// RVA: 0x0000D0D0
-// ADDRESS: 0040d0d0
-// PROTOTYPE: void __thiscall ~CHonorRanks(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CHonorRanks::AddToByteArray
-// STATUS: IMPLEMENTED ABOVE; DECOMPILER STORED LOCALLY
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp:67
-// RVA: 0x0000D120
-// ADDRESS: 0040d120
-// PROTOTYPE: bool __cdecl AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, int param_2, int param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// `DecordFromByteArray` материализован выше с последовательной prefix-мутацией.
-
-// ============================================================================
-// FUNCTION: $E4
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp:9
-// RVA: 0x00249D40
-// ADDRESS: 00649d40
-// PROTOTYPE: void __cdecl $E4(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: $E2
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\gameserver\honorranks.cpp
-// RVA: 0x0024A640
-// ADDRESS: 0064a640
-// PROTOTYPE: void __cdecl $E2(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
