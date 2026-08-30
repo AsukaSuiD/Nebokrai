@@ -2094,10 +2094,6 @@ pub(crate) fn game_wall_time_seconds() -> u64 {
         .as_secs()
 }
 
-pub(crate) trait PlayerEquipmentInspectionContext {}
-
-impl<T> PlayerEquipmentInspectionContext for T {}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueuedSkillExecutionState {
     Pending,
@@ -22026,11 +22022,7 @@ impl CGame {
     /// Полный player query `goodsmessage 0x8FC2F`. Первый непустой old-client
     /// preview сохраняет подтверждённый ранний return EXE; create miss либо
     /// пустой payload позволяют перейти к следующему ordered set entry.
-    pub(crate) fn query_ci_qing_goods<Context>(
-        &mut self,
-        player_id: i32,
-        _context: &mut Context,
-    ) -> Option<()> {
+    pub(crate) fn query_ci_qing_goods(&mut self, player_id: i32) -> Option<()> {
         let base_indices: Vec<_> = self.find_player(player_id)?.ci_qing_list().collect();
         let mut sent = 0_usize;
         for base_index in base_indices {
@@ -22378,11 +22370,7 @@ impl CGame {
         message.send_to_player(self.net_server(), player_id)
     }
 
-    pub(crate) fn compose_ci_qing_node<Context: CiQingComposeContext>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) -> Option<()> {
+    pub(crate) fn compose_ci_qing_node(&mut self, player_id: i32) -> Option<()> {
         let slots = self.find_player(player_id).map(|player| {
             (
                 player
@@ -22618,7 +22606,7 @@ impl CGame {
                 .get_mut(&player_id)
                 .expect("player проверен до CiQing unlock")
                 .restore_ci_qing_entry(result_index);
-            let _ = self.query_ci_qing_goods(player_id, context);
+            let _ = self.query_ci_qing_goods(player_id);
             let log = CiQingLog {
                 player_id,
                 delta: 1,
@@ -22909,11 +22897,10 @@ impl CGame {
         Some(())
     }
 
-    pub(crate) fn query_ci_qing_other_person<Context: CiQingComposeContext>(
+    pub(crate) fn query_ci_qing_other_person(
         &mut self,
         requester_id: i32,
         target: CiQingOtherPersonTarget,
-        _context: &mut Context,
     ) {
         let target_player_id = match &target {
             CiQingOtherPersonTarget::Id(player_id) => {
@@ -24645,11 +24632,10 @@ impl CGame {
         &self.synthesis
     }
 
-    pub(crate) fn query_player_equipment<Context: PlayerEquipmentInspectionContext>(
+    pub(crate) fn query_player_equipment(
         &self,
         requester_id: i32,
         target_id: i32,
-        _context: &mut Context,
     ) {
         let Some(target) = self.find_player(target_id) else {
             tracing::trace!(

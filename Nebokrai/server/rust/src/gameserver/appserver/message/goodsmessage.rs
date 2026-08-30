@@ -202,7 +202,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 Ok(value) => value,
                 Err(error) => return Some(Err(error)),
             };
-            let _ = game.query_player_equipment(player_id, target_id, runtime);
+            let _ = game.query_player_equipment(player_id, target_id);
         }
         UPGRADE_EQUIPMENT => {
             let session_id = match read_long(message, "equipment upgrade session ID") {
@@ -658,7 +658,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             }
         }
         QUERY_CI_QING_GOODS => {
-            game.query_ci_qing_goods(player_id, runtime)
+            game.query_ci_qing_goods(player_id)
                 .expect("resolved message player остаётся в CGame во время synchronous dispatch");
         }
         QUERY_CI_QING_SETUP => {
@@ -686,7 +686,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
             if !game.ci_qing_message_enabled(player_id) {
                 tracing::trace!(player_id, "CiQing недоступен");
             } else {
-                game.compose_ci_qing_node(player_id, runtime).expect(
+                game.compose_ci_qing_node(player_id).expect(
                     "resolved message player остаётся в CGame во время synchronous dispatch",
                 );
             }
@@ -747,7 +747,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 },
                 mode => CiQingOtherPersonTarget::UnsupportedMode(mode),
             };
-            game.query_ci_qing_other_person(player_id, target, runtime);
+            game.query_ci_qing_other_person(player_id, target);
         }
         _ => unreachable!("opcode отфильтрован перед dispatch"),
     }
