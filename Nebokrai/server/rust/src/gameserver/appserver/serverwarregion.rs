@@ -532,6 +532,7 @@ impl CServerWarRegion {
             context.send_contend_time(player_id, 0);
             context.set_global_player_contend_state(player_id, false);
             self.contenders.remove(index);
+            return Ok(());
         }
         Ok(())
     }
@@ -788,7 +789,9 @@ fn read_region_i32(
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // RVA: 0x001D3530
 //
-// IMPLEMENTED выше: Fight-only player/faction filter с продолжением после erase; технические STL/SEH детали удалены.
+// IMPLEMENTED выше: Fight-only player/faction filter; после сообщения, сброса
+// player-state и первого erase исходная функция немедленно возвращается.
+// Технические STL/SEH детали удалены.
 
 // ============================================================================
 // FUNCTION: CServerWarRegion::OnWarDeclare
