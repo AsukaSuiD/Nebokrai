@@ -50,6 +50,7 @@ use super::serverregion::{
 };
 use super::legacycodec::LegacyReader;
 use super::skills::skillfactory::CSkillFactory;
+use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
 // Точные GBK payload из GameServer .rdata VA `0x00651870` и `0x00651850`.
@@ -341,6 +342,7 @@ impl CServerGodsBattleRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
         mut after_npc_entry: impl FnMut(
@@ -356,6 +358,7 @@ impl CServerGodsBattleRegion {
                 source,
                 cursor,
                 include_child,
+                monster_registry,
                 skill_factory,
                 context,
                 |region, npc_id, context| {

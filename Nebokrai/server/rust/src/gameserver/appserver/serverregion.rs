@@ -82,8 +82,9 @@
 //! вынимает monster из map, публикует `0xBF506` и меняет block/area membership.
 //! Полный startup decoder сохраняет base/area/NPC/cache/monster/weather/
 //! setup/param wire-order. NPC и monster создаются собственными factory/spawn
-//! methods региона; decode context предоставляет только реальные RNG/AI/
-//! message/property owners. Startup NPC-cache воспроизводит достигнутый
+//! methods региона; канонические `CMonsterList/CSkillFactory` приходят прямыми
+//! read-only аргументами, а context оставляет только RNG/AI/message effects.
+//! Startup NPC-cache воспроизводит достигнутый
 //! linked-list traversal MSVC linear hash узким локальным адаптером.
 //! War и Country subtype decoder-ы входят в этот owner напрямую.
 //! Concrete `AddNpc` уже создаёт `CNpc` через factory type `500`, назначает
@@ -93,7 +94,8 @@
 //! context. Owned-NPC удаление сохраняет spatial/registry lifecycle Nation AI.
 //! Low-level `AddMonster` аналогично владеет type `600` spawn и хранит
 //! original-name key вместо висячего указателя в reloadable MonsterList;
-//! skills/AI Init и around serialization остаются concrete context callbacks.
+//! skill-init читает фабрику `CGame`, а AI hooks и around serialization
+//! остаются concrete context callbacks.
 //! Script rectangle removal снимает ordered ID snapshot по live tile и
 //! original-name до publication/mutation у `CGame` owner-а.
 //! MonsterTalk area lookup использует тот же девяти-area neighborhood и
@@ -175,7 +177,9 @@ use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::public::netsession::{
     NetSessionAsyncResult, NetSessionAsyncResultKind, NetSessionEndpoint,
 };
-use crate::setup::monsterlist::MonsterProperties;
+use crate::setup::monsterlist::{
+    MonsterProperties, MonsterRegistry, get_monster_property_by_origin_name,
+};
 
 const PLAYER_TYPE: i32 = 400;
 const NPC_TYPE: i32 = 500;
@@ -586,9 +590,6 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
 }
 
 pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
-    /// Возвращает snapshot текущего reloadable `CMonsterList` по original name.
-    fn monster_property(&mut self, origin_name: &[u8]) -> Option<MonsterProperties>;
-
     /// Virtual `+0x9C(monsterID)` до speed/direction/AddObject для AI 10/11.
     fn initialize_guard_monster(&mut self, monster_id: i32);
 
@@ -1016,6 +1017,7 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, ServerRegionMonsterRectBlock> {
@@ -1023,7 +1025,14 @@ impl CServerRegion {
         if ai_tick % period != 0 {
             return Ok(false);
         }
-        self.refresh_monster_groups(now_ms, area_width, area_height, skill_factory, context)?;
+        self.refresh_monster_groups(
+            now_ms,
+            area_width,
+            area_height,
+            monster_registry,
+            skill_factory,
+            context,
+        )?;
         Ok(true)
     }
 
@@ -1034,6 +1043,7 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
@@ -1074,6 +1084,7 @@ impl CServerRegion {
                 now_ms,
                 area_width,
                 area_height,
+                monster_registry,
                 skill_factory,
                 context,
             )?;
@@ -1096,6 +1107,7 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, ServerRegionMonsterRectBlock> {
@@ -1120,6 +1132,7 @@ impl CServerRegion {
                 now_ms,
                 area_width,
                 area_height,
+                monster_registry,
                 skill_factory,
                 context,
             )?;
@@ -1136,6 +1149,7 @@ impl CServerRegion {
         now_ms: u32,
         area_width: i32,
         area_height: i32,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
@@ -1182,7 +1196,9 @@ impl CServerRegion {
                 context.log_monster_position_failure(&selected.name);
             }
 
-            let Some(property) = context.monster_property(&selected.name) else {
+            let Some(property) =
+                get_monster_property_by_origin_name(monster_registry, &selected.name).cloned()
+            else {
                 missing_properties = missing_properties.wrapping_add(1);
                 remaining = remaining.wrapping_sub(1);
                 continue;
@@ -2872,6 +2888,7 @@ impl CServerRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, ServerRegionDecodeError> {
@@ -2879,6 +2896,7 @@ impl CServerRegion {
             source,
             cursor,
             include_child,
+            monster_registry,
             skill_factory,
             context,
             |_, _, _| {},
@@ -2892,6 +2910,7 @@ impl CServerRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
         mut after_npc_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
@@ -3033,6 +3052,7 @@ impl CServerRegion {
                 now_ms,
                 area_width,
                 area_height,
+                monster_registry,
                 skill_factory,
                 context,
             )

@@ -456,7 +456,8 @@
 //! публикуют World responses `0x5FA0A/0x5FA0C`; первая ветвь сохраняет ранний
 //! nullable-client guard, вторая доходит до обычной nullable send-семантики.
 //! `CMonsterList` хранит monster/drop registries selector-а `0x02`; runtime
-//! lookup по original name становится общей базой concrete monster spawn.
+//! spawn и region respawn читают original-name property прямо из этого
+//! `CGame`-registry, не через process context.
 //! Script shape removal `3303/3306/3313/3315` публикует `0xBF504` через
 //! canonical around runtime до spatial removal либо deferred `CS_DELETE`.
 //! Talk pair `3301/3304` публикует actor/name/text `0xBF801`; monster variant
@@ -12020,6 +12021,10 @@ impl CGame {
         &self.skill_factory
     }
 
+    pub(crate) const fn monster_registry(&self) -> &MonsterRegistry {
+        &self.monster_registry
+    }
+
     pub(crate) const fn skill_factory_mut(&mut self) -> &mut CSkillFactory {
         &mut self.skill_factory
     }
@@ -23459,11 +23464,13 @@ impl CGame {
     where
         Context: WarRegionDecodeContext + GodsBattleNpcContendContext,
     {
+        let monster_registry = self.monster_registry.clone();
         let skill_factory = self.skill_factory.clone();
         region.decord_from_byte_array_with_npc_entry(
             source,
             cursor,
             include_child,
+            &monster_registry,
             &skill_factory,
             context,
             |base, faction_npcs, npc_id, context| {
@@ -40036,7 +40043,10 @@ impl CGame {
         else {
             return;
         };
-        let Some(property) = runtime.monster_property(&item.name) else {
+        let Some(property) = self
+            .find_monster_property_by_origin_name(&item.name)
+            .cloned()
+        else {
             return;
         };
         let Some(mut owner) = self.take_region_owner(region_id) else {
@@ -44256,6 +44266,7 @@ impl CGame {
                 now_ms,
                 self.globe_setup.area_width(),
                 self.globe_setup.area_height(),
+                &self.monster_registry,
                 &self.skill_factory,
                 runtime,
             )?;
@@ -45647,6 +45658,7 @@ impl CGame {
                 now_ms,
                 area_width,
                 area_height,
+                &self.monster_registry,
                 &self.skill_factory,
                 runtime,
             );

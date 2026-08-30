@@ -73,6 +73,7 @@ use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
 use super::skills::skillfactory::CSkillFactory;
+use crate::setup::monsterlist::MonsterRegistry;
 use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
@@ -325,13 +326,21 @@ impl CServerCountryRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, CountryRegionDecodeError<ServerRegionDecodeError>>
     {
         let _ = self
             .base
-            .decord_from_byte_array(source, cursor, include_child, skill_factory, context)
+            .decord_from_byte_array(
+                source,
+                cursor,
+                include_child,
+                monster_registry,
+                skill_factory,
+                context,
+            )
             .map_err(CountryRegionDecodeError::Base)?;
         self.decode_gate_section(source, cursor, WC_DEFEND, context)?;
         self.decode_gate_section(source, cursor, WC_ATTACK, context)?;

@@ -36,6 +36,7 @@ use std::collections::BTreeMap;
 
 use super::legacycodec::LegacyReader;
 use super::skills::skillfactory::CSkillFactory;
+use crate::setup::monsterlist::MonsterRegistry;
 use super::servercountryregion::is_player_contend_symbol;
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError, ServerRegionMonsterRectBlock,
@@ -235,6 +236,7 @@ impl CServerWarRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>> {
@@ -242,6 +244,7 @@ impl CServerWarRegion {
             source,
             cursor,
             include_child,
+            monster_registry,
             skill_factory,
             context,
             |_, _, _| {},
@@ -253,6 +256,7 @@ impl CServerWarRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
         after_npc_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
@@ -263,6 +267,7 @@ impl CServerWarRegion {
                 source,
                 cursor,
                 include_child,
+                monster_registry,
                 skill_factory,
                 context,
                 after_npc_entry,

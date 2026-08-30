@@ -852,7 +852,7 @@ where
                             break;
                         }
                     };
-                    match script_context.monster_property(&name) {
+                    match game.find_monster_property_by_origin_name(&name).cloned() {
                         None => tracing::warn!(kind, region_id, ?position, name_bytes = name.len(), "runtime-создание монстра пропущено: свойства отсутствуют"),
                         Some(property) => match owner.base_mut().add_monster(
                             &property,
@@ -2537,6 +2537,7 @@ where
                 source,
                 cursor,
                 true,
+                game.monster_registry(),
                 game.skill_factory(),
                 context,
             ) {
@@ -2550,6 +2551,7 @@ where
                 source,
                 cursor,
                 true,
+                game.monster_registry(),
                 game.skill_factory(),
                 context,
             ) {
@@ -2563,6 +2565,7 @@ where
                 source,
                 cursor,
                 true,
+                game.monster_registry(),
                 game.skill_factory(),
                 context,
             ) {
@@ -2576,6 +2579,7 @@ where
                 source,
                 cursor,
                 true,
+                game.monster_registry(),
                 game.skill_factory(),
                 context,
             ) {
@@ -2589,6 +2593,7 @@ where
                 source,
                 cursor,
                 true,
+                game.monster_registry(),
                 game.skill_factory(),
                 context,
             ) {

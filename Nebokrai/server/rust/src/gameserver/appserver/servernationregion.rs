@@ -25,6 +25,7 @@
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
 use super::skills::skillfactory::CSkillFactory;
+use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{CServerWarRegion, WarRegionDecodeContext, WarRegionDecodeError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,11 +221,19 @@ impl ServerNationRegion {
         source: &[u8],
         cursor: &mut usize,
         include_child: bool,
+        monster_registry: &MonsterRegistry,
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>> {
         self.war
-            .decord_from_byte_array(source, cursor, include_child, skill_factory, context)
+            .decord_from_byte_array(
+                source,
+                cursor,
+                include_child,
+                monster_registry,
+                skill_factory,
+                context,
+            )
     }
 
     /// Exact `GetReliveRect` копирует все пять country rectangles в owner.
