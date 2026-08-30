@@ -7020,7 +7020,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
         }
         SCRIPT_FUNCTION_PUSH_ITEM_TO_CI_QING => {
             if let Some(original_name) = string_arguments[0].filter(|value| !value.is_empty()) {
-                let _ = game.push_script_ci_qing_item(player_id, original_name, runtime);
+                let _ = game.push_script_ci_qing_item(player_id, original_name);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

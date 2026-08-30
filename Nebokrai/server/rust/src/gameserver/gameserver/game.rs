@@ -22068,11 +22068,10 @@ impl CGame {
 
     /// Сценарный `PushItemToCiQing` добавляет только подтверждённый базовый
     /// предмет татуировки и затем заново публикует весь упорядоченный список.
-    pub(crate) fn push_script_ci_qing_item<Context>(
+    pub(crate) fn push_script_ci_qing_item(
         &mut self,
         player_id: i32,
         original_name: &[u8],
-        _context: &mut Context,
     ) -> Option<()> {
         let base_index = self
             .goods_factory
@@ -22188,12 +22187,11 @@ impl CGame {
     /// Resource logs предшествуют каждому DeleteGoods-effect; финальный
     /// positive log сохраняет странный native count оставшихся в vector-е
     /// (то есть не добавленных), после чего всегда отправляется `0xBF932`.
-    pub(crate) fn make_ci_qing_node<Context>(
+    pub(crate) fn make_ci_qing_node(
         &mut self,
         player_id: i32,
         base_index: u32,
         amount: u32,
-        _context: &mut Context,
     ) -> Option<()> {
         let player = self.find_player(player_id)?;
         if !player.ci_qing_list().any(|entry| entry == base_index) {
