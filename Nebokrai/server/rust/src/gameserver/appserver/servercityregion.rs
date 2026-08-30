@@ -48,6 +48,8 @@
 //! остальные player-transition эффекты остаются точным context-контрактом.
 //! Прямой `OnWinSymbol` внутри `OnFactionVictory` у этой сборки указывает на
 //! точный no-op `0x004A8750`; Rust не сохраняет для него фиктивный callback.
+//! Timeout возвращает victory/log snapshot: `CGame` шлёт `0x60138` после
+//! ownership mutation и до сохранённого `GS0223/GS0224` war-log sink.
 //! Остальная поверхность файла ниже остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -160,15 +162,22 @@ pub(crate) enum CityEntryError {
 pub(crate) trait CityRegionContext: WarRegionContext + CityGateRuntimeContext {
     /// Пишет localized template в канал `war` с аргументами `(war, region name)`.
     fn write_war_log(&mut self, string_id: &'static str, war_number: i32, region_name: &str);
+}
 
-    /// Шлёт `0x60138(war, region, faction, union)` в исходный server channel.
-    fn send_city_victory(
-        &mut self,
-        war_number: i32,
-        region_id: i32,
-        faction_id: i32,
-        union_id: i32,
-    );
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CityVictoryUpdate {
+    pub(crate) war_number: i32,
+    pub(crate) region_id: i32,
+    pub(crate) faction_id: i32,
+    pub(crate) union_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CityWarTimeoutEffect {
+    pub(crate) victory: Option<CityVictoryUpdate>,
+    pub(crate) log_string_id: &'static str,
+    pub(crate) war_number: i32,
+    pub(crate) region_name: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -406,13 +415,9 @@ impl CServerCityRegion {
         context.write_war_log("GS0222", war_number, &self.war.base.name);
     }
 
-    pub(crate) fn on_war_time_out<Context: CityRegionContext>(
-        &mut self,
-        war_number: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn on_war_time_out(&mut self, war_number: i32) -> Option<CityWarTimeoutEffect> {
         if self.war.base.war_number != war_number {
-            return;
+            return None;
         }
 
         let mut faction_symbols = BTreeMap::<i32, i32>::new();
@@ -425,16 +430,20 @@ impl CServerCityRegion {
             .iter()
             .find(|(_, count)| self.war.win_victory_symbol_num <= **count)
             .map(|(&faction_id, _)| faction_id);
-        if let Some(faction_id) = winner {
-            self.on_faction_victory(faction_id, 0, context);
-            context.write_war_log("GS0223", war_number, &self.war.base.name);
-            return;
-        }
-
-        let faction_id = self.war.base.param.owned_faction_id;
-        let union_id = self.war.base.param.owned_union_id;
-        self.on_faction_victory(faction_id, union_id, context);
-        context.write_war_log("GS0224", war_number, &self.war.base.name);
+        let (faction_id, union_id, log_string_id) = winner
+            .map(|faction_id| (faction_id, 0, "GS0223"))
+            .unwrap_or((
+                self.war.base.param.owned_faction_id,
+                self.war.base.param.owned_union_id,
+                "GS0224",
+            ));
+        let victory = self.apply_faction_victory(faction_id, union_id);
+        Some(CityWarTimeoutEffect {
+            victory,
+            log_string_id,
+            war_number,
+            region_name: self.war.base.name.clone(),
+        })
     }
 
     pub(crate) fn on_war_end<Context: CityRegionContext>(
@@ -466,22 +475,21 @@ impl CServerCityRegion {
         self.guard_refresh_targets()
     }
 
-    pub(crate) fn on_faction_victory<Context: CityRegionContext>(
+    fn apply_faction_victory(
         &mut self,
         faction_id: i32,
         union_id: i32,
-        context: &mut Context,
-    ) {
+    ) -> Option<CityVictoryUpdate> {
         if self.war.base.city_state == 0 {
-            return;
+            return None;
         }
         self.set_owned_city_org(faction_id, union_id);
-        context.send_city_victory(
-            self.war.base.war_number,
-            self.war.base.id,
+        Some(CityVictoryUpdate {
+            war_number: self.war.base.war_number,
+            region_id: self.war.base.id,
             faction_id,
             union_id,
-        );
+        })
     }
 
     pub(crate) fn clear_region<Context: CityRegionContext>(&mut self, context: &mut Context) {
@@ -949,8 +957,8 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // RVA: 0x001CF1A0
 //
-// IMPLEMENTED выше: state gate, ownership, доказанный no-op и 0x60138;
-// технические STL/SEH детали удалены.
+// IMPLEMENTED выше: state gate, ownership, доказанный no-op и принадлежащий
+// `CGame` 0x60138; технические STL/SEH детали удалены.
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::OperatorCityGate
@@ -1154,7 +1162,8 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // RVA: 0x001D09F0
 //
-// IMPLEMENTED выше: map-order winner selection, victory и GS0223/GS0224 log; технические STL/SEH детали удалены.
+// IMPLEMENTED выше: map-order winner selection, CGame victory send и
+// GS0223/GS0224 log; технические STL/SEH детали удалены.
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::CServerCityRegion
