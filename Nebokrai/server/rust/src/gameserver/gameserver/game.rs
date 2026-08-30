@@ -27411,6 +27411,29 @@ impl CGame {
         mutation.legacy_return
     }
 
+    /// Exact client `0x8FA15`: завершает первый `m_vStates` элемент с
+    /// `CState::m_lID == 0x37`, затем исполняет `CPlayer::UpdateProperty`.
+    pub(crate) fn end_first_player_change_body_state<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        context: &mut Context,
+    ) -> Option<u32> {
+        let state_id = self
+            .find_player(player_id)
+            .and_then(CPlayer::first_change_body_state_id)?;
+        let mutation = {
+            let (players, skill_factory) = (&mut self.players, &self.skill_factory);
+            players
+                .get_mut(&player_id)?
+                .delete_change_body_state(state_id, skill_factory)
+        };
+        let removed = mutation.removed.as_ref()?;
+        self.send_change_body_visual(player_id, removed, false);
+        self.send_change_body_hotkeys(player_id, 12..=23);
+        self.refresh_script_change_body_properties(player_id, context);
+        Some(state_id)
+    }
+
     fn end_change_body_states<Context: RealmAppellationScriptContext>(
         &mut self,
         player_id: i32,

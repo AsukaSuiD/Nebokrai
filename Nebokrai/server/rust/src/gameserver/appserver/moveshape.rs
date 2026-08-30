@@ -3553,6 +3553,10 @@ impl CMoveShape {
         self.change_body_states.last()
     }
 
+    pub(crate) fn first_change_body_state_id(&self) -> Option<u32> {
+        self.change_body_states.first().map(|state| state.level)
+    }
+
     pub(crate) fn activate_loaded_change_body_states(
         &mut self,
         now_ms: u32,

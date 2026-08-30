@@ -4214,6 +4214,10 @@ impl CPlayer {
         self.move_shape.get_change_body_state(state_id)
     }
 
+    pub(crate) fn first_change_body_state_id(&self) -> Option<u32> {
+        self.move_shape.first_change_body_state_id()
+    }
+
     pub(crate) fn activate_loaded_change_body_states(
         &mut self,
         now_ms: u32,

@@ -17,9 +17,11 @@
 //! `0x8FA04` сохраняет порядок проверок, проход свойств предмета, мутации
 //! навыков и состояний, а затем расход и публикации `0xBF709/0xC0101/0xC0102`.
 //! `0x8FA06/07/0B/0C` сохраняют границы частичных изменений сессии обмена.
-//! `0x8FA19` сохраняет порядок `0xBF73E -> 0x5FD10 -> reward script`.
-//! Преобразование времени снаряжения остаётся границей местного CRT.
-//! Остальные коды ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x8FA15` завершает первый `CHBYState`, затем пересчитывает и публикует
+//! свойства игрока. `0x8FA19` сохраняет порядок
+//! `0xBF73E -> 0x5FD10 -> reward script`. Преобразование времени снаряжения
+//! остаётся границей местного CRT. Четыре пустые ветви native switch явно
+//! поглощаются как no-op.
 
 use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
 use crate::gameserver::appserver::cs2ccontainerobjectmove::{
@@ -49,6 +51,9 @@ const USE_PACKET_ITEM: u32 = 0x0008_fa04;
 const SET_PK_PERMISSION: u32 = 0x0008_fa05;
 const REQUEST_TRADE: u32 = 0x0008_fa06;
 const ANSWER_TRADE: u32 = 0x0008_fa07;
+const LEGACY_NO_OP_08: u32 = 0x0008_fa08;
+const LEGACY_NO_OP_09: u32 = 0x0008_fa09;
+const LEGACY_NO_OP_0A: u32 = 0x0008_fa0a;
 const TOGGLE_TRADE_READY: u32 = 0x0008_fa0b;
 const ABORT_TRADE: u32 = 0x0008_fa0c;
 const RUN_HELP_SCRIPT: u32 = 0x0008_fa10;
@@ -58,6 +63,8 @@ const DELETE_FRIEND: u32 = 0x0008_fa0f;
 const SET_DISPLAY_HEAD_PIECE: u32 = 0x0008_fa11;
 const QUERY_QUEST_TIME: u32 = 0x0008_fa12;
 const ACKNOWLEDGE_HEARTBEAT: u32 = 0x0008_fa13;
+const LEGACY_NO_OP_14: u32 = 0x0008_fa14;
+const END_CHANGE_BODY_STATE: u32 = 0x0008_fa15;
 const REFRESH_EXPIRED_EQUIPMENT_STATE: u32 = 0x0008_fa16;
 const QUERY_HONOR_IDENTITY: u32 = 0x0008_fa17;
 const REQUEST_CHANGE_APPELLATION: u32 = 0x0008_fa18;
@@ -348,6 +355,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             | SET_PK_PERMISSION
             | REQUEST_TRADE
             | ANSWER_TRADE
+            | LEGACY_NO_OP_08
+            | LEGACY_NO_OP_09
+            | LEGACY_NO_OP_0A
             | TOGGLE_TRADE_READY
             | ABORT_TRADE
             | RUN_HELP_SCRIPT
@@ -357,6 +367,8 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             | SET_DISPLAY_HEAD_PIECE
             | QUERY_QUEST_TIME
             | ACKNOWLEDGE_HEARTBEAT
+            | LEGACY_NO_OP_14
+            | END_CHANGE_BODY_STATE
             | REFRESH_EXPIRED_EQUIPMENT_STATE
             | QUERY_HONOR_IDENTITY
             | REQUEST_CHANGE_APPELLATION
@@ -1226,6 +1238,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             }
             trace_player_message_outcome(message_type, Some(player_id), "ответ на обмен обработан");
         }
+        LEGACY_NO_OP_08 | LEGACY_NO_OP_09 | LEGACY_NO_OP_0A | LEGACY_NO_OP_14 => {
+            trace_player_message_outcome(
+                message_type,
+                Some(player_id),
+                "пустая legacy-ветвь",
+            );
+        }
         TOGGLE_TRADE_READY => {
             let Some(session_id) = message.base_mut().get_long() else {
                 return Some(Err(GamePlayerMessageError::MissingField(
@@ -1400,6 +1419,15 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .expect("heartbeat player сохранён после context lookup")
                 .acknowledge_heartbeat();
             trace_player_message_outcome(message_type, Some(player_id), "heartbeat подтверждён");
+        }
+        END_CHANGE_BODY_STATE => {
+            let ended = game.end_first_player_change_body_state(player_id, runtime);
+            tracing::trace!(
+                message_type,
+                player_id,
+                ?ended,
+                "завершено клиентское состояние преображения"
+            );
         }
         REFRESH_EXPIRED_EQUIPMENT_STATE => {
             let Some(goods_id) = message.base_mut().get_guid() else {
@@ -1615,25 +1643,3 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
     }
     Some(Ok(()))
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\playermessage.cpp
-
-// ============================================================================
-// FUNCTION: CPlayer::OnMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\playermessage.cpp:26
-// RVA: 0x000FAAB0
-// ADDRESS: 004faab0
-// PROTOTYPE: void __thiscall OnMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
