@@ -2406,6 +2406,14 @@ impl CMoveShape {
         self.god_bless_state_order = Some(self.reached_property_state_order);
         self.god_bless_state.replace(state)
     }
+    pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<GodBlessState> {
+        let state = self
+            .god_bless_state
+            .filter(|state| state.skill_id() == skill_id)?;
+        self.god_bless_state = None;
+        self.god_bless_state_order = None;
+        Some(state)
+    }
     pub(crate) const fn roar_state(&self) -> Option<RoarState> { self.state_storage.roar_state }
     pub(crate) fn replace_roar_state(&mut self, state: RoarState) -> Option<RoarState> {
         self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);

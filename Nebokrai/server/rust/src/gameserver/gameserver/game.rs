@@ -1284,7 +1284,8 @@ use crate::gameserver::appserver::skills::godbless::{
 };
 use crate::gameserver::appserver::skills::godbless2::GOD_BLESS_2_SKILL_ID;
 use crate::gameserver::appserver::skills::godblessstate::{
-    finish_monster_god_bless, finish_player_god_bless,
+    GOD_BLESS_STATE_ID, finish_monster_god_bless, finish_player_god_bless,
+    send_god_bless_state_visual,
 };
 use crate::gameserver::appserver::skills::cure::{
     cancel_player_cure, complete_player_cure, execute_player_cure, is_cure_target, CURE_SKILL_ID,
@@ -2312,12 +2313,7 @@ impl<T> MonsterDeathContext for T where
 /// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
 pub(crate) trait RealmAppellationScriptContext:
     BattleFairyDeathContext + PlayerPropertyContext
-{
-    /// `AddExState` type `0x12F` сначала снимает concrete
-    /// `SKILL_GOD_BLESS`. Общий state registry ещё остаётся у runtime, но
-    /// вызов идёт из реального script owner-а до replacement нового state.
-    fn remove_script_god_bless_state(&mut self, player_id: i32);
-}
+{}
 
 pub(crate) trait BattleFairySkillResetContext {
     fn publish_battle_fairy_skill_reset_packet_consumption(
@@ -26666,7 +26662,7 @@ impl CGame {
                 .query_skill_base_properties(kind.state_id(), state_id as i32)
                 .is_some_and(|properties| properties.query_property(20_010) == 0x12f)
         {
-            context.remove_script_god_bless_state(player_id);
+            self.remove_script_god_bless_state(player_id, now_ms, context);
         }
         let mutation = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
@@ -26686,6 +26682,40 @@ impl CGame {
             self.send_script_player_state_changed(player_id);
         }
         mutation.legacy_return
+    }
+
+    /// Exact prefix `CMoveShape::AddExState`: state type `0x12F` вызывает
+    /// `RemoveState(SKILL_GOD_BLESS)` до поиска/replacement extended state.
+    /// End-visual и `OnChangeStates` поэтому также завершаются до новой
+    /// мутации, даже если последующее создание extended state откажет.
+    fn remove_script_god_bless_state<Context: RealmAppellationScriptContext>(
+        &mut self,
+        player_id: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> bool {
+        let removed = self.find_player_mut(player_id).and_then(|player| {
+            let delivery = player.server_region_id().and_then(|region_id| {
+                Some((
+                    region_id,
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                ))
+            });
+            let state = player.take_god_bless_state(GOD_BLESS_STATE_ID)?;
+            Some((delivery, player.shape().identity(), state))
+        });
+        let Some((delivery, identity, state)) = removed else {
+            return false;
+        };
+        if let Some((region_id, tile_x, tile_y)) = delivery {
+            send_god_bless_state_visual(
+                self, region_id, identity, tile_x, tile_y, state, false, now_ms,
+            );
+        }
+        self.refresh_script_change_body_properties(player_id, context);
+        self.send_script_player_state_changed(player_id);
+        true
     }
 
     pub(crate) fn delete_script_extended_state<Context: RealmAppellationScriptContext>(
