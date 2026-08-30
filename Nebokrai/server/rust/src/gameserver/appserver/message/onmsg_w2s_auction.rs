@@ -9,8 +9,8 @@
 //!
 //! Наблюдаемые эффекты выполняются в исходных местах. Их результаты и причины
 //! пропуска публикуются через `tracing`; временные отчёты и списки результатов
-//! отправки не создаются. Отложенных эффектов у этого владельца нет.
-//! Остальные варианты ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! отправки не создаются. Отложенных эффектов и необработанных selector-ов у
+//! этого владельца нет.
 
 use std::collections::BTreeMap;
 
@@ -1140,25 +1140,3 @@ fn format_auction_log_notice(
     }
     Ok(output)
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\onmsg_w2s_auction.cpp
-
-// ============================================================================
-// FUNCTION: OnMSG_W2S_AUCTION
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\onmsg_w2s_auction.cpp:21
-// RVA: 0x000983A0
-// ADDRESS: 004983a0
-// PROTOTYPE: void __cdecl OnMSG_W2S_AUCTION(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
