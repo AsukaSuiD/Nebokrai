@@ -3543,6 +3543,13 @@ impl CPlayer {
             .stage_region_change(region_id, tile_x, tile_y, direction);
     }
 
+    /// Same-region `ChangeRegion` не пересоздаёт повозку: возможный перенос
+    /// живого monster-owner выполняет `CGame`, а persisted snapshot сбрасывает
+    /// player-owner до его поиска, как исходный `m_bReCreateCarriage = false`.
+    pub(crate) const fn begin_same_region_change(&mut self) {
+        self.recreate_carriage = false;
+    }
+
     pub(crate) fn begin_server_region_change(&mut self) {
         self.state_before_server_region_change = self.shape().get_state();
         self.movement_shape_mut().set_state(0);

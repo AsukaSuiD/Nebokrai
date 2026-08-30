@@ -365,6 +365,9 @@
 //! random destination, ChangeRegion result и `0xBF703/0xBF613/0xBFF2A` wire;
 //! ещё универсальные skill/state/spatial owner-ы заданы обязательным runtime
 //! context, а не подменены пустым успехом.
+//! Same-region `ChangeRegion` уже напрямую переносит близкую активную повозку
+//! через её region monster-owner; только cross-region companion snapshot/delete
+//! остаётся обязательной runtime-границей.
 //! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
 //! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
@@ -2299,7 +2302,7 @@ pub(crate) trait RealmAppellationScriptContext: PlayerPropertyContext {}
 /// runtime-границе. Player GameSave, live pet/carriage snapshots,
 /// region/player maps, session state и message wire исполняет `CGame`.
 pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
-    fn prepare_script_region_companions(
+    fn prepare_script_cross_region_companions(
         &mut self,
         player: &mut CPlayer,
         source_region_id: i32,
@@ -5609,6 +5612,64 @@ impl CGame {
             let _ = self.send_script_move_state_visual(player_id, state, true);
             let _ = self.publish_player_states(player_id);
         }
+    }
+
+    /// Exact same-region carriage prefix `CPlayer::ChangeRegion`: только
+    /// близкая повозка в исходном регионе переносится в случайную свободную
+    /// клетку `7×7` вокруг ещё не нормализованных координат назначения.
+    fn move_same_region_player_carriage<Context: ScriptRegionChangeContext>(
+        &mut self,
+        source_owner: &mut ServerRegionOwner,
+        player: &mut CPlayer,
+        target_tile_x: i32,
+        target_tile_y: i32,
+        carriage_distance: i32,
+        context: &mut Context,
+    ) -> Option<Result<(), RegionMembershipBlock>> {
+        player.begin_same_region_change();
+        if carriage_distance == 0 || player.active_carriage_id() == 0 {
+            return None;
+        }
+        let carriage_id = player.active_carriage_id();
+        let (shape, figure, distance) = {
+            let carriage = source_owner.base().find_monster_by_id(carriage_id)?;
+            let property = self
+                .find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+            let distance = carriage.shape_view(property)?.distance(player.shape_view()?);
+            (
+                carriage.move_shape().shape().clone(),
+                CMonster::figure(property),
+                distance,
+            )
+        };
+        if distance > carriage_distance {
+            return None;
+        }
+        let position = source_owner
+            .base()
+            .region
+            .get_random_pos_in_range(
+                target_tile_x.wrapping_sub(3),
+                target_tile_y.wrapping_sub(3),
+                7,
+                7,
+                context,
+            )
+            .ok()?;
+        let mut movement = CMessage::new(0x000b_f603);
+        movement.add_long(MONSTER_TYPE);
+        movement.add_long(carriage_id);
+        movement.add_long(position.x);
+        movement.add_long(position.y);
+        let _ = self.send_game_shape_around(source_owner.base(), &shape, None, &movement);
+        source_owner.base_mut().set_owned_monster_tile_position(
+            carriage_id,
+            position.x,
+            position.y,
+            figure,
+            self.area_width,
+            self.area_height,
+        )
     }
 
     pub(crate) fn decode_auction_goods(&self, source: &[u8]) -> Result<CGoods, GoodsDecodeError> {
@@ -16591,14 +16652,13 @@ impl CGame {
             direction = context.random_below(8);
         }
         if target_region_id == source_region_id {
-            context.prepare_script_region_companions(
+            let carriage_relocation = self.move_same_region_player_carriage(
+                &mut source_owner,
                 &mut player,
-                source_region_id,
-                target_region_id,
                 tile_x,
                 tile_y,
                 carriage_distance,
-                false,
+                context,
             );
             if tile_x == -1 && tile_y == -1 {
                 if let Ok(position) = source_owner.base().region.get_random_pos(context) {
@@ -16696,13 +16756,14 @@ impl CGame {
                 ?position_delivery,
                 ?direction_delivery,
                 ?change_log_delivery,
+                ?carriage_relocation,
                 "игрок перемещён внутри региона"
             );
             return PlayerRegionChangeOutcome::SameRegion;
         }
 
         if let Some(target_owner) = self.take_region_owner(target_region_id) {
-            context.prepare_script_region_companions(
+            context.prepare_script_cross_region_companions(
                 &mut player,
                 source_region_id,
                 target_region_id,
@@ -16812,7 +16873,7 @@ impl CGame {
             return PlayerRegionChangeOutcome::LocalRegion;
         }
 
-        context.prepare_script_region_companions(
+        context.prepare_script_cross_region_companions(
             &mut player,
             source_region_id,
             target_region_id,
