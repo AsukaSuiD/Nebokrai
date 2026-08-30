@@ -5,10 +5,11 @@
 //! resolved name/script и первые пять полей defence setup. Missing resource
 //! сохраняет прежние lists.
 //!
-//! Serializer пишет полный 0x20 defence block, count и gates. Последние три
-//! defence DWORD loader не задаёт, поэтому wire блокируется до их явного
-//! значения. `Load` успешен только при успешных War/City loaders, включённом
-//! return setup и совпадении обоих return region IDs.
+//! Serializer пишет полный 0x20 defence block, count и gates. Точный конструктор
+//! не инициализирует последние три defence DWORD, а loader намеренно читает
+//! только первые пять; безопасная Rust-замена задаёт этим внутренним полям нули
+//! вместо переноса исходного UB. `Load` успешен только при успешных War/City
+//! loaders, включённом return setup и совпадении обоих return region IDs.
 //!
 //! Decoder делегирует no-op War owner и не двигает cursor. `Clone` строк
 //! заменяет MSVC SSO, сохраняя одиннадцать scalar fields и две C-строки.
@@ -103,8 +104,10 @@ struct WorldCityDefenceSetup {
 }
 
 impl WorldCityDefenceSetup {
-    const fn uninitialized() -> Self {
-        Self { values: [None; 8] }
+    const fn with_safe_constructor_state() -> Self {
+        Self {
+            values: [None, None, None, None, None, Some(0), Some(0), Some(0)],
+        }
     }
 }
 
@@ -127,7 +130,7 @@ impl CWorldCityRegion {
         Self {
             war,
             gates: Vec::new(),
-            defence: WorldCityDefenceSetup::uninitialized(),
+            defence: WorldCityDefenceSetup::with_safe_constructor_state(),
         }
     }
 
