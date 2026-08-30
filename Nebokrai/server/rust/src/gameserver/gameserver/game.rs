@@ -736,7 +736,8 @@ use crate::gameserver::appserver::servercityregion::{
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
-    CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
+    CountryRegionRuntimeContext, CountryReturnPointContext, CountryReturnPointError,
+    CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
@@ -45097,12 +45098,42 @@ impl CGame {
         }
     }
 
-    fn return_region_player<Runtime: GameMainLoopRuntime>(
+    /// Полный country `ClearRegion`: обновляет принадлежащие региону объекты,
+    /// затем возвращает исходный ordered snapshot игроков через обычный
+    /// `CPlayer::ChangeRegion` owner.
+    pub(crate) fn clear_country_region<Runtime>(
+        &mut self,
+        region_id: i32,
+        runtime: &mut Runtime,
+    ) where
+        Runtime: CountryRegionRuntimeContext
+            + RegionRandomContext
+            + ScriptRegionChangeContext
+            + RealmAppellationScriptContext,
+    {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        let ServerRegionOwner::Country(region) = &mut owner else {
+            self.restore_region_owner(owner);
+            return;
+        };
+        region.refresh_for_clear(runtime);
+        let player_ids = region.base.registered_player_ids();
+        self.restore_region_owner(owner);
+        for player_id in player_ids {
+            self.return_region_player(region_id, player_id, runtime);
+        }
+    }
+
+    fn return_region_player<Runtime>(
         &mut self,
         source_region_id: i32,
         player_id: i32,
         runtime: &mut Runtime,
-    ) {
+    ) where
+        Runtime: RegionRandomContext + ScriptRegionChangeContext + RealmAppellationScriptContext,
+    {
         let Some(player) = self.find_player(player_id) else {
             warn!(target: "miracle_server::gameserver::ai", source_region_id, player_id, "невозможно вернуть отсутствующего игрока из региона");
             return;

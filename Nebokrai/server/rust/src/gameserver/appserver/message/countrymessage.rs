@@ -987,9 +987,7 @@ impl<Runtime: GameCountryWarRuntime> CountryWarMessageContext
     }
 
     fn clear_country_region(&mut self, region: Self::Region) {
-        if let Some(ServerRegionOwner::Country(region)) = self.game.find_region_mut(region) {
-            region.clear_region(self.runtime);
-        }
+        self.game.clear_country_region(region, self.runtime);
     }
 
     fn country_region_side_bytes(

@@ -27,9 +27,9 @@
 //! через `CServerRegion` и `CCountryParam`. `SetEnterPosXY` сохраняет fight-only
 //! gate, same-region comparison, игнорирование random bool и player SetPos;
 //! coordinate RNG и внешний player-effect остаются context-границами. Factory,
-//! send-around, concrete monster/spawn
-//! mutation и kick owners остаются явными границами. Guard sets используют
-//! `BTreeSet` с порядком defend monsters, attack monsters, defend indices,
+//! send-around и concrete monster/spawn mutation остаются явными границами;
+//! массовый kick после clear исполняет canonical `CGame` owner. Guard sets
+//! используют `BTreeSet` с порядком defend monsters, attack monsters, defend indices,
 //! attack indices. `GetCamp` сравнивает defend первым; attackability разрешает
 //! только player type `400`, активную войну и объект противоположного camp.
 //! `Vec` сохраняет list-order contender-ов, `BTreeMap` — symbol ownership;
@@ -181,9 +181,11 @@ pub(crate) trait CountryGuardRuntimeContext {
 
 pub(crate) trait CountryRegionRuntimeContext:
     CityGateRuntimeContext + CountryGuardRuntimeContext
+{}
+
+impl<T> CountryRegionRuntimeContext for T where
+    T: CityGateRuntimeContext + CountryGuardRuntimeContext
 {
-    /// Выполняет base `KickOutAllPlayerToReturnPoint` после refresh-цепочки.
-    fn kick_out_all_players_to_return_point(&mut self, region_id: i32);
 }
 
 pub(crate) trait CountryReturnPointContext {
@@ -395,15 +397,16 @@ impl CServerCountryRegion {
         }
     }
 
-    pub(crate) fn clear_region<Context: CountryRegionRuntimeContext>(
+    /// Собственная refresh-часть country `ClearRegion`; следующий
+    /// `KickOutAllPlayerToReturnPoint` исполняет владеющий картой игроков
+    /// `CGame`, чтобы смена региона не уходила во внешний callback.
+    pub(crate) fn refresh_for_clear<Context: CountryRegionRuntimeContext>(
         &mut self,
         context: &mut Context,
     ) {
-        let region_id = self.base.id;
         self.refresh_gates(context);
         self.refresh_flags(context);
         self.refresh_guard(context);
-        context.kick_out_all_players_to_return_point(region_id);
     }
 
     pub(crate) fn refresh_flags<Context: BuildRuntimeContext>(&mut self, context: &mut Context) {
