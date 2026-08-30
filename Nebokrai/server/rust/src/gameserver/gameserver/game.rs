@@ -45111,6 +45111,8 @@ impl CGame {
             + ScriptRegionChangeContext
             + RealmAppellationScriptContext,
     {
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
         };
@@ -45118,7 +45120,7 @@ impl CGame {
             self.restore_region_owner(owner);
             return;
         };
-        region.refresh_for_clear(runtime);
+        region.refresh_for_clear(area_width, area_height, runtime);
         let player_ids = region.base.registered_player_ids();
         self.restore_region_owner(owner);
         for player_id in player_ids {

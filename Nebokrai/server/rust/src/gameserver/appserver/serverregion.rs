@@ -1052,6 +1052,44 @@ impl CServerRegion {
         Ok(())
     }
 
+    /// Country guard-index refresh выбирает одну уже загруженную setup-запись,
+    /// немедленно обновляет её DWORD timestamp и восполняет только
+    /// `count - living_count`, как отдельная ветвь `RefreshGuard`.
+    pub(crate) fn refresh_monster_group_by_index<Context: ServerRegionMonsterContext>(
+        &mut self,
+        refresh_index: i32,
+        now_ms: u32,
+        area_width: i32,
+        area_height: i32,
+        context: &mut Context,
+    ) -> Result<bool, ServerRegionMonsterRectBlock> {
+        let Some(setup_index) = self
+            .monster_setups
+            .iter()
+            .position(|setup| setup.index == refresh_index)
+        else {
+            return Ok(false);
+        };
+        self.monster_setups[setup_index].last_reset_time_ms = now_ms;
+        let amount = self.monster_setups[setup_index]
+            .count
+            .wrapping_sub(self.monster_setups[setup_index].living_count);
+        if amount > 0 {
+            let setup = self.monster_setups[setup_index].clone();
+            self.add_monster_rect(
+                &setup,
+                amount,
+                false,
+                false,
+                now_ms,
+                area_width,
+                area_height,
+                context,
+            )?;
+        }
+        Ok(true)
+    }
+
     pub(crate) fn add_monster_rect<Context: ServerRegionMonsterContext>(
         &mut self,
         setup: &ServerRegionMonsterSetup,
