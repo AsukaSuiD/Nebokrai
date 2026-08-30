@@ -757,6 +757,11 @@ impl CServerCountryRegion {
         self.attack_country = Some(attack_country);
     }
 
+    /// Country vtable `0x65D464`, slot `+0x104`, указывает на единственный
+    /// `ret` по `0x485540`: после записи сторон эта разновидность региона не
+    /// фильтрует contender-ов, в отличие от city/village war owners.
+    pub(crate) const fn update_contend_player(&mut self) {}
+
     pub(crate) fn country_side_bytes(&self) -> Result<(u8, u8), CountryBattleStateBlock> {
         let defend_country = self
             .defend_country

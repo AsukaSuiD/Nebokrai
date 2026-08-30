@@ -33,7 +33,7 @@ use super::super::organizingsystem::villagewarsys::{
 };
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
 use super::super::servercityregion::CityRegionContext;
-use super::super::serverregion::{CServerRegion, RegionMembershipBlock, RegionTaxSessionKind};
+use super::super::serverregion::{RegionMembershipBlock, RegionTaxSessionKind};
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
@@ -56,10 +56,6 @@ pub(crate) trait GameOrganizingWarRuntime:
     + ScriptRegionChangeContext
     + GameContainerMessageRuntime
 {
-    /// Возвращает первый совпавший ID в текущем observable traversal старого
-    /// `stdext::hash_map`; повторный вызов после removal видит новый head.
-    fn find_four_nation_clear_npc_id(&mut self, region: &CServerRegion, name: &[u8])
-    -> Option<i32>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1567,10 +1563,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
 
         let npc_name = self.game.get_string_by_id(b"GS1120").to_vec();
         for _ in 0..4 {
-            let Some(npc_id) = self
-                .runtime
-                .find_four_nation_clear_npc_id(&region.war.base, &npc_name)
-            else {
+            let Some(npc_id) = region.war.base.find_owned_npc_id_by_name(&npc_name) else {
                 continue;
             };
             let Some(npc) = region.war.base.find_npc_by_id(npc_id).filter(|npc| {

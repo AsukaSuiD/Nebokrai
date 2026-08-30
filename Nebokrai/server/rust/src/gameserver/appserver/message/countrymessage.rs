@@ -31,8 +31,6 @@ pub(crate) trait GameCountryWarRuntime:
     + ScriptRegionChangeContext
     + RealmAppellationScriptContext
 {
-    /// Материализует virtual `UpdateContendPlayer` country-region owner-а.
-    fn update_country_contend_player(&mut self, region_id: i32);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -941,7 +939,9 @@ impl<Runtime: GameCountryWarRuntime> CountryWarMessageContext
     }
 
     fn update_contend_player(&mut self, region: Self::Region) {
-        self.runtime.update_country_contend_player(region);
+        if let Some(ServerRegionOwner::Country(region)) = self.game.find_region_mut(region) {
+            region.update_contend_player();
+        }
     }
 
     fn on_declare_begin(&mut self, region: Self::Region, region_id: i32) {

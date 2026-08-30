@@ -2711,6 +2711,15 @@ impl CServerRegion {
         self.owned_npcs.get(&id)
     }
 
+    /// Возвращает первый matching NPC текущего owned traversal. Повторный
+    /// вызов после удаления продолжает очистку со следующего совпадения, как
+    /// исходный четырёхкратный lookup в `FourNationWarSys::ClearRegion`.
+    pub(crate) fn find_owned_npc_id_by_name(&self, name: &[u8]) -> Option<i32> {
+        self.owned_npcs.iter().find_map(|(&id, npc)| {
+            (npc.move_shape().shape().base_object().get_name() == name).then_some(id)
+        })
+    }
+
     /// Безопасная форма type `500` lookup только для доказанно уникального
     /// имени. Старый `stdext::hash_map` traversal при дубликатах не подменяется
     /// порядком `BTreeMap`: неоднозначный результат становится typed block.
