@@ -34,8 +34,9 @@
 //! запуск complete/abandon scripts из canonical `CQuestSystem`.
 //! Остальная client relay-семья `0x90102`, `0x90107..0x90121` сохраняет исходное
 //! соответствие World opcodes, payload и позицию дописанного player ID.
-//! World responses `0x7FE02..0x7FE17` сохраняют исходный buffer, включая уже
-//! прочитанный address ID; `0x7FE09` использует attached player context, а
+//! World responses `0x7FE02..05`, `0x7FE08..17`, `0x7FE1A..1C` сохраняют
+//! исходный buffer, включая уже прочитанный address ID; `0x7FE09` использует
+//! attached player context, а
 //! `0x7FE16/17` сохраняют legacy-пропуск client opcode `0xBFF16`.
 
 use std::ffi::CString;
@@ -521,7 +522,9 @@ fn dispatch_organizing_client_response(
             })?
     };
     let output_opcode = match opcode {
-        0x7fe02..=0x7fe05 | 0x7fe08..=0x7fe15 => 0x000b_ff00 + (opcode & 0xff),
+        0x7fe02..=0x7fe05 | 0x7fe08..=0x7fe15 | 0x7fe1a..=0x7fe1c => {
+            0x000b_ff00 + (opcode & 0xff)
+        }
         0x7fe16..=0x7fe17 => 0x000b_ff17 + (opcode - 0x7fe16),
         _ => unreachable!("client response opcode проверен dispatcher-ом"),
     };
@@ -561,6 +564,7 @@ pub(crate) fn dispatch_game_organizing_message<
             | 0x7fe08..=0x7fe17
             | 0x7fe18
             | 0x7fe19
+            | 0x7fe1a..=0x7fe1c
             | 0x7fe1d
             | 0x7fe1e
             | 0x7fe2a
@@ -584,7 +588,10 @@ pub(crate) fn dispatch_game_organizing_message<
         return None;
     }
 
-    if matches!(opcode, 0x7fe02..=0x7fe05 | 0x7fe08..=0x7fe17) {
+    if matches!(
+        opcode,
+        0x7fe02..=0x7fe05 | 0x7fe08..=0x7fe17 | 0x7fe1a..=0x7fe1c
+    ) {
         return Some(
             dispatch_organizing_client_response(opcode, message, game)
                 .map_err(GameOrganizingMessageError::ClientResponse),
