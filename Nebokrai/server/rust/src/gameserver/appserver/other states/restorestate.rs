@@ -29,6 +29,13 @@ impl ConsumableRestoreState {
         }
     }
 
+    fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        match self {
+            Self::Health(state) => state.client_state_time(now_milliseconds),
+            Self::Mana(state) => state.client_state_time(now_milliseconds),
+        }
+    }
+
     fn tick(self, checked_at_ms: u32, current: u32, maximum: u32) -> (Self, Option<ConsumableRestoreMutation>) {
         match self {
             Self::Health(mut state) => {
@@ -131,6 +138,17 @@ impl ConsumableRestoreStateStorage {
 
     pub(crate) fn is_health(&self, index: usize) -> Option<bool> {
         self.states.get(index).copied().map(ConsumableRestoreState::is_health)
+    }
+
+    pub(crate) fn client_state_time(
+        &self,
+        index: usize,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<i32> {
+        self.states
+            .get(index)
+            .copied()
+            .map(|state| state.client_state_time(now_milliseconds))
     }
 
     pub(crate) fn tick(

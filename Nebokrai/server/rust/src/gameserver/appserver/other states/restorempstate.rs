@@ -6,7 +6,11 @@
 //! когда `frequency * count + started < now`; сложение выполняется с
 //! переполнением и ограничивается текущим максимумом MP. После второго чтения
 //! часов состояние завершается при строгом `time_to_keep + started < now`.
-//! Смерть приостанавливает и шаги, и истечение.
+//! Смерть приостанавливает и шаги, и истечение. Vtable exact EXE подтверждает
+//! общий `CBlindState::GetRemainedTime` по `0x005F2CD0`; visual-effect update
+//! `0x004F86F0` сетевых пакетов не создаёт.
+
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 
 pub(crate) const RESTORE_MP_STATE_ID: i32 = 100_001;
 
@@ -37,6 +41,17 @@ impl RestoreMpState {
 
     pub(crate) const fn state_id(self) -> i32 {
         RESTORE_MP_STATE_ID
+    }
+
+    pub(crate) fn client_state_time(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> i32 {
+        timed_client_state_time(
+            self.started_at_ms,
+            self.time_to_keep_ms,
+            now_milliseconds,
+        ) as i32
     }
 
     pub(crate) fn tick(
