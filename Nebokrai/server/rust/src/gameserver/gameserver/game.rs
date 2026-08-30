@@ -3119,13 +3119,23 @@ pub(crate) struct GroundCurrencyRemoval {
     pub(crate) kind: GroundCurrencyRemovalKind,
 }
 
+pub(crate) trait GodsBattleNpcSpawnContext:
+    ServerRegionMonsterContext + ServerRegionNpcContext + GameClockContext
+{
+}
+
+impl<T> GodsBattleNpcSpawnContext for T where
+    T: ServerRegionMonsterContext + ServerRegionNpcContext + GameClockContext
+{
+}
+
 pub(crate) trait GodsBattleNpcContendContext:
-    ServerRegionMonsterContext + ScriptFunctionRuntime + GameClockContext
+    GodsBattleNpcSpawnContext + ScriptFunctionRuntime
 {
 }
 
 impl<T> GodsBattleNpcContendContext for T where
-    T: ServerRegionMonsterContext + ScriptFunctionRuntime + GameClockContext
+    T: GodsBattleNpcSpawnContext + ScriptFunctionRuntime
 {
 }
 
@@ -23457,7 +23467,7 @@ impl CGame {
         context: &mut Context,
     ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>>
     where
-        Context: WarRegionDecodeContext + GodsBattleNpcContendContext,
+        Context: WarRegionDecodeContext + GodsBattleNpcSpawnContext,
     {
         let (area_width, area_height) = self.area_dimensions();
         let monster_registry = self.monster_registry.clone();
@@ -23482,7 +23492,7 @@ impl CGame {
         )
     }
 
-    fn finish_gods_battle_npc_entry<Context: GodsBattleNpcContendContext>(
+    fn finish_gods_battle_npc_entry<Context: GodsBattleNpcSpawnContext>(
         &mut self,
         region: &mut CServerRegion,
         faction_npcs: &mut [BTreeSet<i32>; 3],
@@ -23524,7 +23534,7 @@ impl CGame {
     /// Создаёт NPC через конкретного владельца региона. Для битвы богов
     /// производное завершение `AddObject` остаётся внутри базовой операции и
     /// предшествует круговой публикации созданного NPC.
-    pub(crate) fn add_region_npc_with_clock<Context: GodsBattleNpcContendContext>(
+    pub(crate) fn add_region_npc_with_clock<Context: GodsBattleNpcSpawnContext>(
         &mut self,
         owner: &mut ServerRegionOwner,
         setup: &ServerRegionNpcSetup,
@@ -23634,7 +23644,7 @@ impl CGame {
         );
     }
 
-    fn spawn_gods_battle_npc_monsters<Context: GodsBattleNpcContendContext>(
+    fn spawn_gods_battle_npc_monsters<Context: GodsBattleNpcSpawnContext>(
         &mut self,
         region: &mut CServerRegion,
         configuration: &crate::setup::godsbattleconf::GodsBattleFactionNpcName,
@@ -23716,7 +23726,7 @@ impl CGame {
         (spawned_monsters, blocked_spawns)
     }
 
-    pub(crate) fn change_gods_battle_npc_faction<Context: GodsBattleNpcContendContext>(
+    pub(crate) fn change_gods_battle_npc_faction<Context: GodsBattleNpcSpawnContext>(
         &mut self,
         region_id: i32,
         npc_id: i32,

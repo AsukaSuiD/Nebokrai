@@ -58,7 +58,7 @@ use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GameNetworkInitializationError, GodsBattleNpcContendContext,
+    CGame, GameMainLoopRuntime, GameNetworkInitializationError, GodsBattleNpcSpawnContext,
     ServerRegionOwner,
     colored_player_notice_message, format_legacy_text_fields,
 };
@@ -2485,7 +2485,7 @@ fn read_start_long(
 }
 
 pub(crate) trait InitialRegionStartupContext:
-    CityRegionDecodeContext + CountryRegionDecodeContext + GodsBattleNpcContendContext
+    CityRegionDecodeContext + CountryRegionDecodeContext + GodsBattleNpcSpawnContext
 {
 }
 
