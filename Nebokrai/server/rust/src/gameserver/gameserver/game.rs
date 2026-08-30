@@ -20839,14 +20839,12 @@ impl CGame {
             .unwrap_or(0)
     }
 
-    fn mutate_script_selected_goods<Context, ResultValue, Mutate>(
+    fn mutate_script_selected_goods<ResultValue, Mutate>(
         &mut self,
         player_id: i32,
-        _context: &mut Context,
         mutate: Mutate,
     ) -> Option<ResultValue>
     where
-        Context: ?Sized,
         Mutate: FnOnce(&CGoodsFactory, &mut u32, &mut CGoods) -> (ResultValue, bool),
     {
         let mut player = self.players.remove(&player_id)?;
@@ -20875,12 +20873,11 @@ impl CGame {
     /// снимается до изменения полей и восстанавливается после него. Для
     /// предмета, находящегося в своей ячейке экипировки, типы 2 и 4 начинают
     /// отсчёт заново с текущего серверного времени.
-    pub(crate) fn modify_script_selected_goods_time<Context>(
+    pub(crate) fn modify_script_selected_goods_time(
         &mut self,
         player_id: i32,
         lifetime: u32,
         time_type: Option<u32>,
-        _context: &mut Context,
     ) {
         let Some(mut player) = self.players.remove(&player_id) else {
             return;
@@ -20932,13 +20929,12 @@ impl CGame {
         }
     }
 
-    pub(crate) fn upgrade_script_selected_equipment<Context>(
+    pub(crate) fn upgrade_script_selected_equipment(
         &mut self,
         player_id: i32,
         level_delta: i32,
-        context: &mut Context,
     ) -> i32 {
-        self.mutate_script_selected_goods(player_id, context, |factory, random_state, goods| {
+        self.mutate_script_selected_goods(player_id, |factory, random_state, goods| {
             let current = goods.addon_property_value(
                 factory,
                 crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_LEVEL,
@@ -20953,15 +20949,14 @@ impl CGame {
         .unwrap_or(0)
     }
 
-    pub(crate) fn set_script_selected_goods_property<Context>(
+    pub(crate) fn set_script_selected_goods_property(
         &mut self,
         player_id: i32,
         property: i32,
         value_id: u32,
         modifier: i32,
-        context: &mut Context,
     ) -> i32 {
-        self.mutate_script_selected_goods(player_id, context, |_, _, goods| {
+        self.mutate_script_selected_goods(player_id, |_, _, goods| {
             let changed = goods.set_addon_property_modifier_core(property, value_id, modifier);
             (i32::from(changed), changed)
         })
@@ -20985,14 +20980,9 @@ impl CGame {
             .map_or(-1, |goods| goods.set_fu_mo_property(property_type, value))
     }
 
-    pub(crate) fn recreate_script_selected_goods_addons<Context>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn recreate_script_selected_goods_addons(&mut self, player_id: i32) {
         let _ = self.mutate_script_selected_goods(
             player_id,
-            context,
             |factory, random_state, goods| {
                 factory.recreate_addon_properties(goods, |maximum| {
                     game_legacy_random(random_state, maximum)

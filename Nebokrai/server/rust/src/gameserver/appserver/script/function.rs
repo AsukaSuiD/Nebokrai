@@ -7194,7 +7194,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     player_id,
                     lifetime as u32,
                     time_type,
-                    runtime,
                 );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
@@ -7581,7 +7580,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 legacy_return: game.upgrade_script_selected_equipment(
                     player_id,
                     level_delta,
-                    runtime,
                 ),
             })
         }
@@ -7617,12 +7615,12 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             };
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game.set_script_selected_goods_property(
-                    player_id, property, value_id, modifier, runtime,
+                    player_id, property, value_id, modifier,
                 ),
             })
         }
         SCRIPT_FUNCTION_RECREATE_GOODS_ADDON_PROPERTIES => {
-            game.recreate_script_selected_goods_addons(player_id, runtime);
+            game.recreate_script_selected_goods_addons(player_id);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_DELETE_SPLIT_GOODS => {
