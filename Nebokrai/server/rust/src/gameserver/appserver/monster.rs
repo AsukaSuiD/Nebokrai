@@ -68,6 +68,8 @@
 //! `Talk` формирует принадлежащий монстру пакет `0xBF801` и сохраняет строгий
 //! прямоугольный предел `AREA_WIDTH/AREA_HEIGHT`; обход игроков и доставка
 //! остаются у регионального runtime-владельца.
+//! Country guard refresh восстанавливает HP, очищает существующий `CBaseAI` и
+//! оставляет формирование `0xBF60F` координирующему `CGame`.
 //! Формулы групповой квоты и поправки опыта также принадлежат этому owner-у;
 //! состав живой группы, множители игрока/региона и выдачу координирует `CGame`.
 //! Там же разрешается `GetBeneficiary`: при непригодности прямого кандидата
@@ -659,6 +661,17 @@ impl CMonster {
 
     pub(crate) const fn set_hit_points(&mut self, hit_points: u32) {
         self.hit_points = hit_points;
+    }
+
+    /// Выполняет достигнутый `SetHP(GetMaxHP) -> GetAI()->Clear()` country
+    /// guard-путь. `CBaseAI::Clear` сбрасывает собственную цель напрямую и не
+    /// запускает расширенную потерю цели питомца или отмену текущего skill.
+    pub(crate) fn refresh_country_guard(&mut self, maximum_hp: u32) {
+        self.hit_points = maximum_hp;
+        if self.ai_binding.is_some() {
+            self.base_ai.clear_country_guard_state();
+            self.ai_target = None;
+        }
     }
 
     pub(crate) fn hibernate_ai(&mut self, now_ms: u32) {

@@ -22,8 +22,10 @@
 //! ставит следующий `Stand` на 1000 мс только при пустом результате основного
 //! прохода и отсутствии цели; `CPlayerAI` применяет эту границу после своих
 //! typed очередей. Общий runtime не вызывает очереди и `OnSchedule`, пока этот
-//! владелец спит. Указатель владельца, цель, остальные действия и обработчики
-//! ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! владелец спит. Country guard refresh также достигает точный `Clear` обычных
+//! active/passive очередей и dormancy-флага без затрагивания war-soul FIFO.
+//! Указатель владельца, остальные действия и обработчики ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
 
@@ -101,6 +103,16 @@ impl CBaseAI {
     /// место относительно уже поставленных пассивных действий.
     pub(crate) fn when_been_killed(&mut self, now_ms: u32) {
         self.add_ai_event(AiShapeAction::Died, 0, 0, now_ms);
+    }
+
+    /// Точный наблюдаемый участок `CBaseAI::Clear`, вызываемый при обновлении
+    /// country guard: очищает обычные active/passive FIFO и снимает сон.
+    /// Исходный owner не очищает отдельную war-soul очередь и не обнуляет
+    /// сохранённые времена сна, поэтому Rust сохраняет это различие.
+    pub(crate) fn clear_country_guard_state(&mut self) {
+        self.active_actions.clear();
+        self.passive_actions.clear();
+        self.is_dormant = false;
     }
 
     /// Выполняет материализованный `Defense`-участок `ProcessPassiveAction`.

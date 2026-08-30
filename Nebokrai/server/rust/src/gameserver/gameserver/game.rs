@@ -45120,12 +45120,99 @@ impl CGame {
             self.restore_region_owner(owner);
             return;
         };
-        region.refresh_for_clear(area_width, area_height, runtime);
-        let player_ids = region.base.registered_player_ids();
+        let guard_targets = region.refresh_for_clear(runtime);
+        self.restore_region_owner(owner);
+
+        for monster_id in guard_targets.monster_ids {
+            self.refresh_country_guard_monster(region_id, monster_id);
+        }
+        for spawn_index in guard_targets.spawn_indices {
+            let now_ms = runtime.now_milliseconds();
+            let Some(mut owner) = self.take_region_owner(region_id) else {
+                return;
+            };
+            let result = match &mut owner {
+                ServerRegionOwner::Country(region) => region.base.refresh_monster_group_by_index(
+                    spawn_index,
+                    now_ms,
+                    area_width,
+                    area_height,
+                    runtime,
+                ),
+                _ => {
+                    self.restore_region_owner(owner);
+                    return;
+                }
+            };
+            self.restore_region_owner(owner);
+            if let Err(error) = result {
+                tracing::warn!(
+                    region_id,
+                    spawn_index,
+                    ?error,
+                    "не обновлена country guard spawn-группа"
+                );
+            }
+        }
+
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        let player_ids = match &owner {
+            ServerRegionOwner::Country(region) => region.base.registered_player_ids(),
+            _ => {
+                self.restore_region_owner(owner);
+                return;
+            }
+        };
         self.restore_region_owner(owner);
         for player_id in player_ids {
             self.return_region_player(region_id, player_id, runtime);
         }
+    }
+
+    /// Материализует точный monster-участок country `RefreshGuard`:
+    /// `SetHP(GetMaxHP)`, conditional `CBaseAI::Clear`, затем один круговой
+    /// `0xBF60F(type,id,action,max_hp,hp)` вокруг той же формы.
+    fn refresh_country_guard_monster(&mut self, region_id: i32, monster_id: i32) {
+        let Some(property) = self
+            .find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(monster_id))
+            .and_then(CMonster::base_property_key)
+            .and_then(|key| self.find_monster_property_by_origin_name(key))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return;
+        };
+        let (identity, action, hit_points) = {
+            let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) else {
+                self.restore_region_owner(owner);
+                return;
+            };
+            monster.refresh_country_guard(property.maximum_hp);
+            (
+                monster.move_shape().shape().identity(),
+                monster.move_shape().shape().get_action(),
+                monster.hit_points(),
+            )
+        };
+        let mut update = CMessage::new(0x000b_f60f);
+        update.add_long(identity.object_type);
+        update.add_long(identity.id);
+        update.add_short(action as i16);
+        update.add_ulong(property.maximum_hp);
+        update.add_ulong(hit_points);
+        let base = owner.base();
+        let shape = base
+            .find_monster_by_id(monster_id)
+            .expect("guard сохранён после синхронного refresh")
+            .move_shape()
+            .shape();
+        let _ = self.send_shape_around_in_region(base, shape, None, &update);
+        self.restore_region_owner(owner);
     }
 
     fn return_region_player<Runtime>(

@@ -26,9 +26,9 @@
 //! `random(map.size())` и mutating `operator[]`; base fallback теперь замкнут
 //! через `CServerRegion` и `CCountryParam`. `SetEnterPosXY` сохраняет fight-only
 //! gate, same-region comparison, игнорирование random bool и player SetPos;
-//! coordinate RNG и внешний player-effect остаются context-границами. Factory,
-//! send-around и concrete monster mutation остаются явными границами; spawn
-//! index refresh и массовый kick после clear исполняют canonical owners. Guard
+//! coordinate RNG и внешний player-effect остаются context-границами. Factory
+//! остаётся явной границей; guard mutation, send-around, spawn index refresh и
+//! массовый kick после clear исполняют canonical owners `CGame/CMonster`. Guard
 //! sets используют `BTreeSet` с порядком defend monsters, attack monsters,
 //! defend indices, attack indices. `GetCamp` сравнивает defend первым;
 //! attackability разрешает
@@ -172,19 +172,19 @@ pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext {
     fn create_country_flag(&mut self, region_id: i32, build: &CountryFlagBuild) -> Option<i32>;
 }
 
-pub(crate) trait CountryGuardRuntimeContext: ServerRegionMonsterContext + GameClockContext {
-    /// Для найденного monster ставит HP=maxHP, сбрасывает non-null AI и шлёт
-    /// вокруг `0xBF60F(type,id,action,max_hp,hp)` в исходном порядке.
-    fn refresh_country_guard_monster(&mut self, region_id: i32, monster_id: i32);
-}
-
 pub(crate) trait CountryRegionRuntimeContext:
-    CityGateRuntimeContext + CountryGuardRuntimeContext
+    CityGateRuntimeContext + ServerRegionMonsterContext + GameClockContext
 {}
 
 impl<T> CountryRegionRuntimeContext for T where
-    T: CityGateRuntimeContext + CountryGuardRuntimeContext
+    T: CityGateRuntimeContext + ServerRegionMonsterContext + GameClockContext
 {
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CountryGuardRefreshTargets {
+    pub(crate) monster_ids: Vec<i32>,
+    pub(crate) spawn_indices: Vec<i32>,
 }
 
 pub(crate) trait CountryReturnPointContext {
@@ -399,15 +399,13 @@ impl CServerCountryRegion {
     /// Собственная refresh-часть country `ClearRegion`; следующий
     /// `KickOutAllPlayerToReturnPoint` исполняет владеющий картой игроков
     /// `CGame`, чтобы смена региона не уходила во внешний callback.
-    pub(crate) fn refresh_for_clear<Context: CountryRegionRuntimeContext>(
+    pub(crate) fn refresh_for_clear<Context: CityGateRuntimeContext>(
         &mut self,
-        area_width: i32,
-        area_height: i32,
         context: &mut Context,
-    ) {
+    ) -> CountryGuardRefreshTargets {
         self.refresh_gates(context);
         self.refresh_flags(context);
-        self.refresh_guard(area_width, area_height, context);
+        self.guard_refresh_targets()
     }
 
     pub(crate) fn refresh_flags<Context: BuildRuntimeContext>(&mut self, context: &mut Context) {
@@ -854,52 +852,20 @@ impl CServerCountryRegion {
         }
     }
 
-    pub(crate) fn refresh_guard<Context: CountryGuardRuntimeContext>(
-        &mut self,
-        area_width: i32,
-        area_height: i32,
-        context: &mut Context,
-    ) {
-        let region_id = self.base.id;
-        for &monster_id in &self.defend_guards {
-            context.refresh_country_guard_monster(region_id, monster_id);
-        }
-        for &monster_id in &self.attack_guards {
-            context.refresh_country_guard_monster(region_id, monster_id);
-        }
-        for &spawn_index in &self.defend_guard_indices {
-            let now_ms = context.now_milliseconds();
-            if let Err(error) = self.base.refresh_monster_group_by_index(
-                spawn_index,
-                now_ms,
-                area_width,
-                area_height,
-                context,
-            ) {
-                tracing::warn!(
-                    region_id,
-                    spawn_index,
-                    ?error,
-                    "не обновлена группа защитников страны"
-                );
-            }
-        }
-        for &spawn_index in &self.attack_guard_indices {
-            let now_ms = context.now_milliseconds();
-            if let Err(error) = self.base.refresh_monster_group_by_index(
-                spawn_index,
-                now_ms,
-                area_width,
-                area_height,
-                context,
-            ) {
-                tracing::warn!(
-                    region_id,
-                    spawn_index,
-                    ?error,
-                    "не обновлена группа нападающих страны"
-                );
-            }
+    pub(crate) fn guard_refresh_targets(&self) -> CountryGuardRefreshTargets {
+        CountryGuardRefreshTargets {
+            monster_ids: self
+                .defend_guards
+                .iter()
+                .chain(&self.attack_guards)
+                .copied()
+                .collect(),
+            spawn_indices: self
+                .defend_guard_indices
+                .iter()
+                .chain(&self.attack_guard_indices)
+                .copied()
+                .collect(),
         }
     }
 
