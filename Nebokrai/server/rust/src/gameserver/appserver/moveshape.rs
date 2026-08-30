@@ -1062,6 +1062,7 @@ impl CMoveShape {
             || !self.state_storage.fury_states.is_empty()
             || self.state_storage.rage_break_state.is_some()
             || self.state_storage.boss_blue_fury_state.is_some()
+            || self.state_storage.boss_blue_quake_state.is_some()
             || self.state_storage.cure_state.is_some()
             || self.state_storage.daub_poison_state.is_some()
             || self.state_storage.seal_state.is_some()
