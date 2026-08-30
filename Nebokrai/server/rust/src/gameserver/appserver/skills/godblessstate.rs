@@ -6,9 +6,12 @@
 //! `INT_MAX`; монстр применяет исходное wrapping-сложение полных `u32`.
 //! `CGame` только координирует независимых владельцев и around-доставку.
 //! Не подключённое DB-восстановление остаётся неизвестной записью legacy codec.
+//! Обе concrete vtable направляют `GetRemainedTime` на точное тело
+//! `0x00601480` с отдельным вторым чтением часов для положительного остатка.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
@@ -32,10 +35,7 @@ impl GodBlessState {
     }
     pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
-    }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32 }
     pub(crate) fn apply_to_player(self, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
         properties.minimum_attack = properties.minimum_attack.wrapping_add(self.minimum_attack_gain as u16 as u32).min(i32::MAX as u32);
         properties.maximum_attack = properties.maximum_attack.wrapping_add(self.maximum_attack_gain as u16 as u32).min(i32::MAX as u32);
@@ -53,7 +53,7 @@ pub(crate) fn send_god_bless_state_visual(game: &mut CGame, region_id: i32, targ
     message.add_long(target.object_type);
     message.add_long(target.id);
     message.add_long(state.skill_id() as i32);
-    if begin { message.add_long(state.client_time(now_ms)); message.add_long(0); }
+    if begin { message.add_long(state.client_time(|| now_ms)); message.add_long(0); }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
