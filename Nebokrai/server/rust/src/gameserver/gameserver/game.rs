@@ -18832,7 +18832,7 @@ impl CGame {
                 };
                 self.send_equipment_upgrade_audit(&audit);
             }
-            self.publish_equipment_upgrade_update(player, equipment_id, context);
+            self.publish_equipment_upgrade_update(player, equipment_id);
             tracing::trace!(
                 player_id,
                 session_id,
@@ -18885,7 +18885,7 @@ impl CGame {
                         });
                     }
                     self.send_equipment_upgrade_notification(player_id, "GS0253", None);
-                    self.publish_equipment_upgrade_update(player, equipment_id, context);
+                    self.publish_equipment_upgrade_update(player, equipment_id);
                     tracing::trace!(
                         player_id,
                         session_id,
@@ -18904,7 +18904,7 @@ impl CGame {
                         });
                     }
                     self.send_equipment_upgrade_notification(player_id, "GS0254", None);
-                    self.publish_equipment_upgrade_update(player, equipment_id, context);
+                    self.publish_equipment_upgrade_update(player, equipment_id);
                     tracing::trace!(
                         player_id,
                         session_id,
@@ -19068,11 +19068,10 @@ impl CGame {
         message.send_to_player(self, player_id)
     }
 
-    fn publish_equipment_upgrade_update<Context: EquipmentUpgradeContext>(
+    fn publish_equipment_upgrade_update(
         &self,
         player: &CPlayer,
         equipment_id: CGuid,
-        _context: &mut Context,
     ) {
         let Some(goods) = player.get_goods_by_id(equipment_id) else {
             return;
