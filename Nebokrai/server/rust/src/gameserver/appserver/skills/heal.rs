@@ -441,7 +441,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
                     previous_target.tile_y,
                     previous,
                     false,
-                    now_ms,
+                    || now_ms,
                 );
             }
         }
@@ -453,7 +453,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
             if effect_target == target.identity { target.tile_y } else { source_y },
             state,
             true,
-            now_ms,
+            || runtime.now_milliseconds(),
         );
     }
     if let Some(execution) = player_ai.heal_family_mut(index) {

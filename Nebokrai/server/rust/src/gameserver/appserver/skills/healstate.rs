@@ -9,11 +9,14 @@
 //! цель эффекта хранится отдельно от владельца записи только ради подтверждённой
 //! ветви `CSuperHeal2`; DB-запись её не сохраняет, поэтому после загрузки
 //! целью снова становится владелец записи, как в исходном `Unserialize`.
+//! Vtable exact EXE направляет клиентский срок семейства на общее тело
+//! `CBlindState::GetRemainedTime` по `0x005F2CD0`.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -87,8 +90,11 @@ impl HealState {
         ))
     }
 
-    pub(crate) fn encoded(self, now_ms: u32) -> [u8; HEAL_STATE_BYTES] {
-        self.encoded_with_remaining(self.client_time(now_ms).max(0) as u32)
+    pub(crate) fn encoded(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> [u8; HEAL_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; HEAL_STATE_BYTES] {
@@ -110,13 +116,8 @@ impl HealState {
         self.heal_count = 0;
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms {
-            0
-        } else {
-            deadline.wrapping_sub(now_ms) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 
     pub(crate) fn advance(
@@ -184,7 +185,7 @@ pub(crate) fn send_heal_state_visual(
     tile_y: i32,
     state: HealState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let mut message = CMessage::new(if begin {
         HEAL_STATE_BEGIN_MESSAGE
@@ -195,7 +196,7 @@ pub(crate) fn send_heal_state_visual(
     message.add_long(target.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
@@ -348,7 +349,7 @@ pub(crate) fn update_stored_heal_states(
             Some((true, tile_x, tile_y)) => {
                 removed_skill_ids.push(state.skill_id());
                 send_heal_state_visual(
-                    game, region_id, target, tile_x, tile_y, state, false, now_ms,
+                    game, region_id, target, tile_x, tile_y, state, false, || now_ms,
                 );
             }
             Some((false, _, _)) => active.push(state),

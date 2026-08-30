@@ -29322,7 +29322,7 @@ impl CGame {
                     y,
                     state,
                     true,
-                    login_tick_ms,
+                    || context.now_milliseconds(),
                 );
             }
         }
