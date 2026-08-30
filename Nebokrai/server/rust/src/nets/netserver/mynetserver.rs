@@ -64,6 +64,10 @@ pub(crate) struct GameServerEventPublisher {
 }
 
 impl GameServerEventPublisher {
+    pub(crate) fn publish_message(&self, message: CMessage) {
+        self.events.push(GameServerEvent::Message(message));
+    }
+
     pub(crate) fn publish_reconnected_world_client(&self, client: CMyNetClient) {
         self.events
             .push(GameServerEvent::WorldClientReconnected(client));

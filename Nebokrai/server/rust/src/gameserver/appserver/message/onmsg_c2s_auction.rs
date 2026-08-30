@@ -9,8 +9,10 @@
 //!
 //! Все эффекты выполняются синхронно в исходных ветвях. Результаты отправок и
 //! причины отказов фиксируются через `tracing`, не накапливаются в отчётах.
-//! Отложенных эффектов у этого владельца нет. Остальные варианты ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `0x90A12` сохраняет отдельный от auction-enabled gate путь: запускает
+//! quest-complete script и помещает синтетический `0x8FB02` в хвост общего
+//! GameServer FIFO, поэтому продолжение исполняется только на следующем
+//! message snapshot. Остальных отложенных эффектов у владельца нет.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_PACKAGE_EXTENTION;
@@ -39,6 +41,7 @@ const CLIENT_AUCTION_RELAY_MESSAGE: i32 = 0x0009_0A09;
 const CLIENT_AUCTION_CELL_MESSAGE: i32 = 0x0009_0A0A;
 const CLIENT_AUCTION_OPEN_MESSAGE: i32 = 0x0009_0A0B;
 const CLIENT_AUCTION_BUY_EXTENSION_MESSAGE: i32 = 0x0009_0A0C;
+const CLIENT_AUCTION_QUEST_RESPONSE_MESSAGE: i32 = 0x0009_0A12;
 const CLIENT_AUCTION_OPEN_SETUP_MESSAGE: i32 = 0x000C_0706;
 const WORLD_AUCTION_PAGE_MESSAGE: i32 = 0x0006_0803;
 const WORLD_AUCTION_REFRESH_MESSAGE: i32 = 0x0006_080A;
@@ -80,6 +83,7 @@ where
             | CLIENT_AUCTION_CELL_MESSAGE
             | CLIENT_AUCTION_OPEN_MESSAGE
             | CLIENT_AUCTION_BUY_EXTENSION_MESSAGE
+            | CLIENT_AUCTION_QUEST_RESPONSE_MESSAGE
     ) {
         return None;
     }
@@ -91,9 +95,40 @@ where
         tracing::trace!(selector, player_id, "игрок сообщения аукциона не найден");
         return Some(());
     }
+    if selector == CLIENT_AUCTION_QUEST_RESPONSE_MESSAGE {
+        let quest_id = message.base_mut().get_long().unwrap_or_default() as u16;
+        let response = message
+            .base_mut()
+            .get_str_bytes(0x20)
+            .unwrap_or_default();
+        let script_id = game.queue_player_quest_complete_script(player_id, quest_id);
+        if let Some(script_id) = script_id {
+            let region_id = game
+                .find_player(player_id)
+                .and_then(|player| player.server_region_id());
+            let mut continuation = CMessage::new(0x0008_fb02);
+            continuation.base_mut().add_long(script_id);
+            continuation.base_mut().add_long(1);
+            continuation.base_mut().add(&response);
+            continuation.base_mut().add_byte(0);
+            continuation.apply_player_context(player_id, region_id);
+            game.net_server()
+                .event_publisher()
+                .publish_message(continuation);
+        }
+        tracing::trace!(
+            selector,
+            player_id,
+            quest_id,
+            ?script_id,
+            response_bytes = response.len(),
+            "ответ аукционного задания поставлен в GameServer FIFO"
+        );
+        return Some(());
+    }
     if !game.auction_now() {
         let notice_delivery =
-            colored_player_notice_message(0xffff_ffff, 0, game.get_string_by_id(b"GPM013"))
+            colored_player_notice_message(0xffff_0000, 0, game.get_string_by_id(b"GPM013"))
                 .send_to_player(game.net_server(), player_id);
         tracing::trace!(selector, player_id, notice_delivery, "аукцион отключён");
         return Some(());
@@ -691,53 +726,3 @@ fn finish_current_auction_listing<Runtime: GameContainerMessageRuntime>(
     // это повторно. Полный снимок игрока остаётся владельцу границы `0x6080E`.
     tracing::trace!(player_id, ?gate, ?add_delivery, ?sale_log_delivery, client_delivery, notice_delivery, snapshot_refreshes = 1 + u8::from(fresh_request), "лот выставлен");
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\onmsg_c2s_auction.cpp
-
-// ============================================================================
-// FUNCTION: OnMSG_C2S_AUCTION
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\onmsg_c2s_auction.cpp:32
-// RVA: 0x000877B0
-// ADDRESS: 004877b0
-// PROTOTYPE: void __cdecl OnMSG_C2S_AUCTION(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: Catch@0049822b
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\onmsg_c2s_auction.cpp
-// RVA: 0x0009822B
-// ADDRESS: 0049822b
-// PROTOTYPE: undefined Catch@0049822b()
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CGoodsNode::CGoodsNode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\onmsg_c2s_auction.cpp
-// RVA: 0x00098240
-// ADDRESS: 00498240
-// PROTOTYPE: undefined __thiscall CGoodsNode(CGoodsNode * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
