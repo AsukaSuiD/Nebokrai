@@ -356,7 +356,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
             target.tile_x,
             target.tile_y,
             state,
-            state_now_ms,
+            || runtime.now_milliseconds(),
         );
     }
     let _ = game.publish_player_states(player_id);

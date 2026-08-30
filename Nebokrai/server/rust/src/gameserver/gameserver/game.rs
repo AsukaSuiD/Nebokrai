@@ -29463,7 +29463,7 @@ impl CGame {
                             tile_x,
                             tile_y,
                             state,
-                            login_tick_ms,
+                            || context.now_milliseconds(),
                         );
                     }
                 }
