@@ -2165,6 +2165,13 @@ impl CMoveShape {
         self.cure_state.replace(state)
     }
 
+    pub(crate) fn activate_loaded_cure_state(&mut self, now_ms: u32) -> Option<CureState> {
+        let mut state = self.cure_state?;
+        state.activate_loaded(now_ms);
+        self.cure_state = Some(state);
+        Some(state)
+    }
+
     pub(crate) const fn cure_state(&self) -> Option<CureState> {
         self.state_storage.cure_state
     }

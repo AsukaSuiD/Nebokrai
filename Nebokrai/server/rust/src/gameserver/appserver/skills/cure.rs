@@ -441,7 +441,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         game,
         region_id,
         &target,
-        CureState::new(caster_identity(player_id), target.identity),
+        CureState::new(caster_identity(player_id), target.identity).begin_now(),
     );
     if let Some(execution) = player_ai.cure_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);

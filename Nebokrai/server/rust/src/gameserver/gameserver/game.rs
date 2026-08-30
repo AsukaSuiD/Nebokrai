@@ -29188,9 +29188,9 @@ impl CGame {
             .activate_loaded_blind_state(login_tick_ms);
         let loaded_cure_state = self
             .players
-            .get(&expected_player_id)
+            .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
-            .cure_state();
+            .activate_loaded_cure_state(login_tick_ms);
         let loaded_heal_states = self
             .players
             .get_mut(&expected_player_id)

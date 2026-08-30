@@ -146,7 +146,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     for state_id in order {
         if CONFLICTING_STATES.contains(&state_id) { let _ = finish_curable_state(game, region_id, identity, state_id, now); }
     }
-    let cure = CureState::new(identity, identity);
+    let cure = CureState::new(identity, identity).begin_now();
     let previous_cure = game.find_player_mut(player_id).and_then(|player| player.replace_cure_state(cure));
     if let Some(previous) = previous_cure { send_cure_state_visual(game, player_id, previous, false); }
     send_cure_state_visual(game, player_id, cure, true);

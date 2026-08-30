@@ -6,7 +6,9 @@
 //! `UpdateAbnormality`; состояние успевает участвовать в `OnChangeStates`.
 //! Запись сохраняет ID и четыре `long` базового `CState`:
 //! user type/ID и sufferer type/ID. Это же представление читается при
-//! входе и удаляется вместе с каноническим однотиковым состоянием.
+//! входе и удаляется вместе с каноническим однотиковым состоянием. Vtable
+//! exact EXE направляет `GetRemainedTime` на `CBlindState` (`0x005F2CD0`),
+//! а нулевая длительность задаётся конструктором самого `CCureState`.
 
 pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
 pub(crate) const CURE_STATE_BYTES: usize = 20;
@@ -17,26 +19,38 @@ use super::manashieldstate::{
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CureState {
     user: ShapeIdentity,
     sufferer: ShapeIdentity,
+    started_at_ms: u32,
 }
 
 impl CureState {
     pub(crate) const fn new(user: ShapeIdentity, sufferer: ShapeIdentity) -> Self {
-        Self { user, sufferer }
+        Self { user, sufferer, started_at_ms: 0 }
+    }
+
+    /// Соответствует timestamp-записи унаследованного `CState::Begin`.
+    pub(crate) fn begin_now(mut self) -> Self {
+        self.started_at_ms = game_tick_milliseconds();
+        self
+    }
+
+    pub(crate) const fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) const fn skill_id(self) -> u32 {
         CURE_STATE_SKILL_ID
     }
 
-    pub(crate) const fn client_time(self) -> i32 {
-        0
+    pub(crate) fn client_time(self) -> i32 {
+        timed_client_state_time(self.started_at_ms, 0, game_tick_milliseconds) as i32
     }
 
     pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
