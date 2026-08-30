@@ -235,7 +235,7 @@ impl CServerWarRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>> {
         self.decord_from_byte_array_with_npc_entry(
             source,
             cursor,
@@ -252,7 +252,7 @@ impl CServerWarRegion {
         include_child: bool,
         context: &mut Context,
         after_npc_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
-    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>> {
         let _ = self
             .base
             .decord_from_byte_array_with_npc_entry(

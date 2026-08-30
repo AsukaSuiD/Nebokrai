@@ -82,7 +82,8 @@
 //! Полный startup decoder сохраняет base/area/NPC/cache/monster/weather/
 //! setup/param wire-order. NPC и monster создаются собственными factory/spawn
 //! methods региона; decode context предоставляет только реальные RNG/AI/
-//! message/property owners и пока не восстановленный hash traversal cache.
+//! message/property owners. Startup NPC-cache воспроизводит достигнутый
+//! linked-list traversal MSVC linear hash узким локальным адаптером.
 //! War и Country subtype decoder-ы входят в этот owner напрямую.
 //! Concrete `AddNpc` уже создаёт `CNpc` через factory type `500`, назначает
 //! spawn-поля, проводит его через `AddObject/CArea` и сохраняет owned object.
@@ -111,8 +112,8 @@
 //! Следом тот же секундный gate увеличивает weather counter, циклически меняет
 //! segment, выбирает первую cumulative RNG-option и публикует `0xBF507`.
 //! `BTreeMap` используется только для identity lookup: observable обход
-//! старого MSVC `stdext::hash_map` для startup name-cache пока остаётся у
-//! `ServerRegionDecodeContext`, а не подменяется сортировкой Rust-map.
+//! старого MSVC `stdext::hash_map` для startup name-cache отдельно сортирует
+//! snapshot по exact bucket/key order и не зависит от Rust-map traversal.
 //! Уже используемый crate dependency `encoding_rs` заменяет только ANSI
 //! преобразование имени в совместимый `String`-view; byte-exact имя остаётся
 //! у встроенного `CRegion`, поэтому wire не зависит от Unicode-конверсии.
@@ -445,14 +446,13 @@ pub(crate) struct ServerRegionDecodeInputBlock {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ServerRegionDecodeError<RuntimeError> {
+pub(crate) enum ServerRegionDecodeError {
     Region(RegionDecodeError),
     AreaGrid(AreaGridBlock),
     Setup(ServerRegionSetupDecodeError),
     Input(ServerRegionDecodeInputBlock),
     Npc(ServerRegionNpcSpawnBlock),
     Monster(ServerRegionMonsterRectBlock),
-    Runtime(RuntimeError),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -529,28 +529,11 @@ pub(crate) enum ServerRegionWeatherTick {
     },
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ServerRegionVisibleNpc {
-    pub(crate) show_list: bool,
-    pub(crate) name: Vec<u8>,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-}
-
 pub(crate) trait ServerRegionDecodeContext:
     ServerRegionNpcContext + ServerRegionMonsterContext
 {
-    type RuntimeError: std::fmt::Debug;
-
     fn area_dimensions(&self) -> (i32, i32);
     fn now_millis(&mut self) -> u32;
-
-    /// Возвращает traversal текущего `m_mNpcs` после всех `AddNpc`; decoder
-    /// фильтрует его уже созданным owner-ом по исходному show-list признаку.
-    fn visible_region_npcs(
-        &mut self,
-        region_id: i32,
-    ) -> Result<Vec<ServerRegionVisibleNpc>, Self::RuntimeError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2885,7 +2868,7 @@ impl CServerRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, ServerRegionDecodeError<Context::RuntimeError>> {
+    ) -> Result<bool, ServerRegionDecodeError> {
         self.decord_from_byte_array_with_npc_entry(
             source,
             cursor,
@@ -2904,7 +2887,7 @@ impl CServerRegion {
         include_child: bool,
         context: &mut Context,
         mut after_npc_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
-    ) -> Result<bool, ServerRegionDecodeError<Context::RuntimeError>> {
+    ) -> Result<bool, ServerRegionDecodeError> {
         self.region
             .decord_from_byte_array(source, cursor, include_child)
             .map_err(ServerRegionDecodeError::Region)?;
@@ -2970,17 +2953,21 @@ impl CServerRegion {
         // Compatibility quirk: decoder сбрасывает count, но не очищает bytes
         // прежнего cache-vector перед новым append.
         self.npc_name_list_count = 0;
-        let npcs = context
-            .visible_region_npcs(self.id)
-            .map_err(ServerRegionDecodeError::Runtime)?;
-        for npc in npcs {
-            if !npc.show_list {
+        for npc_id in legacy_msvc_npc_hash_traversal(self.owned_npcs.keys().copied()) {
+            let npc = self
+                .owned_npcs
+                .get(&npc_id)
+                .expect("hash traversal построен из owned NPC keys");
+            if !npc.show_list() {
                 continue;
             }
-            append_server_region_c_string(&mut self.npc_name_list, &npc.name);
+            let view = npc
+                .shape_view()
+                .expect("успешно зарегистрированный startup NPC имеет координаты");
+            append_server_region_c_string(&mut self.npc_name_list, npc.name());
             let mut writer = LegacyWriter::new(&mut self.npc_name_list);
-            writer.write_i32(npc.tile_x);
-            writer.write_i32(npc.tile_y);
+            writer.write_i32(view.tile_x);
+            writer.write_i32(view.tile_y);
             self.npc_name_list_count = self.npc_name_list_count.wrapping_add(1);
         }
 
@@ -4405,6 +4392,40 @@ fn read_server_region_u8(
         .map_err(|block| server_region_error(field, block))?;
     *cursor = reader.position();
     Ok(value)
+}
+
+/// Воспроизводит только observable traversal `m_mNpcs` из decoder RVA
+/// `0x000858F0`. MSVC `_Hash::insert` RVA `0x00081A60` начинает с mask/bucket
+/// `1/1`, растит один bucket на каждые четыре элемента, группирует linked
+/// list по bucket и держит signed `long` keys по возрастанию внутри группы.
+fn legacy_msvc_npc_hash_traversal(ids: impl IntoIterator<Item = i32>) -> Vec<i32> {
+    let mut ids: Vec<_> = ids.into_iter().collect();
+    let mut mask = 1_u32;
+    let mut bucket_count = 1_u32;
+    let mut bucket_vector_len = 9_u32;
+
+    for inserted in 0..ids.len() as u32 {
+        if bucket_count <= inserted >> 2 {
+            if bucket_count < bucket_vector_len - 1 {
+                if mask < bucket_count {
+                    mask = mask.wrapping_mul(2).wrapping_add(1);
+                }
+            } else {
+                mask = bucket_vector_len.wrapping_mul(2).wrapping_sub(3);
+                bucket_vector_len = bucket_vector_len.wrapping_mul(2).wrapping_sub(1);
+            }
+            bucket_count = bucket_count.wrapping_add(1);
+        }
+    }
+
+    ids.sort_by_key(|id| {
+        let mut bucket = (*id as u32 ^ 0xdead_beef) & mask;
+        if bucket_count <= bucket {
+            bucket = bucket.wrapping_sub(1 + (mask >> 1));
+        }
+        (bucket, *id)
+    });
+    ids
 }
 
 fn read_server_region_i32(

@@ -347,7 +347,7 @@ impl CServerGodsBattleRegion {
             i32,
             &mut Context,
         ),
-    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>> {
         let faction_npcs = &mut self.faction_npcs;
         self.war
             .decord_from_byte_array_with_npc_entry(

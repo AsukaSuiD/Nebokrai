@@ -325,7 +325,7 @@ impl CServerCountryRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, CountryRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>>
+    ) -> Result<bool, CountryRegionDecodeError<ServerRegionDecodeError>>
     {
         let _ = self
             .base
@@ -986,7 +986,7 @@ impl CServerCountryRegion {
         cursor: &mut usize,
         camp: i32,
         context: &mut Context,
-    ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+    ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError>> {
         let count = read_country_i32(source, cursor, country_gate_count_field(camp))
             .map_err(CountryRegionDecodeError::Input)?;
         for _ in 0..count.max(0) {
@@ -1043,7 +1043,7 @@ impl CServerCountryRegion {
         cursor: &mut usize,
         camp: i32,
         context: &mut Context,
-    ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+    ) -> Result<(), CountryRegionDecodeError<ServerRegionDecodeError>> {
         let count = read_country_i32(source, cursor, country_flag_count_field(camp))
             .map_err(CountryRegionDecodeError::Input)?;
         for _ in 0..count.max(0) {

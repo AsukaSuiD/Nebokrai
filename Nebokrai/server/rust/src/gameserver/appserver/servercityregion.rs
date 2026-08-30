@@ -271,7 +271,7 @@ impl CServerCityRegion {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, CityRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>> {
+    ) -> Result<bool, CityRegionDecodeError<ServerRegionDecodeError>> {
         let _ = self
             .war
             .decord_from_byte_array(source, cursor, include_child, context)

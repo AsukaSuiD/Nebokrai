@@ -624,7 +624,7 @@ fn player_ranks_decode_errors_equal(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GameServerMessageError<RegionRuntimeError> {
+pub(crate) enum GameServerMessageError {
     StartupSelector(GameClientServerStartPayloadError),
     StringTable(MyStringTableDecodeError),
     GodsBattleTopTen(GodsBattleTopTenDecodeError),
@@ -649,7 +649,7 @@ pub(crate) enum GameServerMessageError<RegionRuntimeError> {
     PlayerRanksStartup(GamePlayerRanksStartupError),
     HonorStartup(GameHonorStartupError),
     ScriptStartup(GameScriptStartupError),
-    InitialRegionStartup(InitialRegionStartupError<RegionRuntimeError>),
+    InitialRegionStartup(InitialRegionStartupError),
     WarStartup(WarScheduleSetupError),
 }
 
@@ -661,7 +661,7 @@ pub(crate) fn dispatch_server_message<Context>(
     game: &mut CGame,
     script_context: &mut Context,
     mut now_ms: impl FnMut(&mut Context) -> u32,
-) -> Option<Result<(), GameServerMessageError<Context::RuntimeError>>>
+) -> Option<Result<(), GameServerMessageError>>
 where
     Context: GameMainLoopRuntime,
 {
@@ -2393,11 +2393,11 @@ fn dispatch_player_count_message(
     Some(())
 }
 
-fn dispatch_string_table_message<RegionRuntimeError>(
+fn dispatch_string_table_message(
     message: &mut CMessage,
     game: &mut CGame,
     source: GameStringTableSource,
-) -> Result<(), GameServerMessageError<RegionRuntimeError>> {
+) -> Result<(), GameServerMessageError> {
     {
         let (wire, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
         game.create_string_table(wire, cursor, |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"))
@@ -2496,13 +2496,13 @@ pub(crate) struct InitialRegionSubtypeInputBlock {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum InitialRegionStartupError<RuntimeError> {
+pub(crate) enum InitialRegionStartupError {
     SubtypeInput(InitialRegionSubtypeInputBlock),
     UnknownSubtype(i32),
-    Base(ServerRegionDecodeError<RuntimeError>),
-    War(WarRegionDecodeError<ServerRegionDecodeError<RuntimeError>>),
-    City(CityRegionDecodeError<ServerRegionDecodeError<RuntimeError>>),
-    Country(CountryRegionDecodeError<ServerRegionDecodeError<RuntimeError>>),
+    Base(ServerRegionDecodeError),
+    War(WarRegionDecodeError<ServerRegionDecodeError>),
+    City(CityRegionDecodeError<ServerRegionDecodeError>),
+    Country(CountryRegionDecodeError<ServerRegionDecodeError>),
 }
 
 /// Выполняет startup case `0x0E`, включая allocation/decode, display-list
@@ -2514,7 +2514,7 @@ pub(crate) fn dispatch_initial_region_startup<Context, AddRegionList, AddLogText
     context: &mut Context,
     mut add_region_list: AddRegionList,
     mut add_log_text: AddLogText,
-) -> Option<Result<(), InitialRegionStartupError<Context::RuntimeError>>>
+) -> Option<Result<(), InitialRegionStartupError>>
 where
     Context: InitialRegionStartupContext,
     AddRegionList: FnMut(&[u8], i32),

@@ -23451,7 +23451,7 @@ impl CGame {
         cursor: &mut usize,
         include_child: bool,
         context: &mut Context,
-    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError<Context::RuntimeError>>>
+    ) -> Result<bool, WarRegionDecodeError<ServerRegionDecodeError>>
     where
         Context: WarRegionDecodeContext + GodsBattleNpcContendContext,
     {
