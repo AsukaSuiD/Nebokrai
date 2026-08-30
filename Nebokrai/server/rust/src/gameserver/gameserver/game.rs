@@ -4540,11 +4540,7 @@ impl CGame {
         player.register_goods_ai_by_id(goods_id, factory, now_seconds)
     }
 
-    pub(crate) fn personal_shop_session_available<Context: GameContainerMessageRuntime>(
-        &self,
-        session_id: i32,
-        _context: &mut Context,
-    ) -> bool {
+    pub(crate) fn personal_shop_session_available(&self, session_id: i32) -> bool {
         if !self
             .session_factory
             .personal_shop_session_available(session_id)
@@ -4613,7 +4609,7 @@ impl CGame {
         billing_completion: bool,
         context: &mut Context,
     ) -> PersonalShopBillingCompletion {
-        if !self.personal_shop_session_available(session_id, context) {
+        if !self.personal_shop_session_available(session_id) {
             tracing::trace!(
                 session_id,
                 buyer_plug_id,

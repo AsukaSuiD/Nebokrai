@@ -158,7 +158,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
                 .base_mut()
                 .get_guid()
                 .ok_or(PlayerShopMessageError::MissingGoodsId)?;
-            if !game.personal_shop_session_available(session_id, context) {
+            if !game.personal_shop_session_available(session_id) {
                 action_notice(game, player_id, b"GS0078");
             } else if !buyer_owned_by(game, session_id, buyer_plug_id, player_id) {
                 trace!(player_id, session_id, buyer_plug_id, "покупка отклонена владельцем сессии");
@@ -251,7 +251,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
             if game
                 .find_player(player_id)
                 .is_none_or(|player| player.current_progress() != PlayerProgress::None)
-                || !game.personal_shop_session_available(session_id, context)
+                || !game.personal_shop_session_available(session_id)
             {
                 trace!(player_id, session_id, "вход в личную лавку отклонён состоянием игрока или сессии");
             } else if let Some(buyer_plug_id) = game
@@ -279,7 +279,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
         PLAYER_SHOP_END_SESSION_MESSAGE => {
             let (session_id, plug_id) = read_session_plug(message)?;
             if seller_owned_by(game, session_id, plug_id, player_id)
-                && game.personal_shop_session_available(session_id, context)
+                && game.personal_shop_session_available(session_id)
             {
                 game.finish_personal_shop_session(session_id);
                 debug!(player_id, session_id, plug_id, "сессия личной лавки завершена продавцом");
@@ -290,7 +290,7 @@ fn dispatch_player_shop_action<Context: GameContainerMessageRuntime>(
         PLAYER_SHOP_EXIT_MESSAGE => {
             let (session_id, plug_id) = read_session_plug(message)?;
             if buyer_owned_by(game, session_id, plug_id, player_id)
-                && game.personal_shop_session_available(session_id, context)
+                && game.personal_shop_session_available(session_id)
             {
                 game.exit_personal_shop_buyer(session_id, plug_id);
                 debug!(player_id, session_id, plug_id, "покупатель вышел из личной лавки");
