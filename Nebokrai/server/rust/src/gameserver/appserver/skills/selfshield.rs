@@ -49,7 +49,7 @@ pub(crate) trait SelfShieldOwner {
         player_id: i32,
         state: Self::State,
         begin: bool,
-        now_ms: u32,
+        now_milliseconds: impl FnMut() -> u32,
     );
     fn execution(
         player_ai: &CPlayerAI,
@@ -284,10 +284,9 @@ where
         .find_player_mut(player_id)
         .and_then(|player| Owner::replace_state(player, state));
     if let Some(removed) = removed {
-        Owner::send_state_visual(game, player_id, removed, false, 0);
+        Owner::send_state_visual(game, player_id, removed, false, || 0);
     }
-    let state_now_ms = runtime.now_milliseconds();
-    Owner::send_state_visual(game, player_id, state, true, state_now_ms);
+    Owner::send_state_visual(game, player_id, state, true, || runtime.now_milliseconds());
     let _ = game.update_player_current_state(
         player_id,
         GamePlayerFightStatePhase::MoveShapeAi,

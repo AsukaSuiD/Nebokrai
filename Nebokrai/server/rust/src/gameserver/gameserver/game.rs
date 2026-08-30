@@ -29426,7 +29426,7 @@ impl CGame {
                         expected_player_id,
                         state,
                         true,
-                        login_tick_ms,
+                        || context.now_milliseconds(),
                     );
                 }
                 DefenseShieldState::Machine(state) => {
@@ -29435,7 +29435,7 @@ impl CGame {
                         expected_player_id,
                         state,
                         true,
-                        login_tick_ms,
+                        || context.now_milliseconds(),
                     );
                 }
                 DefenseShieldState::Life(state) => {

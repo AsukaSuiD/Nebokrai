@@ -5,10 +5,13 @@
 //! `CFightDefense::PreDefense`, до обычной защиты и итогового коэффициента
 //! `damage_factor`. DB-запись хранит остаток срока, прочность, обе
 //! защиты и WORD-факторы; после загрузки отсчёт начинается от текущих часов.
+//! Vtable exact EXE подтверждает общий с `CBlindState` клиентский срок по
+//! `0x005F2CD0`, включая условное второе чтение clock.
 
 use super::manashield::MANA_SHIELD_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::attackpower::{AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -67,13 +70,8 @@ impl ManaShieldState {
             || player_mana == 0
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
-        if deadline <= now_ms {
-            0
-        } else {
-            deadline.wrapping_sub(now_ms) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
@@ -84,11 +82,18 @@ impl ManaShieldState {
         Ok(Self::new(now_ms, reader.read_u32()?, reader.read_i32()?, reader.read_i32()?, reader.read_i32()?, reader.read_u16()?, reader.read_u16()?))
     }
 
-    pub(crate) fn encoded(self, now_ms: u32) -> [u8; MANA_SHIELD_STATE_BYTES] {
+    pub(crate) fn encoded(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> [u8; MANA_SHIELD_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
+    }
+
+    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; MANA_SHIELD_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(MANA_SHIELD_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(MANA_SHIELD_SKILL_ID);
-        writer.write_u32(self.client_time(now_ms) as u32);
+        writer.write_u32(remaining_time_ms);
         writer.write_i32(self.life);
         writer.write_i32(self.physical_defense);
         writer.write_i32(self.element_defense);
@@ -98,7 +103,7 @@ impl ManaShieldState {
     }
 
     pub(crate) fn encoded_for_install(self) -> [u8; MANA_SHIELD_STATE_BYTES] {
-        self.encoded(self.started_at_ms)
+        self.encoded_with_remaining(self.keep_time_ms)
     }
 
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
@@ -163,7 +168,7 @@ pub(crate) fn send_mana_shield_state_visual(
     player_id: i32,
     state: ManaShieldState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let Some(player) = game.find_player(player_id) else {
         return;
@@ -178,7 +183,7 @@ pub(crate) fn send_mana_shield_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(state.life());
     }
     let _ = game.send_player_shape_around(player_id, None, &message);

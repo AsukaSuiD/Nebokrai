@@ -71,9 +71,9 @@ impl SelfShieldOwner for ManaShieldOwner {
         player_id: i32,
         state: Self::State,
         begin: bool,
-        now_ms: u32,
+        now_milliseconds: impl FnMut() -> u32,
     ) {
-        send_mana_shield_state_visual(game, player_id, state, begin, now_ms);
+        send_mana_shield_state_visual(game, player_id, state, begin, now_milliseconds);
     }
 
     fn execution(

@@ -106,11 +106,11 @@ pub(crate) fn expire_player_defense_shields(
             }
             DefenseShieldState::Machine(state) => {
                 ordinary_ended = true;
-                send_machine_shield_state_visual(game, player_id, state, false, now_ms);
+                send_machine_shield_state_visual(game, player_id, state, false, || now_ms);
             }
             DefenseShieldState::Mana(state) => {
                 ordinary_ended = true;
-                send_mana_shield_state_visual(game, player_id, state, false, now_ms);
+                send_mana_shield_state_visual(game, player_id, state, false, || now_ms);
             }
             DefenseShieldState::Promotion(_) => {
                 ordinary_ended = true;
