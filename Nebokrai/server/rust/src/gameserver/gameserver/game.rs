@@ -5017,7 +5017,7 @@ impl CGame {
                 .expect("seller остаётся online")
                 .increase_money(price.price, &self.goods_factory, created);
             let seller_deliveries =
-                self.send_player_money_increase(seller_id, &seller_increase, context);
+                self.send_player_money_increase(seller_id, &seller_increase);
             tracing::trace!(
                 session_id,
                 seller_id,
@@ -14645,7 +14645,7 @@ impl CGame {
                     .get_mut(&party.owner_id)
                     .expect("trade party остаётся online")
                     .increase_money(delta, &self.goods_factory, created);
-                let deliveries = self.send_player_money_increase(party.owner_id, &outcome, context);
+                let deliveries = self.send_player_money_increase(party.owner_id, &outcome);
                 tracing::trace!(
                     player_id = party.owner_id,
                     ?deliveries,
@@ -14856,11 +14856,10 @@ impl CGame {
         }
     }
 
-    pub(crate) fn send_player_money_increase<Context>(
+    pub(crate) fn send_player_money_increase(
         &self,
         player_id: i32,
         outcome: &crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome,
-        _context: &mut Context,
     ) {
         use crate::gameserver::appserver::container::cwallet::CurrencyIncreaseOutcome;
         match outcome {
@@ -31373,11 +31372,10 @@ impl CGame {
         Some((additions, remaining))
     }
 
-    pub(crate) fn increase_player_money<Context>(
+    pub(crate) fn increase_player_money(
         &mut self,
         player_id: i32,
         amount: u32,
-        context: &mut Context,
     ) -> Option<()> {
         let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), amount);
         let outcome = {
@@ -31386,7 +31384,7 @@ impl CGame {
                 .get_mut(&player_id)?
                 .increase_money(amount, goods_factory, created)
         };
-        self.send_player_money_increase(player_id, &outcome, context);
+        self.send_player_money_increase(player_id, &outcome);
         tracing::trace!(player_id, amount, ?outcome, "деньги игрока увеличены");
         Some(())
     }
@@ -31536,18 +31534,17 @@ impl CGame {
         Some(created.id)
     }
 
-    pub(crate) fn submit_region_tax_session_result<Context>(
+    pub(crate) fn submit_region_tax_session_result(
         &mut self,
         player_id: i32,
         session_id: i64,
         password: i32,
         value: i32,
-        context: &mut Context,
     ) -> NetSessionCallbackOutcome {
         let outcome = self
             .net_session_manager
             .on_sync_callback_result(session_id, player_id, password, value);
-        self.apply_region_tax_session_effects(context);
+        self.apply_region_tax_session_effects();
         outcome
     }
 
@@ -31641,10 +31638,7 @@ impl CGame {
         let _ = prompt.send_to_player(self.net_server(), player_id);
     }
 
-    fn apply_region_tax_session_effects<Context>(
-        &mut self,
-        context: &mut Context,
-    ) {
+    fn apply_region_tax_session_effects(&mut self) {
         let effects = self.effect_journal.take_all();
         for effect in effects {
             match effect {
@@ -31668,7 +31662,7 @@ impl CGame {
                     player_id,
                     region_id,
                     value,
-                } => self.apply_region_tax_payment(player_id, region_id, value, context),
+                } => self.apply_region_tax_payment(player_id, region_id, value),
                 GameEffect::RegionTaxResult {
                     kind: RegionTaxSessionKind::AdjustRate,
                     player_id,
@@ -31697,12 +31691,11 @@ impl CGame {
         }
     }
 
-    fn apply_region_tax_payment<Context>(
+    fn apply_region_tax_payment(
         &mut self,
         player_id: i32,
         region_id: i32,
         value: i32,
-        context: &mut Context,
     ) {
         let amount = value as u32;
         let Some((total_tax, region_name)) = self.find_region(region_id).map(|region| {
@@ -31733,7 +31726,7 @@ impl CGame {
         if resulting_money >= 999_999_999 {
             return;
         }
-        let Some(()) = self.increase_player_money(player_id, amount, context) else {
+        let Some(()) = self.increase_player_money(player_id, amount) else {
             return;
         };
         if self.find_player(player_id).map(CPlayer::money) != Some(resulting_money) {
@@ -33767,11 +33760,10 @@ impl CGame {
     /// wallet остаётся canonical state owner-ом, а CGame публикует соответствующий
     /// create/amount/delete packet с extend ID 4. Как и оригинал, caller считает
     /// найденного игрока успехом даже при отказе wallet создать currency object.
-    pub(crate) fn set_script_player_money<Context>(
+    pub(crate) fn set_script_player_money(
         &mut self,
         player_id: i32,
         requested: u32,
-        context: &mut Context,
     ) -> bool {
         let Some(previous) = self.find_player(player_id).map(CPlayer::money) else {
             return false;
@@ -33791,7 +33783,7 @@ impl CGame {
                 };
                 player.increase_money(amount, goods_factory, created)
             };
-            let _ = self.send_player_money_increase(player_id, &outcome, context);
+            let _ = self.send_player_money_increase(player_id, &outcome);
         }
         true
     }
@@ -33800,11 +33792,10 @@ impl CGame {
     /// `SetMoney(max(signed(result), 0))`. Обычная положительная плата идёт
     /// через тот же wallet/container wire, что остальные gameplay debits;
     /// отрицательный legacy параметр сохраняет историческое пополнение.
-    pub(crate) fn apply_war_application_money<Context>(
+    pub(crate) fn apply_war_application_money(
         &mut self,
         player_id: i32,
         fee: i32,
-        context: &mut Context,
     ) -> Option<()> {
         let previous = self.find_player(player_id)?.money();
         let wrapped = previous.wrapping_sub(fee as u32);
@@ -33821,7 +33812,7 @@ impl CGame {
                     .get_mut(&player_id)?
                     .increase_money(amount, goods_factory, created)
             };
-            self.send_player_money_increase(player_id, &outcome, context);
+            self.send_player_money_increase(player_id, &outcome);
         }
         let current = self.find_player(player_id)?.money();
         tracing::trace!(
@@ -45158,7 +45149,7 @@ impl CGame {
             trace_message_dispatch("world_auction", message_type, &result);
         } else if let Some(result) = dispatch_player_shop_message(message, self, runtime) {
             trace_message_dispatch("player_shop", message_type, &result);
-        } else if let Some(result) = dispatch_shop_message(message, self, runtime) {
+        } else if let Some(result) = dispatch_shop_message(message, self) {
             trace_message_dispatch("shop", message_type, &result);
         } else if let Some(result) = dispatch_gm_message(message, self, runtime) {
             trace_message_dispatch("gm", message_type, &result);

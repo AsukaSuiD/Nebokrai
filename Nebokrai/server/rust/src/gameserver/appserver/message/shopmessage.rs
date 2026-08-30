@@ -55,10 +55,9 @@ pub(crate) enum ShopMessageError {
     MissingRepairSlot,
 }
 
-pub(crate) fn dispatch_shop_message<Context>(
+pub(crate) fn dispatch_shop_message(
     message: &mut CMessage,
     game: &mut CGame,
-    context: &mut Context,
 ) -> Option<Result<(), ShopMessageError>> {
     let message_type = message.message_type();
     if !matches!(
@@ -93,7 +92,7 @@ pub(crate) fn dispatch_shop_message<Context>(
 
     let outcome = match message_type {
         BUY => handle_buy(message, game, player_id, region_id),
-        SELL => handle_sell(message, game, context, player_id, region_id),
+        SELL => handle_sell(message, game, player_id, region_id),
         REPAIR_ONE => handle_repair_one(message, game, player_id, region_id),
         REPAIR_ALL => handle_repair_all(message, game, player_id, region_id),
         DISTANCE_PROBE => handle_distance_probe(message, game, player_id, region_id),
@@ -257,10 +256,9 @@ fn handle_buy(
     Ok(())
 }
 
-fn handle_sell<Context>(
+fn handle_sell(
     message: &mut CMessage,
     game: &mut CGame,
-    context: &mut Context,
     player_id: i32,
     region_id: i32,
 ) -> Result<(), ShopMessageError> {
@@ -350,7 +348,7 @@ fn handle_sell<Context>(
     };
     let _ = send_hand_delete(game, player_id, &removed);
     let _ = game
-        .increase_player_money(player_id, proceeds, context)
+        .increase_player_money(player_id, proceeds)
         .expect("shop player live");
     let tax = gross.wrapping_sub(proceeds);
     let _ = game.add_region_tax(region_id, tax);

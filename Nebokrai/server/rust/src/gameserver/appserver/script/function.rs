@@ -6518,7 +6518,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 } else {
                     value.max(0) as u32
                 };
-                let _ = game.set_script_player_money(target_id, requested, runtime);
+                let _ = game.set_script_player_money(target_id, requested);
                 1
             });
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
@@ -6575,7 +6575,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 } else {
                     value.max(0) as u32
                 };
-                let _ = game.set_script_player_money(target_id, requested, runtime);
+                let _ = game.set_script_player_money(target_id, requested);
                 1
             });
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })

@@ -379,14 +379,14 @@ pub(crate) fn dispatch_game_organizing_message<
 
     if opcode == 0x7fe34 {
         return Some(
-            dispatch_village_war_application_response(message, game, runtime)
+            dispatch_village_war_application_response(message, game)
                 .map_err(GameOrganizingMessageError::VillageApplication),
         );
     }
 
     if opcode == 0x7fe37 {
         return Some(
-            dispatch_war_application_response(message, game, runtime)
+            dispatch_war_application_response(message, game)
                 .map_err(GameOrganizingMessageError::CityApplication),
         );
     }
@@ -519,7 +519,7 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext>(
                 return Err(FactionLifecycleDispatchError::InvalidPayload);
             }
             let callback = game
-                .submit_region_tax_session_result(player_id, session_id, password, value, runtime);
+                .submit_region_tax_session_result(player_id, session_id, password, value);
             trace!(opcode, player_id, session_id, ?callback, applied = callback == NetSessionCallbackOutcome::Delivered, "Обработан ответ налогового сеанса");
             Ok(())
         }
@@ -561,18 +561,16 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext>(
     }
 }
 
-fn dispatch_village_war_application_response<Runtime>(
+fn dispatch_village_war_application_response(
     message: &mut CMessage,
     game: &mut CGame,
-    runtime: &mut Runtime,
 ) -> Result<(), FactionLifecycleDispatchError> {
-    dispatch_war_application_response(message, game, runtime)
+    dispatch_war_application_response(message, game)
 }
 
-fn dispatch_war_application_response<Runtime>(
+fn dispatch_war_application_response(
     message: &mut CMessage,
     game: &mut CGame,
-    runtime: &mut Runtime,
 ) -> Result<(), FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
@@ -588,7 +586,7 @@ fn dispatch_war_application_response<Runtime>(
     if !message.base_mut().unread_bytes().is_empty() {
         return Err(FactionLifecycleDispatchError::InvalidPayload);
     }
-    let money = game.apply_war_application_money(player_id, fee, runtime);
+    let money = game.apply_war_application_money(player_id, fee);
     trace!(player_id, fee, player_found = money.is_some(), ?money, "Обработан возврат платы за заявку войны");
     Ok(())
 }
