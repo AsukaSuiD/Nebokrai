@@ -22,8 +22,8 @@
 //! pointer-return factory. Gate map хранит logical/runtime IDs, имя и concrete
 //! `CCityGate`; safe owner сам выдаёт legacy child-ID и регистрирует тот же
 //! gate в base region/area. Initial и action-dependent block сразу меняет
-//! owning `CServerRegion`; runtime context оставляет только проверку footprint
-//! и клиентскую публикацию.
+//! owning `CServerRegion`; closing footprint читает ту же карту напрямую, а
+//! runtime context оставляет только клиентскую публикацию.
 //! Inherited `CServerWarRegion::AI` вызывается реальным `CGame::AI` через City
 //! adapter с weekly membership, defender/owner и network/log effects.
 //! Rust name/ID queries используют `Option` вместо pointer/sentinel формы и не
@@ -66,7 +66,9 @@ use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
 };
-use super::serverregion::{ServerRegionDecodeError, ServerReturnPlayer, ServerReturnSetupBlock};
+use super::serverregion::{
+    CServerRegion, ServerRegionDecodeError, ServerReturnPlayer, ServerReturnSetupBlock,
+};
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{
@@ -126,11 +128,9 @@ pub(crate) trait CityRegionDecodeContext: WarRegionDecodeContext {}
 
 impl<Context: WarRegionDecodeContext + ?Sized> CityRegionDecodeContext for Context {}
 
-pub(crate) trait CityGateRuntimeContext: BuildRuntimeContext {
-    /// Возвращает младший byte DWORD-клетки либо `None` для старых
-    /// out-of-bounds/null-map путей, которые `CityGateIsClose` пропускал.
-    fn city_gate_cell_block(&self, region_id: i32, tile_x: i32, tile_y: i32) -> Option<u8>;
-}
+pub(crate) trait CityGateRuntimeContext: BuildRuntimeContext {}
+
+impl<Context: BuildRuntimeContext + ?Sized> CityGateRuntimeContext for Context {}
 
 pub(crate) trait CityReturnPointContext {
     /// Сохраняет первый отброшенный virtual `CShape::GetTileY`.
@@ -485,8 +485,8 @@ impl CServerCityRegion {
     ) {
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
-            let _ = self.operator_city_gate(logical_id, OC_REFRESH, context);
-            let _ = self.operator_city_gate(logical_id, OC_CLOSE, context);
+            let _ = self.operator_city_gate(logical_id, OC_REFRESH);
+            let _ = self.operator_city_gate(logical_id, OC_CLOSE);
             self.update_city_gate_to_client(logical_id, context);
         }
     }
@@ -516,24 +516,19 @@ impl CServerCityRegion {
         self.war.clear_region(context);
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
-            let _ = self.operator_city_gate(logical_id, OC_REFRESH, context);
+            let _ = self.operator_city_gate(logical_id, OC_REFRESH);
             self.update_city_gate_to_client(logical_id, context);
         }
     }
 
-    pub(crate) fn operator_city_gate<Context: CityGateRuntimeContext>(
-        &mut self,
-        logical_id: i32,
-        operation: i32,
-        context: &mut Context,
-    ) -> bool {
+    pub(crate) fn operator_city_gate(&mut self, logical_id: i32, operation: i32) -> bool {
         let Some(gate_state) = self.city_gates.get(&logical_id) else {
             return false;
         };
 
         let pointer_result = match operation {
             OC_OPEN => true,
-            OC_CLOSE => city_gate_footprint_is_clear(self.war.base.id, &gate_state.gate, context),
+            OC_CLOSE => city_gate_footprint_is_clear(&self.war.base, &gate_state.gate),
             OC_REFRESH | OC_DIED => true,
             _ => true,
         };
@@ -585,15 +580,11 @@ impl CServerCityRegion {
         );
     }
 
-    pub(crate) fn city_gate_is_close<Context: CityGateRuntimeContext>(
-        &self,
-        logical_id: i32,
-        context: &Context,
-    ) -> bool {
+    pub(crate) fn city_gate_is_close(&self, logical_id: i32) -> bool {
         let Some(gate) = self.city_gates.get(&logical_id) else {
             return false;
         };
-        city_gate_footprint_is_clear(self.war.base.id, &gate.gate, context)
+        city_gate_footprint_is_clear(&self.war.base, &gate.gate)
     }
 
     pub(crate) fn get_city_gate_state(&self, logical_id: i32) -> i32 {
@@ -634,11 +625,7 @@ impl CServerCityRegion {
 /// Общий PDB-symbol `CServerCityRegion::CityGateIsClose` RVA `0x001CAAA0`:
 /// country-region вызывает именно его, поэтому обе region-цепочки используют
 /// один доказанный x-major footprint scan без объединения самих владельцев.
-pub(crate) fn city_gate_footprint_is_clear<Context: CityGateRuntimeContext>(
-    region_id: i32,
-    gate: &CCityGate,
-    context: &Context,
-) -> bool {
+pub(crate) fn city_gate_footprint_is_clear(region: &CServerRegion, gate: &CCityGate) -> bool {
     let footprint = gate.footprint();
     let width = i32::from(footprint.width_increment);
     let height = i32::from(footprint.height_increment);
@@ -655,8 +642,8 @@ pub(crate) fn city_gate_footprint_is_clear<Context: CityGateRuntimeContext>(
     while tile_x <= right {
         let mut tile_y = top;
         while tile_y <= bottom {
-            if context
-                .city_gate_cell_block(region_id, tile_x, tile_y)
+            if region
+                .block_at(tile_x, tile_y)
                 .is_some_and(|cell| cell & 7 == 3)
             {
                 return false;

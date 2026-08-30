@@ -352,18 +352,16 @@ impl CServerCountryRegion {
         Ok(true)
     }
 
-    pub(crate) fn operator_city_gate<Context: CityGateRuntimeContext>(
+    pub(crate) fn operator_city_gate(
         &mut self,
         city_gate_id: i32,
         operation: i32,
         camp: i32,
-        context: &mut Context,
     ) -> bool {
-        let region_id = self.base.id;
         let Some(gate) = self.gates(camp).and_then(|gates| gates.get(&city_gate_id)) else {
             return false;
         };
-        if operation == OC_CLOSE && !city_gate_footprint_is_clear(region_id, gate, context) {
+        if operation == OC_CLOSE && !city_gate_footprint_is_clear(&self.base, gate) {
             return false;
         }
         let gate = self

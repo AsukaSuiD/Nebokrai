@@ -6307,7 +6307,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 } else if operation == 0 && current_state == 0 {
                     Some(b"GS0199".as_slice())
                 } else if operation == 1
-                    && !game.script_city_gate_can_close(region_id, gate_id, runtime)
+                    && !game.script_city_gate_can_close(region_id, gate_id)
                 {
                     Some(b"GS0200".as_slice())
                 } else {

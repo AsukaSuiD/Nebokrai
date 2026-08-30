@@ -15897,14 +15897,9 @@ impl CGame {
         }
     }
 
-    pub(crate) fn script_city_gate_can_close<Context: CityGateRuntimeContext>(
-        &self,
-        region_id: i32,
-        gate_id: i32,
-        context: &Context,
-    ) -> bool {
+    pub(crate) fn script_city_gate_can_close(&self, region_id: i32, gate_id: i32) -> bool {
         match self.find_region(region_id) {
-            Some(ServerRegionOwner::City(region)) => region.city_gate_is_close(gate_id, context),
+            Some(ServerRegionOwner::City(region)) => region.city_gate_is_close(gate_id),
             _ => false,
         }
     }
@@ -15919,7 +15914,7 @@ impl CGame {
         let Some(ServerRegionOwner::City(mut region)) = self.take_region_owner(region_id) else {
             return false;
         };
-        let operated = region.operator_city_gate(gate_id, operation, context);
+        let operated = region.operator_city_gate(gate_id, operation);
         if operated {
             region.update_city_gate_to_client(gate_id, context);
         }
