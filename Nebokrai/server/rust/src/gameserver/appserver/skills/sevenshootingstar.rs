@@ -13,7 +13,7 @@ use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -114,6 +114,26 @@ fn finish(game: &mut CGame, player_id: i32) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
+}
+
+pub(crate) fn cancel_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    record_reuse: bool,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai
+        .seven_shooting_star()
+        .map(|state| state.kernel().dispatch())
+    else {
+        return false;
+    };
+    finish(game, player_id);
+    if record_reuse {
+        player_ai.mark_seven_shooting_star_used(runtime.now_milliseconds());
+    }
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo {

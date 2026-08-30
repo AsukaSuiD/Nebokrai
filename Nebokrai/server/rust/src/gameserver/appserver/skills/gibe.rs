@@ -11,7 +11,7 @@
 //! принадлежат этому модулю.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::monster_attackable_by_monster;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -213,4 +213,26 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     }
     player_ai.mark_gibe_used(runtime.now_milliseconds());
     terminal(QueuedSkillExecutionState::Completed)
+}
+
+/// Общий `CSkill::End(bool)` для полностью материализованной провокации:
+/// current skill снимается до очистки kernel-а, а ненулевой End фиксирует
+/// тот же realtime cooldown, что и нормальное синхронное завершение.
+pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    record_reuse: bool,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.gibe().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    if record_reuse {
+        player_ai.mark_gibe_used(runtime.now_milliseconds());
+    }
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }

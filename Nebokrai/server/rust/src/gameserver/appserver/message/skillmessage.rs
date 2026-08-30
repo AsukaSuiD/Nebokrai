@@ -46,14 +46,11 @@ pub(crate) enum PlayerSkillEndRuntimeOutcome {
     Ended,
 }
 
-pub(crate) trait GameSkillMessageRuntime: ScriptFunctionRuntime {
-    fn end_current_player_skill(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        skill_id: u32,
-    ) -> PlayerSkillEndRuntimeOutcome;
-}
+/// Skill message route использует тот же script runtime; завершение любого
+/// current player skill уже принадлежит materialized `CPlayerAI` owner-у.
+pub(crate) trait GameSkillMessageRuntime: ScriptFunctionRuntime {}
+
+impl<T: ScriptFunctionRuntime> GameSkillMessageRuntime for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameSkillMessageError {
@@ -133,7 +130,7 @@ pub(crate) fn dispatch_game_skill_message<Runtime: GameMainLoopRuntime>(
                         MaterializedSkillEndCause::ClientRequest,
                         runtime,
                     )
-                    .unwrap_or_else(|| runtime.end_current_player_skill(game, player_id, current))
+                    .unwrap_or(PlayerSkillEndRuntimeOutcome::AlreadyEnded)
                 {
                     PlayerSkillEndRuntimeOutcome::AlreadyEnded => "уже завершён",
                     PlayerSkillEndRuntimeOutcome::Ended => "завершён",

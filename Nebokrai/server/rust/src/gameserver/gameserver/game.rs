@@ -955,7 +955,7 @@ use crate::gameserver::appserver::skills::inversechopped::{
     INVERSE_CHOPPED_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::firewall::{
-    execute_player_fire_wall, is_fire_wall_target,
+    cancel_player_fire_wall, execute_player_fire_wall, is_fire_wall_target, FIRE_WALL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::firewallphalanx::{
     calculate_owned_fire_wall_attack, fire_wall_targets, FireWallPhalanxTick,
@@ -969,7 +969,8 @@ use crate::gameserver::appserver::skills::infernol::{
     cancel_player_infernol, execute_player_infernol, is_infernol_dispatch, INFERNOL_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::sevenshootingstar::{
-    execute_player_seven_shooting_star, is_seven_shooting_star_dispatch,
+    cancel_player_seven_shooting_star, execute_player_seven_shooting_star,
+    is_seven_shooting_star_dispatch, SEVEN_SHOOTING_STAR_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::littlestar::{
     cancel_player_little_star, execute_player_little_star, is_player_little_star_dispatch,
@@ -1194,7 +1195,9 @@ use crate::gameserver::appserver::skills::monsterprojectile::{
 use crate::gameserver::appserver::skills::hearten::{
     cancel_player_hearten, execute_player_hearten, HEARTEN_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::gibe::{execute_player_gibe, GIBE_SKILL_ID};
+use crate::gameserver::appserver::skills::gibe::{
+    cancel_player_gibe, execute_player_gibe, GIBE_SKILL_ID,
+};
 use crate::gameserver::appserver::skills::heartenstate::{
     expire_player_hearten_state, send_hearten_state_visual,
 };
@@ -37381,6 +37384,8 @@ impl CGame {
                 | BASE_MAGIC_SKILL_ID
                 | FIRE_BOLT_SKILL_ID
                 | FIRE_BALL_SKILL_ID
+                | FIRE_WALL_SKILL_ID
+                | SEVEN_SHOOTING_STAR_SKILL_ID
                 | THUNDER_SLASH_SKILL_ID
                 | CHAIN_LIGHTNING_SKILL_ID
                 | THUNDER_BLOW_SKILL_ID
@@ -37473,6 +37478,7 @@ impl CGame {
                 | PETS_CONTROL_SKILL_ID
                 | MONSTER_TAMING_SKILL_ID
                 | KNOCK_OUT_SKILL_ID
+                | GIBE_SKILL_ID
                 | CHUCK_STONE_SKILL_ID
                 | SKELETON_ARCHERY_SKILL_ID
                 | YUNSHENG_LIGHTNING_SKILL_ID
@@ -37498,6 +37504,8 @@ impl CGame {
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
             FIRE_BALL_SKILL_ID => player_ai.fire_ball().is_some(),
+            FIRE_WALL_SKILL_ID => player_ai.fire_wall().is_some(),
+            SEVEN_SHOOTING_STAR_SKILL_ID => player_ai.seven_shooting_star().is_some(),
             THUNDER_SLASH_SKILL_ID => player_ai.thunder_slash().is_some(),
             CHAIN_LIGHTNING_SKILL_ID => player_ai.chain_lightning().is_some(),
             THUNDER_BLOW_SKILL_ID => player_ai.thunder_blow().is_some(),
@@ -37602,6 +37610,7 @@ impl CGame {
             PETS_CONTROL_SKILL_ID => player_ai.pets_control().is_some(),
             MONSTER_TAMING_SKILL_ID => player_ai.monster_taming().is_some(),
             KNOCK_OUT_SKILL_ID => player_ai.knock_out().is_some(),
+            GIBE_SKILL_ID => player_ai.gibe().is_some(),
             _ if is_heal_skill(skill_id) => (0..4).any(|index| player_ai.heal_family(index).is_some()),
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(&player_ai, skill_id)
@@ -37891,6 +37900,22 @@ impl CGame {
             FIRE_BALL_SKILL_ID => {
                 cancel_player_fire_ball(self, player_id, &mut player_ai, runtime)
             }
+            FIRE_WALL_SKILL_ID => {
+                cancel_player_fire_wall(
+                    self,
+                    player_id,
+                    &mut player_ai,
+                    cause == MaterializedSkillEndCause::ClientRequest,
+                    runtime,
+                )
+            }
+            SEVEN_SHOOTING_STAR_SKILL_ID => cancel_player_seven_shooting_star(
+                self,
+                player_id,
+                &mut player_ai,
+                cause == MaterializedSkillEndCause::ClientRequest,
+                runtime,
+            ),
             THUNDER_SLASH_SKILL_ID => {
                 cancel_player_thunder_slash(self, player_id, &mut player_ai, runtime)
             }
@@ -38139,6 +38164,13 @@ impl CGame {
             KNOCK_OUT_SKILL_ID => {
                 cancel_player_knock_out(self, player_id, &mut player_ai, runtime)
             }
+            GIBE_SKILL_ID => cancel_player_gibe(
+                self,
+                player_id,
+                &mut player_ai,
+                cause == MaterializedSkillEndCause::ClientRequest,
+                runtime,
+            ),
             _ if is_heal_skill(skill_id) => {
                 cancel_player_heal(self, player_id, &mut player_ai, runtime)
             }

@@ -10,7 +10,7 @@
 
 use super::baseattack::time_reached;
 use super::firewallphalanx::CFireWallPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -94,6 +94,23 @@ fn finish(game: &mut CGame, player_id: i32) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
+}
+
+pub(crate) fn cancel_player_fire_wall<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    player_ai: &mut CPlayerAI,
+    record_reuse: bool,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(dispatch) = player_ai.fire_wall().map(SkillExecutionKernel::dispatch) else {
+        return false;
+    };
+    finish(game, player_id);
+    if record_reuse {
+        player_ai.mark_fire_wall_used(runtime.now_milliseconds());
+    }
+    player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) const fn is_fire_wall_target(dispatch: PlayerSkillDispatch) -> bool {
