@@ -56,8 +56,8 @@
 //! строки игроку отдельными `0xBF806`.
 //! `Vec` заменяет исходное выделение памяти; поле объявленной ёмкости сохраняет
 //! исходные `sum(name_len + 2) + 0x40`, включая возможное
-//! расхождение между двумя зависящими от времени проходами. Непокрытые
-//! селекторы GM остаются в сохранённом RAW ниже.
+//! расхождение между двумя зависящими от времени проходами. Все селекторы
+//! `0x7FC01..14` связаны с typed dispatcher-ом.
 //! `ParseGMCommand` сохраняет двухуровневую авторизацию, legacy-разбор четырёх
 //! параметров, upsert сценарных переменных и отложенный запуск
 //! `scripts/gm/{command}.script` через канонический script owner.
@@ -151,8 +151,8 @@ pub(crate) enum GmMessageError {
     DeclaredLengthOutsideLegacyRange { required: usize },
 }
 
-/// Материализует связанные ветви молчания, рассылки и адресного уведомления
-/// `OnGMMessage`. `None` оставляет прочие селекторы их сохранённому RAW-владельцу.
+/// Материализует полный selector-owner `OnGMMessage`; `None` означает, что
+/// сообщение принадлежит другому диспетчеру.
 pub(crate) fn dispatch_gm_message<
     Runtime: GameClockContext + ScriptRegionChangeContext + RealmAppellationScriptContext,
 >(
@@ -921,26 +921,3 @@ pub(crate) fn parse_gm_command<Runtime: ScriptFunctionRuntime>(
     );
     true
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\gmmessage.cpp
-
-// ============================================================================
-// FUNCTION: OnGMMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\gmmessage.cpp:19
-// RVA: 0x0009B210
-// ADDRESS: 0049b210
-// PROTOTYPE: void __cdecl OnGMMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
-
