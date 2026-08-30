@@ -18,7 +18,9 @@
 //!
 //! Декодирование exact persistence-wire теперь включает `CShape`, legacy
 //! description buffer, ordered addon/value storage и обе fairy-проекции;
-//! `CGoodsFactory` и exp-config передаются явно вместо process-global owners.
+//! `Clone` использует ту же исходную пару `Serialize(true) → Unserialize(true)`
+//! и новый constructor target, а не Rust field-copy. `CGoodsFactory` и
+//! exp-config передаются явно вместо process-global owners.
 //! Script durability getter/setter теперь сохраняют exact base-value storage,
 //! включая запись `-1` без client update. Constructor/release, остальные
 //! time-поля, обратный codec и прочая gameplay mutation ниже остаются RAW:
@@ -74,6 +76,14 @@ pub(crate) enum GoodsDecodeError {
     },
     #[error("не найдены base properties goods с index {}", .0.index)]
     MissingBaseProperties(GoodsBasePropertyBlock),
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum GoodsCloneError {
+    #[error("CGoods::Serialize отклонил persisted clone payload")]
+    EncodeRejected,
+    #[error(transparent)]
+    Decode(#[from] GoodsDecodeError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,7 +240,8 @@ impl CGoods {
         self.addon_properties.push(property);
     }
 
-    /// Exact persisted `CGoods::Serialize` для межсерверного auction-node.
+    /// Exact persisted `CGoods::Serialize` для native Clone и
+    /// межсерверного auction-node.
     /// Derived fairy-проекции не имеют отдельного wire: они восстанавливаются
     /// decoder-ом из base properties и addon list.
     pub(crate) fn serialize(&self, destination: &mut Vec<u8>, include_child: bool) -> bool {
@@ -255,6 +266,38 @@ impl CGoods {
             }
         }
         true
+    }
+
+    /// Exact `CGoods::Clone` RVA `0x000CB470`: source сериализуется с
+    /// `include_child = true`, а новый constructor target декодирует тот же
+    /// payload. Runtime-only `price_type/add_ticket` намеренно не копируются;
+    /// fairy-проекции восстанавливаются decoder-ом из catalog/addon данных.
+    pub(crate) fn clone_via_persisted_codec<OrdinaryThreshold, BattleThreshold>(
+        &self,
+        factory: &CGoodsFactory,
+        ordinary_threshold: OrdinaryThreshold,
+        battle_threshold: BattleThreshold,
+    ) -> Result<Self, GoodsCloneError>
+    where
+        OrdinaryThreshold: FnMut(u32, u32) -> u32,
+        BattleThreshold: FnMut(u32, u32) -> u32,
+    {
+        let mut payload = Vec::new();
+        if !self.serialize(&mut payload, true) {
+            return Err(GoodsCloneError::EncodeRejected);
+        }
+        let mut cloned = Self::with_reached_constructor_defaults();
+        let mut cursor = 0;
+        cloned.unserialize(
+            &payload,
+            &mut cursor,
+            true,
+            factory,
+            ordinary_threshold,
+            battle_threshold,
+        )?;
+        debug_assert_eq!(cursor, payload.len());
+        Ok(cloned)
     }
 
     /// Exact `SerializeForOldClient` projection, используемая live

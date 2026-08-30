@@ -253,9 +253,9 @@
 //! входном message owner-е.
 //! Mount `0x8FC34` сохраняет read-before-gate wire, addon-driven slot/chance,
 //! failure destruction и success Clone→hand delete→CiQing add с hand/packet/
-//! CiQing `0xC0101/02`; полный native Clone, old-client codec и addon/property
-//! recompute остаются обязательными runtime-границами, поскольку их owners
-//! ещё не материализованы полностью.
+//! CiQing `0xC0101/02`. Native Clone замкнут через точную persisted-codec пару
+//! `CGoods`; обязательной runtime-границей остаётся только полный equipment/
+//! addon property recompute, owner которого ещё не материализован полностью.
 //! Other-person `0x8FC35` объединяет ordered CiQing/TaoZhuang property maps,
 //! сериализует target identity, values-only sequence, owned CiQing goods и
 //! TaoZhuang ID в адресный `0xC010F`. Delete/mount property tail получает от
@@ -2053,7 +2053,6 @@ pub(crate) struct GameWarStartupOwners {
 }
 
 pub(crate) trait CiQingComposeContext {
-    fn clone_ci_qing_hand_goods(&mut self, goods: &CGoods) -> Option<CGoods>;
     fn mount_ci_qing_equipment(
         &mut self,
         game: &mut CGame,
@@ -22803,16 +22802,26 @@ impl CGame {
             .expect("mount facts подтверждают hand goods");
         let hand_base_index = hand_goods.base_properties_index();
         let cloned_hand_goods = if succeeded {
-            let Some(cloned) = context.clone_ci_qing_hand_goods(hand_goods) else {
-                tracing::warn!(
-                    player_id,
-                    amount,
-                    position,
-                    "не удалось клонировать предмет для установки CiQing"
-                );
-                return Some(());
-            };
-            Some(cloned)
+            match hand_goods.clone_via_persisted_codec(
+                &self.goods_factory,
+                |equip_level, level| self.fairy_exp_conf.dw_exp_up(equip_level, level),
+                |equip_level, level| {
+                    self.battle_fairy_exp_config
+                        .dw_exp_up(equip_level, level)
+                },
+            ) {
+                Ok(cloned) => Some(cloned),
+                Err(error) => {
+                    tracing::warn!(
+                        player_id,
+                        amount,
+                        position,
+                        %error,
+                        "не удалось клонировать предмет для установки CiQing"
+                    );
+                    return Some(());
+                }
+            }
         } else {
             None
         };
