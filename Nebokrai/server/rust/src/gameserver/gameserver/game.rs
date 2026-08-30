@@ -4145,6 +4145,10 @@ struct GameMainLoopState {
 /// отклоняются диспетчером. Маршрутизацию сообщений уже исполняет `CGame`, а
 /// декодер региона получает тот же актуальный контекст фабрик без отдельного
 /// теневого состояния.
+pub(crate) trait GameExitRuntime {
+    fn exit_requested(&self) -> bool;
+}
+
 pub(crate) trait GameMainLoopRuntime:
     InitialRegionStartupContext
     + GameRegionEnterContext
@@ -4159,8 +4163,8 @@ pub(crate) trait GameMainLoopRuntime:
     + NationContendContext
     + GodsBattleNpcContendContext
     + ServerRegionAreaTransitionContext
+    + GameExitRuntime
 {
-    fn exit_requested(&self) -> bool;
     /// Исполняет только ещё не материализованные state-классы из
     /// `CMoveShape::UpdateAbnormality` после owned change-body/extended/
     /// appellation/ride owners и до `CPlayer::UpdateCurrentState`.
@@ -4214,6 +4218,10 @@ pub(crate) trait GameReleaseRuntime {
     fn exit_network_server_worker(&mut self, server: &mut CMyNetServer);
 }
 
+pub(crate) trait GameRuntimePathOwner {
+    fn runtime_paths(&self) -> GameRuntimePaths;
+}
+
 /// Process-owned nonblocking network turn. Tokio заменяет независимые Win32
 /// accept/IO workers, но публикация их завершившихся событий остаётся перед
 /// очередным игровым ходом и не смешивается с `CGame::ProcessMessage`.
@@ -4225,10 +4233,8 @@ pub(crate) trait GameNetworkRuntime {
 }
 
 pub(crate) trait GameThreadRuntime:
-    GameMainLoopRuntime + GameReleaseRuntime + GameNetworkRuntime
-{
-    fn runtime_paths(&self) -> GameRuntimePaths;
-}
+    GameMainLoopRuntime + GameReleaseRuntime + GameNetworkRuntime + GameRuntimePathOwner
+{}
 
 impl ServerRegionOwner {
     pub(crate) const fn base(&self) -> &CServerRegion {

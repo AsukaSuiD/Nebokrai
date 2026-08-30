@@ -24,7 +24,10 @@ use crate::nets::servers::{
     AcceptStart, AdmissionOutcome, ServerCommandHandle, ServerIoAction, ServerIoCompletion,
 };
 
-use super::game::{CGame, GameNetworkRuntime, GameRuntimePaths, game_tick_milliseconds};
+use super::game::{
+    CGame, GameExitRuntime, GameNetworkRuntime, GameReleaseRuntime, GameRuntimePathOwner,
+    GameRuntimePaths, game_tick_milliseconds,
+};
 
 #[derive(Clone)]
 pub(crate) struct GameProcessControl {
@@ -279,6 +282,24 @@ impl RegionRandomContext for GameProcessRuntime {
             .wrapping_mul(214_013)
             .wrapping_add(2_531_011);
         (((self.random_state >> 16) & 0x7fff) as i32) % bound
+    }
+}
+
+impl GameRuntimePathOwner for GameProcessRuntime {
+    fn runtime_paths(&self) -> GameRuntimePaths {
+        GameProcessRuntime::runtime_paths(self)
+    }
+}
+
+impl GameExitRuntime for GameProcessRuntime {
+    fn exit_requested(&self) -> bool {
+        GameProcessRuntime::exit_requested(self)
+    }
+}
+
+impl GameReleaseRuntime for GameProcessRuntime {
+    fn exit_network_server_worker(&mut self, server: &mut CMyNetServer) {
+        GameProcessRuntime::exit_network_server_worker(self, server);
     }
 }
 
