@@ -7,12 +7,14 @@
 //! межсерверные изменения навыков и уровня, а также обновление LeiTing.
 //! Канал чата `8` связан с `ParseGMCommand`: сохраняются две GM-карты,
 //! script variables, файловый GMLog и условный World-аудит `0x6020B`.
+//! Channel `9` использует подтверждённый setup-gate и immediate global
+//! `RunLine`; `0x8FBF9` сохраняет временной god-passport и live GM-map level 200.
 //!
 //! Все наблюдаемые эффекты выполняются синхронно в исходных ветвях. Результаты
 //! отправок не управляют дальнейшим выполнением и фиксируются через `tracing`;
 //! временные деревья отчётов и списки результатов отправки не создаются.
 //! Отложенных эффектов у этого владельца нет, поэтому `GameEffectJournal` здесь
-//! не используется. Остальные ветви ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! не используется. Все селекторы владельца материализованы typed dispatcher-ом.
 
 use crate::gameserver::appserver::player::{PlayerLeiTingDecodeBlock, PlayerTalkChannel};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
@@ -23,7 +25,9 @@ use crate::gameserver::gameserver::game::{
     CGame, colored_player_notice_message, player_skill_learned_message,
 };
 use crate::nets::netserver::message::{CMessage, SendMessageError};
+use crate::public::date::TagTime;
 use crate::public::tools::{add_game_error_log_text, put_string_to_file};
+use crate::setup::gmlist::GmInfo;
 
 const PLAYER_RENAME_REQUEST: u32 = 0x0008_fb05;
 const PLAYER_CHAT_REQUEST: u32 = 0x0008_fb01;
@@ -56,6 +60,9 @@ const COUNTRY_NOTICE_DELIVERY: u32 = 0x0007_fa11;
 const WORLD_LEI_TING_UPDATE: u32 = 0x0007_fa17;
 const WORLD_HONOR_ELIMINATE_ACKNOWLEDGEMENT: u32 = 0x0007_fa16;
 const WORLD_SCRIPT_CONTINUE: u32 = 0x0007_fa15;
+const PLAYER_GOD_AUTH_REQUEST: u32 = 0x0008_fbf9;
+const GM_GOD_LEVEL: i32 = 200;
+const GOD_AUTH_PREFIX: &[u8] = b"sdf!@#$aurora-348sklhw9lsdhf!@Dfsdf89s*LKHL@#$@#;sldjkfnv/z[q";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameOtherMessageError {
@@ -310,7 +317,7 @@ fn dispatch_gm_chat<Runtime: ScriptFunctionRuntime>(
         .or_else(|| game.gm_list().gm_info().get(&player_name))
         .map(|info| info.level)
         .unwrap_or_default();
-    if gm_level != 100 {
+    if gm_level != GM_GOD_LEVEL {
         let log = format_gm_command_log(
             &player_name,
             player_level,
@@ -333,6 +340,56 @@ fn dispatch_gm_chat<Runtime: ScriptFunctionRuntime>(
         }
     }
     tracing::trace!(message_type, player_id, gm_level, "GM-команда принята");
+    Ok(())
+}
+
+fn dispatch_god_auth(
+    message: &mut CMessage,
+    game: &mut CGame,
+) -> Result<(), GameOtherMessageError> {
+    let message_type = PLAYER_GOD_AUTH_REQUEST;
+    message.resolve_player_context(game);
+    let Some(player_id) = message.player_id() else {
+        tracing::trace!(message_type, "у god-auth нет игрока");
+        return Ok(());
+    };
+    let Some(player_name) = game
+        .find_player(player_id)
+        .map(|player| player.player_name().to_vec())
+    else {
+        tracing::trace!(message_type, player_id, "игрок god-auth не найден");
+        return Ok(());
+    };
+    match read_char(message, "god-auth operation")? {
+        0 => {
+            let removed = game.gm_list_mut().remove_gm(&player_name).is_some();
+            tracing::trace!(message_type, player_id, removed, "god-auth снят");
+        }
+        1 => {
+            let supplied = read_string(message, 0x400);
+            let now = TagTime::local_now();
+            let passport = game.gm_list().god_passport();
+            let mut expected = Vec::with_capacity(GOD_AUTH_PREFIX.len() + passport.len() + 16);
+            expected.extend_from_slice(GOD_AUTH_PREFIX);
+            expected.extend_from_slice(
+                format!("{:04}{:02}{:02}{:02}", now.year, now.month, now.day, now.hour)
+                    .as_bytes(),
+            );
+            expected.extend_from_slice(passport);
+            if supplied == expected && !game.gm_list().gm_info().contains_key(&player_name) {
+                let _ = game.gm_list_mut().insert_gm(GmInfo {
+                    name: player_name,
+                    level: GM_GOD_LEVEL,
+                });
+                tracing::trace!(message_type, player_id, "god-auth принят");
+            } else {
+                tracing::trace!(message_type, player_id, "god-auth отклонён");
+            }
+        }
+        operation => {
+            tracing::trace!(message_type, player_id, operation, "неизвестная god-auth операция");
+        }
+    }
     Ok(())
 }
 
@@ -738,6 +795,9 @@ pub(crate) fn dispatch_game_other_message<Runtime: ScriptFunctionRuntime>(
     runtime: &mut Runtime,
 ) -> Option<Result<(), GameOtherMessageError>> {
     let message_type = message.message_type() as u32;
+    if message_type == PLAYER_GOD_AUTH_REQUEST {
+        return Some(dispatch_god_auth(message, game));
+    }
     if message_type == PLAYER_SCRIPT_DIALOG_RESPONSE {
         message.resolve_player_context(game);
         let player_id = message.player_id();
@@ -1341,25 +1401,3 @@ pub(crate) fn dispatch_game_other_message<Runtime: ScriptFunctionRuntime>(
     tracing::trace!(message_type, player_id, client_delivery, "LeiTing обновлён");
     Some(Ok(()))
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\othermessage.cpp
-
-// ============================================================================
-// FUNCTION: OnOtherMessage
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\message\othermessage.cpp:42
-// RVA: 0x00090E20
-// ADDRESS: 00490e20
-// PROTOTYPE: void __cdecl OnOtherMessage(CMessage * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer

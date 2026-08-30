@@ -44,6 +44,10 @@ impl CGMList {
         self.gm_info.insert(info.name.clone(), info)
     }
 
+    pub(crate) fn remove_gm(&mut self, name: &[u8]) -> Option<GmInfo> {
+        self.gm_info.remove(name)
+    }
+
     pub(crate) fn insert_player_gm(&mut self, info: GmInfo) -> Option<GmInfo> {
         self.player_gm_info.insert(info.name.clone(), info)
     }
