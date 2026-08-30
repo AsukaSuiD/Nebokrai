@@ -149,6 +149,7 @@ use indexmap::IndexSet;
 
 use super::area::{AreaAiContext, AreaWokenMonsterClass, CArea, WarSoulPoint};
 use super::baseobject::CBaseObject;
+use super::build::BuildBlockUpdate;
 use super::country::countryparam::CCountryParam;
 use super::gameeffectjournal::{GameEffect, SharedGameEffectJournal};
 use super::goods::cgoods::CGoods;
@@ -3296,6 +3297,16 @@ impl CServerRegion {
 
     pub(crate) fn block_at(&self, x: i32, y: i32) -> Option<u8> {
         self.region.get_block(x, y).ok()
+    }
+
+    /// Применяет достигнутый virtual `SetBlock(tile_x, tile_y, block)` к
+    /// карте именно того региона, которому принадлежит build.
+    pub(crate) fn apply_build_block(&mut self, update: BuildBlockUpdate) -> bool {
+        update.region_id == self.id
+            && self
+                .region
+                .set_block(update.tile_x, update.tile_y, update.block as u8)
+                .is_ok()
     }
 
     /// Mutable counterpart точного coordinate-overload `GetArea`; нужен

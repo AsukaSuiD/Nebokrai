@@ -21,7 +21,9 @@
 //! safe-блоками. Exact EXE подтвердил normal `true`, layout gate-полей и
 //! pointer-return factory. Gate map хранит logical/runtime IDs, имя и concrete
 //! `CCityGate`; safe owner сам выдаёт legacy child-ID и регистрирует тот же
-//! gate в base region/area, а send-around остаётся context-границей.
+//! gate в base region/area. Initial и action-dependent block сразу меняет
+//! owning `CServerRegion`; runtime context оставляет только проверку footprint
+//! и клиентскую публикацию.
 //! Inherited `CServerWarRegion::AI` вызывается реальным `CGame::AI` через City
 //! adapter с weekly membership, defender/owner и network/log effects.
 //! Rust name/ID queries используют `Option` вместо pointer/sentinel формы и не
@@ -55,7 +57,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::build::{BuildClientUpdate, BuildRuntimeContext};
+use super::build::{BuildBlockUpdate, BuildClientUpdate, BuildRuntimeContext};
 use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
@@ -120,12 +122,9 @@ pub(crate) enum CityRegionDecodeError<BaseError> {
     Input(RegionDecodeInputBlock),
 }
 
-pub(crate) trait CityRegionDecodeContext: WarRegionDecodeContext + BuildRuntimeContext {}
+pub(crate) trait CityRegionDecodeContext: WarRegionDecodeContext {}
 
-impl<Context: WarRegionDecodeContext + BuildRuntimeContext + ?Sized> CityRegionDecodeContext
-    for Context
-{
-}
+impl<Context: WarRegionDecodeContext + ?Sized> CityRegionDecodeContext for Context {}
 
 pub(crate) trait CityGateRuntimeContext: BuildRuntimeContext {
     /// Возвращает младший byte DWORD-клетки либо `None` для старых
@@ -334,7 +333,10 @@ impl CServerCityRegion {
         {
             return None;
         }
-        context.apply_build_block(gate.current_block_update());
+        let _legacy_void = self
+            .war
+            .base
+            .apply_build_block(gate.current_block_update());
         self.city_gates.insert(
             build.logical_id,
             CityGateState {
@@ -542,15 +544,18 @@ impl CServerCityRegion {
                 .get_mut(&logical_id)
                 .expect("gate найден до неизменяющего map вызова")
                 .gate;
-            match operation {
-                OC_OPEN => apply_gate_action(gate, 7, context),
-                OC_CLOSE => apply_gate_action(gate, 1, context),
+            let update = match operation {
+                OC_OPEN => apply_gate_action(gate, 7),
+                OC_CLOSE => apply_gate_action(gate, 1),
                 OC_REFRESH => {
                     gate.refresh_hp();
-                    apply_gate_action(gate, 7, context);
+                    apply_gate_action(gate, 7)
                 }
-                OC_DIED => apply_gate_action(gate, 6, context),
-                _ => {}
+                OC_DIED => apply_gate_action(gate, 6),
+                _ => None,
+            };
+            if let Some(update) = update {
+                let _legacy_void = self.war.base.apply_build_block(update);
             }
         }
 
@@ -663,14 +668,8 @@ pub(crate) fn city_gate_footprint_is_clear<Context: CityGateRuntimeContext>(
     true
 }
 
-fn apply_gate_action<Context: CityGateRuntimeContext>(
-    gate: &mut CCityGate,
-    action: u16,
-    context: &mut Context,
-) {
-    if let Some(update) = gate.set_action(action) {
-        context.apply_build_block(update);
-    }
+fn apply_gate_action(gate: &mut CCityGate, action: u16) -> Option<BuildBlockUpdate> {
+    gate.set_action(action)
 }
 
 fn decode_defence_return(bytes: [u8; 0x20]) -> CityDefenceReturnState {

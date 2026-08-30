@@ -24,7 +24,9 @@
 //! child/area membership. `BTreeMap`
 //! сохраняет порядок `std::map`. Flags являются обычными `CBuild` type `0x44C`:
 //! wire `field_24` не применяется, initial action остаётся `0`, а refresh
-//! меняет только HP до обязательного `0xBF60F`. Area lookup сохраняет
+//! меняет только HP до обязательного `0xBF60F`. Gate/flag block применяет
+//! собственный base-region, поэтому startup decoder не требует process-side
+//! build owner-а. Area lookup сохраняет
 //! `random(map.size())` и mutating `operator[]`; base fallback теперь замкнут
 //! через `CServerRegion` и `CCountryParam`. `SetEnterPosXY` сохраняет fight-only
 //! gate, same-region comparison, игнорирование random bool и player SetPos;
@@ -68,7 +70,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::build::{BuildClientUpdate, BuildInit, BuildRuntimeContext, CBuild};
+use super::build::{
+    BuildBlockUpdate, BuildClientUpdate, BuildInit, BuildRuntimeContext, CBuild,
+};
 use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
@@ -167,12 +171,9 @@ pub(crate) enum CountryEntryError {
     Cell(RegionCellAccessBlock),
 }
 
-pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext + BuildRuntimeContext {}
+pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext {}
 
-impl<Context: ServerRegionDecodeContext + BuildRuntimeContext + ?Sized> CountryRegionDecodeContext
-    for Context
-{
-}
+impl<Context: ServerRegionDecodeContext + ?Sized> CountryRegionDecodeContext for Context {}
 
 pub(crate) trait CountryRegionRuntimeContext:
     CityGateRuntimeContext + ServerRegionMonsterContext + GameClockContext
@@ -369,7 +370,10 @@ impl CServerCountryRegion {
             .gates_mut(camp)
             .and_then(|gates| gates.get_mut(&city_gate_id))
             .expect("gate найден до неизменяющего map вызова");
-        operate_city_gate(gate, operation, context);
+        let update = operate_city_gate(gate, operation);
+        if let Some(update) = update {
+            let _legacy_void = self.base.apply_build_block(update);
+        }
         true
     }
 
@@ -399,11 +403,41 @@ impl CServerCountryRegion {
 
     pub(crate) fn refresh_gates<Context: CityGateRuntimeContext>(&mut self, context: &mut Context) {
         let region_id = self.base.id;
-        for gate in self.defend_gates.values_mut() {
-            refresh_city_gate_object(region_id, gate, context);
+        let defend_ids: Vec<_> = self.defend_gates.keys().copied().collect();
+        for gate_id in defend_ids {
+            let update = refresh_city_gate_object_state(
+                self.defend_gates
+                    .get_mut(&gate_id)
+                    .expect("snapshot построен из defend gate map"),
+            );
+            if let Some(update) = update {
+                let _legacy_void = self.base.apply_build_block(update);
+            }
+            update_city_gate_object(
+                region_id,
+                self.defend_gates
+                    .get(&gate_id)
+                    .expect("defend gate не удаляется во время refresh"),
+                context,
+            );
         }
-        for gate in self.attack_gates.values_mut() {
-            refresh_city_gate_object(region_id, gate, context);
+        let attack_ids: Vec<_> = self.attack_gates.keys().copied().collect();
+        for gate_id in attack_ids {
+            let update = refresh_city_gate_object_state(
+                self.attack_gates
+                    .get_mut(&gate_id)
+                    .expect("snapshot построен из attack gate map"),
+            );
+            if let Some(update) = update {
+                let _legacy_void = self.base.apply_build_block(update);
+            }
+            update_city_gate_object(
+                region_id,
+                self.attack_gates
+                    .get(&gate_id)
+                    .expect("attack gate не удаляется во время refresh"),
+                context,
+            );
         }
     }
 
@@ -1039,7 +1073,7 @@ impl CServerCountryRegion {
         {
             return None;
         }
-        context.apply_build_block(gate.current_block_update());
+        let _legacy_void = self.base.apply_build_block(gate.current_block_update());
         // VERIFIED_DISASSEMBLY: country map key — `CCityGate::m_lID +8`, не
         // `tagGate.field_00`/logical ID, который использует city-owner.
         self.gates_mut(camp)
@@ -1095,7 +1129,7 @@ impl CServerCountryRegion {
         {
             return None;
         }
-        context.apply_build_block(flag.current_block_update());
+        let _legacy_void = self.base.apply_build_block(flag.current_block_update());
         self.flags_mut(camp)
             .expect("decoder передаёт только доказанный camp")
             .insert(flag_id, flag);
@@ -1203,42 +1237,27 @@ enum CountryTargetKind {
     Guard,
 }
 
-fn operate_city_gate<Context: CityGateRuntimeContext>(
-    gate: &mut CCityGate,
-    operation: i32,
-    context: &mut Context,
-) {
+fn operate_city_gate(gate: &mut CCityGate, operation: i32) -> Option<BuildBlockUpdate> {
     match operation {
-        OC_OPEN => apply_gate_action(gate, 7, context),
-        OC_CLOSE => apply_gate_action(gate, 1, context),
+        OC_OPEN => apply_gate_action(gate, 7),
+        OC_CLOSE => apply_gate_action(gate, 1),
         OC_REFRESH => {
             gate.refresh_hp();
-            apply_gate_action(gate, 7, context);
+            apply_gate_action(gate, 7)
         }
         // Country pointer-overload, в отличие от city-owner, для `OC_Died`
         // и неизвестных operation успешно ничего не делает.
-        _ => {}
+        _ => None,
     }
 }
 
-fn refresh_city_gate_object<Context: CityGateRuntimeContext>(
-    region_id: i32,
-    gate: &mut CCityGate,
-    context: &mut Context,
-) {
+fn refresh_city_gate_object_state(gate: &mut CCityGate) -> Option<BuildBlockUpdate> {
     gate.refresh_hp();
-    apply_gate_action(gate, 7, context);
-    update_city_gate_object(region_id, gate, context);
+    apply_gate_action(gate, 7)
 }
 
-fn apply_gate_action<Context: CityGateRuntimeContext>(
-    gate: &mut CCityGate,
-    action: u16,
-    context: &mut Context,
-) {
-    if let Some(update) = gate.set_action(action) {
-        context.apply_build_block(update);
-    }
+fn apply_gate_action(gate: &mut CCityGate, action: u16) -> Option<BuildBlockUpdate> {
+    gate.set_action(action)
 }
 
 fn update_city_gate_object<Context: CityGateRuntimeContext>(

@@ -9,13 +9,14 @@
 //! `ServerCountryRegion::DecordFromByteArray` RVA `0x001CD3F0`.
 //!
 //! Rust хранит достигнутые identity/shape/property поля и byte-exact script.
-//! `BuildBlockUpdate` оставляет старый region `SetBlock` context-владельцу:
+//! `BuildBlockUpdate` применяет owning `CServerRegion`:
 //! обычный `CBuild` освобождает клетку только action `6`, тогда как subclass
 //! `CCityGate` также освобождает её при `7`. x87 `i32 -> f32 -> trunc i32`
 //! для title coordinates сохранён общим helper-ом этого владельца. Owned
 //! `Vec<u8>` и `Drop` заменяют `std::string`/destructor noise. `GetFigure`
 //! материализован в общий `ShapeView`, поэтому country flags участвуют в
-//! region membership и общем поиске боевых целей. AI, combat, client
+//! region membership и общем поиске боевых целей. Runtime context хранит
+//! только внешнюю client publication. AI, combat, client
 //! serialization и остальная поверхность ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
@@ -61,9 +62,6 @@ pub(crate) struct BuildClientUpdate {
 }
 
 pub(crate) trait BuildRuntimeContext {
-    /// Применяет старый region virtual `SetBlock(tile_x, tile_y, block)`.
-    fn apply_build_block(&mut self, update: BuildBlockUpdate);
-
     /// Кодирует `0xBF60F(type, id, action, max_hp, hp)` и шлёт вокруг build.
     fn send_build_update(&mut self, region_id: i32, build_id: i32, update: BuildClientUpdate);
 }
