@@ -17,8 +17,9 @@
 //! wire. Внешний resolve не сохраняется: все production-вызовы `add_object`
 //! принадлежат достигнутым owner-ам; виртуальные сериализаторы недостигнутых
 //! категорий фигур остаются узкой границей исполнения.
-//! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы NPC и всех
-//! достигнутых призванных форм и не уводит их в параллельный runtime callback.
+//! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы ground
+//! goods, NPC и всех достигнутых призванных форм и не уводит их в параллельный
+//! runtime callback.
 //! Синхронные отправки не
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 //! Эмоция `0x8F905` сохраняет странность EXE: наличие `ChangeBody` сначала
@@ -42,6 +43,7 @@ const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
 const NPC_TYPE: i32 = 500;
+const GOODS_TYPE: i32 = 700;
 const SUMMON_SHAPE_TYPE: i32 = 1000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -309,7 +311,7 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             };
             let snapshot = match game.find_shape_in_region(region_id, identity) {
                 Some(shape) => {
-                    if matches!(identity.object_type, NPC_TYPE | SUMMON_SHAPE_TYPE) {
+                    if matches!(identity.object_type, NPC_TYPE | GOODS_TYPE | SUMMON_SHAPE_TYPE) {
                         let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
                             region_id,
                             identity,

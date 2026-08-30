@@ -41094,8 +41094,8 @@ impl CGame {
     }
 
     /// Разрешает подтверждённый виртуальный клиентский сериализатор формы у
-    /// канонического владельца региона. Достигнуты `CNpc` и семейство
-    /// `SummonedSkillShape`; остальные категории не имитируются.
+    /// канонического владельца региона. Достигнуты ground `CGoods`, `CNpc` и
+    /// семейство `SummonedSkillShape`; остальные категории не имитируются.
     pub(crate) fn serialize_owned_shape_snapshot(
         &self,
         region_id: i32,
@@ -41109,6 +41109,19 @@ impl CGame {
                 return None;
             }
             let payload = npc.encode_client_snapshot(true)?;
+            return Some((canonical_identity, payload));
+        }
+        if identity.object_type == GOODS_TYPE {
+            let goods = self
+                .find_region(region_id)?
+                .base()
+                .find_ground_goods(identity.ex_id)?;
+            let canonical_identity = goods.identity();
+            if canonical_identity != identity {
+                return None;
+            }
+            let mut payload = Vec::new();
+            goods.serialize(&mut payload, true).then_some(())?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type != SUMMON_SHAPE_TYPE {
