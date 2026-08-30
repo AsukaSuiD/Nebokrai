@@ -7,6 +7,8 @@
 //! подтверждён собственный DB-кодек, поэтому runtime-состояние не выдумывает
 //! сериализацию и хранится отдельным каноническим slot-ом. Извлечение,
 //! возврат перед ударом и завершение также принадлежат этому owner-у.
+//! Унаследованный клиентский срок сохраняет два чтения exact-owner-а
+//! `CBloodLossState::GetRemainedTime` по `0x00606320`.
 
 use super::leafcutstate::{LeafCutState, LeafCutStateTick};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -52,7 +54,7 @@ impl LeafCutState2 {
 
     pub(crate) const fn skill_id(self) -> u32 { LEAF_CUT_2_STATE_ID }
     pub(crate) const fn master(self) -> MasterInfo { self.0.master() }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 { self.0.client_time(now_ms) }
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { self.0.client_state_time(now_milliseconds) }
     pub(crate) fn tick(
         &mut self,
         lifetime_now_ms: u32,
@@ -88,7 +90,7 @@ pub(crate) fn send_leaf_cut_2_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_ulong(state.client_state_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);

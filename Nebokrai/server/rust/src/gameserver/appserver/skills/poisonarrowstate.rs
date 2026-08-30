@@ -10,6 +10,8 @@
 //! доставку.
 //! DB-запись сохраняет десять DWORD `MasterInfo`, остаток срока, частоту и
 //! потерю HP. Недостигнутые координатные перегрузки `Begin` сохранены ниже.
+//! Клиентский `GetRemainedTime` разделяет точное тело `0x00606320` и при
+//! положительном остатке выполняет второе чтение wrapping clock.
 
 use super::poisonarrow::POISON_ARROW_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -19,6 +21,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -77,6 +80,10 @@ impl PoisonArrowState {
         } else {
             self.keep_time_ms.wrapping_sub(elapsed) as i32
         }
+    }
+
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
     }
 
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
@@ -177,7 +184,7 @@ pub(crate) fn send_poison_arrow_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_ulong(state.client_state_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);

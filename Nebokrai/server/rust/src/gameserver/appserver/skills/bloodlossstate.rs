@@ -10,6 +10,8 @@
 //! DB-запись буквально сохраняет десять DWORD `MasterInfo`, остаток срока,
 //! частоту, биты двух `float` и границы атаки. Координатные перегрузки `Begin`
 //! остаются ниже как RAW без параллельного изменяемого представления.
+//! Клиентский `GetRemainedTime` разделяет общее тело по `0x00606320` с
+//! периодическими poison/burn-состояниями и читает wrapping clock дважды.
 
 use super::bloodloss::BLOOD_LOSS_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -19,6 +21,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -87,6 +90,10 @@ impl BloodLossState {
         } else {
             self.keep_time_ms.wrapping_sub(elapsed) as i32
         }
+    }
+
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
     }
 
     pub(crate) fn decode(
@@ -245,7 +252,7 @@ pub(crate) fn send_blood_loss_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_ulong(state.client_state_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);

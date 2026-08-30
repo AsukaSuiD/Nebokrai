@@ -6,6 +6,8 @@
 //! состоянием и сохраняет собственный ID. Обёртка не создаёт второй источник
 //! истины: жизненный цикл принадлежит `CanonicalStateStorage`, а его runtime
 //! tick выполняется этим owner-ом до межвладельческого применения атаки.
+//! Унаследованный клиентский срок сохраняет два чтения exact-owner-а
+//! `CBloodLossState::GetRemainedTime` по `0x00606320`.
 
 use super::leafcutstate::{LeafCutState, LeafCutStateTick};
 use crate::gameserver::appserver::legacycodec::LegacyReadBlock;
@@ -53,7 +55,7 @@ impl LeafCutState3 {
 
     pub(crate) const fn skill_id(self) -> u32 { LEAF_CUT_3_STATE_ID }
     pub(crate) const fn master(self) -> MasterInfo { self.0.master() }
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 { self.0.client_time(now_ms) }
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { self.0.client_state_time(now_milliseconds) }
     pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { self.0.serialized_span() }
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { self.0.shift_serialized_offset_after(removed_offset, amount); }
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.0.activate_loaded(now_ms); }
@@ -79,7 +81,7 @@ pub(crate) fn send_leaf_cut_3_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_ulong(state.client_state_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);

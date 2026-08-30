@@ -7,6 +7,8 @@
 //! принадлежат этому модулю; `CGame` координирует независимых владельцев цели
 //! и смерти.
 //! Координатные перегрузки `Begin` остаются RAW ниже.
+//! Клиентский срок использует общий exact-owner `0x00606320`: проверка
+//! deadline и положительный остаток читают wrapping clock независимо.
 
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -15,6 +17,7 @@ use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -54,9 +57,8 @@ impl SpiderPoisonState {
     pub(crate) const fn skill_id(self) -> u32 { SPIDER_POISON_SKILL_ID }
     pub(crate) const fn master(self) -> MasterInfo { self.master }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) as i32 }
+    pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
     }
 
     pub(crate) fn tick(
@@ -112,7 +114,7 @@ pub(crate) fn send_spider_poison_state_visual(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_ulong(state.client_state_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
@@ -133,7 +135,7 @@ pub(crate) fn send_spider_poison_state_visual_in_region(
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_ulong(state.client_state_time(|| now_ms));
         message.add_long(0);
     }
     let _ = game.send_game_position_around(region, tile_x, tile_y, &message);
