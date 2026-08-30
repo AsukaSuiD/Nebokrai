@@ -24751,12 +24751,7 @@ impl CGame {
         })
     }
 
-    pub(crate) fn get_precious_box_item<Context>(
-        &mut self,
-        player_id: i32,
-        box_id: i32,
-        _context: &mut Context,
-    ) -> i32 {
+    pub(crate) fn get_precious_box_item(&mut self, player_id: i32, box_id: i32) -> i32 {
         if self.find_player(player_id).is_none() {
             return -1;
         }

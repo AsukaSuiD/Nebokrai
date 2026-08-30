@@ -8551,7 +8551,6 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
                 game.get_precious_box_item(
                     player_id,
                     integer_arguments[0].unwrap_or(SCRIPT_INT_PARAMETER_ERROR),
-                    runtime,
                 )
             });
             return ScriptFunctionDispatchOutcome::Handled { legacy_return };
