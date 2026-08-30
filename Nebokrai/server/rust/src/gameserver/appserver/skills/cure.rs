@@ -258,7 +258,9 @@ fn finish_monster_curable_state(
         RemovedMonsterCurableState::Seal(state) => send_seal_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpiderPoison(state) => send_spider_poison_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::SpriteBurn(state) => send_sprite_burn_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
-        RemovedMonsterCurableState::SpiderWeb(state) => send_spider_web_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
+        RemovedMonsterCurableState::SpiderWeb(state) => send_spider_web_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
+        ),
         RemovedMonsterCurableState::KnockOut(state) => send_knock_out_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
         RemovedMonsterCurableState::BossBlueQuake(state) => send_boss_blue_quake_state_visual(
             game,

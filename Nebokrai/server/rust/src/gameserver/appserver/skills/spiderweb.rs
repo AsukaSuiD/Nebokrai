@@ -38,7 +38,7 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
@@ -159,7 +159,7 @@ fn install_state(
     region: &mut CServerRegion,
     target: ShapeIdentity,
     state: SpiderWebState,
-    now_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) {
     let installed = match target.object_type {
         PLAYER_TYPE => game.find_player_mut(target.id).and_then(|player| {
@@ -199,11 +199,11 @@ fn install_state(
     };
     if let Some(previous) = previous {
         send_spider_web_state_visual(
-            game, region.id, identity, tile_x, tile_y, previous, false, now_ms,
+            game, region.id, identity, tile_x, tile_y, previous, false, || now_milliseconds(),
         );
     }
     send_spider_web_state_visual(
-        game, region.id, identity, tile_x, tile_y, state, true, now_ms,
+        game, region.id, identity, tile_x, tile_y, state, true, now_milliseconds,
     );
 }
 
@@ -505,7 +505,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         let state_now_ms = runtime.now_milliseconds();
         let state = SpiderWebState::new(state_now_ms, keep_time_ms);
         if let Some(mut owner) = game.take_region_owner(region_id) {
-            install_state(game, owner.base_mut(), target, state, state_now_ms);
+            install_state(game, owner.base_mut(), target, state, || runtime.now_milliseconds());
             game.restore_region_owner(owner);
         }
     }
@@ -722,7 +722,7 @@ pub(crate) fn execute_owned_spider_web(
             region,
             target_identity,
             SpiderWebState::new(now_ms, keep_time_ms),
-            now_ms,
+            game_tick_milliseconds,
         );
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {

@@ -4,11 +4,14 @@
 //! `appserver/skills/spiderwebstate.cpp`. Состояние сохраняет wrapping-время,
 //! запрещает движение и бой через счётчики `CMoveShape`, снимает оба запрета
 //! при замене, истечении или защитном действии и публикует `0xBFE03/0xBFE04`.
-//! Координатные перегрузки и legacy-сериализация остаются RAW ниже.
+//! Координатные перегрузки и legacy-сериализация остаются RAW ниже. Vtable
+//! exact EXE подтверждает общий с `CBlindState` клиентский срок по
+//! `0x005F2CD0`, включая отдельное чтение clock для положительного остатка.
 
 use super::spiderweb::SPIDER_WEB_SKILL_ID;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -34,13 +37,8 @@ impl SpiderWebState {
         now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
     }
 
-    pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms {
-            0
-        } else {
-            self.keep_time_ms.wrapping_sub(elapsed) as i32
-        }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 }
 
@@ -53,14 +51,14 @@ pub(crate) fn send_spider_web_state_visual(
     tile_y: i32,
     state: SpiderWebState,
     begin: bool,
-    now_ms: u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_long(state.client_time(now_ms));
+        message.add_long(state.client_time(now_milliseconds));
         message.add_long(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
@@ -92,7 +90,7 @@ fn finish_player_state(
         return false;
     };
     send_spider_web_state_visual(
-        game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+        game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
     );
     true
 }
@@ -125,7 +123,7 @@ fn finish_monster_state(
         return false;
     };
     send_spider_web_state_visual(
-        game, region.id, identity, tile_x, tile_y, state, false, now_ms,
+        game, region.id, identity, tile_x, tile_y, state, false, || now_ms,
     );
     true
 }
