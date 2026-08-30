@@ -368,7 +368,9 @@
 //! Same-region `ChangeRegion` уже напрямую переносит близкую активную повозку
 //! через её region monster-owner. Cross-region departure теперь сохраняет
 //! pet/carriage snapshots и ставит прежних monster-owner-ов в `CS_DELETE`;
-//! только прочие player virtual callbacks остаются runtime-границей.
+//! `8F801` entry восстанавливает их между подтверждёнными частями
+//! `CPlayer::OnEnterRegion`. Только прочие player virtual callbacks остаются
+//! runtime-границей.
 //! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
 //! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
@@ -2315,10 +2317,21 @@ pub(crate) trait ScriptRegionChangeContext: NationCombatContext {
     );
 }
 
-pub(crate) trait GameRegionEnterContext: NationCombatContext {
-    /// Remaining `8F801` serialization/weather/state tail after concrete
-    /// destination membership has been established by `CGame`.
-    fn publish_changed_player_region_entry(
+pub(crate) trait GameRegionEnterContext: NationCombatContext + ServerRegionMonsterContext {
+    /// Первая часть `CPlayer::OnEnterRegion`: base move-shape, router,
+    /// automatic restore и equipment states предшествуют companion spawn.
+    fn prepare_changed_player_region_entry(
+        &mut self,
+        game: &mut CGame,
+        player_id: i32,
+        region_id: i32,
+        entry_token: i32,
+        socket_id: i32,
+    );
+
+    /// Оставшийся `8F801` tail после pet/carriage spawn: team, WarSoul,
+    /// weather/state serialization и связанные client publications.
+    fn finish_changed_player_region_entry(
         &mut self,
         game: &mut CGame,
         player_id: i32,
@@ -18223,7 +18236,16 @@ impl CGame {
         if membership.is_ok() {
             let skill_interrupted = self.on_player_skill_change_region(player_id);
             let _ = self.enter_gods_battle_player(region_id, player_id);
-            context.publish_changed_player_region_entry(
+            context.prepare_changed_player_region_entry(
+                self,
+                player_id,
+                region_id,
+                entry_token,
+                socket_id,
+            );
+            self.restore_player_region_pets(player_id, region_id, context);
+            self.restore_player_region_carriage(player_id, region_id, context);
+            context.finish_changed_player_region_entry(
                 self,
                 player_id,
                 region_id,
@@ -28619,7 +28641,7 @@ impl CGame {
         self.login_validate_times.remove(&player_id);
     }
 
-    fn restore_player_login_pets<Context: ServerRegionMonsterContext>(
+    fn restore_player_region_pets<Context: ServerRegionMonsterContext>(
         &mut self,
         player_id: i32,
         region_id: i32,
@@ -28780,7 +28802,7 @@ impl CGame {
         self.restore_region_owner(owner);
     }
 
-    fn restore_player_login_carriage<Context: ServerRegionMonsterContext>(
+    fn restore_player_region_carriage<Context: ServerRegionMonsterContext>(
         &mut self,
         player_id: i32,
         region_id: i32,
@@ -29622,8 +29644,8 @@ impl CGame {
                 }
             }
         }
-        self.restore_player_login_pets(expected_player_id, region_id, context);
-        self.restore_player_login_carriage(expected_player_id, region_id, context);
+        self.restore_player_region_pets(expected_player_id, region_id, context);
+        self.restore_player_region_carriage(expected_player_id, region_id, context);
 
         let first_login = self
             .players
