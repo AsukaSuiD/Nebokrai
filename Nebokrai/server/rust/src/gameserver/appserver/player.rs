@@ -903,6 +903,7 @@ pub(crate) enum BattleFairySkillResetEffect {
     PacketItemConsumed {
         player_id: i32,
         goods: super::shape::ShapeIdentity,
+        position: Option<u32>,
         previous_amount: u32,
         remaining_amount: u32,
         consumed: bool,
@@ -11686,6 +11687,7 @@ impl CPlayer {
                     .push(BattleFairySkillResetEffect::PacketItemConsumed {
                         player_id,
                         goods: reset_identity,
+                        position: reset_position,
                         previous_amount: reset_amount,
                         remaining_amount,
                         consumed,

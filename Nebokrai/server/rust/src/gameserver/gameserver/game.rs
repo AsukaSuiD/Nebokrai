@@ -2315,13 +2315,6 @@ pub(crate) trait RealmAppellationScriptContext:
     BattleFairyDeathContext + PlayerPropertyContext
 {}
 
-pub(crate) trait BattleFairySkillResetContext {
-    fn publish_battle_fairy_skill_reset_packet_consumption(
-        &mut self,
-        effect: &BattleFairySkillResetEffect,
-    ) -> Vec<i32>;
-}
-
 /// Нематериализованные virtual owners skill-state остаются на
 /// runtime-границе. Player GameSave, live pet/carriage snapshots,
 /// region/player maps, session state и message wire исполняет `CGame`.
@@ -34114,19 +34107,15 @@ impl CGame {
         Some(())
     }
 
-    /// Runtime entry point `CBattleFairyContainer::ResetSkill`, общий для
+    /// Owner entry point `CBattleFairyContainer::ResetSkill`, общий для
     /// script-functions распределения обычного/special skill и прямого caller-а
     /// с расходом reset item. RNG принадлежит одному `CGame` sequence.
-    pub(crate) fn reset_battle_fairy_skill<Context>(
+    pub(crate) fn reset_battle_fairy_skill(
         &mut self,
         player_id: i32,
         position: i32,
         consume_item: bool,
-        context: &mut Context,
-    ) -> Option<BattleFairySkillResetReport>
-    where
-        Context: BattleFairySkillResetContext,
-    {
+    ) -> Option<BattleFairySkillResetReport> {
         let enabled = self.globe_setup.battle_fairy_enabled();
         let mut report = {
             let (players, random_state, goods_factory, skill_factory) = (
@@ -34173,8 +34162,7 @@ impl CGame {
                     );
                 }
                 effect @ BattleFairySkillResetEffect::PacketItemConsumed { .. } => {
-                    let deliveries =
-                        context.publish_battle_fairy_skill_reset_packet_consumption(&effect);
+                    let deliveries = self.send_battle_fairy_skill_reset_packet_consumption(&effect);
                     tracing::trace!(
                         player_id,
                         ?deliveries,
@@ -34241,6 +34229,32 @@ impl CGame {
             }
         }
         Some(report)
+    }
+
+    fn send_battle_fairy_skill_reset_packet_consumption(
+        &self,
+        effect: &BattleFairySkillResetEffect,
+    ) -> Vec<i32> {
+        let BattleFairySkillResetEffect::PacketItemConsumed {
+            player_id,
+            goods,
+            position: Some(position),
+            previous_amount,
+            remaining_amount,
+            consumed: true,
+            ..
+        } = effect
+        else {
+            return Vec::new();
+        };
+        self.send_player_packet_consumption(&CiQingPacketConsumption {
+            player_id: *player_id,
+            goods: *goods,
+            position: *position,
+            previous_amount: *previous_amount,
+            remaining_amount: *remaining_amount,
+            removal: None,
+        })
     }
 
     /// Начальный player/equipment участок goods-message `0x8FC29`.
@@ -34507,15 +34521,11 @@ impl CGame {
     /// вычисление аргументов остаются в `CScript::RunFunction`; здесь замкнуты
     /// канонические мутации игрока и экипировки, RNG, клиентские сообщения и
     /// локальный журнал.
-    pub(crate) fn run_battle_fairy_script_action<Context>(
+    pub(crate) fn run_battle_fairy_script_action(
         &mut self,
         script_player_id: Option<i32>,
         action: BattleFairyScriptAction,
-        context: &mut Context,
-    ) -> i32
-    where
-        Context: BattleFairyDeathContext + BattleFairySkillResetContext,
-    {
+    ) -> i32 {
         let target_id = |game: &Self, player_name: &[u8]| {
             if player_name.is_empty() {
                 script_player_id.filter(|player_id| game.find_player(*player_id).is_some())
@@ -34747,7 +34757,7 @@ impl CGame {
                 {
                     return 0;
                 }
-                let _ = self.reset_battle_fairy_skill(player_id, position, false, context);
+                let _ = self.reset_battle_fairy_skill(player_id, position, false);
                 0
             }
             BattleFairyScriptAction::DeleteSkillSlot {

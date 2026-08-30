@@ -449,8 +449,8 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
-    BattleFairyDeathContext, BattleFairyScriptAction, BattleFairySkillResetContext, CGame,
-    CiQingComposeContext, EquipmentDaKongContext, GameClockContext,
+    BattleFairyDeathContext, BattleFairyScriptAction, CGame, CiQingComposeContext,
+    EquipmentDaKongContext, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, GodsBattleDeathContext,
     MonsterDeathContext, NationCombatContext, PlayerReliveContext,
     RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
@@ -848,7 +848,6 @@ pub(crate) trait ScriptFunctionRuntime:
     + EquipmentDaKongContext
     + GameContainerMessageRuntime
     + BattleFairyDeathContext
-    + BattleFairySkillResetContext
     + ScriptRegionChangeContext
     + CityGateRuntimeContext
     + GodsBattleDeathContext
@@ -868,7 +867,6 @@ impl<T> ScriptFunctionRuntime for T where
         + EquipmentDaKongContext
         + GameContainerMessageRuntime
         + BattleFairyDeathContext
-        + BattleFairySkillResetContext
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
         + GodsBattleDeathContext
@@ -3946,9 +3944,8 @@ pub(crate) fn script_function_parameter_kind(
     }
 }
 
-fn run_battle_fairy_script_function<Runtime: ScriptFunctionRuntime>(
+fn run_battle_fairy_script_function(
     game: &mut CGame,
-    runtime: &mut Runtime,
     script_player_id: Option<i32>,
     function_id: i32,
     integer_arguments: [Option<i32>; 4],
@@ -4103,7 +4100,7 @@ fn run_battle_fairy_script_function<Runtime: ScriptFunctionRuntime>(
         }
         _ => return None,
     };
-    Some(game.run_battle_fairy_script_action(script_player_id, action, runtime))
+    Some(game.run_battle_fairy_script_action(script_player_id, action))
 }
 
 fn run_fairy_script_function<Runtime: ScriptFunctionRuntime>(
@@ -8687,7 +8684,6 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
 
     if let Some(legacy_return) = run_battle_fairy_script_function(
         game,
-        runtime,
         script_player_id,
         function_id,
         [
