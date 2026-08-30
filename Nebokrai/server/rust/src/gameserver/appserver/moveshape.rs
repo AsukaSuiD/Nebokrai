@@ -704,7 +704,11 @@ impl CMoveShape {
         &self.undead_states
     }
 
-    pub(crate) fn serialized_ex_states(&self, now_ms: u32) -> Vec<u8> {
+    pub(crate) fn serialized_ex_states(
+        &self,
+        now_ms: u32,
+        mut blind_now_milliseconds: impl FnMut() -> u32,
+    ) -> Vec<u8> {
         let mut payload = self.ex_states.to_vec();
         for state in &self.change_body_states {
             state.update_serialized_runtime(&mut payload, now_ms);
@@ -729,7 +733,11 @@ impl CMoveShape {
                 .into_iter()
                 .find(|offset| read_u32(&payload, *offset) == Some(BLIND_STATE_ID))
             {
-                write_u32(&mut payload, offset + 4, state.remaining_time(now_ms));
+                write_u32(
+                    &mut payload,
+                    offset + 4,
+                    state.client_state_time(&mut blind_now_milliseconds),
+                );
             }
         }
         if let Some(state) = self.hearten_state {

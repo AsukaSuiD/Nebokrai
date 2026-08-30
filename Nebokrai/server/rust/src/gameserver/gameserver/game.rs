@@ -5745,11 +5745,13 @@ impl CGame {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let now_ms = context.now_milliseconds();
         player
             .encode_game_save(
                 destination,
                 &self.goods_factory,
-                context.now_milliseconds(),
+                now_ms,
+                || context.now_milliseconds(),
                 self.globe_setup.one_pk_count_time_ms(),
                 &pets,
                 &carriage,
@@ -29294,7 +29296,7 @@ impl CGame {
                 y,
                 state,
                 true,
-                login_tick_ms,
+                || context.now_milliseconds(),
             );
         }
         if let Some(state) = loaded_cure_state {

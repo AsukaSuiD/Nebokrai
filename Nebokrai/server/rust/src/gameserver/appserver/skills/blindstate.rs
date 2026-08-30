@@ -253,12 +253,14 @@ impl BlindState {
         now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
     }
 
-    pub(crate) const fn remaining_time(self, now_ms: u32) -> u32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms {
+    /// Exact `GetRemainedTime`: deadline-check и положительный остаток читают
+    /// wrapping clock независимо.
+    pub(crate) fn client_state_time(self, mut now_milliseconds: impl FnMut() -> u32) -> u32 {
+        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
+        if deadline <= now_milliseconds() {
             0
         } else {
-            self.keep_time_ms.wrapping_sub(elapsed)
+            deadline.wrapping_sub(now_milliseconds())
         }
     }
 }
@@ -275,14 +277,14 @@ pub(crate) fn send_blind_state_visual(
     tile_y: i32,
     state: BlindState,
     begin: bool,
-    now_ms: u32,
+    mut now_milliseconds: impl FnMut() -> u32,
 ) {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
     message.add_long(state.skill_id() as i32);
     if begin {
-        message.add_ulong(state.remaining_time(now_ms));
+        message.add_ulong(state.client_state_time(&mut now_milliseconds));
         message.add_ulong(0);
     }
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
@@ -314,7 +316,7 @@ fn finish_player_blind_state(
         return false;
     };
     send_blind_state_visual(
-        game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+        game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
     );
     true
 }

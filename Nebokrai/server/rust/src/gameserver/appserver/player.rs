@@ -2629,6 +2629,7 @@ impl CPlayer {
         destination: &mut Vec<u8>,
         goods_factory: &CGoodsFactory,
         now_ms: u32,
+        blind_now_milliseconds: impl FnMut() -> u32,
         one_pk_count_time_ms: u32,
         pets: &[PlayerUncreatedPet],
         carriage: &PlayerUncreatedCarriage,
@@ -2658,7 +2659,9 @@ impl CPlayer {
             let packed = (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16);
             LegacyWriter::new(destination).write_u32(packed);
         }
-        let ex_states = self.move_shape.serialized_ex_states(now_ms);
+        let ex_states = self
+            .move_shape
+            .serialized_ex_states(now_ms, blind_now_milliseconds);
         append_player_game_save_count(destination, "m_vExStates length", ex_states.len())?;
         destination.extend_from_slice(&ex_states);
         append_player_game_save_count(destination, "m_listFriend", self.friends.len())?;
