@@ -1138,12 +1138,19 @@ impl CMonster {
         self.base_ai.process_reached_defense_actions()
     }
 
-    pub(crate) fn process_reached_death_action(&mut self) -> PassiveDeathAction {
-        let action = self.base_ai.process_reached_death_action();
-        if action != PassiveDeathAction::None {
-            self.ai_target = None;
-        }
-        action
+    pub(crate) fn begin_reached_death_action(&mut self) -> bool {
+        self.base_ai.begin_reached_death_action()
+    }
+
+    /// Общий `CMonsterAI::OnLoseTarget` смерти очищает только target-поля и
+    /// не отменяет сохранённый `ASA_MOVE`; расширенный `clear_ai_target`
+    /// намеренно остаётся для обычных schedule/interruption путей.
+    pub(crate) fn release_ai_target_for_death(&mut self) {
+        self.ai_target = None;
+    }
+
+    pub(crate) fn finish_reached_death_action(&mut self) -> PassiveDeathAction {
+        self.base_ai.finish_reached_death_action()
     }
 
     pub(crate) fn advance_active_ai_stand(&mut self, now_ms: u32) -> bool {

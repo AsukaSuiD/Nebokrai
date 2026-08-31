@@ -151,13 +151,13 @@ impl CBaseAI {
     /// отдельным проходом снял предшествующий Defense-префикс. Исходник
     /// отбрасывает все active-события до первого Move, сохраняет только этот
     /// Move со всеми его часами/handling и повторяет обработчик, пока движение
-    /// не завершится. Нулевая задержка Died снимает событие в том же проходе,
-    /// в котором owner death становится разрешён.
-    pub(crate) fn process_reached_death_action(&mut self) -> PassiveDeathAction {
+    /// не завершится. Снятие Died после virtual `OnLoseTarget` выполняет
+    /// парный `finish_reached_death_action`.
+    pub(crate) fn begin_reached_death_action(&mut self) -> bool {
         if !self.passive_actions.front().is_some_and(|event| {
             event.action == AiShapeAction::Died && event.handling == 0
         }) {
-            return PassiveDeathAction::None;
+            return false;
         }
 
         let retained_move = self
@@ -168,10 +168,24 @@ impl CBaseAI {
         self.active_actions.clear();
         if let Some(event) = retained_move {
             self.active_actions.push_back(event);
-            PassiveDeathAction::WaitingForMove
-        } else {
+        }
+        true
+    }
+
+    /// Завершает тот же virtual-handler после того, как concrete AI owner
+    /// выполнил свой `OnLoseTarget`. Производный обработчик вправе изменить
+    /// active FIFO, поэтому исходная проверка пустоты находится именно здесь.
+    pub(crate) fn finish_reached_death_action(&mut self) -> PassiveDeathAction {
+        if !self.passive_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::Died && event.handling == 0
+        }) {
+            return PassiveDeathAction::None;
+        }
+        if self.active_actions.is_empty() {
             self.passive_actions.pop_front();
             PassiveDeathAction::Ready
+        } else {
+            PassiveDeathAction::WaitingForMove
         }
     }
 

@@ -1223,7 +1223,9 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
 use crate::gameserver::appserver::skills::knightcutstate::{
     expire_monster_knight_cut_state, expire_player_knight_cut_state,
 };
+use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::PassiveDeathAction;
+use crate::gameserver::appserver::ai::cityguardwithsword::release_guard_sword_target_for_death;
 use crate::gameserver::appserver::ai::jiumai::{
     retarget_jiumai_after_hurt, synchronize_jiumai_target_loss,
 };
@@ -45716,22 +45718,55 @@ impl CGame {
                     let mut change_skill_pending = false;
                     let mut search_enemy_pending = false;
                     let mut passive_death = PassiveDeathAction::None;
-                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                        let processed = monster.process_reached_defense_actions();
-                        if processed != 0 {
-                            tracing::trace!(
-                                region_id,
+                    let (death_started, guard_target_release) = owner
+                        .base_mut()
+                        .find_monster_by_id_mut(monster_id)
+                        .map_or((false, false), |monster| {
+                            let processed = monster.process_reached_defense_actions();
+                            if processed != 0 {
+                                tracing::trace!(
+                                    region_id,
+                                    monster_id,
+                                    processed,
+                                    "обработаны пассивные Defense-события монстра"
+                                );
+                            }
+                            let death_started = processed == 0
+                                && monster.begin_reached_death_action();
+                            let guard_target_release = death_started
+                                && matches!(
+                                    monster.active_ai(),
+                                    Some(ActiveMonsterAi::Primary(
+                                        MonsterAiKind::CityGuardWithSword
+                                            | MonsterAiKind::VillageCountyGuardWithSword
+                                            | MonsterAiKind::NationCountyGuardWithSword
+                                    ))
+                                );
+                            (death_started, guard_target_release)
+                        });
+                    if death_started {
+                        if guard_target_release {
+                            release_guard_sword_target_for_death(
+                                self,
+                                owner.base_mut(),
                                 monster_id,
-                                processed,
-                                "обработаны пассивные Defense-события монстра"
+                                runtime,
                             );
+                        } else if let Some(monster) =
+                            owner.base_mut().find_monster_by_id_mut(monster_id)
+                        {
+                            monster.release_ai_target_for_death();
                         }
-                        if processed == 0 {
-                            passive_death = monster.process_reached_death_action();
+                        if let Some(monster) =
+                            owner.base_mut().find_monster_by_id_mut(monster_id)
+                        {
+                            passive_death = monster.finish_reached_death_action();
                         }
+                    }
+                    if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         if passive_death == PassiveDeathAction::WaitingForMove {
                             move_pending = monster.advance_active_ai_move(now_ms);
-                        } else if passive_death == PassiveDeathAction::None {
+                        } else if !death_started {
                             monster.queue_search_after_active_move(ai_type, now_ms);
                             move_pending = monster.advance_active_ai_move(now_ms);
                             if !move_pending && monster.active_ai_attack_pending() {
