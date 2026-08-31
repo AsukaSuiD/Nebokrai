@@ -1197,6 +1197,7 @@ use crate::gameserver::appserver::skills::battlefairyattribute::{
 };
 use crate::gameserver::appserver::skills::battlefairyattributestate::{
     expire_player_battle_fairy_attribute_states,
+    send_battle_fairy_attribute_state_visual,
     take_expired_monster_battle_fairy_attribute_states, BattleFairyAttributeState,
 };
 use crate::gameserver::appserver::skills::callosity::{
@@ -30287,8 +30288,21 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_persisted_defense_shields(login_tick_ms);
+        let loaded_battle_fairy_attribute_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_battle_fairy_attribute_states(login_tick_ms);
         for state in &loaded_appellation_states {
             self.send_appellation_visual(expected_player_id, state, true, login_tick_ms);
+        }
+        if let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            let identity = player.shape().identity();
+            for state in loaded_battle_fairy_attribute_states {
+                send_battle_fairy_attribute_state_visual(self, region_id, identity, x, y, state, true);
+            }
         }
         for state in &loaded_extended_states {
             self.send_extended_state_visual(expected_player_id, state, true, login_tick_ms);

@@ -168,7 +168,7 @@ use crate::gameserver::appserver::skills::bloodlossstate::{
 use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
 use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_BYTES, LEAF_CUT_2_STATE_ID};
 use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
-use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
+use crate::gameserver::appserver::skills::battlefairyattributestate::{BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES, BattleFairyAttributeState};
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BossBlueFuryTick, BOSS_BLUE_FURY_STATE_BYTES,
     BOSS_BLUE_FURY_STATE_ID,
@@ -1075,6 +1075,9 @@ impl CMoveShape {
                 }
             }
         }
+        for state in &self.battle_fairy_attribute_states {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+        }
         payload
     }
 
@@ -1388,6 +1391,11 @@ impl CMoveShape {
                 _ => None,
             }
         }));
+        self.battle_fairy_attribute_states = known_offsets
+            .iter()
+            .copied()
+            .filter_map(|offset| BattleFairyAttributeState::decode(&states, offset).ok())
+            .collect();
         self.ex_states.replace(states);
     }
 
@@ -3588,6 +3596,8 @@ impl CMoveShape {
         &mut self,
         state: BattleFairyAttributeState,
     ) -> Option<BattleFairyAttributeState> {
+        self.remove_serialized_state_record(state.skill_id(), BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         let previous = self
             .battle_fairy_attribute_states
             .iter()
@@ -3605,12 +3615,19 @@ impl CMoveShape {
         let mut position = 0;
         while position < self.battle_fairy_attribute_states.len() {
             if self.battle_fairy_attribute_states[position].expired(now_ms) {
-                expired.push(self.battle_fairy_attribute_states.remove(position));
+                let state = self.battle_fairy_attribute_states.remove(position);
+                self.remove_serialized_state_record(state.skill_id(), BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES);
+                expired.push(state);
             } else {
                 position += 1;
             }
         }
         expired
+    }
+
+    pub(crate) fn activate_loaded_battle_fairy_attribute_states(&mut self, now_ms: u32) -> Vec<BattleFairyAttributeState> {
+        for state in &mut self.battle_fairy_attribute_states { *state = state.activate_loaded(now_ms); }
+        self.battle_fairy_attribute_states.clone()
     }
 
     pub(crate) fn take_blood_loss_state_for_ai(&mut self) -> Option<BloodLossState> {
@@ -4816,6 +4833,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
             ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
             BOSS_BLUE_FURY_STATE_ID => BOSS_BLUE_FURY_STATE_BYTES,
+            0x212..=0x219 => BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES,
             TIAN_SHEN_XIA_FAN_STATE_ID => TIAN_SHEN_XIA_FAN_STATE_BYTES,
             WANGSHENG_STATE_ID => WANGSHENG_STATE_BYTES,
             super::skills::poisonarrow::POISON_ARROW_SKILL_ID => POISON_ARROW_STATE_BYTES,

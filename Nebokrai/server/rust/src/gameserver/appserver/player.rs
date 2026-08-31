@@ -5752,6 +5752,13 @@ impl CPlayer {
         self.move_shape.take_expired_battle_fairy_attribute_states(now_ms)
     }
 
+    pub(crate) fn activate_loaded_battle_fairy_attribute_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::battlefairyattributestate::BattleFairyAttributeState> {
+        self.move_shape.activate_loaded_battle_fairy_attribute_states(now_ms)
+    }
+
     pub(crate) fn take_blood_loss_state_for_ai(
         &mut self,
     ) -> Option<super::skills::bloodlossstate::BloodLossState> {

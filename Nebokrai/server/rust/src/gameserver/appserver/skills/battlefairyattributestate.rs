@@ -8,7 +8,10 @@
 //! разделены, поскольку часть ослаблений в оригинале не поддерживала монстров.
 //! Все восемь concrete vtable (`Pojia..Yufa`) направляют клиентский срок на
 //! `CFuryState::GetRemainedTime` по `0x00605E10` с двумя чтениями часов.
+//! Те же vtable используют `Serialize` `0x005E7330` и `Unserialize`
+//! `0x005FD660`: DB-запись состоит из ID, остатка срока и signed value.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -19,6 +22,7 @@ use crate::public::guid::CGuid;
 
 pub(crate) const ATTRIBUTE_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 pub(crate) const ATTRIBUTE_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+pub(crate) const BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BattleFairyAttributeKind {
@@ -69,6 +73,18 @@ impl BattleFairyAttributeState {
     pub(crate) const fn started_at_ms(self) -> u32 { self.started_at_ms }
     pub(crate) const fn keep_time_ms(self) -> u32 { self.keep_time_ms }
     pub(crate) const fn value(self) -> i32 { self.value }
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let skill_id = reader.read_u32()?;
+        let Some(definition) = super::battlefairyattribute::definition(skill_id) else { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); };
+        Ok(Self::new(skill_id, definition.kind, 0, reader.read_u32()?, reader.read_i32()?))
+    }
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] {
+        let elapsed = now_ms.wrapping_sub(self.started_at_ms); let remaining = if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) };
+        let mut bytes = [0; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES]; bytes[..4].copy_from_slice(&self.skill_id.to_le_bytes()); bytes[4..8].copy_from_slice(&remaining.to_le_bytes()); bytes[8..].copy_from_slice(&self.value.to_le_bytes()); bytes
+    }
+    pub(crate) fn encoded_for_install(self) -> [u8; BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES] { self.encoded(self.started_at_ms) }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
