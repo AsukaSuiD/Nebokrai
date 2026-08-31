@@ -39761,6 +39761,21 @@ impl CGame {
             && let Some(dispatch) = player_ai.next_player_skill()
         {
             player_execution_count = 1;
+            // В native `OnSchedule` только уже выбранная объектная цель доходит
+            // до `OnLoseTarget`: отказ до `Begin` не должен менять idle-навык.
+            // Снимок берётся до concrete owner-а, поскольку его `End` очищает
+            // active skill перед возвратом отказного результата.
+            let lost_materialized_object_target_default = matches!(
+                dispatch,
+                PlayerSkillDispatch::Object { .. }
+            )
+            .then(|| {
+                self.find_player(player_id).and_then(|player| {
+                    (player.current_skill_id() == Some(dispatch.skill_id()))
+                        .then(|| player.default_attack_skill_id(self.goods_factory()))
+                })
+            })
+            .flatten();
             let concrete_base_attack = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
@@ -40216,6 +40231,13 @@ impl CGame {
                 QueuedSkillExecutionState::Rejected =>
                     player_ai.finish_player_skill(dispatch, SkillTermination::Rejected),
             };
+            if outcome.state == QueuedSkillExecutionState::Rejected
+                && removed_from_queue
+                && let Some(default_attack_skill_id) = lost_materialized_object_target_default
+                && let Some(player) = self.find_player_mut(player_id)
+            {
+                player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
+            }
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
