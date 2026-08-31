@@ -412,6 +412,7 @@ impl CServerGodsBattleRegion {
             |region, npc_id, context| {
                 after_npc_entry(region, faction_npcs, npc_id, context);
             },
+            |npc, context| context.send_npc_entered_around(npc),
         )
     }
 

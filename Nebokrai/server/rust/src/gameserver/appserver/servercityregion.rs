@@ -71,8 +71,8 @@ use super::region::{
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
     ServerRegionMembershipContext, ServerRegionMonsterContext,
-    ServerRegionMonsterEffectsContext, ServerRegionNpcContext, ServerReturnPlayer,
-    ServerReturnSetupBlock,
+    ServerRegionMonsterEffectsContext, ServerRegionNpcContext,
+    ServerRegionNpcSpawnEffectsContext, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use super::shape::ShapeIdentity;
 use super::skills::skillfactory::CSkillFactory;
@@ -154,16 +154,18 @@ impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
     }
 }
 
-impl<Context: ServerRegionNpcContext> ServerRegionNpcContext
+impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcSpawnEffectsContext
     for CityGuardDecodeContext<'_, Context>
 {
     fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
         self.context.log_npc_position_failure(npc_name);
     }
+}
 
-    fn send_npc_entered_around(&mut self, npc: &CNpc) {
-        self.context.send_npc_entered_around(npc);
-    }
+impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn send_npc_entered_around(&mut self, _npc: &CNpc) {}
 }
 
 impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext

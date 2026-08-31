@@ -536,7 +536,7 @@ pub(crate) enum ServerRegionWeatherTick {
 }
 
 pub(crate) trait ServerRegionDecodeEffectsContext:
-    ServerRegionNpcContext + ServerRegionMonsterEffectsContext
+    ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterEffectsContext
 {
     fn now_millis(&mut self) -> u32;
 }
@@ -591,10 +591,12 @@ pub(crate) trait ServerRegionMembershipContext: RegionRandomContext {
     fn move_shape_entered_area(&mut self, identity: ShapeIdentity);
 }
 
-pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
+pub(crate) trait ServerRegionNpcSpawnEffectsContext: ServerRegionMembershipContext {
     /// Сохраняет `GS0233` owner-side log при отсутствии свободной позиции.
     fn log_npc_position_failure(&mut self, npc_name: &[u8]);
+}
 
+pub(crate) trait ServerRegionNpcContext: ServerRegionNpcSpawnEffectsContext {
     /// Материализует optional `0xBF502`; startup вызывает AddNpc с false.
     fn send_npc_entered_around(&mut self, npc: &CNpc);
 }
@@ -2714,6 +2716,7 @@ impl CServerRegion {
             context,
             now_ms,
             |_, _, _| {},
+            |npc, context| context.send_npc_entered_around(npc),
         )
     }
 
@@ -2721,7 +2724,7 @@ impl CServerRegion {
     /// `AddObject` вызывается после появления NPC в каноническом хранилище и
     /// до следующего NPC, круговой публикации и следующего обращения к
     /// генератору случайных чисел.
-    pub(crate) fn add_npc_with_clock_and_entry<Context: ServerRegionNpcContext>(
+    pub(crate) fn add_npc_with_clock_and_entry<Context: ServerRegionNpcSpawnEffectsContext>(
         &mut self,
         setup: &ServerRegionNpcSetup,
         remember_setup: bool,
@@ -2731,6 +2734,7 @@ impl CServerRegion {
         context: &mut Context,
         mut now_ms: impl FnMut(&mut Context) -> u32,
         mut after_entry: impl FnMut(&mut CServerRegion, i32, &mut Context),
+        mut send_entry: impl FnMut(&CNpc, &mut Context),
     ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
         if remember_setup {
             self.npc_setups.push(setup.clone());
@@ -2799,10 +2803,11 @@ impl CServerRegion {
             created = created.wrapping_add(1);
             first_created_id.get_or_insert(id);
             if send_around {
-                context.send_npc_entered_around(
+                send_entry(
                     self.owned_npcs
                         .get(&id)
                         .expect("NPC опубликован непосредственно перед send"),
+                    context,
                 );
             }
             remaining = remaining.wrapping_sub(1);
@@ -2992,6 +2997,7 @@ impl CServerRegion {
                 context,
                 |_| 0,
                 &mut after_npc_entry,
+                |_, _| {},
             )
             .map_err(ServerRegionDecodeError::Npc)?;
         }

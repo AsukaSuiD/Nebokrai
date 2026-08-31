@@ -57,8 +57,8 @@ use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
     ServerRegionMembershipContext, ServerRegionMonsterContext,
-    ServerRegionMonsterEffectsContext, ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionSetupDecodeError,
+    ServerRegionMonsterEffectsContext, ServerRegionNpcContext,
+    ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSetup, ServerRegionSetupDecodeError,
 };
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
@@ -2515,16 +2515,18 @@ impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
     }
 }
 
-impl<Context: ServerRegionNpcContext> ServerRegionNpcContext
+impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcSpawnEffectsContext
     for InheritedBaseGuardContext<'_, Context>
 {
     fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
         self.context.log_npc_position_failure(npc_name);
     }
+}
 
-    fn send_npc_entered_around(&mut self, npc: &CNpc) {
-        self.context.send_npc_entered_around(npc);
-    }
+impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcContext
+    for InheritedBaseGuardContext<'_, Context>
+{
+    fn send_npc_entered_around(&mut self, _npc: &CNpc) {}
 }
 
 impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
