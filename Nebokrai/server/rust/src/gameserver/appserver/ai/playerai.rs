@@ -985,9 +985,10 @@ impl CPlayerAI {
         true
     }
 
-    /// Материализует встречный `CPlayerAI::OnLoseTarget`, который вызывает
-    /// `CPet::ReleaseReciprocalTarget`: удаляет только текущую object-команду,
-    /// действительно направленную на отказавшегося питомца.
+    /// Fallback встречного `CPlayerAI::OnLoseTarget`, когда concrete execution
+    /// ещё не материализован: удаляет только текущую object-команду,
+    /// действительно направленную на отказавшегося питомца. Уже начатый skill
+    /// координатор завершает отдельно через исходный `End(1)`.
     pub(crate) fn release_object_target(
         &mut self,
         target: super::super::shape::ShapeIdentity,
@@ -2803,9 +2804,9 @@ impl CPlayerAI {
 // FUNCTION: CPlayerAI::OnLoseTarget
 // STATUS: PARTIALLY_IMPLEMENTED
 // IMPLEMENTED: достигнутый вызов из `CPet::ReleaseReciprocalTarget` завершает
-// только совпавшую объектную команду через `SkillTermination::Cancelled`, не
-// затрагивая независимую очередь боевой феи. Остались общая очистка цели,
-// восстановление направления и иные недостигнутые вызывающие стороны.
+// начатый concrete skill через `End(1)`, а ещё не материализованную совпавшую
+// object-команду — через `SkillTermination::Cancelled`; независимая очередь
+// боевой феи не затрагивается. Остались иные недостигнутые вызывающие стороны.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:450

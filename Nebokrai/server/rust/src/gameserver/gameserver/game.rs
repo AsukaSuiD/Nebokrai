@@ -36863,7 +36863,7 @@ impl CGame {
             self.end_materialized_player_skill(
                 player_id,
                 skill_id,
-                MaterializedSkillEndCause::Interruption,
+                MaterializedSkillEndCause::ClientRequest,
                 runtime,
             )
         });
