@@ -69,16 +69,17 @@ use super::region::{
     RegionSecurity,
 };
 use super::serverregion::{
-    CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError,
-    ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionNpcContext,
-    ServerReturnPlayer, ServerReturnSetupBlock,
+    CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
+    ServerRegionMembershipContext, ServerRegionMonsterContext,
+    ServerRegionMonsterEffectsContext, ServerRegionNpcContext, ServerReturnPlayer,
+    ServerReturnSetupBlock,
 };
 use super::shape::ShapeIdentity;
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{
     CServerWarRegion, ContendState, RegionDecodeInputBlock, WarContendContext, WarRegionContext,
-    WarRegionDecodeContext, WarRegionDecodeError, read_region_array,
+    WarRegionDecodeError, read_region_array,
 };
 
 const OC_OPEN: i32 = 0;
@@ -129,9 +130,9 @@ pub(crate) enum CityRegionDecodeError<BaseError> {
     Input(RegionDecodeInputBlock),
 }
 
-pub(crate) trait CityRegionDecodeContext: WarRegionDecodeContext {}
+pub(crate) trait CityRegionDecodeContext: ServerRegionDecodeEffectsContext {}
 
-impl<Context: WarRegionDecodeContext + ?Sized> CityRegionDecodeContext for Context {}
+impl<Context: ServerRegionDecodeEffectsContext + ?Sized> CityRegionDecodeContext for Context {}
 
 struct CityGuardDecodeContext<'a, Context> {
     context: &'a mut Context,
@@ -165,13 +166,9 @@ impl<Context: ServerRegionNpcContext> ServerRegionNpcContext
     }
 }
 
-impl<Context: ServerRegionMonsterContext> ServerRegionMonsterContext
+impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
     for CityGuardDecodeContext<'_, Context>
 {
-    fn register_guard_monster(&mut self, monster_id: i32) {
-        self.guard_monsters.insert(monster_id);
-    }
-
     fn send_monster_entered_around(&mut self, monster: &CMonster) {
         self.context.send_monster_entered_around(monster);
     }
@@ -184,6 +181,14 @@ impl<Context: ServerRegionMonsterContext> ServerRegionMonsterContext
     fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
         self.context.log_monster_position_failure(origin_name);
     }
+}
+
+impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn register_guard_monster(&mut self, monster_id: i32) {
+        self.guard_monsters.insert(monster_id);
+    }
 
     fn register_guard_index(&mut self, refresh_index: i32) {
         if !self.guard_indices.contains(&refresh_index) {
@@ -192,7 +197,7 @@ impl<Context: ServerRegionMonsterContext> ServerRegionMonsterContext
     }
 }
 
-impl<Context: ServerRegionDecodeContext> ServerRegionDecodeContext
+impl<Context: ServerRegionDecodeEffectsContext> ServerRegionDecodeEffectsContext
     for CityGuardDecodeContext<'_, Context>
 {
     fn now_millis(&mut self) -> u32 {

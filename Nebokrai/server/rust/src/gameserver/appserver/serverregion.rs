@@ -535,10 +535,20 @@ pub(crate) enum ServerRegionWeatherTick {
     },
 }
 
-pub(crate) trait ServerRegionDecodeContext:
-    ServerRegionNpcContext + ServerRegionMonsterContext
+pub(crate) trait ServerRegionDecodeEffectsContext:
+    ServerRegionNpcContext + ServerRegionMonsterEffectsContext
 {
     fn now_millis(&mut self) -> u32;
+}
+
+pub(crate) trait ServerRegionDecodeContext:
+    ServerRegionDecodeEffectsContext + ServerRegionMonsterContext
+{
+}
+
+impl<Context> ServerRegionDecodeContext for Context where
+    Context: ServerRegionDecodeEffectsContext + ServerRegionMonsterContext + ?Sized
+{
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -589,16 +599,18 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionMembershipContext {
     fn send_npc_entered_around(&mut self, npc: &CNpc);
 }
 
-pub(crate) trait ServerRegionMonsterContext: ServerRegionMembershipContext {
-    /// Virtual `AddGurdMonster(monsterID)` до speed/direction/AddObject для
-    /// AI 10/11; concrete war-region сохраняет ID в своём guard owner.
-    fn register_guard_monster(&mut self, monster_id: i32);
-
+pub(crate) trait ServerRegionMonsterEffectsContext: ServerRegionMembershipContext {
     fn send_monster_entered_around(&mut self, monster: &CMonster);
 
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32);
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]);
+}
+
+pub(crate) trait ServerRegionMonsterContext: ServerRegionMonsterEffectsContext {
+    /// Virtual `AddGurdMonster(monsterID)` до speed/direction/AddObject для
+    /// AI 10/11; concrete war-region сохраняет ID в своём guard owner.
+    fn register_guard_monster(&mut self, monster_id: i32);
 
     /// Virtual `AddGuardIndex(refreshIndex)` после записи refresh metadata
     /// для guard AI 10/11; это регистрация, не немедленный region refresh.
