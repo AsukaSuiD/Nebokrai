@@ -852,6 +852,7 @@ use crate::gameserver::appserver::skills::tianshenxiafanstate::send_tian_shen_xi
 use crate::gameserver::appserver::skills::wangsheng::{
     execute_battle_fairy_wangsheng, WANGSHENG_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::wangshengstate::send_wangsheng_state_visual;
 use crate::gameserver::appserver::skills::archery::{
     cancel_player_archery, execute_player_archery, ARCHERY_SKILL_ID,
 };
@@ -28413,6 +28414,13 @@ impl CGame {
             send_tian_shen_xia_fan_state_visual(self, player_id, state, false, || now_ms);
             let _ = self.update_player_properties(player_id);
         }
+        let expired_wangsheng = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.take_expired_wangsheng_state(now_ms));
+        if let Some(state) = expired_wangsheng {
+            send_wangsheng_state_visual(self, player_id, state, false, || now_ms);
+            let _ = self.update_player_properties(player_id);
+        }
         let _ = expire_player_poison_fog_state(self, player_id, now_ms, runtime);
         let rage_break_context = self.find_player(player_id).and_then(|player| {
             Some((
@@ -30153,6 +30161,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_tian_shen_xia_fan_state(login_tick_ms);
+        let loaded_wangsheng_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_wangsheng_state(login_tick_ms);
         let loaded_appellation_states = self
             .players
             .get_mut(&expected_player_id)
@@ -30338,6 +30351,9 @@ impl CGame {
                 true,
                 || login_tick_ms,
             );
+        }
+        if let Some(state) = loaded_wangsheng_state {
+            send_wangsheng_state_visual(self, expected_player_id, state, true, || login_tick_ms);
         }
         for state in &loaded_change_body_states {
             self.send_change_body_visual(expected_player_id, state, true);

@@ -5160,6 +5160,11 @@ impl CPlayer {
         }
         let properties =
             self.apply_change_body_state_properties(properties, coefficients, goods_factory);
+        if let Some(state) = self.move_shape.wangsheng_state()
+            && let Some(health) = state.capped_health(self.health(), properties.maximum_hp)
+        {
+            self.base_properties.health = health;
+        }
         PlayerStatePropertyPass {
             properties,
             callosity_visual,
@@ -5855,6 +5860,20 @@ impl CPlayer {
         now_ms: u32,
     ) -> Option<super::skills::tianshenxiafanstate::TianShenXiaFanState> {
         self.move_shape.take_expired_tian_shen_xia_fan_state(now_ms)
+    }
+
+    pub(crate) fn activate_loaded_wangsheng_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::wangshengstate::WangshengState> {
+        self.move_shape.activate_loaded_wangsheng_state(now_ms)
+    }
+
+    pub(crate) fn take_expired_wangsheng_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::wangshengstate::WangshengState> {
+        self.move_shape.take_expired_wangsheng_state(now_ms)
     }
 
     pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::scriptstate::ScriptMoveState> {

@@ -186,7 +186,7 @@ use crate::gameserver::appserver::skills::weakstate::{
     WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState,
 };
 use crate::gameserver::appserver::skills::wangshengstate::{
-    WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID,
+    WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID, WangshengState,
 };
 use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
 use crate::gameserver::appserver::skills::godblessstate::{
@@ -644,6 +644,7 @@ pub(crate) struct CanonicalStateStorage {
     team_recruitment_states: Vec<CTeamState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
     tian_shen_xia_fan_state: Option<TianShenXiaFanState>,
+    wangsheng_state: Option<WangshengState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
     ex_states: LegacyStateCodec,
@@ -1102,6 +1103,13 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        if let Some(state) = self.wangsheng_state {
+            update_known_state_record(
+                &mut payload,
+                state.state_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         payload
     }
 
@@ -1430,6 +1438,11 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(TIAN_SHEN_XIA_FAN_STATE_ID))
             .and_then(|offset| TianShenXiaFanState::decode(&states, offset).ok());
+        self.wangsheng_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(WANGSHENG_STATE_ID))
+            .and_then(|offset| WangshengState::decode(&states, offset).ok());
         self.ex_states.replace(states);
     }
 
@@ -1493,6 +1506,7 @@ impl CMoveShape {
         self.consumable_restore_states = ConsumableRestoreStateStorage::default();
         self.battle_fairy_attribute_states.clear();
         self.tian_shen_xia_fan_state = None;
+        self.wangsheng_state = None;
         self.periodic_attack_order.clear();
         self.defense_shields.clear();
         self.change_body_states.clear();
@@ -1569,6 +1583,7 @@ impl CMoveShape {
             || self.state_storage.pillar_state.is_some()
             || self.state_storage.knight_cut_state.is_some()
             || self.state_storage.tian_shen_xia_fan_state.is_some()
+            || self.state_storage.wangsheng_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || self.state_storage.kerosene_state.is_some()
             || self.state_storage.leaf_cut_state.is_some()
@@ -3847,6 +3862,26 @@ impl CMoveShape {
         let state = self.tian_shen_xia_fan_state.filter(|state| state.expired(now_ms))?;
         self.tian_shen_xia_fan_state = None;
         self.remove_serialized_state_record(state.state_id(), TIAN_SHEN_XIA_FAN_STATE_BYTES);
+        Some(state)
+    }
+
+    pub(crate) const fn wangsheng_state(&self) -> Option<WangshengState> {
+        self.state_storage.wangsheng_state
+    }
+
+    pub(crate) fn activate_loaded_wangsheng_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<WangshengState> {
+        let state = self.wangsheng_state?.activate_loaded(now_ms);
+        self.wangsheng_state = Some(state);
+        Some(state)
+    }
+
+    pub(crate) fn take_expired_wangsheng_state(&mut self, now_ms: u32) -> Option<WangshengState> {
+        let state = self.wangsheng_state.filter(|state| state.expired(now_ms))?;
+        self.wangsheng_state = None;
+        self.remove_serialized_state_record(state.state_id(), WANGSHENG_STATE_BYTES);
         Some(state)
     }
 
