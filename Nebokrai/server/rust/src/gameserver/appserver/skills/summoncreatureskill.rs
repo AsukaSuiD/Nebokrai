@@ -4,7 +4,8 @@
 //! только идентификатором навыка. `CBossFiendSummon` дополнительно выбирает
 //! одну из трёх разновидностей ровно одним исходным броском на всё применение.
 //! Модуль сохраняет объектный, точечный и self-входы игрока и общий объектный
-//! путь monster/pet, задержку повторного применения, задержку исполнения,
+//! путь monster/pet, максимальную дистанцию цели, задержку повторного
+//! применения, задержку исполнения,
 //! пакеты `0xBFE01` и последовательность вызовов создания.
 //! Поиск владельцев и around-доставка остаются у `CGame`; создаваемая сущность
 //! сразу публикуется через `CServerRegion::add_summoned_creature`.
@@ -141,7 +142,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     let amount = properties.query_property(SKILL_USAGE_CONST);
     let lifetime_ms = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME);
     let picture_id = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_ID);
-    let _maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
     if player_ai.summon_creature().is_none() {
@@ -150,6 +151,23 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(destination) = player_destination(game, region_id, dispatch, (source_x, source_y)) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+        if maximum_distance != 0
+            && game
+                .base_magic_path(
+                    region_id,
+                    source_x,
+                    source_y,
+                    destination.0,
+                    destination.1,
+                    None,
+                )
+                .len()
+                > maximum_distance as usize
+        {
+            game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0b);
+            game.send_skill_system_info(player_id, b"GS0290");
+            return player_terminal(QueuedSkillExecutionState::Rejected);
+        }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
         player_ai.begin_summon_creature(PlayerSummonCreatureExecutionState::begin(dispatch, destination, variant_index, now_ms));
     } else if player_ai.summon_creature().is_none_or(|state| state.kernel().dispatch() != dispatch) {
