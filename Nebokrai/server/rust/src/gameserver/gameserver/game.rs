@@ -3553,6 +3553,8 @@ struct GameCityRegionAiContext<'a, Runtime> {
     war_number: i32,
     owner: WarRegionOwnership,
     defence_side_faction_id: i32,
+    guard_monsters: Vec<i32>,
+    guard_indices: Vec<i32>,
 }
 
 enum GameWarGuardRefreshEffect {
@@ -3811,12 +3813,14 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
         region: &mut CServerRegion,
     ) -> Result<(), ServerRegionMonsterRectBlock> {
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
-        self.game.run_server_region_base_ai(
+        let outcome = self.game.run_server_region_base_ai(
             region,
             self.ai_tick,
             tick_interval_ms,
             self.runtime,
         )?;
+        self.guard_monsters.extend(outcome.guard_monsters);
+        self.guard_indices.extend(outcome.guard_indices);
         self.region = region.clone();
         self.owner = WarRegionOwnership {
             faction_id: region.param.owned_faction_id,
@@ -4264,6 +4268,13 @@ struct GameMainLoopState {
     profile: GameMainLoopProfile,
     pacing_initialized: bool,
     pacing_deadline_ms: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct GameServerRegionBaseAiOutcome {
+    removed_npcs: Vec<i32>,
+    guard_monsters: Vec<i32>,
+    guard_indices: Vec<i32>,
 }
 
 /// Конкретные владельцы сценариев, регионов, AI и сессий подключаются сюда по
@@ -25136,7 +25147,7 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        let removed_npcs = match self.run_server_region_base_ai(
+        let base_ai = match self.run_server_region_base_ai(
             &mut region.war.base,
             ai_tick,
             tick_interval_ms,
@@ -25154,7 +25165,7 @@ impl CGame {
                 return Some(());
             }
         };
-        for npc_id in removed_npcs {
+        for npc_id in base_ai.removed_npcs {
             Self::finish_gods_battle_npc_leave(&mut region, npc_id);
         }
         let advance = region.advance_contenders(runtime.now_milliseconds());
@@ -44938,19 +44949,55 @@ impl CGame {
         ai_tick: i32,
         tick_interval_ms: i32,
         runtime: &mut Runtime,
-    ) -> Result<Vec<i32>, ServerRegionMonsterRectBlock> {
+    ) -> Result<GameServerRegionBaseAiOutcome, ServerRegionMonsterRectBlock> {
         let period = (1_000i32 / tick_interval_ms) as u32;
         let periodic_due = (ai_tick as u32) % period == 0;
+        let mut guard_monsters = Vec::new();
+        let mut guard_indices = Vec::new();
         if periodic_due {
             let now_ms = runtime.now_milliseconds();
-            region.refresh_monster_groups(
+            let default_master_name = self.get_string_by_id(b"GS0119").to_vec();
+            let variant_failure_template = self.get_string_by_id(b"GS0231").to_vec();
+            let position_failure_template = self.get_string_by_id(b"GS0232").to_vec();
+            let mut context = GameWarGuardRefreshContext {
+                random_state: &mut self.random_state,
+                monster_registry: &self.monster_registry,
+                default_master_name: &default_master_name,
+                variant_failure_template: &variant_failure_template,
+                position_failure_template: &position_failure_template,
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let refresh = region.refresh_monster_groups(
                 now_ms,
                 self.globe_setup.area_width(),
                 self.globe_setup.area_height(),
                 &self.monster_registry,
                 &self.skill_factory,
-                runtime,
-            )?;
+                &mut context,
+            );
+            guard_monsters = std::mem::take(&mut context.guard_monsters);
+            guard_indices = std::mem::take(&mut context.guard_indices);
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            for effect in effects {
+                match effect {
+                    GameWarGuardRefreshEffect::Log(text) => add_game_log_text(&text),
+                    GameWarGuardRefreshEffect::MonsterEntry(origin, message) => {
+                        if let Err(error) =
+                            self.send_game_shape_around(region, &origin, None, &message)
+                        {
+                            tracing::warn!(
+                                region_id = region.id,
+                                ?error,
+                                "не опубликован вход монстра refresh-группы"
+                            );
+                        }
+                    }
+                }
+            }
+            refresh?;
         }
         if periodic_due {
             self.run_region_weather_tick(region, runtime);
@@ -44962,7 +45009,11 @@ impl CGame {
             periodic_due,
             "завершён базовый проход ИИ региона"
         );
-        Ok(removed_npcs)
+        Ok(GameServerRegionBaseAiOutcome {
+            removed_npcs,
+            guard_monsters,
+            guard_indices,
+        })
     }
 
     /// Достигнутый prefix `CServerRegion::AI` для concrete Base owner-а;
@@ -45049,12 +45100,22 @@ impl CGame {
                 union_id: region.war.base.param.owned_union_id,
             },
             defence_side_faction_id: region.defence_side_faction_id,
+            guard_monsters: Vec::new(),
+            guard_indices: Vec::new(),
         };
         let result = region.war.ai(&mut context);
         let owner = context.owner;
         let defence_side_faction_id = context.defence_side_faction_id;
+        let guard_monsters = std::mem::take(&mut context.guard_monsters);
+        let guard_indices = std::mem::take(&mut context.guard_indices);
         drop(context);
         region.defence_side_faction_id = defence_side_faction_id;
+        for monster_id in guard_monsters {
+            region.add_gurd_monster(monster_id);
+        }
+        for refresh_index in guard_indices {
+            region.add_guard_index(refresh_index);
+        }
         self.restore_region_owner(ServerRegionOwner::City(region));
         tracing::trace!(
             region_id,
