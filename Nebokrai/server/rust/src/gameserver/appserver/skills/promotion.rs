@@ -6,15 +6,24 @@
 //! `0xBFE01` и подтверждённую особенность повторного применения: прежнее
 //! состояние завершается, но новое в этот проход не создаётся. `CGame`
 //! предоставляет владельцев и доставку, а проверки, формулы и жизненный цикл
-//! остаются в этом модуле. Координатная перегрузка сохранена ниже как RAW,
+//! остаются в этом модуле. Monster-ветвь использует объектную цель обычного
+//! боевого ИИ, сохраняет delay/reuse/range и после применения публикует
+//! состояния source-монстра, как исходный virtual `OnChangeStates`.
+//! Координатная перегрузка сохранена ниже как RAW,
 //! потому что её исходный выбор цели состояния ещё не достигнут цепочкой выполнения.
 
 use super::baseattack::time_reached;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::monsterattack::resolve_owned_monster_attack_target;
 use super::promotionstate::{PromotionState, send_promotion_state_begin};
+use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::finish_state_skill;
+use crate::gameserver::appserver::ai::monsterai::{
+    approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
@@ -163,6 +172,218 @@ fn send_cast(
         _ => return,
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_monster_cast(
+    game: &CGame,
+    region: &CServerRegion,
+    monster_id: i32,
+    target: ShapeIdentity,
+    target_x: i32,
+    target_y: i32,
+    skill_level: u16,
+    action: u8,
+) {
+    let Some(source) = region
+        .find_monster_by_id(monster_id)
+        .map(|monster| monster.move_shape().shape())
+    else {
+        return;
+    };
+    let mut message = CMessage::new(PROMOTION_EFFECT_MESSAGE);
+    match action {
+        0 => {
+            message.add_byte(1);
+            message.add_long(PROMOTION_SKILL_ID as i32);
+            message.add_short(skill_level as i16);
+            message.add_long(MONSTER_TYPE);
+            message.add_long(monster_id);
+            message.add_long(source.get_direction());
+        }
+        1 => {
+            message.add_byte(2);
+            message.add_long(PROMOTION_SKILL_ID as i32);
+            message.add_short(skill_level as i16);
+            message.add_long(MONSTER_TYPE);
+            message.add_long(monster_id);
+            message.add_long(target.object_type);
+            message.add_long(target.id);
+            message.add_long(target_x);
+            message.add_long(target_y);
+        }
+        _ => return,
+    }
+    let _ = game.send_game_shape_around(region, source, None, &message);
+}
+
+fn install_monster_promotion_target(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    target: ShapeIdentity,
+    state: PromotionState,
+) -> Option<bool> {
+    match target.object_type {
+        PLAYER_TYPE => {
+            let player = game.find_player_mut(target.id)?;
+            (player.server_region_id() == Some(region.id))
+                .then(|| player.begin_promotion_state(state))
+        }
+        MONSTER_TYPE => region
+            .find_monster_by_id_mut(target.id)
+            .map(|monster| monster.move_shape_mut().begin_promotion_state(state)),
+        _ => None,
+    }
+}
+
+pub(crate) fn execute_owned_monster_promotion(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    now_ms: u32,
+) -> bool {
+    let Some((source_x, source_y, ai_type, attack_interval_ms, cast, last_used_ms)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            let attack_interval_ms = monster
+                .is_tamed()
+                .then(|| monster.pet_attack_properties(property))
+                .map_or(property.attack_speed, |pet| pet.attack_interval);
+            Some((
+                monster.move_shape().shape().get_tile_x().ok()?,
+                monster.move_shape().shape().get_tile_y().ok()?,
+                property.ai,
+                attack_interval_ms,
+                monster.base_attack_cast(),
+                monster.skill_last_used_ms(PROMOTION_SKILL_ID),
+            ))
+        })
+    else {
+        return false;
+    };
+    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_ai_target();
+        }
+        return true;
+    };
+    let (Ok(target_x), Ok(target_y)) = (target.shape.get_tile_x(), target.shape.get_tile_y())
+    else {
+        return true;
+    };
+    if target.dead {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_ai_target();
+        }
+        return true;
+    }
+
+    if cast.is_none() {
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            target_x,
+            target_y,
+            properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
+            now_ms,
+        ) {
+            return true;
+        }
+        if schedule_attack_interval(ai_type, attack_interval_ms).is_some_and(|interval| {
+            region
+                .find_monster_by_id_mut(monster_id)
+                .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
+        }) {
+            return true;
+        }
+        if last_used_ms != 0
+            && !time_reached(
+                now_ms,
+                last_used_ms,
+                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+            )
+        {
+            return true;
+        }
+        let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().shape_mut().set_direction(direction);
+            monster.begin_base_attack_cast(
+                target_identity,
+                PROMOTION_SKILL_ID,
+                skill_level,
+                now_ms,
+            );
+        }
+        send_monster_cast(
+            game,
+            region,
+            monster_id,
+            target_identity,
+            target_x,
+            target_y,
+            skill_level,
+            0,
+        );
+        return true;
+    }
+
+    let cast = cast.expect("выполнение усиления проверено выше");
+    if cast.dispatch().skill_id != PROMOTION_SKILL_ID
+        || cast.dispatch().target != target_identity
+    {
+        return false;
+    }
+    if !time_reached(
+        now_ms,
+        cast.started_at_ms(),
+        properties.query_property(SKILL_USAGE_DELAY_TIME),
+    ) {
+        return true;
+    }
+
+    send_monster_cast(
+        game,
+        region,
+        monster_id,
+        target_identity,
+        target_x,
+        target_y,
+        skill_level,
+        1,
+    );
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+    }
+    let state = PromotionState::new(
+        now_ms,
+        properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
+        properties.query_property(SKILL_USAGE_EM_MODIFIER) as u16,
+        properties.query_property(SKILL_USAGE_HEAL_RECOVER_COEFFICIENT) as u16,
+    );
+    if install_monster_promotion_target(game, region, target_identity, state) == Some(true) {
+        send_promotion_state_begin(
+            game,
+            region.id,
+            target_identity,
+            target_x,
+            target_y,
+            state,
+            || now_ms,
+        );
+    }
+    let _ = game.publish_owned_monster_states(region, monster_id);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        let _ = monster.finish_base_attack_cast(now_ms);
+    }
+    true
 }
 
 fn install_state(
