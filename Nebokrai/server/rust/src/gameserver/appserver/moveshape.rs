@@ -97,7 +97,9 @@ use crate::gameserver::appserver::skills::rushstate::{
 use crate::gameserver::appserver::skills::rushstate2::{
     RUSH_2_STATE_BYTES, RUSH_2_STATE_ID, Rush2State,
 };
-use crate::gameserver::appserver::skills::roarstate::RoarState;
+use crate::gameserver::appserver::skills::roarstate::{
+    ROAR_STATE_BYTES, ROAR_STATE_ID, RoarState,
+};
 use crate::gameserver::appserver::skills::energyholdingstate::{
     EnergyHoldingState, ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID,
 };
@@ -962,6 +964,13 @@ impl CMoveShape {
         if let Some(state) = self.rush_2_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
+        if let Some(state) = self.roar_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1179,6 +1188,16 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(RUSH_2_STATE_ID))
             .and_then(|offset| Rush2State::decode(&states, offset).ok());
+        self.roar_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(ROAR_STATE_ID))
+            .and_then(|offset| RoarState::decode(&states, offset).ok());
+        self.roar_state_order = None;
+        if self.roar_state.is_some() {
+            self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
+            self.roar_state_order = Some(self.reached_property_state_order);
+        }
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2821,14 +2840,22 @@ impl CMoveShape {
     }
     pub(crate) const fn roar_state(&self) -> Option<RoarState> { self.state_storage.roar_state }
     pub(crate) fn replace_roar_state(&mut self, state: RoarState) -> Option<RoarState> {
+        self.remove_serialized_state_record(state.skill_id(), ROAR_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
         self.roar_state_order = Some(self.reached_property_state_order);
         self.roar_state.replace(state)
+    }
+    pub(crate) fn activate_loaded_roar_state(&mut self, now_ms: u32) -> Option<RoarState> {
+        let state = self.roar_state?.activate_loaded(now_ms);
+        self.roar_state = Some(state);
+        Some(state)
     }
     pub(crate) fn take_expired_roar_state(&mut self, now_ms: u32) -> Option<RoarState> {
         let state = self.roar_state.filter(|state| state.expired(now_ms))?;
         self.roar_state = None;
         self.roar_state_order = None;
+        self.remove_serialized_state_record(state.skill_id(), ROAR_STATE_BYTES);
         Some(state)
     }
     pub(crate) const fn energy_holding_state(&self) -> Option<EnergyHoldingState> { self.state_storage.energy_holding_state }
@@ -4571,6 +4598,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             BOA_LOCK_STATE_ID => BOA_LOCK_STATE_BYTES,
             RUSH_STATE_ID => RUSH_STATE_BYTES,
             RUSH_2_STATE_ID => RUSH_2_STATE_BYTES,
+            ROAR_STATE_ID => ROAR_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

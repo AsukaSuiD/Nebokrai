@@ -5348,6 +5348,7 @@ impl CPlayer {
     pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_god_bless_state(skill_id) }
     pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.take_expired_god_bless_state(now_ms) }
     pub(crate) fn replace_roar_state(&mut self, state: super::skills::roarstate::RoarState) -> Option<super::skills::roarstate::RoarState> { self.move_shape.replace_roar_state(state) }
+    pub(crate) fn activate_loaded_roar_state(&mut self, now_ms: u32) -> Option<super::skills::roarstate::RoarState> { self.move_shape.activate_loaded_roar_state(now_ms) }
     pub(crate) fn take_expired_roar_state(&mut self, now_ms: u32) -> Option<super::skills::roarstate::RoarState> { self.move_shape.take_expired_roar_state(now_ms) }
     pub(crate) const fn energy_holding_state(&self) -> Option<super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state() }
     pub(crate) fn energy_holding_state_mut(&mut self) -> Option<&mut super::skills::energyholdingstate::EnergyHoldingState> { self.move_shape.energy_holding_state_mut() }

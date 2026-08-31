@@ -6,10 +6,12 @@
 //! ограничивая каждое уменьшение текущим значением. Визуальные сообщения
 //! сохраняют `0xBFE03/0xBFE04`; порядок относительно других достигнутых
 //! состояниями свойств принадлежит `CanonicalStateStorage`. Vtable exact EXE
-//! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0`.
-//!
-//! Не достигнуто: восстановление `CRoarState::Unserialize` из старого DB-потока.
+//! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0` и
+//! собственную serializer-пару `0x005F65F0/0x005ECC60`. Persisted-запись
+//! `ID + remaining time + attack loss + element attack loss` занимает 16 байт;
+//! spatial login восстанавливает срок до общего пересчёта свойств.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
@@ -17,6 +19,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const ROAR_STATE_ID: u32 = 0x83;
+pub(crate) const ROAR_STATE_BYTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RoarState {
@@ -29,6 +32,24 @@ pub(crate) struct RoarState {
 impl RoarState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, attack_loss: i32, element_attack_loss: i32) -> Self {
         Self { started_at_ms, keep_time_ms, attack_loss, element_attack_loss }
+    }
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != ROAR_STATE_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(0, reader.read_u32()?, reader.read_i32()?, reader.read_i32()?))
+    }
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+    pub(crate) fn encoded_for_install(self) -> [u8; ROAR_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; ROAR_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; ROAR_STATE_BYTES] {
+        let mut bytes = [0; ROAR_STATE_BYTES];
+        bytes[..4].copy_from_slice(&ROAR_STATE_ID.to_le_bytes());
+        bytes[4..8].copy_from_slice(&remaining.to_le_bytes());
+        bytes[8..12].copy_from_slice(&self.attack_loss.to_le_bytes());
+        bytes[12..].copy_from_slice(&self.element_attack_loss.to_le_bytes());
+        bytes
     }
     pub(crate) const fn skill_id(self) -> u32 { ROAR_STATE_ID }
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
@@ -129,8 +150,3 @@ pub(crate) fn finish_monster_roar(
     send_roar_state_visual(game, region_id, identity, x, y, state, false, || now_ms);
     true
 }
-
-// Сохранён только недостигнутый DB-контракт исходного владельца.
-// `CRoarState::Unserialize` читает три `DWORD`: длительность, снижение атаки и
-// снижение стихийной атаки, после чего начинает новый срок по системным часам.
-// Подключать его без вызывающей цепочки старого кодека состояний нельзя.
