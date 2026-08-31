@@ -53,12 +53,11 @@ impl JiuMaiAiState {
 /// Выполняет достигнутый префикс `OnIdle` AI101. Обычный монстр один раз
 /// создаёт бессрочного близнеца того же свойства, а призванный близнец берёт
 /// обратный ID из `master_id` и не создаёт следующую сущность.
-pub(crate) fn ensure_jiumai_twin<Runtime: GameMainLoopRuntime>(
-    game: &CGame,
+pub(crate) fn ensure_jiumai_twin(
+    game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     property: &MonsterProperties,
-    runtime: &mut Runtime,
 ) -> bool {
     let Some((twins_id, summoned, master, owner)) = region
         .find_monster_by_id(monster_id)
@@ -86,17 +85,16 @@ pub(crate) fn ensure_jiumai_twin<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    let position = region.region.get_random_pos_in_range(
+    let position = game.random_region_position_owned(
+        region,
         owner.tile_x.wrapping_sub(5),
         owner.tile_y.wrapping_sub(5),
         10,
         10,
-        runtime,
     );
     let spawned = position.ok().and_then(|position| {
-        let (area_width, area_height) = game.area_dimensions();
-        region
-            .add_summoned_creature(
+        game.add_summoned_creature_owned(
+                region,
                 property,
                 MasterInfo {
                     master_type: MONSTER_TYPE,
@@ -107,11 +105,6 @@ pub(crate) fn ensure_jiumai_twin<Runtime: GameMainLoopRuntime>(
                 position.y,
                 -1,
                 u32::MAX,
-                area_width,
-                area_height,
-                game.skill_factory(),
-                runtime,
-                |runtime| runtime.now_milliseconds(),
             )
             .ok()
     });

@@ -712,7 +712,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     }
     if property.ai == 0x65
-        && !ensure_jiumai_twin(game, region, monster_id, &property, runtime)
+        && !ensure_jiumai_twin(game, region, monster_id, &property)
     {
         return false;
     }
@@ -1215,7 +1215,6 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             skill.level,
             &skill_properties,
             now_ms,
-            runtime,
         );
     }
     if skill_id == MONSTER_RANGE_ATTACK_SKILL_ID && cast.is_some() {

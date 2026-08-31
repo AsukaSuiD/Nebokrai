@@ -225,7 +225,7 @@ fn calculate_attack(
     }))
 }
 
-fn summon<Runtime: GameMainLoopRuntime>(
+fn summon(
     game: &mut CGame,
     region_id: i32,
     master: MasterInfo,
@@ -234,14 +234,11 @@ fn summon<Runtime: GameMainLoopRuntime>(
     direction: i32,
     picture_id: u32,
     lifetime: u32,
-    runtime: &mut Runtime,
 ) {
     let Some(property) = game.find_monster_property_by_picture_id(picture_id).cloned() else { return };
-    let (area_width, area_height) = game.area_dimensions();
     let Some(mut owner) = game.take_region_owner(region_id) else { return };
-    let _ = owner.base_mut().add_summoned_creature(
-        &property, master, x, y, direction, lifetime, area_width, area_height,
-        game.skill_factory(), runtime, |runtime| runtime.now_milliseconds(),
+    let _ = game.add_summoned_creature_owned(
+        owner.base_mut(), &property, master, x, y, direction, lifetime,
     );
     game.restore_region_owner(owner);
 }
@@ -351,7 +348,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
             (move_shapes, region.skill_cell_block(x, y))
         }) else { continue };
         if move_shapes.is_empty() {
-            if block == 0 { summon(game, region_id, master, x, y, direction, picture_id, lifetime, runtime); }
+            if block == 0 { summon(game, region_id, master, x, y, direction, picture_id, lifetime); }
             continue;
         }
         for target in move_shapes {

@@ -166,14 +166,13 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     restore_player_movement(game, player_id);
     send_player_visual(game, player_id, skill_id, skill_level, 2, destination);
     let property = game.find_monster_property_by_picture_id(picture_id).cloned();
-    let (area_width, area_height) = game.area_dimensions();
     if let Some(mut owner) = game.take_region_owner(region_id) {
         for _ in 0..amount {
             let mut tile_x = 0;
             let mut tile_y = 0;
-            if let Ok(position) = owner.base_mut().region.get_random_pos_in_range(source_x.wrapping_sub(4), source_y.wrapping_sub(4), 8, 8, runtime) && position.found { tile_x = position.x; tile_y = position.y; }
+            if let Ok(position) = game.random_region_position_owned(owner.base(), source_x.wrapping_sub(4), source_y.wrapping_sub(4), 8, 8) && position.found { tile_x = position.x; tile_y = position.y; }
             if let Some(property) = property.as_ref() {
-                let _ = owner.base_mut().add_summoned_creature(property, master, tile_x, tile_y, -1, lifetime_ms, area_width, area_height, game.skill_factory(), runtime, |runtime| runtime.now_milliseconds());
+                let _ = game.add_summoned_creature_owned(owner.base_mut(), property, master, tile_x, tile_y, -1, lifetime_ms);
             }
         }
         game.restore_region_owner(owner);
@@ -243,7 +242,7 @@ fn send_fire(
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет идентификатор, цель и текущий такт исходного навыка")]
-pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
+pub(crate) fn execute_owned_summon_creature(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
@@ -252,7 +251,6 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
     skill_level: u16,
     properties: &CSkillBaseProperties,
     now_ms: u32,
-    runtime: &mut Runtime,
 ) -> bool {
     let Some((source, property, attack_interval_ms, cast, last_used_ms)) = region
         .find_monster_by_id(monster_id)
@@ -310,12 +308,11 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
             master_id: monster_id,
             ..MasterInfo::default()
         };
-        let (area_width, area_height) = game.area_dimensions();
         for _ in 0..amount {
             let mut tile_x = 0;
             let mut tile_y = 0;
-            if let Ok(position) = region.region.get_random_pos_in_range(
-                source_x.wrapping_sub(4), source_y.wrapping_sub(4), 8, 8, runtime,
+            if let Ok(position) = game.random_region_position_owned(
+                region, source_x.wrapping_sub(4), source_y.wrapping_sub(4), 8, 8,
             ) && position.found {
                 tile_x = position.x;
                 tile_y = position.y;
@@ -324,9 +321,8 @@ pub(crate) fn execute_owned_summon_creature<Runtime: GameMainLoopRuntime>(
             let picture_id = properties.query_property(summoned_creature_usage);
             let property = game.find_monster_property_by_picture_id(picture_id).cloned();
             if let Some(property) = property {
-                let _ = region.add_summoned_creature(
-                    &property, master, tile_x, tile_y, -1, lifetime_ms,
-                    area_width, area_height, game.skill_factory(), runtime, |runtime| runtime.now_milliseconds(),
+                let _ = game.add_summoned_creature_owned(
+                    region, &property, master, tile_x, tile_y, -1, lifetime_ms,
                 );
             }
         }

@@ -13,8 +13,10 @@
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::region::RegionRandomContext;
+use crate::gameserver::appserver::region::{RegionCellAccessBlock, RegionRandomPosition};
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, ServerRegionMonsterContext, ServerRegionMonsterEffectsContext,
+    CServerRegion, RegionMembershipBlock, ServerRegionMonsterContext,
+    ServerRegionMonsterEffectsContext,
     ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext, ServerRegionNpcSetup,
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSpawnOutcome,
 };
@@ -135,6 +137,84 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 }
 
 impl CGame {
+    pub(crate) fn random_region_position_owned(
+        &mut self,
+        region: &CServerRegion,
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+    ) -> Result<RegionRandomPosition, RegionCellAccessBlock> {
+        self.with_legacy_random_stream(|_, random| {
+            region
+                .region
+                .get_random_pos_in_range(left, top, width, height, random)
+        })
+    }
+
+    /// Общий canonical owner для `CSummonedCreature`: caller удерживает
+    /// concrete region, а `CGame` предоставляет единую RNG, clock,
+    /// membership и fresh-entry без process-owned callbacks.
+    #[allow(clippy::too_many_arguments, reason = "literal AddSummonedCreature сохраняет spawn fields")]
+    pub(crate) fn add_summoned_creature_owned(
+        &mut self,
+        region: &mut CServerRegion,
+        property: &crate::setup::monsterlist::MonsterProperties,
+        master: crate::gameserver::appserver::masterinfo::MasterInfo,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        lifetime_ms: u32,
+    ) -> Result<i32, RegionMembershipBlock> {
+        self.with_legacy_random_stream(|game, random| {
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let (area_width, area_height) = game.area_dimensions();
+            let result = region.add_summoned_creature(
+                property,
+                master,
+                tile_x,
+                tile_y,
+                direction,
+                lifetime_ms,
+                area_width,
+                area_height,
+                game.skill_factory(),
+                &mut context,
+                |_| game_tick_milliseconds(),
+            );
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            for effect in effects {
+                match effect {
+                    GameRuntimeSpawnEffect::Log(text) => add_game_log_text(&text),
+                    GameRuntimeSpawnEffect::NpcEntry(origin, message)
+                    | GameRuntimeSpawnEffect::MonsterEntry(origin, message) => {
+                        if let Err(error) =
+                            game.send_game_shape_around(region, &origin, None, &message)
+                        {
+                            tracing::warn!(
+                                region_id = region.id,
+                                ?error,
+                                "не опубликован вход призванного существа"
+                            );
+                        }
+                    }
+                }
+            }
+            result
+        })
+    }
+
     /// Contribution-death item spawn: общий RNG, concrete region mutation,
     /// city guard hooks и fresh-entry принадлежат `CGame`, а death owner
     /// передаёт только уже вычисленные gameplay inputs.
