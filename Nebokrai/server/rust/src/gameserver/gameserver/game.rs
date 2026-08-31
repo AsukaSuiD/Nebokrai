@@ -10584,7 +10584,7 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn drop_player_goods_to_region<Context: GameContainerMessageRuntime>(
+    pub(crate) fn drop_player_goods_to_region(
         &mut self,
         player_id: i32,
         region_id: i32,
@@ -10592,7 +10592,6 @@ impl CGame {
         source_position: u32,
         goods_id: CGuid,
         amount: u32,
-        context: &mut Context,
     ) -> Result<(), GroundGoodsMoveBlock> {
         let player = self
             .find_player(player_id)
@@ -10926,19 +10925,25 @@ impl CGame {
         let particular_attribute =
             detached.addon_property_value(&self.goods_factory, GAP_PARTICULAR_ATTRIBUTE, 1) as u32;
         let old_client_payload = OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(&detached);
-        let now_ms = context.now_milliseconds();
+        let now_ms = game_tick_milliseconds();
         let (area_width, area_height) = self.area_dimensions();
-        if let Err((error, detached)) = owner.base_mut().add_owned_ground_goods(
-            detached,
-            tile_x,
-            tile_y,
-            particular_attribute,
-            now_ms,
-            area_width,
-            area_height,
-            context,
-        ) {
+        let addition = self.with_legacy_random_stream(|_, random| {
+            owner.base_mut().add_owned_ground_goods(
+                detached,
+                tile_x,
+                tile_y,
+                particular_attribute,
+                now_ms,
+                area_width,
+                area_height,
+                random,
+            )
+        });
+        if let Err((error, detached)) = addition {
             let mut incoming = Some(detached);
+            let mut rollback_random = GameLegacyRandomStream {
+                state: self.random_state,
+            };
             let (
                 mut rollback,
                 hand_rollback,
@@ -10967,7 +10972,7 @@ impl CGame {
                             source_position,
                             &mut incoming,
                             self.globe_setup.pack_add_enabled(),
-                            context,
+                            &mut rollback_random,
                         )),
                         None,
                         None,
@@ -11006,7 +11011,7 @@ impl CGame {
                             9,
                             source_position,
                             &mut incoming,
-                            context,
+                            &mut rollback_random,
                         )),
                         None,
                     ),
@@ -11020,11 +11025,12 @@ impl CGame {
                             11,
                             source_position,
                             &mut incoming,
-                            context,
+                            &mut rollback_random,
                         )),
                     ),
                     _ => unreachable!("ground source extend проверен до removal"),
                 };
+            self.random_state = rollback_random.state;
             self.players.insert(player_id, player);
             self.restore_region_owner(owner);
             if let Some(addition) = rollback.as_mut() {
@@ -17348,7 +17354,7 @@ impl CGame {
             direction = context.random_below(8);
         }
         if target_region_id != source_region_id {
-            self.drop_particular_goods_before_recall(player_id, context);
+            self.drop_particular_goods_before_recall(player_id);
         }
         let Some(mut source_owner) = self.take_region_owner(source_region_id) else {
             tracing::debug!(
@@ -18275,7 +18281,7 @@ impl CGame {
         if !changing_server {
             nation_timing_finished = self
                 .finish_nation_war_timing_on_player_lost(player_id, || runtime.now_milliseconds());
-            self.drop_particular_goods_on_player_lost(player_id, runtime);
+            self.drop_particular_goods_on_player_lost(player_id);
             change_body_states_ended = self.change_body_after_player_lost(player_id);
         }
 
@@ -18341,11 +18347,7 @@ impl CGame {
         Some(removal)
     }
 
-    fn drop_particular_goods_on_player_lost<Runtime: GameContainerMessageRuntime>(
-        &mut self,
-        player_id: i32,
-        runtime: &mut Runtime,
-    ) {
+    fn drop_particular_goods_on_player_lost(&mut self, player_id: i32) {
         let Some((region_id, sources)) = self.find_player(player_id).and_then(|player| {
             Some((
                 player.server_region_id()?,
@@ -18362,7 +18364,6 @@ impl CGame {
                 source.location.position,
                 source.goods_id,
                 source.amount,
-                runtime,
             );
             tracing::trace!(
                 player_id,
@@ -18377,11 +18378,7 @@ impl CGame {
     /// `DropParticularGoodsWhenRecall` выполняется до обоих видов перемещения.
     /// Снимок сохраняет порядок контейнеров, а каждый перенос на землю остаётся
     /// отдельным частичным изменением с немедленной публикацией в протокол.
-    fn drop_particular_goods_before_recall<Context: GameContainerMessageRuntime>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) {
+    fn drop_particular_goods_before_recall(&mut self, player_id: i32) {
         let Some((region_id, sources)) = self.find_player(player_id).and_then(|player| {
             Some((
                 player.server_region_id()?,
@@ -18398,7 +18395,6 @@ impl CGame {
                 source.location.position,
                 source.goods_id,
                 source.amount,
-                context,
             );
             tracing::trace!(
                 player_id,
@@ -18413,12 +18409,8 @@ impl CGame {
     /// Свойство предмета `0x2E`: после сброса особых предметов выбирает позицию
     /// во всём текущем регионе и вызывает тот же `CPlayer::ChangeRegion` с
     /// нулевым служебным хвостом. Направление игрока сохраняется.
-    pub(crate) fn recall_player_inside_region<Context: PlayerReliveContext>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) -> bool {
-        self.drop_particular_goods_before_recall(player_id, context);
+    pub(crate) fn recall_player_inside_region(&mut self, player_id: i32) -> bool {
+        self.drop_particular_goods_before_recall(player_id);
         let Some((region_id, direction)) = self.find_player(player_id).and_then(|player| {
             Some((player.server_region_id()?, player.shape().get_direction()))
         }) else {
@@ -18451,12 +18443,8 @@ impl CGame {
     /// выполняет виртуальный `GetReturnPoint`, выбирает случайную позицию в
     /// целевом прямоугольнике и вызывает обычный `CPlayer::ChangeRegion` в том
     /// же порядке, что `BackToCity`.
-    pub(crate) fn recall_player_to_return_point<Context: PlayerReliveContext>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) -> bool {
-        self.drop_particular_goods_before_recall(player_id, context);
+    pub(crate) fn recall_player_to_return_point(&mut self, player_id: i32) -> bool {
+        self.drop_particular_goods_before_recall(player_id);
         let Some((source_region_id, direction)) = self.find_player(player_id).and_then(|player| {
             Some((player.server_region_id()?, player.shape().get_direction()))
         }) else {
@@ -41219,7 +41207,6 @@ impl CGame {
                     candidate.location.position,
                     candidate.goods_id,
                     candidate.amount,
-                    runtime,
                 );
                 if result.is_ok()
                     && candidate.location.extend_id == 3
@@ -41296,7 +41283,6 @@ impl CGame {
                                 candidate.location.position,
                                 candidate.goods_id,
                                 candidate.amount,
-                                runtime,
                             );
                             if result.is_ok() && self.log_system.goods_lost_by_dead_enabled() {
                                 record_death_world_delivery!(self.send_goods_lost_by_death_log(
@@ -41332,7 +41318,6 @@ impl CGame {
                                         0,
                                         goods.identity().ex_id,
                                         amount.min(money),
-                                        runtime,
                                     );
                                     if result.is_ok()
                                         && self.log_system.goods_lost_by_dead_enabled()

@@ -933,7 +933,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 consume = false;
                                 let _ = send_item_notice(game, player_id, b"GS0153", &[], 0);
                             } else {
-                                let _ = game.recall_player_inside_region(player_id, runtime);
+                                let _ = game.recall_player_inside_region(player_id);
                             }
                         }
                         0x2f => {
@@ -1052,7 +1052,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
             }
             if return_after_use {
-                let _ = game.recall_player_to_return_point(player_id, runtime);
+                let _ = game.recall_player_to_return_point(player_id);
             }
             trace_player_message_outcome(message_type, Some(player_id), "предмет использован");
         }

@@ -1396,7 +1396,6 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 request.source_position,
                 request.object_id,
                 request.amount,
-                context,
             )
         } else {
             game.pick_up_ground_goods_to_player(
