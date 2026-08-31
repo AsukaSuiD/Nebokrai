@@ -3,15 +3,15 @@
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает навык `304`:
 //! он выбирает владельца раньше sufferer-а, создаёт состояние из usage `115`,
 //! заменяет только прежнее состояние `304`, публикует `OnChangeStates` и
-//! завершает базовый навык с восстановлением движения. Monster-применение
-//! остаётся в сыром корпусе до появления реального monster skill caller-а.
+//! завершает базовый навык с восстановлением движения. Monster-ветвь теперь
+//! использует тот же `OriginState` из реального monster skill caller-а.
 
 pub(crate) const ORIGIN_SKILL_ID: u32 = 304;
 pub(crate) const SKILL_USAGE_ELEMENT_MODIFY_GAIN: u32 = 115;
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сохранена только смешанная player/monster-функция `AI`: player-ветвь подключена, monster-ветвь ещё не достигнута.
+// Смешанная player/monster-функция `AI` подключена обоими canonical owner-ами.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -23,7 +23,8 @@ pub(crate) const SKILL_USAGE_ELEMENT_MODIFY_GAIN: u32 = 115;
 // ============================================================================
 // FUNCTION: COrigin::AI
 // STATUS: IMPLEMENTED
-// IMPLEMENTED: `execute_player_immediate_state`.
+// IMPLEMENTED: `execute_player_immediate_state` и
+// `execute_monster_immediate_state`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\origin.cpp:99

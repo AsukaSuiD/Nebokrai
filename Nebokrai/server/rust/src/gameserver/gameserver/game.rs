@@ -32248,6 +32248,34 @@ impl CGame {
         Some(())
     }
 
+    /// Exact базовый `CMoveShape::OnChangeStates` для monster-owner-а. PDB не
+    /// содержит override `CMonster`, поэтому после HP следуют три нулевых
+    /// scalar-а, а пакет публикуется обычным around-route формы.
+    pub(crate) fn publish_owned_monster_states(
+        &self,
+        region: &CServerRegion,
+        monster_id: i32,
+    ) -> Option<()> {
+        let monster = region.find_monster_by_id(monster_id)?;
+        let shape = monster.move_shape().shape();
+        let mut states = CMessage::new(0x000b_fe02);
+        states.add_long(MONSTER_TYPE);
+        states.add_long(monster_id);
+        states.add_ulong(monster.hit_points());
+        states.add_ulong(0);
+        states.add_short(0);
+        states.add_short(0);
+        let delivery = self.send_game_shape_around(region, shape, None, &states);
+        tracing::trace!(
+            region_id = region.id,
+            monster_id,
+            hit_points = monster.hit_points(),
+            ?delivery,
+            "состояние монстра опубликовано"
+        );
+        Some(())
+    }
+
     pub(crate) fn find_player(&self, player_id: i32) -> Option<&CPlayer> {
         self.players.get(&player_id)
     }

@@ -77,6 +77,7 @@ use super::corpsecandleblasting::{
 use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptomaine};
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
+use super::immediatestate::execute_monster_immediate_state;
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
 use super::lordfastattack::LORD_FAST_ATTACK_SKILL_ID;
 use super::lordwiderangingattack::{
@@ -87,6 +88,7 @@ use super::machinerystomp::{
 };
 use super::monsterprojectile::{MonsterProjectileDispatch, prepare_owned_monster_projectile};
 use super::monsterthorn::{MONSTER_THORN_SKILL_ID, execute_owned_monster_thorn};
+use super::origin::ORIGIN_SKILL_ID;
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
 use super::snakebolt::{SNAKE_BOLT_SKILL_ID, execute_owned_snake_bolt};
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
@@ -98,6 +100,7 @@ use super::summoncorpsecandle::SUMMON_CORPSE_CANDLE_SKILL_ID;
 use super::summoncreatureskill::execute_owned_summon_creature;
 use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
 use super::summonspore::SUMMON_SPORE_SKILL_ID;
+use super::taiji::TAIJI_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::archer::select_archer_enemy;
@@ -195,6 +198,8 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | SUMMON_CORPSE_CANDLE_SKILL_ID
             | SUMMON_SKELETON_SKILL_ID
             | SUMMON_SPORE_SKILL_ID
+            | TAIJI_SKILL_ID
+            | ORIGIN_SKILL_ID
     )
 }
 
@@ -937,6 +942,35 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return false;
     };
     let now_ms = runtime.now_milliseconds();
+    if matches!(skill_id, TAIJI_SKILL_ID | ORIGIN_SKILL_ID) {
+        let attack_interval = schedule_attack_interval(
+            property.ai,
+            pet_attack_properties.map_or(property.attack_speed, |pet| pet.attack_interval),
+        );
+        if attack_interval.is_some_and(|interval| {
+            region
+                .find_monster_by_id_mut(monster_id)
+                .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
+        }) {
+            return true;
+        }
+        let reuse_delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        let last_used_ms = region
+            .find_monster_by_id(monster_id)
+            .map(|monster| monster.skill_last_used_ms(skill_id))
+            .unwrap_or_default();
+        if last_used_ms != 0 && now_ms.wrapping_sub(last_used_ms) < reuse_delay_ms {
+            return true;
+        }
+        return execute_monster_immediate_state(
+            game,
+            region,
+            monster_id,
+            skill_id,
+            i32::from(skill.level),
+            now_ms,
+        );
+    }
     if skill_id == FURY_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_fury(

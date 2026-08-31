@@ -6,13 +6,15 @@
 //! это состояние, публикует текущее состояние владельца и завершает навык с часами
 //! восстановления. Навык не ставит запрет движения и не создаёт отдельный
 //! визуальный пакет, однако базовое завершение один раз снимает запрет.
+//! Monster-ветвь использует тот же `TaiJiState` из реального monster skill
+//! caller-а и завершает derived AI тем же completion action.
 
 pub(crate) const TAIJI_SKILL_ID: u32 = 301;
 pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 // Декомпилятор: Ghidra 12.1.2
-// Сохранена только смешанная player/monster-функция `AI`: player-ветвь подключена, monster-ветвь ещё не достигнута.
+// Смешанная player/monster-функция `AI` подключена обоими canonical owner-ами.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -24,7 +26,8 @@ pub(crate) const SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN: u32 = 112;
 // ============================================================================
 // FUNCTION: CTaiJi::AI
 // STATUS: IMPLEMENTED
-// IMPLEMENTED: `execute_player_immediate_state`.
+// IMPLEMENTED: `execute_player_immediate_state` и
+// `execute_monster_immediate_state`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taiji.cpp:99

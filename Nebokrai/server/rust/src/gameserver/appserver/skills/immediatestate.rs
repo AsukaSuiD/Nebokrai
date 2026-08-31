@@ -1,10 +1,11 @@
-//! Общий короткий runtime немедленных состояний игрока.
+//! Общий короткий runtime немедленных состояний игрока и подтверждённых
+//! monster-ветвей `TaiJi`/`Origin`.
 //!
 //! Владелец объединяет только подтверждённую одинаковую последовательность
 //! `Begin → Check → Calculate → Attack → Apply`. Идентификатор usage,
 //! формула значения и конкретное каноническое состояние остаются у пяти
-//! навыков семейства; `CGame` предоставляет player owner, свойства навыка и
-//! фактическую публикацию состояния.
+//! навыков семейства; `CGame` предоставляет canonical shape owner, свойства
+//! навыка и фактическую публикацию состояния.
 
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
 use super::enlargefullmissstate::EnlargeFullMissState;
@@ -20,6 +21,7 @@ use super::wuxing::{execute_player_wuxing, is_wuxing_skill};
 use super::taijistate::TaiJiState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -30,6 +32,44 @@ enum ImmediateStateKind {
     EnlargeMaxHp,
     EnlargeMaxMp,
     Origin,
+}
+
+/// Monster-ветвь смешанных `CTaiJi::AI`/`COrigin::AI`: owner навыка является
+/// sufferer-ом, поэтому состояние заменяется на самом монстре и немедленно
+/// участвует в его combat properties. Остальные immediate-state family здесь
+/// намеренно не принимаются без подтверждённого monster caller-а.
+pub(crate) fn execute_monster_immediate_state(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    skill_id: u32,
+    skill_level: i32,
+    now_ms: u32,
+) -> bool {
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        return false;
+    };
+    let Some(monster) = region.find_monster_by_id_mut(monster_id) else {
+        return false;
+    };
+    match skill_id {
+        TAIJI_SKILL_ID => {
+            let gain = properties.query_property(SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN) as i32;
+            let _ = monster
+                .move_shape_mut()
+                .replace_taiji_state(TaiJiState::new(gain));
+        }
+        ORIGIN_SKILL_ID => {
+            let gain = properties.query_property(SKILL_USAGE_ELEMENT_MODIFY_GAIN) as i32;
+            let _ = monster
+                .move_shape_mut()
+                .replace_origin_state(OriginState::new(gain));
+        }
+        _ => return false,
+    }
+    monster.finish_immediate_skill(skill_id, now_ms);
+    let _ = game.publish_owned_monster_states(region, monster_id);
+    true
 }
 
 pub(crate) const fn is_immediate_state_skill(skill_id: u32) -> bool {
