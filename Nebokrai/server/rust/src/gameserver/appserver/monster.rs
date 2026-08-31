@@ -945,6 +945,20 @@ impl CMonster {
         properties
     }
 
+    /// Виртуальный `CMonster::GetDodge`: базовое значение не ниже единицы,
+    /// а приручённый monster-owner применяет свой pet-level factor до
+    /// сужения результата к `ushort`.
+    pub(crate) fn dodge(&self, property: &MonsterProperties) -> u16 {
+        let base = property.dodge.max(1);
+        if self.tamed
+            && self.master_info.master_type == 400
+            && self.master_info.master_id != 0
+        {
+            return ((base as f32) * f32::from_bits(self.factors[4])).round_ties_even() as u16;
+        }
+        base as u16
+    }
+
     pub(crate) fn pet_attack_properties(
         &self,
         property: &MonsterProperties,
@@ -1317,6 +1331,24 @@ impl CMonster {
     }
 
     pub(crate) fn finish_base_attack_cast(&mut self, now_ms: u32) -> Option<MonsterBaseAttackCast> {
+        self.finish_base_attack_cast_with_reuse(now_ms, true)
+    }
+
+    /// `CSkill::End(false)` завершает самостоятельное AI-действие, но не
+    /// запускает reuse навыка. Это отличается от внешней отмены cast-а:
+    /// derived AI всё равно получает своё обычное completion action.
+    pub(crate) fn finish_base_attack_cast_without_reuse(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<MonsterBaseAttackCast> {
+        self.finish_base_attack_cast_with_reuse(now_ms, false)
+    }
+
+    fn finish_base_attack_cast_with_reuse(
+        &mut self,
+        now_ms: u32,
+        mark_reuse: bool,
+    ) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
         let skill_id = execution.dispatch().skill_id;
         self.fast_attack_progress = None;
@@ -1332,7 +1364,9 @@ impl CMonster {
             self.move_shape.set_current_skill_id(None);
         }
         let _ = execution.terminate(SkillTermination::Completed);
-        self.skill_last_used_ms.insert(skill_id, now_ms);
+        if mark_reuse {
+            self.skill_last_used_ms.insert(skill_id, now_ms);
+        }
         self.base_ai
             .add_ai_event(self.attack_completion_action, 0, 0, now_ms);
         Some(execution)

@@ -1,9 +1,9 @@
 //! Рабочий владелец исполнения `CKnockOut` (`0x192`) с объектом-целью.
 //!
 //! Формулы, последовательность случайных чисел, проверки, время восстановления
-//! и сетевой формат принадлежат
-//! навыку; `CGame` остаётся координатором общей защиты, жизненного цикла цели
-//! и доставки.
+//! и сетевой формат принадлежат навыку. Player- и monster-owner-ы подключены
+//! к своим реальным AI/runtime путям; `CGame` остаётся координатором общей
+//! защиты, жизненного цикла цели и доставки.
 
 use super::baseattack::time_reached;
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
@@ -11,16 +11,24 @@ use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knockoutstate::{
     KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
 };
+use super::monsterattack::{
+    MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
+    owned_monster_attackable, resolve_owned_monster_attack_target,
+};
+use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::finish_state_skill;
+use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+use crate::setup::monsterlist::MonsterProperties;
 
 pub(crate) const KNOCK_OUT_SKILL_ID: u32 = 0x192;
 const PLAYER_TYPE: i32 = 400;
@@ -82,6 +90,28 @@ fn cast(game: &mut CGame, player_id: i32, target: Target, level: i32, fire: bool
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
+fn monster_cast(
+    game: &CGame,
+    region: &CServerRegion,
+    monster_id: i32,
+    target: ShapeIdentity,
+    target_x: i32,
+    target_y: i32,
+    level: u16,
+    fire: bool,
+) {
+    let Some(monster) = region.find_monster_by_id(monster_id) else { return };
+    let mut message = CMessage::new(0x000b_fe01);
+    message.add_byte(if fire { 2 } else { 1 });
+    message.add_long(KNOCK_OUT_SKILL_ID as i32); message.add_short(level as i16);
+    message.add_long(MONSTER_TYPE); message.add_long(monster_id);
+    if fire {
+        message.add_long(target.object_type); message.add_long(target.id);
+        message.add_long(target_x); message.add_long(target_y);
+    } else { message.add_long(monster.move_shape().shape().get_direction()); }
+    let _ = game.send_game_shape_around(region, monster.move_shape().shape(), None, &message);
+}
+
 fn master(player: &CPlayer) -> MasterInfo {
     let p = player.pk_permissions();
     MasterInfo {
@@ -121,6 +151,164 @@ fn attack(game: &mut CGame, player_id: i32, target_level: u8) -> Option<(MasterI
         for power in &mut value.damages { power.hp_damage = ((power.hp_damage as f32) * rate).round_ties_even() as i32; }
     }
     Some((master, value))
+}
+
+fn monster_attack(
+    game: &mut CGame,
+    region: &CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+) -> Option<(MasterInfo, AttackInformation)> {
+    let monster = region.find_monster_by_id(monster_id)?;
+    let master = monster.master_info();
+    let (minimum, maximum) = if monster.is_tamed() {
+        let attack = monster.pet_attack_properties(property);
+        (attack.minimum_attack, attack.maximum_attack)
+    } else {
+        let clamp = |value: u32| value.clamp(1, i32::MAX as u32);
+        monster.state_attack_bounds(clamp(property.minimum_attack), clamp(property.maximum_attack))
+    };
+    let minimum = minimum as i32;
+    let difference = (maximum as i32).wrapping_sub(minimum);
+    let span = if difference < 0 { difference.wrapping_neg() } else { difference }.wrapping_add(1);
+    let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
+    let mut attack = AttackInformation {
+        // Конструкторное значение сохраняется и для non-player owner-а.
+        skill_id: UNKNOWN_ATTACK_SKILL_ID, skill_level: 1,
+        attacker_type: MONSTER_TYPE, attacker_id: monster_id,
+        attacker_team_id: 0, attacker_faction_id: 0, attacker_union_id: 0,
+        hit_modifier: 100, damage_factor: 1.0, damage_modifier: 0,
+        critical: false, blast_attack: false, full_miss: 0,
+        damages: vec![
+            AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
+            // Виртуальный `CMonster::GetAddElementAtk` обычного monster-owner-а
+            // возвращает ноль; GetAddSoulAtk оставляет младшие 16 бит только
+            // положительного `dwYaoAtk`.
+            AttackPower { kind: AttackPowerType::Element, hp_damage: 0, mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: if property.yao_attack == 0 { 0 } else { (property.yao_attack & 0xffff) as i32 }, mp_damage: 0 },
+        ],
+    };
+    // `CMoveShape::GetCCH` для монстра равен нулю, но исходный owner всё
+    // равно расходует отдельный critical RNG после physical RNG.
+    let critical_roll = game.skill_random_below(100);
+    let critical_chance = 0;
+    if critical_roll < critical_chance {
+        attack.critical = true;
+        let rate = game.globe_setup().critical_rate();
+        for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; }
+    }
+    Some((master, attack))
+}
+
+fn owned_target_has_cure(game: &CGame, region: &CServerRegion, target: ShapeIdentity) -> bool {
+    match target.object_type {
+        PLAYER_TYPE => game.find_player(target.id).is_some_and(|player| player.has_state_by_skill_id(CURE_SKILL_ID)),
+        MONSTER_TYPE => region.find_monster_by_id(target.id).is_some_and(|monster| monster.move_shape().has_state_by_skill_id(CURE_SKILL_ID)),
+        _ => true,
+    }
+}
+
+/// Generic object-target ветвь `CKnockOut::AI` для monster-owner-а: общий
+/// reuse/range lifecycle, блокировка движения до delay, отдельный hit RNG,
+/// затем concrete attack, replacement состояния и monster death tail.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    properties: &CSkillBaseProperties,
+    property: &MonsterProperties,
+    now_ms: u32,
+    runtime: &mut Runtime,
+    deaths: &mut Vec<MonsterAttackDeath>,
+) -> bool {
+    let Some((source, master, tamed, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.base_attack_cast())) else { return false };
+    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if cast.is_some() { monster.move_shape_mut().set_moveable(true); }
+            monster.clear_ai_target();
+        }
+        return true;
+    };
+    if target.dead || target.god || target.city_dead || !owned_monster_attackable(game, region.id, property, tamed, master, target_identity, &target) {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            if cast.is_some() { monster.move_shape_mut().set_moveable(true); }
+            monster.clear_ai_target();
+        }
+        return true;
+    }
+    let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (source.get_tile_x(), source.get_tile_y(), target.shape.get_tile_x(), target.shape.get_tile_y()) else { return true };
+    let path_len = region.straight_skill_path(source_x, source_y, target_x, target_y, None).len() as u32;
+    let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    if cast.is_none() {
+        let interval = if tamed { region.find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
+        if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
+        let reuse = properties.query_property(REUSE);
+        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(KNOCK_OUT_SKILL_ID)).unwrap_or_default();
+        if last_used != 0 && !time_reached(now_ms, last_used, reuse) { return true; }
+        if maximum != 0 && maximum.wrapping_add(1) < path_len {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+            return true;
+        }
+        let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().shape_mut().set_direction(direction);
+            monster.move_shape_mut().set_moveable(false);
+            monster.begin_base_attack_cast(target_identity, KNOCK_OUT_SKILL_ID, skill_level, now_ms);
+        }
+        monster_cast(game, region, monster_id, target_identity, target_x, target_y, skill_level, false);
+        return true;
+    }
+    let cast = cast.expect("активное оглушение проверено выше");
+    if cast.dispatch().skill_id != KNOCK_OUT_SKILL_ID || cast.dispatch().target != target_identity { return false; }
+    if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(DELAY)) { return true; }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); }
+    if maximum != 0 && maximum.wrapping_add(1) < path_len {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+        return true;
+    }
+    monster_cast(game, region, monster_id, target_identity, target_x, target_y, skill_level, true);
+    let target_level = if target_identity.object_type == PLAYER_TYPE {
+        game.find_player(target_identity.id).map_or(0, CPlayer::level)
+    } else {
+        target.monster_property.as_ref().map_or(0, |property| property.level as u8)
+    };
+    let target_dodge = if target_identity.object_type == PLAYER_TYPE {
+        target.player_properties.map_or(0, |combat| combat.dodge)
+    } else {
+        region.find_monster_by_id(target_identity.id).zip(target.monster_property.as_ref()).map_or(0, |(monster, property)| monster.dodge(property))
+    };
+    let source_hit = (property.hit as i32).max(1) as u16;
+    let source_level = property.level as u8;
+    let (base, magnify, level_rate) = game.globe_setup().base_attack_hit_formula();
+    let chance = ((i32::from(source_hit).wrapping_sub(i32::from(target_dodge))) as f32 * magnify + base as f32 + i32::from(source_level).wrapping_sub(i32::from(target_level)) as f32 * level_rate).round_ties_even() as i32;
+    if chance <= game.skill_random_below(100) {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(now_ms); }
+        return true;
+    }
+    let Some((attacker_master, attack)) = monster_attack(game, region, monster_id, property) else { return true };
+    let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+    }
+    apply_owned_monster_attack_hit(game, region, runtime, now_ms, monster_id, attacker_master, target_identity, &target.shape, target.health, target.mana, target.master, target.monster_property, target.tamed, target.carriage, attack, deaths);
+    if !owned_target_has_cure(game, region, target_identity) {
+        let state_now = runtime.now_milliseconds();
+        let state = KnockOutState::new(state_now, properties.query_property(PERSIST));
+        match target_identity.object_type {
+            PLAYER_TYPE => { let _ = replace_player_knock_out_state(game, target_identity.id, state, state_now); }
+            MONSTER_TYPE => { let _ = replace_monster_knock_out_state(game, region, target_identity.id, state, state_now); }
+            _ => {}
+        }
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        let _ = monster.finish_base_attack_cast(now_ms);
+    }
+    true
 }
 
 fn install(game: &mut CGame, region_id: i32, target: Target, state: KnockOutState, now_ms: u32) {
