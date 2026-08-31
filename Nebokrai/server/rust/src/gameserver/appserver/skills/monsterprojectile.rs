@@ -34,6 +34,7 @@ const BLOCK_SHAPE: u8 = 3;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
 const SKILL_USAGE_TARGET_MIN_DISTANCE: u32 = 5_004;
 const SKILL_USAGE_MISSILE_FLYING_TIME: u32 = 10_008;
+const SKILL_USAGE_TARGET_DAMAGE_FACTOR: u32 = 20_003;
 
 #[derive(Clone, Debug)]
 pub(crate) struct MonsterProjectileDispatch {
@@ -46,7 +47,36 @@ pub(crate) struct MonsterProjectileDispatch {
     property: MonsterProperties,
     attacker_master: MasterInfo,
     attacker_tamed: bool,
+    damage_factor: f32,
     now_ms: u32,
+}
+
+impl MonsterProjectileDispatch {
+    /// Собирает object-target удар для навыка, который сам ведёт полёт и
+    /// визуальную фазу, но использует общий monster attack tail.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn object_target(
+        monster_id: i32,
+        skill_id: u32,
+        target_x: i32,
+        target_y: i32,
+        skill_level: u16,
+        properties: CSkillBaseProperties,
+        property: MonsterProperties,
+        attacker_master: MasterInfo,
+        attacker_tamed: bool,
+        now_ms: u32,
+    ) -> Self {
+        let damage_factor = match properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) {
+            0 => 1.0,
+            factor => factor as f32 * 0.01,
+        };
+        Self {
+            monster_id, skill_id, impact_x: target_x, impact_y: target_y,
+            skill_level, properties, property, attacker_master, attacker_tamed,
+            damage_factor, now_ms,
+        }
+    }
 }
 
 fn send_projectile_visual(
@@ -311,6 +341,7 @@ pub(crate) fn prepare_owned_monster_projectile(
         property,
         attacker_master: master,
         attacker_tamed: tamed,
+        damage_factor: 1.0,
         now_ms,
     });
     true
@@ -417,7 +448,7 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
         hit_modifier: dispatch
             .properties
             .query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
-        damage_factor: 1.0,
+        damage_factor: dispatch.damage_factor,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,

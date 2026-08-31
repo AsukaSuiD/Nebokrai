@@ -103,6 +103,7 @@ use super::summonskeleton::SUMMON_SKELETON_SKILL_ID;
 use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::taiji::TAIJI_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
+use super::yakshaslash::{YAKSHA_SLASH_SKILL_ID, execute_owned_monster_yaksha_slash};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
 use crate::gameserver::appserver::ai::archer::select_archer_enemy;
 use crate::gameserver::appserver::ai::bossblue::{
@@ -202,6 +203,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | TAIJI_SKILL_ID
             | ORIGIN_SKILL_ID
             | PROMOTION_SKILL_ID
+            | YAKSHA_SLASH_SKILL_ID
     )
 }
 
@@ -996,6 +998,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &skill_properties,
             now_ms,
         );
+    }
+    if skill_id == YAKSHA_SLASH_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_monster_yaksha_slash(game, region, monster_id, target, skill.level, &skill_properties, &property, now_ms, runtime, deaths);
     }
     if matches!(skill_id, SKELETON_ARCHERY_SKILL_ID | CHUCK_STONE_SKILL_ID) {
         let skill_properties = skill_properties.clone();
