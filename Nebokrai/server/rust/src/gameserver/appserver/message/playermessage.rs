@@ -89,6 +89,10 @@ pub(crate) trait GamePlayerMessageRuntime:
     PlayerReliveContext + GameContainerMessageRuntime + ScriptFunctionRuntime
 {}
 
+impl<T> GamePlayerMessageRuntime for T where
+    T: PlayerReliveContext + GameContainerMessageRuntime + ScriptFunctionRuntime + ?Sized
+{}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlayerItemUseFacts {
     pub(crate) blocking_skill_state: bool,

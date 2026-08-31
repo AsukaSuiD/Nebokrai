@@ -88,6 +88,14 @@ pub(crate) trait GameGoodsMessageRuntime:
 {
 }
 
+impl<T> GameGoodsMessageRuntime for T where
+    T: ScriptFunctionRuntime
+        + EquipmentComposeContext
+        + EquipmentUpgradeContext
+        + GameContainerMessageRuntime
+        + ?Sized
+{}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GameGoodsMessageError {
     MissingField(&'static str),

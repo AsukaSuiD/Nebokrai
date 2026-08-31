@@ -2479,6 +2479,10 @@ pub(crate) trait GameContainerMessageRuntime:
     GameClockContext + ServerRegionMembershipContext
 {}
 
+impl<T> GameContainerMessageRuntime for T where
+    T: GameClockContext + ServerRegionMembershipContext + ?Sized
+{}
+
 /// Runtime facts equipment-container-а выводятся только из canonical player,
 /// live goods и `GlobeSetup`; process runtime не владеет их теневой копией.
 fn player_equipment_remove_runtime_facts(
