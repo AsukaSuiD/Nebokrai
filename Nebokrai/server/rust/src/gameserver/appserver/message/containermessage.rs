@@ -380,6 +380,12 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             {
                 request.source_position = 0;
             }
+            if request.source_container_type == 10
+                && request.destination_container_type == PLAYER_CONTAINER_TYPE
+                && request.destination_container_extend_id == 3
+            {
+                request.destination_position = 0;
+            }
             let source_is_reached = game
                 .find_player(player_id)
                 .is_some_and(|player| match request.source_container_extend_id {
@@ -722,18 +728,23 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         trace("источник и назначение совпадают");
         return Some(Ok(()));
     }
-    if route == EnhancementMessageRoute::GroundPickup
-        && (!(0..=11).contains(&request.destination_container_extend_id)
-            || request.destination_container_extend_id == 5)
-    {
-        trace("недопустимый контейнер назначения для поднятия предмета");
-        return Some(Ok(()));
-    }
     if route == EnhancementMessageRoute::GroundDrop
         && (!(0..=11).contains(&request.source_container_extend_id)
             || request.source_container_extend_id == 5)
     {
         trace("недопустимый исходный контейнер для выбрасывания предмета");
+        return Some(Ok(()));
+    }
+    if route == EnhancementMessageRoute::TradeOfferAdd
+        && !(0..=11).contains(&request.source_container_extend_id)
+    {
+        trace("недопустимый исходный контейнер для торговой сессии");
+        return Some(Ok(()));
+    }
+    if route == EnhancementMessageRoute::TradeOfferRemove
+        && !(0..=11).contains(&request.destination_container_extend_id)
+    {
+        trace("недопустимый контейнер назначения для торговой сессии");
         return Some(Ok(()));
     }
     if route == EnhancementMessageRoute::EnhancementSelect
