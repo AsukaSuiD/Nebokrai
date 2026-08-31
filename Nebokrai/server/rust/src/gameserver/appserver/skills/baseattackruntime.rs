@@ -13,7 +13,7 @@ use super::{
     MonsterKillingAttack, PLAYER_TYPE, PlayerKillingBlow, PlayerSkillDispatch,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    SKILL_USAGE_USER_HIT_MODIFIER, ScriptExecutionContext, ShapeIdentity, SkillStage,
+    SKILL_USAGE_USER_HIT_MODIFIER, ShapeIdentity, SkillStage,
     defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
     finish_blind_states_on_defense, finish_player_base_attack,
     finish_player_blind_states_on_defense, game_legacy_random, get_line_direction, real_distance,
@@ -1043,77 +1043,13 @@ fn execute_player_stationary_attack<Runtime: GameMainLoopRuntime>(
         &mut random,
     );
 
-    if attack.full_miss != 0 {
-        let mut missed = CMessage::new(0x000b_f612);
-        missed.add_byte(attack.full_miss);
-        missed.add_long(identity.object_type);
-        missed.add_long(identity.id);
-        let _ = game.send_shape_position_around(region_id, target_x, target_y, &missed);
-        return true;
-    }
-    let damage = attack.hp_damage().min(target.hp);
-    if damage == 0 {
-        return true;
-    }
-    let Some(mutation) = game.apply_stationary_build_damage(player_id, region_id, identity, damage)
-    else {
-        return false;
-    };
-
-    if mutation.died {
-        let physical_damage = attack
-            .damages
-            .iter()
-            .find(|power| power.kind == AttackPowerType::Physical)
-            .map_or(0, |power| power.hp_damage.max(0) as u32)
-            .min(target.hp);
-        if !mutation.script.is_empty() {
-            let _ = game.run_script_file(
-                &mutation.script,
-                ScriptExecutionContext {
-                    player_id: Some(player_id),
-                    region_id: Some(region_id),
-                    ..ScriptExecutionContext::default()
-                },
-                runtime,
-            );
-        }
-        let mut died = CMessage::new(0x000b_f60b);
-        died.add_long(PLAYER_TYPE);
-        died.add_long(player_id);
-        died.add_long(identity.object_type);
-        died.add_long(identity.id);
-        died.add_ulong(physical_damage);
-        died.base_mut().add_char(1);
-        CGame::append_base_attack_tail(&mut died, &attack);
-        let _ = game.send_shape_position_around(region_id, target_x, target_y, &died);
-        if !game.finish_stationary_build_death(region_id, identity) {
-            return false;
-        }
-    } else {
-        let records: Vec<_> = attack
-            .damages
-            .iter()
-            .filter(|power| power.hp_damage > 0)
-            .collect();
-        let mut hurt = CMessage::new(0x000b_f60a);
-        hurt.add_long(PLAYER_TYPE);
-        hurt.add_long(player_id);
-        hurt.add_long(identity.object_type);
-        hurt.add_long(identity.id);
-        hurt.add_byte(records.len() as u8);
-        for power in records {
-            hurt.add_byte(match power.kind {
-                AttackPowerType::Physical => 0,
-                AttackPowerType::Element => 1,
-                AttackPowerType::Soul => 2,
-                AttackPowerType::Poison => 3,
-            });
-            hurt.add_ulong(power.hp_damage as u32);
-        }
-        hurt.add_ulong(mutation.current_hp);
-        CGame::append_base_attack_tail(&mut hurt, &attack);
-        let _ = game.send_shape_position_around(region_id, target_x, target_y, &hurt);
-    }
-    true
+    game.apply_defended_player_attack_to_stationary_build(
+        player_id,
+        region_id,
+        identity,
+        target_x,
+        target_y,
+        &attack,
+        runtime,
+    )
 }

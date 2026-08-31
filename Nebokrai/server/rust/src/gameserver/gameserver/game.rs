@@ -39147,6 +39147,11 @@ impl CGame {
                 .find_player(target.id)
                 .filter(|player| player.server_region_id() == Some(region_id))
                 .and_then(CPlayer::shape_view),
+            NPC_TYPE => self
+                .find_region(region_id)?
+                .base()
+                .find_npc_by_id(target.id)?
+                .shape_view(),
             MONSTER_TYPE => {
                 let monster = self
                     .find_region(region_id)?
@@ -39155,6 +39160,9 @@ impl CGame {
                 let property = self
                     .find_monster_property_by_origin_name(monster.base_property_key()?)?;
                 monster.shape_view(property)
+            }
+            kind if kind == BUILD_OBJECT_TYPE as i32 || kind == CITY_GATE_OBJECT_TYPE as i32 => {
+                self.find_region(region_id)?.stationary_shape_view(target)
             }
             _ => None,
         }
@@ -43411,6 +43419,100 @@ impl CGame {
         })
     }
 
+    /// Общий достигнутый хвост `CFightDefense::Defense` для стационарной
+    /// постройки: применяет уже защищённую атаку, сохраняет порядок death
+    /// script -> `0xBF60B` -> action/block и формирует тот же damage wire для
+    /// базовой атаки и снаряда базовой магии.
+    pub(crate) fn apply_defended_player_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        identity: ShapeIdentity,
+        target_x: i32,
+        target_y: i32,
+        attack: &AttackInformation,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let Some(target) = self.stationary_build_combat_snapshot(region_id, identity) else {
+            return false;
+        };
+        if attack.full_miss != 0 {
+            let mut missed = CMessage::new(0x000b_f612);
+            missed.add_byte(attack.full_miss);
+            missed.add_long(identity.object_type);
+            missed.add_long(identity.id);
+            let _ = self.send_shape_position_around(region_id, target_x, target_y, &missed);
+            return true;
+        }
+        let damage = attack.hp_damage().min(target.hp);
+        if damage == 0 {
+            return true;
+        }
+        let Some(mutation) = self.apply_stationary_build_damage(
+            player_id,
+            region_id,
+            identity,
+            damage,
+        ) else {
+            return false;
+        };
+
+        if mutation.died {
+            let physical_damage = attack
+                .damages
+                .iter()
+                .find(|power| power.kind == AttackPowerType::Physical)
+                .map_or(0, |power| power.hp_damage.max(0) as u32)
+                .min(target.hp);
+            if !mutation.script.is_empty() {
+                let _ = self.run_script_file(
+                    &mutation.script,
+                    ScriptExecutionContext {
+                        player_id: Some(player_id),
+                        region_id: Some(region_id),
+                        ..ScriptExecutionContext::default()
+                    },
+                    runtime,
+                );
+            }
+            let mut died = CMessage::new(0x000b_f60b);
+            died.add_long(PLAYER_TYPE);
+            died.add_long(player_id);
+            died.add_long(identity.object_type);
+            died.add_long(identity.id);
+            died.add_ulong(physical_damage);
+            died.base_mut().add_char(1);
+            Self::append_base_attack_tail(&mut died, attack);
+            let _ = self.send_shape_position_around(region_id, target_x, target_y, &died);
+            return self.finish_stationary_build_death(region_id, identity);
+        }
+
+        let records: Vec<_> = attack
+            .damages
+            .iter()
+            .filter(|power| power.hp_damage > 0)
+            .collect();
+        let mut hurt = CMessage::new(0x000b_f60a);
+        hurt.add_long(PLAYER_TYPE);
+        hurt.add_long(player_id);
+        hurt.add_long(identity.object_type);
+        hurt.add_long(identity.id);
+        hurt.add_byte(records.len() as u8);
+        for power in records {
+            hurt.add_byte(match power.kind {
+                AttackPowerType::Physical => 0,
+                AttackPowerType::Element => 1,
+                AttackPowerType::Soul => 2,
+                AttackPowerType::Poison => 3,
+            });
+            hurt.add_ulong(power.hp_damage as u32);
+        }
+        hurt.add_ulong(mutation.current_hp);
+        Self::append_base_attack_tail(&mut hurt, attack);
+        let _ = self.send_shape_position_around(region_id, target_x, target_y, &hurt);
+        true
+    }
+
     pub(crate) fn finish_stationary_build_death(
         &mut self,
         region_id: i32,
@@ -44990,6 +45092,67 @@ impl CGame {
         true
     }
 
+    /// Точная ветвь `CBaseMagicPhalanx::Attack` для `CBuild/CCityGate`.
+    /// Оригинальный virtual `GetLevel` обеих построек возвращает `1`; затем
+    /// снаряд передаёт рассчитанную атаку общему `CFightDefense::Defense`.
+    fn apply_base_magic_to_stationary_build<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        phalanx: &SummonedSkillShape,
+        target: ShapeIdentity,
+        region_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        if !matches!(phalanx, SummonedSkillShape::BaseMagic(_)) {
+            return false;
+        }
+        let master = phalanx.master();
+        if master.master_type != PLAYER_TYPE
+            || !self.stationary_build_attackable_by_player(
+                master.master_id,
+                region_id,
+                target,
+            )
+        {
+            return false;
+        }
+        let Some(snapshot) = self.stationary_build_combat_snapshot(region_id, target) else {
+            return false;
+        };
+        if snapshot.hp == 0 {
+            return false;
+        }
+        let Some(view) = self
+            .find_region(region_id)
+            .and_then(|owner| owner.stationary_shape_view(target))
+        else {
+            return false;
+        };
+        let Some((mut attack, attacker, occupation, _)) =
+            self.calculate_summoned_skill_attack(phalanx, 1)
+        else {
+            return true;
+        };
+        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+        defend_build_base_attack(
+            &mut attack,
+            attacker,
+            occupation,
+            snapshot.defense,
+            snapshot.element_resistance,
+            &self.globe_setup,
+            &mut random,
+        );
+        self.apply_defended_player_attack_to_stationary_build(
+            master.master_id,
+            region_id,
+            target,
+            view.tile_x,
+            view.tile_y,
+            &attack,
+            runtime,
+        )
+    }
+
     fn run_owned_skill_phalanx<Runtime: GameMainLoopRuntime>(
         &mut self,
         region_id: i32,
@@ -45672,6 +45835,14 @@ impl CGame {
                         sampled_at_ms,
                         runtime,
                     ),
+                    kind if kind == BUILD_OBJECT_TYPE as i32
+                        || kind == CITY_GATE_OBJECT_TYPE as i32 => self
+                        .apply_base_magic_to_stationary_build(
+                            &phalanx,
+                            target,
+                            region_id,
+                            runtime,
+                        ),
                     _ => false,
                 };
             }

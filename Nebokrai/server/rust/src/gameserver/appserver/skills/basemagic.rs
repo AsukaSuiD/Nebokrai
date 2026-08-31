@@ -13,14 +13,18 @@
 //! восстановления. Все
 //! достигнутые перегрузки, проверки и визуальные пакеты реализованы этим
 //! владельцем; `CGame` оставляет только доступ к региону, владельцам целей и
-//! фактическую доставку. Target identity использует canonical region type
-//! монстра `600`; значение `100` относится к другой legacy enum и не является
-//! `CShape::GetType`.
+//! фактическую доставку. Общий `CState::GetSufferer` разрешает типы player
+//! `400`, NPC `500`, monster `600`, build `1100` и gate `1200`; NPC сразу
+//! отклоняется как мёртвый, а стационарные цели проходят тот же region-owned
+//! combat lifecycle. Значение `100` относится к другой legacy enum и не
+//! является `CShape::GetType`.
 
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagicphalanx::CBaseMagicPhalanx;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::build::BUILD_OBJECT_TYPE;
+use crate::gameserver::appserver::citygate::CITY_GATE_OBJECT_TYPE;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -31,6 +35,7 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const PLAYER_TYPE: i32 = 400;
+const NPC_TYPE: i32 = 500;
 const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const BASE_MAGIC_SKILL_ID: u32 = 3;
@@ -94,6 +99,23 @@ impl BaseMagicExecutionState {
 
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> {
         &mut self.kernel
+    }
+}
+
+fn base_magic_target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
+    match target.object_type {
+        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
+        // Точный `CNpc::LossHP` всегда возвращает ноль: его combat HP равен
+        // нулю, поэтому `CMoveShape::IsDied` отклоняет NPC до создания снаряда.
+        NPC_TYPE => true,
+        MONSTER_TYPE => game
+            .find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(target.id))
+            .is_none_or(|monster| monster.hit_points() == 0),
+        kind if kind == BUILD_OBJECT_TYPE as i32 || kind == CITY_GATE_OBJECT_TYPE as i32 => game
+            .stationary_build_combat_snapshot(region_id, target)
+            .is_none_or(|build| build.hp == 0),
+        _ => true,
     }
 }
 
@@ -209,14 +231,7 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0290");
             return rejected();
         }
-        let target_dead = match target.object_type {
-            PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-            MONSTER_TYPE => game
-                .find_region(region_id)
-                .and_then(|owner| owner.base().find_monster_by_id(target.id))
-                .is_none_or(|monster| monster.hit_points() == 0),
-            _ => true,
-        };
+        let target_dead = base_magic_target_dead(game, region_id, target);
         if target_dead {
             game.send_base_magic_failure(player_id, 10);
             game.send_skill_system_info(player_id, b"GS0285");
@@ -277,14 +292,7 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
         finish_player_base_magic(game, player_id, player_ai, runtime);
         return rejected();
     };
-    let target_dead = match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-        MONSTER_TYPE => game
-            .find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target.id))
-            .is_none_or(|monster| monster.hit_points() == 0),
-        _ => true,
-    };
+    let target_dead = base_magic_target_dead(game, region_id, target);
     if target_dead {
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
