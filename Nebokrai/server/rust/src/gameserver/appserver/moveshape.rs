@@ -151,7 +151,9 @@ use crate::gameserver::appserver::skills::spiderwebstate::{
 use crate::gameserver::appserver::skills::sealstate::{
     SEAL_STATE_BYTES, SEAL_STATE_ID, SealState,
 };
-use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
+use crate::gameserver::appserver::skills::swordshipstate::{
+    SWORDSHIP_STATE_BYTES, SwordshipState,
+};
 use crate::gameserver::appserver::skills::strikestate::{
     STRIKE_STATE_BYTES, STRIKE_STATE_ID, StrikeState,
 };
@@ -1238,6 +1240,14 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(RAGE_BREAK_STATE_ID))
             .and_then(|offset| RageBreakState::decode(&states, offset).ok());
+        self.swordship_states = known_offsets
+            .iter()
+            .copied()
+            .filter(|offset| {
+                read_u32(&states, *offset).is_some_and(super::skills::swordship::is_swordship_skill)
+            })
+            .filter_map(|offset| SwordshipState::decode(&states, offset).ok())
+            .collect();
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -1402,6 +1412,7 @@ impl CMoveShape {
         self.leaf_cut_2_state = None;
         self.leaf_cut_3_state = None;
         self.kerosene_state = None;
+        self.swordship_states.clear();
         self.strike_states.clear();
         self.wuxing_states.clear();
         self.automatic_restore_states.clear();
@@ -2091,6 +2102,8 @@ impl CMoveShape {
         &mut self,
         state: SwordshipState,
     ) -> Option<SwordshipState> {
+        self.remove_serialized_state_record(state.skill_id(), SWORDSHIP_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
         if let Some(slot) = self
             .swordship_states
             .iter_mut()
@@ -4671,6 +4684,10 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
             LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
             KEROSENE_STATE_ID => KEROSENE_STATE_BYTES,
+            SWORDSHIP_SKILL_ID
+            | SWORDSHIP_2_SKILL_ID
+            | SWORDSHIP_3_SKILL_ID
+            | SWORDSHIP_4_SKILL_ID => SWORDSHIP_STATE_BYTES,
             STRIKE_STATE_ID => STRIKE_STATE_BYTES,
             0x353..=0x357 => WUXING_STATE_BYTES,
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
