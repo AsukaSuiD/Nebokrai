@@ -70,7 +70,7 @@ use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GameNetworkInitializationError, ServerRegionOwner,
+    CGame, GameContainerMessageRuntime, GameNetworkInitializationError, ServerRegionOwner,
     LegacyFormatArgument, colored_player_notice_message, format_legacy_mixed,
     format_legacy_text_fields,
     game_tick_milliseconds,
@@ -676,7 +676,7 @@ pub(crate) fn dispatch_server_message<Context>(
     mut now_ms: impl FnMut(&mut Context) -> u32,
 ) -> Option<Result<(), GameServerMessageError>>
 where
-    Context: GameMainLoopRuntime,
+    Context: GameContainerMessageRuntime,
 {
     if message.message_type() == WORLD_SERVER_CLOSED {
         add_game_log_text(b"WorldServer closed");

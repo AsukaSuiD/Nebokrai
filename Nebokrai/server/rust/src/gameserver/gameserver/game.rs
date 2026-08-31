@@ -18123,7 +18123,7 @@ impl CGame {
     /// владеет validation/script/map/spatial и delayed-fight timestamp; JJC
     /// остаётся отдельным historical owner-ом. Вопреки прежнему adapter-у
     /// original `OnLost` не исключает игрока из команды.
-    pub(crate) fn on_player_lost<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn on_player_lost<Runtime: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
@@ -18245,7 +18245,7 @@ impl CGame {
         Some(removal)
     }
 
-    fn drop_particular_goods_on_player_lost<Runtime: GameMainLoopRuntime>(
+    fn drop_particular_goods_on_player_lost<Runtime: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
@@ -18409,7 +18409,7 @@ impl CGame {
     /// session owner-у; затем legacy silence, `0xBF504`, virtual return point
     /// и необязательный World `0x5FB02` исполняются в исходном порядке.
     /// Changing-server ветвь намеренно не сохраняется.
-    fn finish_player_exit<Runtime: GameMainLoopRuntime>(
+    fn finish_player_exit<Runtime: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
         changing_server: bool,
@@ -18467,7 +18467,7 @@ impl CGame {
         );
     }
 
-    fn apply_player_exit_return_point<Runtime: GameMainLoopRuntime>(
+    fn apply_player_exit_return_point<Runtime: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
         runtime: &mut Runtime,
