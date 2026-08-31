@@ -18868,6 +18868,12 @@ impl CGame {
                     .or_default();
                 team_id
             });
+        let interrupted_war_soul_skill = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.player_ai_mut().cancel_active_battle_fairy_skill());
+        if let Some(dispatch) = interrupted_war_soul_skill {
+            self.send_battle_fairy_skill_end(player_id, dispatch);
+        }
         let war_soul = self
             .find_player_mut(player_id)
             .and_then(CPlayer::prepare_war_soul_region_entry);
@@ -18905,6 +18911,7 @@ impl CGame {
             player_id,
             region_id,
             ?team_snapshot_queued,
+            interrupted_war_soul_skill = interrupted_war_soul_skill.is_some(),
             ?war_soul_delivery,
             "завершён хвост OnEnterRegion игрока"
         );

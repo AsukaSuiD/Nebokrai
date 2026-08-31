@@ -10545,8 +10545,9 @@ impl CPlayer {
         }
     }
 
-    /// Active WarSoul tail `CPlayer::OnEnterRegion`: обе visual float
-    /// координаты и spatial point синхронно возвращаются к клетке хозяина.
+    /// Active WarSoul tail `CPlayer::OnEnterRegion`: после выполненного
+    /// координатором `SetWarSoulXY → End(0)` обе visual float координаты и
+    /// spatial point синхронно возвращаются к клетке хозяина.
     pub(crate) fn prepare_war_soul_region_entry(
         &mut self,
     ) -> Option<(BattleFairyWarSoulAction, u32, u32)> {
