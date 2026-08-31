@@ -58,7 +58,7 @@ use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarPhaseContext,
 };
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
-use super::super::servercityregion::CityRegionContext;
+use super::super::servercityregion::CityGateRuntimeContext;
 use super::super::serverregion::{
     RegionMembershipBlock, RegionTaxSessionKind, ServerRegionMonsterContext,
     ServerRegionNpcSetup,
@@ -68,8 +68,9 @@ use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameContainerMessageRuntime, GameWarRegionHandle,
-    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
-    format_legacy_text_fields, game_tick_milliseconds,
+    LegacyFormatArgument, ScriptRegionChangeContext, ServerRegionOwner,
+    colored_player_notice_message, format_legacy_mixed, format_legacy_text_fields,
+    game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
@@ -77,7 +78,8 @@ use crate::public::tools::{add_game_error_log_text, add_game_log_text, put_strin
 use tracing::trace;
 
 pub(crate) trait GameOrganizingWarRuntime:
-    CityRegionContext
+    WarRegionContext
+    + CityGateRuntimeContext
     + RegionRandomContext
     + ScriptRegionChangeContext
     + GameContainerMessageRuntime
@@ -1695,6 +1697,18 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
         put_string_to_file("war", &text);
     }
 
+    fn write_city_war_log(&self, string_id: &str, war_number: i32, region_name: &str) {
+        let text = format_legacy_mixed(
+            self.game.get_string_by_id(string_id.as_bytes()),
+            &[
+                LegacyFormatArgument::Signed(war_number),
+                LegacyFormatArgument::Bytes(region_name.as_bytes()),
+            ],
+            0xff,
+        );
+        put_string_to_file("war", &text);
+    }
+
     fn lookup_region_then_proxy(&self, region_id: i32) -> Option<GameWarRegionHandle> {
         if self.game.find_region(region_id).is_some() {
             Some(GameWarRegionHandle::Local(region_id))
@@ -2064,7 +2078,12 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                         self.write_village_war_log(effect.string_id, &effect.region_name);
                     }
                     ServerRegionOwner::City(region) => {
-                        region.on_war_declare(war_number, self.runtime)
+                        let effect = region.on_war_declare(war_number);
+                        self.write_city_war_log(
+                            effect.string_id,
+                            effect.war_number,
+                            &effect.region_name,
+                        );
                     }
                     ServerRegionOwner::Nation(region) => region.war.on_war_declare(war_number),
                     ServerRegionOwner::GodsBattle(region) => region.war.on_war_declare(war_number),
@@ -2093,7 +2112,13 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                         }
                     }
                     ServerRegionOwner::City(region) => {
-                        region.on_war_start(war_number, self.runtime)
+                        if let Some(effect) = region.on_war_start(war_number) {
+                            self.write_city_war_log(
+                                effect.string_id,
+                                effect.war_number,
+                                &effect.region_name,
+                            );
+                        }
                     }
                     region => region.base_mut().on_war_start(war_number),
                 }
@@ -2140,8 +2165,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                         victory.union_id,
                     );
                 }
-                CityRegionContext::write_war_log(
-                    self.runtime,
+                self.write_city_war_log(
                     effect.log_string_id,
                     effect.war_number,
                     &effect.region_name,
@@ -2169,7 +2193,15 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     return;
                 };
                 match region {
-                    ServerRegionOwner::City(region) => region.on_war_end(war_number, self.runtime),
+                    ServerRegionOwner::City(region) => {
+                        if let Some(effect) = region.on_war_end(war_number, self.runtime) {
+                            self.write_city_war_log(
+                                effect.string_id,
+                                effect.war_number,
+                                &effect.region_name,
+                            );
+                        }
+                    }
                     ServerRegionOwner::Nation(region) => region.war.on_war_end(war_number),
                     ServerRegionOwner::GodsBattle(region) => region.war.on_war_end(war_number),
                     region => region.base_mut().on_war_end(war_number),
@@ -2190,7 +2222,15 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     return;
                 };
                 match region {
-                    ServerRegionOwner::City(region) => region.on_war_mass(war_number, self.runtime),
+                    ServerRegionOwner::City(region) => {
+                        if let Some(effect) = region.on_war_mass(war_number) {
+                            self.write_city_war_log(
+                                effect.string_id,
+                                effect.war_number,
+                                &effect.region_name,
+                            );
+                        }
+                    }
                     region => region.base_mut().on_war_mass(war_number),
                 }
             }

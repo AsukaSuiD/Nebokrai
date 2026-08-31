@@ -756,7 +756,7 @@ use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use crate::gameserver::appserver::servercityregion::{
-    CServerCityRegion, CityGateRuntimeContext, CityGuardRefreshTargets, CityRegionContext,
+    CServerCityRegion, CityGateRuntimeContext, CityGuardRefreshTargets,
     CityReturnPointContext, CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
@@ -46162,9 +46162,7 @@ impl CGame {
         _war_number: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: CityRegionContext
-            + RegionRandomContext
-            + ScriptRegionChangeContext,
+        Runtime: CityGateRuntimeContext + RegionRandomContext + ScriptRegionChangeContext,
     {
         let Some(owner) = self.take_region_owner(region_id) else {
             return;

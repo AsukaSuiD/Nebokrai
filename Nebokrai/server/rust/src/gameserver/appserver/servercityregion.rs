@@ -229,17 +229,19 @@ pub(crate) enum CityEntryError {
     Cell(RegionCellAccessBlock),
 }
 
-pub(crate) trait CityRegionContext: WarRegionContext + CityGateRuntimeContext {
-    /// Пишет localized template в канал `war` с аргументами `(war, region name)`.
-    fn write_war_log(&mut self, string_id: &'static str, war_number: i32, region_name: &str);
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CityVictoryUpdate {
     pub(crate) war_number: i32,
     pub(crate) region_id: i32,
     pub(crate) faction_id: i32,
     pub(crate) union_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CityWarLogEffect {
+    pub(crate) string_id: &'static str,
+    pub(crate) war_number: i32,
+    pub(crate) region_name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -479,38 +481,38 @@ impl CServerCityRegion {
         }
     }
 
-    pub(crate) fn on_war_declare<Context: CityRegionContext>(
-        &mut self,
-        war_number: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn on_war_declare(&mut self, war_number: i32) -> CityWarLogEffect {
         self.war.on_war_declare(war_number);
         self.defence_side_faction_id = self.war.base.param.owned_faction_id;
-        context.write_war_log("GS0221", war_number, &self.war.base.name);
+        CityWarLogEffect {
+            string_id: "GS0221",
+            war_number,
+            region_name: self.war.base.name.clone(),
+        }
     }
 
-    pub(crate) fn on_war_start<Context: CityRegionContext>(
-        &mut self,
-        war_number: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn on_war_start(&mut self, war_number: i32) -> Option<CityWarLogEffect> {
         if self.war.base.war_number != war_number {
-            return;
+            return None;
         }
         self.war.base.on_war_start(war_number);
-        context.write_war_log("GS0220", war_number, &self.war.base.name);
+        Some(CityWarLogEffect {
+            string_id: "GS0220",
+            war_number,
+            region_name: self.war.base.name.clone(),
+        })
     }
 
-    pub(crate) fn on_war_mass<Context: CityRegionContext>(
-        &mut self,
-        war_number: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn on_war_mass(&mut self, war_number: i32) -> Option<CityWarLogEffect> {
         if self.war.base.war_number != war_number {
-            return;
+            return None;
         }
         self.war.base.on_war_mass(war_number);
-        context.write_war_log("GS0222", war_number, &self.war.base.name);
+        Some(CityWarLogEffect {
+            string_id: "GS0222",
+            war_number,
+            region_name: self.war.base.name.clone(),
+        })
     }
 
     pub(crate) fn on_war_time_out(&mut self, war_number: i32) -> Option<CityWarTimeoutEffect> {
@@ -544,17 +546,24 @@ impl CServerCityRegion {
         })
     }
 
-    pub(crate) fn on_war_end<Context: CityRegionContext>(
+    pub(crate) fn on_war_end<Context>(
         &mut self,
         war_number: i32,
         context: &mut Context,
-    ) {
+    ) -> Option<CityWarLogEffect>
+    where
+        Context: WarRegionContext + CityGateRuntimeContext,
+    {
         if self.war.base.war_number != war_number || self.war.base.city_state == 0 {
-            return;
+            return None;
         }
         self.war.on_war_end(war_number);
         self.clear_region(context);
-        context.write_war_log("GS0225", war_number, &self.war.base.name);
+        Some(CityWarLogEffect {
+            string_id: "GS0225",
+            war_number,
+            region_name: self.war.base.name.clone(),
+        })
     }
 
     pub(crate) fn refresh_and_close_gates<Context: CityGateRuntimeContext>(
@@ -590,7 +599,10 @@ impl CServerCityRegion {
         })
     }
 
-    pub(crate) fn clear_region<Context: CityRegionContext>(&mut self, context: &mut Context) {
+    pub(crate) fn clear_region<Context>(&mut self, context: &mut Context)
+    where
+        Context: WarRegionContext + CityGateRuntimeContext,
+    {
         self.war.clear_region(context);
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
