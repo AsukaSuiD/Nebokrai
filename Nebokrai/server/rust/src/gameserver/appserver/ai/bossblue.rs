@@ -9,48 +9,19 @@
 //! выбранного навыка остаётся у его skill-owner-а.
 //!
 //! `OnSearchEnemy` подключён к реальному ходу монстра и сохраняет общий проход
-//! игроков, затем питомцев с заменой цели при равной дистанции. `Run`,
+//! игроков, затем питомцев с заменой цели при равной дистанции.
 //! `OnIdle` подключён целиком: после выбора навыка общий владелец бездействия
 //! сохраняет исходный случайный шаг либо ожидание перед поиском цели, а при
 //! отсутствии игроков переводит владельца в сон через общий `CMonsterAI`.
-//! `Run` и `OnSchedule` ниже остаются RAW.
+//! `Run` и `OnSchedule` замкнуты общим monster tick: FIFO-проход сохраняет
+//! target/current skill, `Tracing`, `CheckCast` и отсутствие обычного
+//! attack-speed gate.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp
-
-// ============================================================================
-// FUNCTION: CBossBlue::Run
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp:48
-// RVA: 0x00209340
-// ADDRESS: 00609340
-// PROTOTYPE: AI_EXEC_STATE __thiscall Run(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBossBlue::OnSchedule
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: `execute_owned_monster_base_attack` и
-// `bossidle::schedule_attack_interval` сохраняют достигнутые target/current
-// skill, `Tracing`, `CheckCast` и отсутствие обычного attack-speed gate.
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\bossblue.cpp:93
-// RVA: 0x00209FE0
-// ADDRESS: 00609fe0
-// PROTOTYPE: void __thiscall OnSchedule(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // COMPONENT_VARIANT_END: GameServer
 
