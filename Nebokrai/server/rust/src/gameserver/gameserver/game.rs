@@ -2322,7 +2322,9 @@ pub(crate) trait ScriptRegionChangeContext:
 
 impl<T> ScriptRegionChangeContext for T where T: NationCombatContext + GameContainerMessageRuntime {}
 
-pub(crate) trait GameRegionEnterContext: NationCombatContext + ServerRegionMonsterContext {
+pub(crate) trait GameRegionEnterContext:
+    NationCombatContext + ServerRegionMonsterContext + ServerRegionMembershipContext
+{
     /// Первая часть `CPlayer::OnEnterRegion`: base move-shape, router,
     /// automatic restore и equipment states предшествуют companion spawn.
     fn prepare_changed_player_region_entry(
@@ -2352,7 +2354,7 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext + ServerRegionMonst
 /// recompute получают тот же live runtime в исходном порядке. GoodsAI tree
 /// принадлежит canonical player и заполняется после успешной регистрации.
 pub(crate) trait GamePlayerLoginContext:
-    NationCombatContext + PlayerPropertyContext
+    NationCombatContext + PlayerPropertyContext + ServerRegionMembershipContext
 {
     fn publish_initial_player_client_snapshot(
         &mut self,
@@ -18535,7 +18537,7 @@ impl CGame {
                     context.now_milliseconds()
                 });
             },
-            true,
+            |identity, context| context.move_shape_entered_area(identity),
         );
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
@@ -29708,7 +29710,7 @@ impl CGame {
                     context.now_milliseconds()
                 });
             },
-            true,
+            |identity, context| context.move_shape_entered_area(identity),
         );
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);

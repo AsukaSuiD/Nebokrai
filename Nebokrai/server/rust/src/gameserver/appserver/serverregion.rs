@@ -591,7 +591,7 @@ pub(crate) trait ServerRegionMembershipContext: RegionRandomContext {
     fn move_shape_entered_area(&mut self, identity: ShapeIdentity);
 }
 
-pub(crate) trait ServerRegionNpcSpawnEffectsContext: ServerRegionMembershipContext {
+pub(crate) trait ServerRegionNpcSpawnEffectsContext: RegionRandomContext {
     /// Сохраняет `GS0233` owner-side log при отсутствии свободной позиции.
     fn log_npc_position_failure(&mut self, npc_name: &[u8]);
 }
@@ -601,7 +601,7 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionNpcSpawnEffectsContext {
     fn send_npc_entered_around(&mut self, npc: &CNpc);
 }
 
-pub(crate) trait ServerRegionMonsterSpawnEffectsContext: ServerRegionMembershipContext {
+pub(crate) trait ServerRegionMonsterSpawnEffectsContext: RegionRandomContext {
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32);
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]);
@@ -3587,11 +3587,11 @@ impl CServerRegion {
             now_ms,
             context,
             |_, _, _| {},
-            true,
+            |identity, context| context.move_shape_entered_area(identity),
         )
     }
 
-    fn add_fresh_move_object<Context: ServerRegionMembershipContext>(
+    fn add_fresh_move_object<Context: RegionRandomContext>(
         &mut self,
         shape: &mut CShape,
         facts: ShapeRuntimeFacts,
@@ -3608,11 +3608,11 @@ impl CServerRegion {
             now_ms,
             context,
             |_, _, _| {},
-            false,
+            |_, _| {},
         )
     }
 
-    pub(crate) fn add_object_with_area_entry<Context: ServerRegionMembershipContext>(
+    pub(crate) fn add_object_with_area_entry<Context: RegionRandomContext>(
         &mut self,
         shape: &mut CShape,
         facts: ShapeRuntimeFacts,
@@ -3621,7 +3621,7 @@ impl CServerRegion {
         now_ms: u32,
         context: &mut Context,
         mut before_move_shape_entry: impl FnMut(&mut CServerRegion, usize, &mut Context),
-        notify_move_shape_entry: bool,
+        mut on_move_shape_entry: impl FnMut(ShapeIdentity, &mut Context),
     ) -> Result<(), RegionMembershipBlock> {
         validate_area_span(area_width, area_height)?;
         let mut tile_x = shape
@@ -3670,8 +3670,8 @@ impl CServerRegion {
             shape.set_area_index(Some(area_index));
 
             before_move_shape_entry(self, area_index, context);
-            if facts.is_move_shape && notify_move_shape_entry {
-                context.move_shape_entered_area(identity);
+            if facts.is_move_shape {
+                on_move_shape_entry(identity, context);
             }
         } else {
             self.remove_object(shape, facts)?;
