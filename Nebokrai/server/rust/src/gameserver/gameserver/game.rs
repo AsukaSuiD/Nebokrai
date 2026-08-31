@@ -30155,6 +30155,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_spider_web_state(login_tick_ms);
+        let loaded_god_bless_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_god_bless_state(login_tick_ms);
         let loaded_cure_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30304,6 +30309,21 @@ impl CGame {
                 state,
                 true,
                 || context.now_milliseconds(),
+            );
+        }
+        if let Some(state) = loaded_god_bless_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_god_bless_state_visual(
+                self,
+                region_id,
+                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                x,
+                y,
+                state,
+                true,
+                login_tick_ms,
             );
         }
         if let Some(state) = loaded_cure_state {

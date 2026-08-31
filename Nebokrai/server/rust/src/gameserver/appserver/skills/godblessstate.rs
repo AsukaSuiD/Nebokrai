@@ -5,11 +5,13 @@
 //! прибавками. Игрок сохраняет сужение прибавок до `u16` и ограничение атаки
 //! `INT_MAX`; монстр применяет исходное wrapping-сложение полных `u32`.
 //! `CGame` только координирует независимых владельцев и around-доставку.
-//! Не подключённое DB-восстановление остаётся неизвестной записью legacy codec.
+//! Обе идентичности используют общую 20-байтовую persisted-запись: ID,
+//! remaining time и три прибавки; загрузка активируется при spatial login.
 //! Обе concrete vtable направляют `GetRemainedTime` на точное тело
 //! `0x00601480` с отдельным вторым чтением часов для положительного остатка.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -17,6 +19,7 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
 pub(crate) const GOD_BLESS_STATE_ID: u32 = 0x12f;
+pub(crate) const GOD_BLESS_STATE_BYTES: usize = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GodBlessState {
@@ -33,9 +36,27 @@ impl GodBlessState {
         debug_assert!(matches!(skill_id, GOD_BLESS_STATE_ID | super::godblessstate2::GOD_BLESS_STATE_2_ID));
         Self { skill_id, started_at_ms, keep_time_ms, minimum_attack_gain, maximum_attack_gain, element_gain }
     }
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let skill_id = reader.read_u32()?;
+        if !matches!(skill_id, GOD_BLESS_STATE_ID | super::godblessstate2::GOD_BLESS_STATE_2_ID) {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(skill_id, 0, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?))
+    }
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
     pub(crate) const fn skill_id(self) -> u32 { self.skill_id }
     pub(crate) const fn expired(self, now_ms: u32) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms }
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32 }
+    pub(crate) fn encoded_for_install(self) -> [u8; GOD_BLESS_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; GOD_BLESS_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; GOD_BLESS_STATE_BYTES] {
+        let mut bytes = [0; GOD_BLESS_STATE_BYTES];
+        for (index, value) in [self.skill_id, remaining_time_ms, self.minimum_attack_gain, self.maximum_attack_gain, self.element_gain].into_iter().enumerate() {
+            bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
     pub(crate) fn apply_to_player(self, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
         properties.minimum_attack = properties.minimum_attack.wrapping_add(self.minimum_attack_gain as u16 as u32).min(i32::MAX as u32);
         properties.maximum_attack = properties.maximum_attack.wrapping_add(self.maximum_attack_gain as u16 as u32).min(i32::MAX as u32);

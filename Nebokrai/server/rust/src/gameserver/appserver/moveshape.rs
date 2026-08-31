@@ -160,7 +160,10 @@ use crate::gameserver::appserver::skills::wangshengstate::{
     WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID,
 };
 use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
-use crate::gameserver::appserver::skills::godblessstate::GodBlessState;
+use crate::gameserver::appserver::skills::godblessstate::{
+    GOD_BLESS_STATE_BYTES, GOD_BLESS_STATE_ID, GodBlessState,
+};
+use crate::gameserver::appserver::skills::godblessstate2::GOD_BLESS_STATE_2_ID;
 use crate::gameserver::appserver::skills::soulcollectstate::SoulCollectState;
 use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
@@ -897,6 +900,13 @@ impl CMoveShape {
                 );
             }
         }
+        if let Some(state) = self.god_bless_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1045,6 +1055,16 @@ impl CMoveShape {
         if let Some(state) = self.spider_web_state {
             self.blind_state_order.insert(state.skill_id());
             self.curable_state_order.insert(state.skill_id());
+        }
+        self.god_bless_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset).is_some_and(|id| matches!(id, GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID)))
+            .and_then(|offset| GodBlessState::decode(&states, offset).ok());
+        self.god_bless_state_order = None;
+        if self.god_bless_state.is_some() {
+            self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
+            self.god_bless_state_order = Some(self.reached_property_state_order);
         }
         self.strike_states = known_offsets
             .iter()
@@ -2616,9 +2636,18 @@ impl CMoveShape {
 
     pub(crate) const fn god_bless_state(&self) -> Option<GodBlessState> { self.state_storage.god_bless_state }
     pub(crate) fn replace_god_bless_state(&mut self, state: GodBlessState) -> Option<GodBlessState> {
+        let previous = self.god_bless_state.take();
+        if let Some(previous) = previous { self.remove_serialized_state_record(previous.skill_id(), GOD_BLESS_STATE_BYTES); }
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
         self.god_bless_state_order = Some(self.reached_property_state_order);
-        self.god_bless_state.replace(state)
+        self.god_bless_state = Some(state);
+        previous
+    }
+    pub(crate) fn activate_loaded_god_bless_state(&mut self, now_ms: u32) -> Option<GodBlessState> {
+        let state = self.god_bless_state?.activate_loaded(now_ms);
+        self.god_bless_state = Some(state);
+        Some(state)
     }
     pub(crate) fn take_god_bless_state(&mut self, skill_id: u32) -> Option<GodBlessState> {
         let state = self
@@ -2626,6 +2655,7 @@ impl CMoveShape {
             .filter(|state| state.skill_id() == skill_id)?;
         self.god_bless_state = None;
         self.god_bless_state_order = None;
+        self.remove_serialized_state_record(state.skill_id(), GOD_BLESS_STATE_BYTES);
         Some(state)
     }
     pub(crate) const fn roar_state(&self) -> Option<RoarState> { self.state_storage.roar_state }
@@ -2672,6 +2702,7 @@ impl CMoveShape {
         let state = self.god_bless_state.filter(|state| state.expired(now_ms))?;
         self.god_bless_state = None;
         self.god_bless_state_order = None;
+        self.remove_serialized_state_record(state.skill_id(), GOD_BLESS_STATE_BYTES);
         Some(state)
     }
     pub(crate) const fn soul_collect_state(&self) -> Option<SoulCollectState> {
@@ -4309,6 +4340,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             KNOCK_OUT_STATE_ID => KNOCK_OUT_STATE_BYTES,
             super::skills::spiderweb::SPIDER_WEB_SKILL_ID => SPIDER_WEB_STATE_BYTES,
             SEAL_STATE_ID => SEAL_STATE_BYTES,
+            GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => GOD_BLESS_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID
