@@ -9,7 +9,7 @@
 //! неопределёнными и здесь намеренно нормализованы в ноль; фактический return
 //! `CMessage::Send` сохранён для трёх прямых World-команд.
 
-use super::function::{SCRIPT_FUNCTION_ARGUMENT_CAPACITY, ScriptFunctionRuntime};
+use super::function::SCRIPT_FUNCTION_ARGUMENT_CAPACITY;
 use crate::gameserver::gameserver::game::{CGame, game_wall_time_seconds};
 use crate::nets::netserver::message::CMessage;
 
@@ -23,9 +23,8 @@ pub(crate) enum JjcScriptFunctionOutcome {
     Handled { legacy_return: i32 },
 }
 
-pub(crate) fn dispatch_jjc_script_function<Runtime: ScriptFunctionRuntime>(
+pub(crate) fn dispatch_jjc_script_function(
     game: &mut CGame,
-    runtime: &mut Runtime,
     script_player_id: Option<i32>,
     script_region_id: Option<i32>,
     function_id: i32,
@@ -68,7 +67,7 @@ pub(crate) fn dispatch_jjc_script_function<Runtime: ScriptFunctionRuntime>(
             .unwrap_or_default(),
         4 => {
             if let (Some(region_id), Some(player_id)) = (script_region_id, script_player_id) {
-                let _ = game.end_player_jjc(region_id, player_id, runtime);
+                let _ = game.end_player_jjc(region_id, player_id);
             }
             0
         }

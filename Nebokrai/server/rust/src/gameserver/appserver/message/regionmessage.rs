@@ -107,7 +107,6 @@ where
                                     0,
                                     0,
                                     0,
-                                    context,
                                 );
                                 debug!(player_id, source_region_id, target_region_id, destination_x = destination.x, destination_y = destination.y, "запущена смена связанного региона");
                             }

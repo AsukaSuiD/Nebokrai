@@ -422,7 +422,6 @@ fn dispatch_country_exile_message<Runtime: GameCountryWarRuntime>(
                 0,
                 0,
                 0,
-                runtime,
             );
             tracing::trace!(opcode, country, player_id, ?relocation, "игрок перемещён при изгнании");
         }
@@ -756,7 +755,6 @@ fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
         0,
         0,
         0,
-        runtime,
     );
     let exploit = {
         let player = game
@@ -983,7 +981,7 @@ impl<Runtime: GameCountryWarRuntime> CountryWarMessageContext
     }
 
     fn clear_country_region(&mut self, region: Self::Region) {
-        self.game.clear_country_region(region, self.runtime);
+        self.game.clear_country_region(region);
     }
 
     fn country_region_side_bytes(

@@ -2335,9 +2335,9 @@ impl<T> MonsterDeathContext for T where
 {
 }
 
-/// Exact внешняя поверхность `CPlayer::ChangeRegion`: общий RNG, container
-/// publication и wrapping clock. Nation NPC/monster combat этому owner-у не
-/// принадлежит.
+/// Внешняя поверхность caller-ов смены региона. Пространственный RNG теперь
+/// всегда извлекает и возвращает сам `CGame`; runtime нужен соседним container
+/// publication и wrapping clock, но не выбирает позицию перехода.
 pub(crate) trait PlayerRegionChangeContext:
     RegionRandomContext + GameContainerMessageRuntime + GameClockContext
 {
@@ -2348,8 +2348,8 @@ impl<T> PlayerRegionChangeContext for T where
 {
 }
 
-/// Script-вызовы смены региона дополнительно живут в runtime-е, который
-/// обслуживает соседние Nation combat функции того же dispatcher-а.
+/// Script dispatcher дополнительно объединяет соседние Nation combat ветви;
+/// сама смена региона не расходует их runtime-состояние.
 pub(crate) trait ScriptRegionChangeContext:
     PlayerRegionChangeContext + NationCombatContext
 {
@@ -17259,7 +17259,34 @@ impl CGame {
     /// пространственную позицию и в исходном порядке отправляет сообщения
     /// клиенту и WorldServer.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn change_player_region<Context: PlayerRegionChangeContext>(
+    pub(crate) fn change_player_region(
+        &mut self,
+        player_id: i32,
+        target_region_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        use_goods: i32,
+        range: i32,
+        carriage_distance: i32,
+    ) -> PlayerRegionChangeOutcome {
+        self.with_legacy_random_stream(|game, context| {
+            game.change_player_region_with_context(
+                player_id,
+                target_region_id,
+                tile_x,
+                tile_y,
+                direction,
+                use_goods,
+                range,
+                carriage_distance,
+                context,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn change_player_region_with_context<Context: PlayerRegionChangeContext>(
         &mut self,
         player_id: i32,
         target_region_id: i32,
@@ -17655,12 +17682,9 @@ impl CGame {
     /// ограничиваются его границами. Снимок игроков сохраняет порядок
     /// `CArea::FindShapes(400)`, после чего каждый игрок проходит через общий
     /// владелец `change_player_region`.
-    pub(crate) fn move_script_players_in_rectangles<
-        Context: ScriptRegionChangeContext,
-    >(
+    pub(crate) fn move_script_players_in_rectangles(
         &mut self,
         mut arguments: [i32; 10],
-        context: &mut Context,
     ) -> usize {
         const PARAMETER_ERROR: i32 = 0x09ff_fff9;
 
@@ -17745,18 +17769,18 @@ impl CGame {
         let target_height = target_rectangle[3].wrapping_sub(target_rectangle[1]);
         let mut moved = 0usize;
         for player_id in player_ids {
-            let destination = self.find_region(target_region_id).and_then(|owner| {
-                owner
-                    .base()
-                    .region
-                    .get_random_pos_in_range(
-                        target_rectangle[0],
-                        target_rectangle[1],
-                        target_width,
-                        target_height,
-                        context,
-                    )
-                    .ok()
+            let destination_region = self
+                .find_region(target_region_id)
+                .map(|owner| owner.base().clone());
+            let destination = destination_region.and_then(|region| {
+                self.random_region_position_owned(
+                    &region,
+                    target_rectangle[0],
+                    target_rectangle[1],
+                    target_width,
+                    target_height,
+                )
+                .ok()
             });
             let Some(destination) = destination else {
                 continue;
@@ -17776,7 +17800,6 @@ impl CGame {
                 0,
                 0,
                 0,
-                context,
             );
             moved = moved.wrapping_add(1);
         }
@@ -17954,12 +17977,7 @@ impl CGame {
 
     /// Exact reached `EndPK -> UpdateJJcData -> OnRelive(1) -> BackRegion`.
     /// Сведения матча удаляются лишь после выбора и запуска возврата.
-    pub(crate) fn end_player_jjc<Runtime: ScriptFunctionRuntime>(
-        &mut self,
-        region_id: i32,
-        player_id: i32,
-        runtime: &mut Runtime,
-    ) -> bool {
+    pub(crate) fn end_player_jjc(&mut self, region_id: i32, player_id: i32) -> bool {
         let (region_min, region_max, _, buff_id) = self.globe_setup.jjc_game_config();
         let Some(player) = self.players.get_mut(&player_id) else {
             tracing::trace!(player_id, region_id, "завершение JJC пропущено: игрок отсутствует");
@@ -17980,7 +17998,7 @@ impl CGame {
             .get(&player_id)
             .is_some_and(|player| CMoveShape::is_died(player.health()));
         if relived {
-            self.relive_player(player_id, 1, runtime);
+            self.relive_player(player_id, 1);
         }
 
         let return_facts = self.players.get(&player_id).and_then(|player| {
@@ -18011,7 +18029,6 @@ impl CGame {
                 0,
                 0,
                 0,
-                runtime,
             )
         });
         self.jjc_system.finish_pk(region_id, player_id);
@@ -18028,12 +18045,7 @@ impl CGame {
         true
     }
 
-    pub(crate) fn jjc_start_player<Runtime: PlayerRegionChangeContext>(
-        &mut self,
-        region_id: i32,
-        player_id: i32,
-        runtime: &mut Runtime,
-    ) -> bool {
+    pub(crate) fn jjc_start_player(&mut self, region_id: i32, player_id: i32) -> bool {
         let (_, _, _, buff_id) = self.globe_setup.jjc_game_config();
         let direction = {
             let Some(player) = self.players.get_mut(&player_id) else {
@@ -18044,7 +18056,7 @@ impl CGame {
             player.shape().get_direction()
         };
         let _ =
-            self.change_player_region(player_id, region_id, -1, -1, direction, 0, 0, 0, runtime);
+            self.change_player_region(player_id, region_id, -1, -1, direction, 0, 0, 0);
         true
     }
 
@@ -18415,7 +18427,9 @@ impl CGame {
         let Some(owner) = self.take_region_owner(region_id) else {
             return false;
         };
-        let position = owner.base().region.get_random_pos(context);
+        let position = self.with_legacy_random_stream(|_, random| {
+            owner.base().region.get_random_pos(random)
+        });
         self.restore_region_owner(owner);
         let Ok(position) = position else {
             return false;
@@ -18429,7 +18443,6 @@ impl CGame {
             0,
             0,
             0,
-            context,
         )
         .succeeded()
     }
@@ -18462,13 +18475,15 @@ impl CGame {
         let mut x = point.left.wrapping_add(point.right.wrapping_sub(point.left) / 2);
         let mut y = point.top.wrapping_add(point.bottom.wrapping_sub(point.top) / 2);
         if let Some(owner) = self.take_region_owner(point.region_id) {
-            let position = owner.base().region.get_random_pos_in_range(
-                point.left,
-                point.top,
-                point.right.wrapping_sub(point.left),
-                point.bottom.wrapping_sub(point.top),
-                context,
-            );
+            let position = self.with_legacy_random_stream(|_, random| {
+                owner.base().region.get_random_pos_in_range(
+                    point.left,
+                    point.top,
+                    point.right.wrapping_sub(point.left),
+                    point.bottom.wrapping_sub(point.top),
+                    random,
+                )
+            });
             self.restore_region_owner(owner);
             if let Ok(position) = position {
                 x = position.x;
@@ -18484,7 +18499,6 @@ impl CGame {
             0,
             0,
             0,
-            context,
         )
         .succeeded()
     }
@@ -24446,12 +24460,7 @@ impl CGame {
     /// запуск back-stage навыков сохраняется. Очистку спутников, пересчёт
     /// свойств, движение, `OnChangeStates`, состояния покоя и мира, virtual
     /// `GetReturnPoint`, смену региона и client publication исполняет `CGame`.
-    pub(crate) fn relive_player<Context: PlayerReliveContext>(
-        &mut self,
-        player_id: i32,
-        relive_type: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn relive_player(&mut self, player_id: i32, relive_type: i32) {
         let Some(player) = self.find_player(player_id) else {
             tracing::trace!(player_id, relive_type, "игрок для воскрешения не найден");
             return;
@@ -24551,7 +24560,6 @@ impl CGame {
                     0,
                     3,
                     0,
-                    context,
                 )
             });
             let cannot_move_delivery = region_change.as_ref().and_then(|_| {
@@ -24617,13 +24625,16 @@ impl CGame {
         let width = return_point.right.wrapping_sub(return_point.left);
         let height = return_point.bottom.wrapping_sub(return_point.top);
         if width > 0 && height > 0 {
-            if let Some(owner) = self.find_region(return_point.region_id) {
-                match owner.base().region.get_random_pos_in_range(
+            if let Some(region) = self
+                .find_region(return_point.region_id)
+                .map(|owner| owner.base().clone())
+            {
+                match self.random_region_position_owned(
+                    &region,
                     return_point.left,
                     return_point.top,
                     width,
                     height,
-                    context,
                 ) {
                     Ok(position) => {
                         x = position.x;
@@ -24652,7 +24663,6 @@ impl CGame {
             0,
             0,
             0,
-            context,
         );
         let changed_region = region_change.succeeded();
         let answer_delivery = changed_region.then(|| self.send_player_relive_answer(player_id));
@@ -30804,9 +30814,7 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn script_set_region_for_team<
-        Context: ScriptRegionChangeContext,
-    >(
+    pub(crate) fn script_set_region_for_team(
         &mut self,
         player_id: i32,
         mut transfer_type: i32,
@@ -30815,7 +30823,6 @@ impl CGame {
         mut tile_y: i32,
         mut direction: i32,
         mut range: i32,
-        context: &mut Context,
     ) -> i32 {
         if !(0..=3).contains(&transfer_type) {
             transfer_type = 0;
@@ -30909,7 +30916,6 @@ impl CGame {
                     0,
                     range,
                     0,
-                    context,
                 );
             }
         }
@@ -30917,9 +30923,7 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn script_set_team_region<
-        Context: ScriptRegionChangeContext,
-    >(
+    pub(crate) fn script_set_team_region(
         &mut self,
         player_id: i32,
         region_id: i32,
@@ -30928,7 +30932,6 @@ impl CGame {
         mut radius: i32,
         mut direction: i32,
         mut range: i32,
-        context: &mut Context,
     ) {
         if tile_x == SCRIPT_SCALAR_ERROR
             || tile_y == SCRIPT_SCALAR_ERROR
@@ -30992,7 +30995,6 @@ impl CGame {
                 0,
                 range,
                 0,
-                context,
             );
         }
     }
@@ -40379,11 +40381,7 @@ impl CGame {
     /// перемещения; отказ сначала возвращает игрока на три клетки назад, затем
     /// отправляет красное уведомление, а обычный переход использует общий
     /// `ChangeRegion` с исходной дистанцией перевозки.
-    fn on_player_stand_on_switch_point<Runtime: GameMainLoopRuntime>(
-        &mut self,
-        player_id: i32,
-        runtime: &mut Runtime,
-    ) -> Option<()> {
+    fn on_player_stand_on_switch_point(&mut self, player_id: i32) -> Option<()> {
         const NORMAL_SWITCH: i32 = 0;
         const SCRIPT_SWITCH: i32 = 2;
 
@@ -40465,7 +40463,6 @@ impl CGame {
                 0,
                 1,
                 0,
-                runtime,
             );
             let template = self.get_string_by_id(string_id);
             let text = value.map_or_else(
@@ -40500,7 +40497,6 @@ impl CGame {
             0,
             0,
             self.globe_setup.carriage_transport_distance() as i32,
-            runtime,
         );
         tracing::trace!(
             player_id,
@@ -45259,7 +45255,7 @@ impl CGame {
                             let active_move_handled = !ai_hibernated
                                 && player_ai.advance_active_move(runtime.now_milliseconds());
                             if moving_started {
-                                let _ = self.on_player_stand_on_switch_point(player_id, runtime);
+                                let _ = self.on_player_stand_on_switch_point(player_id);
                             }
                             let active_stand_handled = if !ai_hibernated
                                 && !active_move_handled
@@ -45270,7 +45266,7 @@ impl CGame {
                                     player_ai.advance_active_stand(runtime.now_milliseconds());
                                 if standing_started {
                                     let _ =
-                                        self.on_player_stand_on_switch_point(player_id, runtime);
+                                        self.on_player_stand_on_switch_point(player_id);
                                 }
                                 true
                             } else {
@@ -46123,7 +46119,7 @@ impl CGame {
                         }
                         let returned_players = player_ids.len();
                         for player_id in player_ids {
-                            let _ = self.return_region_player(region_id, player_id, runtime);
+                            self.return_region_player(region_id, player_id);
                         }
                         trace_region_ai_pass(
                             region_id,
@@ -46189,13 +46185,7 @@ impl CGame {
     /// Полный country `ClearRegion`: обновляет принадлежащие региону объекты,
     /// затем возвращает исходный ordered snapshot игроков через обычный
     /// `CPlayer::ChangeRegion` owner.
-    pub(crate) fn clear_country_region<Runtime>(
-        &mut self,
-        region_id: i32,
-        runtime: &mut Runtime,
-    ) where
-        Runtime: PlayerRegionChangeContext,
-    {
+    pub(crate) fn clear_country_region(&mut self, region_id: i32) {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
         };
@@ -46226,7 +46216,7 @@ impl CGame {
         };
         self.restore_region_owner(owner);
         for player_id in player_ids {
-            self.return_region_player(region_id, player_id, runtime);
+            self.return_region_player(region_id, player_id);
         }
     }
 
@@ -46490,14 +46480,7 @@ impl CGame {
     /// Полный city `OnClearOtherPlayer`: сначала возвращает всех игроков без
     /// faction либо не из владеющей faction, затем обновляет, закрывает и
     /// публикует ворота в исходном map-order.
-    pub(crate) fn clear_city_other_players<Runtime>(
-        &mut self,
-        region_id: i32,
-        _war_number: i32,
-        runtime: &mut Runtime,
-    ) where
-        Runtime: PlayerRegionChangeContext,
-    {
+    pub(crate) fn clear_city_other_players(&mut self, region_id: i32, _war_number: i32) {
         let Some(owner) = self.take_region_owner(region_id) else {
             return;
         };
@@ -46514,7 +46497,7 @@ impl CGame {
                 player.faction_id() == 0 || player.faction_id() != owner_faction_id
             });
             if should_return {
-                self.return_region_player(region_id, player_id, runtime);
+                self.return_region_player(region_id, player_id);
             }
         }
 
@@ -46659,14 +46642,7 @@ impl CGame {
         self.restore_region_owner(owner);
     }
 
-    fn return_region_player<Runtime>(
-        &mut self,
-        source_region_id: i32,
-        player_id: i32,
-        runtime: &mut Runtime,
-    ) where
-        Runtime: PlayerRegionChangeContext,
-    {
+    fn return_region_player(&mut self, source_region_id: i32, player_id: i32) {
         let Some(player) = self.find_player(player_id) else {
             warn!(target: "miracle_server::gameserver::ai", source_region_id, player_id, "невозможно вернуть отсутствующего игрока из региона");
             return;
@@ -46686,13 +46662,16 @@ impl CGame {
         let mut x = point_value.left.wrapping_add(width / 2);
         let mut y = point_value.top.wrapping_add(height / 2);
         if width > 0 && height > 0 {
-            if let Some(destination) = self.find_region(point_value.region_id) {
-                match destination.base().region.get_random_pos_in_range(
+            if let Some(destination) = self
+                .find_region(point_value.region_id)
+                .map(|owner| owner.base().clone())
+            {
+                match self.random_region_position_owned(
+                    &destination,
                     point_value.left,
                     point_value.top,
                     width,
                     height,
-                    runtime,
                 ) {
                     Ok(position) => {
                         x = position.x;
@@ -46717,7 +46696,6 @@ impl CGame {
             0,
             0,
             0,
-            runtime,
         );
         let changed_region = region_change.succeeded();
         trace!(
@@ -46979,7 +46957,7 @@ impl CGame {
             trace_message_dispatch_success("depot", message_type);
         } else if let Some(result) = dispatch_increment_shop_message(message, self) {
             trace_message_dispatch("increment_shop", message_type, &result);
-        } else if let Some(result) = dispatch_game_jjc_system_message(message, self, runtime) {
+        } else if let Some(result) = dispatch_game_jjc_system_message(message, self) {
             trace_message_dispatch("jjc", message_type, &result);
         } else if let Some(result) = dispatch_increment_shop_billing_message(message, self, runtime)
         {

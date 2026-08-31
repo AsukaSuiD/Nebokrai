@@ -825,7 +825,6 @@ impl<'a> CScript<'a> {
         }
         let dispatch_outcome = match dispatch_jjc_script_function(
             game,
-            runtime,
             self.context.player_id,
             self.context.region_id,
             function_id,

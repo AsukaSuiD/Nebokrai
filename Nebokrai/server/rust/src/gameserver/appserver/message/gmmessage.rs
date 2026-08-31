@@ -316,7 +316,6 @@ pub(crate) fn dispatch_gm_message<Runtime: GameClockContext + ScriptRegionChange
             0,
             0,
             0,
-            runtime,
         );
         trace!(requester_id, target_player_id, region_id, tile_x, tile_y, ?report, "Выполнен перенос игрока командой GM");
         return Some(Ok(()));

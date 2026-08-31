@@ -21,9 +21,10 @@
 //! region spawn owners без прежних monster/spawn callbacks runtime-а.
 //! `0x7FE24` аналогично передаёт полный city player/gate проход `CGame`, не
 //! оставляя возврат игроков внешнему callback-у.
-//! Весь OrganSys runtime ограничен фактическим `CPlayer::ChangeRegion`
-//! контрактом; Nation NPC/monster combat и faction GameSave clock больше не
-//! расширяют dispatcher surface и исполняются concrete owners.
+//! OrganSys больше не получает process RNG: `CPlayer::ChangeRegion`, tax
+//! password и FourNation relocation расходуют единый поток `CGame`. Runtime
+//! остаётся только у достигнутых clock/container контрактов соседних ветвей;
+//! Nation NPC/monster combat исполняют concrete owners.
 //! Обновление списков городских и деревенских contender-ов также читает
 //! faction, публикует `0xBFF29` и меняет `0xBFF28` через canonical `CGame`,
 //! не делегируя эти четыре операции process runtime-у.
@@ -646,7 +647,7 @@ pub(crate) fn dispatch_game_organizing_message<Runtime: GameOrganizingWarRuntime
 
     if matches!(opcode, 0x90122 | 0x90123 | 0x7fe28 | 0x7fe29 | 0x7fe2e) {
         return Some(
-            dispatch_region_tax_message(opcode, message, game, runtime)
+            dispatch_region_tax_message(opcode, message, game)
                 .map_err(GameOrganizingMessageError::RegionTax),
         );
     }
@@ -660,7 +661,7 @@ pub(crate) fn dispatch_game_organizing_message<Runtime: GameOrganizingWarRuntime
 
     if opcode == 0x7fe2a {
         return Some(
-            dispatch_city_gate_response(message, game, runtime)
+            dispatch_city_gate_response(message, game)
                 .map_err(GameOrganizingMessageError::CityGate),
         );
     }
@@ -718,14 +719,14 @@ pub(crate) fn dispatch_game_organizing_message<Runtime: GameOrganizingWarRuntime
         0x7fe3c..=0x7fe3f | 0x7fe41 | 0x7fe43..=0x7fe45
     ) {
         return Some(
-            dispatch_four_nation_phase_message(opcode, message, game, runtime)
+            dispatch_four_nation_phase_message(opcode, message, game)
                 .map_err(GameOrganizingMessageError::Phase),
         );
     }
 
     let mut owners = game.take_war_startup_owners();
     let result = {
-        let mut context = GameOrganizingWarContext { game, runtime };
+        let mut context = GameOrganizingWarContext { game };
         let (payload, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
         if matches!(opcode, 0x7fe35 | 0x7fe36) {
             dispatch_war_faction_update(
@@ -831,11 +832,10 @@ fn dispatch_faction_billboard_response(
     Ok(())
 }
 
-fn dispatch_region_tax_message<Runtime: RegionRandomContext>(
+fn dispatch_region_tax_message(
     opcode: u32,
     message: &mut CMessage,
     game: &mut CGame,
-    runtime: &mut Runtime,
 ) -> Result<(), FactionLifecycleDispatchError> {
     let read_i32 = |message: &mut CMessage, field| {
         message
@@ -884,8 +884,10 @@ fn dispatch_region_tax_message<Runtime: RegionRandomContext>(
             } else {
                 RegionTaxSessionKind::AdjustRate
             };
-            let session_id = game.start_region_tax_session(player_id, region_id, kind, |bound| {
-                runtime.random_below(bound)
+            let session_id = game.with_legacy_random_stream(|game, random| {
+                game.start_region_tax_session(player_id, region_id, kind, |bound| {
+                    random.random_below(bound)
+                })
             });
             trace!(opcode, player_id, region_id, ?session_id, applied = session_id.is_some(), "Запущен налоговый сеанс");
             Ok(())
@@ -941,10 +943,9 @@ fn dispatch_war_application_response(
     Ok(())
 }
 
-fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(
+fn dispatch_city_gate_response(
     message: &mut CMessage,
     game: &mut CGame,
-    _runtime: &mut Runtime,
 ) -> Result<(), FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
@@ -1318,11 +1319,10 @@ fn dispatch_faction_lifecycle_message<Runtime: GameClockContext>(
     }
 }
 
-fn dispatch_four_nation_phase_message<Runtime: GameOrganizingWarRuntime>(
+fn dispatch_four_nation_phase_message(
     opcode: u32,
     message: &mut CMessage,
     game: &mut CGame,
-    runtime: &mut Runtime,
 ) -> Result<(), WarPhaseDispatchError> {
     let (payload, cursor) = message.base_mut().wire_bytes_and_cursor_mut();
     let war_number = read_phase_war_number(payload, cursor)?;
@@ -1342,7 +1342,7 @@ fn dispatch_four_nation_phase_message<Runtime: GameOrganizingWarRuntime>(
     };
     let mut owners = game.take_war_startup_owners();
     let (schedule_found, results) = {
-        let mut context = GameOrganizingWarContext { game, runtime };
+        let mut context = GameOrganizingWarContext { game };
         match opcode {
             0x7fe3c => (
                 owners.four_nation.on_war_start(war_number, &mut context),
@@ -1611,9 +1611,8 @@ fn read_phase_war_number(payload: &[u8], cursor: &mut usize) -> Result<i32, WarP
     Ok(value)
 }
 
-struct GameOrganizingWarContext<'a, Runtime> {
+struct GameOrganizingWarContext<'a> {
     game: &'a mut CGame,
-    runtime: &'a mut Runtime,
 }
 
 struct CityWarEndContext<'a> {
@@ -1697,7 +1696,7 @@ impl WarRegionContext for ContendProjectionContext<'_> {
     }
 }
 
-impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
+impl GameOrganizingWarContext<'_> {
     fn write_village_war_log(&self, string_id: &str, region_name: &str) {
         let text = format_legacy_text_fields(
             self.game.get_string_by_id(string_id.as_bytes()),
@@ -1809,12 +1808,12 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 );
                 continue;
             };
-            let destination = match region.war.base.region.get_random_pos_in_range(
+            let destination = match self.game.random_region_position_owned(
+                &region.war.base,
                 rect.left,
                 rect.top,
                 rect.right.wrapping_sub(rect.left),
                 rect.bottom.wrapping_sub(rect.top),
-                self.runtime,
             ) {
                 Ok(destination) => destination,
                 Err(block) => {
@@ -2234,9 +2233,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
     }
 }
 
-impl<Runtime: GameOrganizingWarRuntime> WarFactionUpdateContext
-    for GameOrganizingWarContext<'_, Runtime>
-{
+impl WarFactionUpdateContext for GameOrganizingWarContext<'_> {
     fn update_attack_city_contend_player(&mut self, region_id: i32, schedules: &CAttackCitySys) {
         self.update_contenders(region_id, ContendSchedule::AttackCity(schedules));
     }
@@ -2246,9 +2243,7 @@ impl<Runtime: GameOrganizingWarRuntime> WarFactionUpdateContext
     }
 }
 
-impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
-    for GameOrganizingWarContext<'_, Runtime>
-{
+impl FourNationPhaseContext for GameOrganizingWarContext<'_> {
     type Region = GameWarRegionHandle;
 
     fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region> {
@@ -2457,9 +2452,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
     }
 }
 
-impl<Runtime: GameOrganizingWarRuntime> AttackCityPhaseContext
-    for GameOrganizingWarContext<'_, Runtime>
-{
+impl AttackCityPhaseContext for GameOrganizingWarContext<'_> {
     type Region = GameWarRegionHandle;
 
     fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region> {
@@ -2494,8 +2487,7 @@ impl<Runtime: GameOrganizingWarRuntime> AttackCityPhaseContext
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        self.game
-            .clear_city_other_players(region_id, war_number, self.runtime);
+        self.game.clear_city_other_players(region_id, war_number);
     }
 
     fn on_refresh_region(&mut self, region: Self::Region, war_number: i32) {
@@ -2516,9 +2508,7 @@ impl<Runtime: GameOrganizingWarRuntime> AttackCityPhaseContext
     }
 }
 
-impl<Runtime: GameOrganizingWarRuntime> VillageWarPhaseContext
-    for GameOrganizingWarContext<'_, Runtime>
-{
+impl VillageWarPhaseContext for GameOrganizingWarContext<'_> {
     type Region = GameWarRegionHandle;
 
     fn find_region_then_proxy(&mut self, region_id: i32) -> Option<Self::Region> {

@@ -5388,7 +5388,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let arguments = std::array::from_fn(|index| {
                 integer_arguments[index].unwrap_or(SCRIPT_INT_PARAMETER_ERROR)
             });
-            let _ = game.move_script_players_in_rectangles(arguments, runtime);
+            let _ = game.move_script_players_in_rectangles(arguments);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_CREATE_MONSTER => {
@@ -5984,7 +5984,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     0,
                     range,
                     0,
-                    runtime,
                 );
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             }
@@ -6023,7 +6022,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     0,
                     0,
                     0,
-                    runtime,
                 );
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
@@ -6746,7 +6744,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     integer(3),
                     integer(4),
                     integer(5),
-                    runtime,
                 ),
             })
         }
@@ -6767,7 +6764,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 integer(3),
                 integer(4),
                 integer(5),
-                runtime,
             );
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
@@ -6819,7 +6815,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 use_goods,
                 range,
                 carriage_distance,
-                runtime,
             );
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
@@ -6832,7 +6827,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
             if let Some(player_id) = script_player_id {
-                game.relive_player(player_id, relive_type, runtime);
+                game.relive_player(player_id, relive_type);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

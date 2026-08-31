@@ -8,7 +8,7 @@
 //! публикуется через `tracing`.
 
 use crate::gameserver::appserver::jjcsystem::JjcInfo;
-use crate::gameserver::gameserver::game::{CGame, PlayerRegionChangeContext};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use tracing::{debug, trace};
 
@@ -37,10 +37,9 @@ fn decode_jjc_info(message: &mut CMessage) -> Option<JjcInfo> {
     })
 }
 
-pub(crate) fn dispatch_game_jjc_system_message<Runtime: PlayerRegionChangeContext>(
+pub(crate) fn dispatch_game_jjc_system_message(
     message: &mut CMessage,
     game: &mut CGame,
-    runtime: &mut Runtime,
 ) -> Option<Result<(), GameJjcSystemMessageError>> {
     let source_type = message.message_type() as u32;
     match source_type {
@@ -71,7 +70,7 @@ pub(crate) fn dispatch_game_jjc_system_message<Runtime: PlayerRegionChangeContex
             let Some(region_id) = message.base_mut().get_long() else {
                 return Some(Err(GameJjcSystemMessageError::MissingField));
             };
-            let changed = game.jjc_start_player(region_id, player_id, runtime);
+            let changed = game.jjc_start_player(region_id, player_id);
             debug!(player_id, region_id, changed, "обработан старт JJC для игрока");
         }
         TIMEOUT => {
