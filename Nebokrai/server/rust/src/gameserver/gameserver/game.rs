@@ -779,9 +779,7 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome, ServerRegionWeather,
     ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
-use crate::gameserver::appserver::servervillageregion::{
-    CServerVillageRegion, VillageRegionContext,
-};
+use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, SymbolCaptureLog, WarContendContext, WarContendEntryContext,
     WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError, WarRegionOwnership,
@@ -46110,7 +46108,7 @@ impl CGame {
         war_number: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: VillageRegionContext,
+        Runtime: WarRegionContext,
     {
         let Some(owner) = self.take_region_owner(region_id) else {
             return;
@@ -46143,7 +46141,7 @@ impl CGame {
             }
         }
 
-        let now_ms = VillageRegionContext::now_millis(runtime);
+        let now_ms = game_tick_milliseconds();
         let Some(owner) = self.take_region_owner(targets.region_id) else {
             return;
         };

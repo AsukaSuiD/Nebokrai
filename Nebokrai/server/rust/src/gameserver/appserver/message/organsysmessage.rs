@@ -63,7 +63,6 @@ use super::super::serverregion::{
     RegionMembershipBlock, RegionTaxSessionKind, ServerRegionMonsterContext,
     ServerRegionNpcSetup,
 };
-use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
@@ -74,12 +73,11 @@ use crate::gameserver::gameserver::game::{
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
-use crate::public::tools::{add_game_error_log_text, add_game_log_text};
+use crate::public::tools::{add_game_error_log_text, add_game_log_text, put_string_to_file};
 use tracing::trace;
 
 pub(crate) trait GameOrganizingWarRuntime:
     CityRegionContext
-    + VillageRegionContext
     + RegionRandomContext
     + ScriptRegionChangeContext
     + GameContainerMessageRuntime
@@ -1688,6 +1686,15 @@ impl WarRegionContext for ContendProjectionContext<'_> {
 }
 
 impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
+    fn write_village_war_log(&self, string_id: &str, region_name: &str) {
+        let text = format_legacy_text_fields(
+            self.game.get_string_by_id(string_id.as_bytes()),
+            &[region_name.as_bytes()],
+            0xff,
+        );
+        put_string_to_file("war", &text);
+    }
+
     fn lookup_region_then_proxy(&self, region_id: i32) -> Option<GameWarRegionHandle> {
         if self.game.find_region(region_id).is_some() {
             Some(GameWarRegionHandle::Local(region_id))
@@ -2053,7 +2060,8 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 };
                 match region {
                     ServerRegionOwner::Village(region) => {
-                        region.on_war_declare(war_number, self.runtime)
+                        let effect = region.on_war_declare(war_number);
+                        self.write_village_war_log(effect.string_id, &effect.region_name);
                     }
                     ServerRegionOwner::City(region) => {
                         region.on_war_declare(war_number, self.runtime)
@@ -2080,7 +2088,9 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                 };
                 match region {
                     ServerRegionOwner::Village(region) => {
-                        region.on_war_start(war_number, self.runtime)
+                        if let Some(effect) = region.on_war_start(war_number) {
+                            self.write_village_war_log(effect.string_id, &effect.region_name);
+                        }
                     }
                     ServerRegionOwner::City(region) => {
                         region.on_war_start(war_number, self.runtime)
@@ -2113,11 +2123,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     effect.region_id,
                     effect.flag_owner_faction_id,
                 );
-                VillageRegionContext::write_war_log(
-                    self.runtime,
-                    "GS0240",
-                    &effect.region_name,
-                );
+                self.write_village_war_log("GS0240", &effect.region_name);
             }
             ServerRegionOwner::City(mut region) => {
                 let effect = region.on_war_time_out(war_number);
@@ -2605,7 +2611,7 @@ impl<Runtime: GameOrganizingWarRuntime> VillageWarPhaseContext
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        let now_ms = VillageRegionContext::now_millis(self.runtime);
+        let now_ms = game_tick_milliseconds();
         if let Some(region) = self.game.find_region_mut(region_id) {
             region
                 .base_mut()

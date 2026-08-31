@@ -44,17 +44,17 @@ pub(crate) trait VillageOwnerContext {
     fn owned_city_faction(&mut self, region: Self::Region) -> i32;
 }
 
-pub(crate) trait VillageRegionContext: WarRegionContext {
-    /// Пишет localized template в канал `war` с аргументом region name.
-    fn write_war_log(&mut self, string_id: &'static str, region_name: &str);
-    fn now_millis(&mut self) -> u32;
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct VillageTimeoutEffect {
     pub(crate) war_number: i32,
     pub(crate) region_id: i32,
     pub(crate) flag_owner_faction_id: i32,
+    pub(crate) region_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VillageWarLogEffect {
+    pub(crate) string_id: &'static str,
     pub(crate) region_name: String,
 }
 
@@ -136,27 +136,25 @@ impl CServerVillageRegion {
         }
     }
 
-    pub(crate) fn on_war_declare<Context: VillageRegionContext>(
-        &mut self,
-        war_number: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn on_war_declare(&mut self, war_number: i32) -> VillageWarLogEffect {
         self.war.on_war_declare(war_number);
         self.flag_owner_faction_id = self.war.base.param.owned_faction_id;
-        context.write_war_log("GS0238", &self.war.base.name);
+        VillageWarLogEffect {
+            string_id: "GS0238",
+            region_name: self.war.base.name.clone(),
+        }
     }
 
-    pub(crate) fn on_war_start<Context: VillageRegionContext>(
-        &mut self,
-        war_number: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn on_war_start(&mut self, war_number: i32) -> Option<VillageWarLogEffect> {
         if self.war.base.war_number != war_number {
-            return;
+            return None;
         }
         self.war.base.on_war_start(war_number);
         self.war.base.country = 0;
-        context.write_war_log("GS0239", &self.war.base.name);
+        Some(VillageWarLogEffect {
+            string_id: "GS0239",
+            region_name: self.war.base.name.clone(),
+        })
     }
 
     pub(crate) fn on_war_time_out(&self, _war_number: i32) -> VillageTimeoutEffect {
