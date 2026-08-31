@@ -5475,6 +5475,7 @@ impl CPlayer {
     }
 
     pub(crate) fn replace_boa_lock_state(&mut self, state: super::skills::boalockstate::BoaLockState) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.replace_boa_lock_state(state) }
+    pub(crate) fn activate_loaded_boa_lock_state(&mut self, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.activate_loaded_boa_lock_state(now_ms) }
     pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_expired_boa_lock_state(now_ms) }
 
     pub(crate) fn pillar_state(&self) -> Option<super::skills::pillarstate::PillarState> {

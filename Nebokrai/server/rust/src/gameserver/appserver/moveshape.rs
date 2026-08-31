@@ -112,7 +112,9 @@ use crate::gameserver::appserver::skills::promotionstate::{
 use crate::gameserver::appserver::skills::knockoutstate::{
     KNOCK_OUT_STATE_BYTES, KNOCK_OUT_STATE_ID, KnockOutState,
 };
-use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
+use crate::gameserver::appserver::skills::boalockstate::{
+    BOA_LOCK_STATE_BYTES, BOA_LOCK_STATE_ID, BoaLockState,
+};
 use crate::gameserver::appserver::skills::blindstate::{
     BLIND_STATE_BYTES, BLIND_STATE_ID, BlindState,
 };
@@ -939,6 +941,13 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        if let Some(state) = self.boa_lock_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1141,6 +1150,11 @@ impl CMoveShape {
         if self.knight_cut_state.is_some() {
             self.curable_state_order.insert(KNIGHT_CUT_STATE_ID);
         }
+        self.boa_lock_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(BOA_LOCK_STATE_ID))
+            .and_then(|offset| BoaLockState::decode(&states, offset).ok());
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2952,8 +2966,25 @@ impl CMoveShape {
         }
     }
 
-    pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> { self.boa_lock_state.replace(state) }
-    pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<BoaLockState> { self.boa_lock_state.filter(|state| state.expired(now_ms))?; self.boa_lock_state.take() }
+    pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> {
+        self.remove_serialized_state_record(state.skill_id(), BOA_LOCK_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
+        self.boa_lock_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_boa_lock_state(&mut self, now_ms: u32) -> Option<BoaLockState> {
+        let state = self.boa_lock_state?.activate_loaded(now_ms);
+        self.boa_lock_state = Some(state);
+        self.set_moveable(false);
+        Some(state)
+    }
+
+    pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<BoaLockState> {
+        self.boa_lock_state.filter(|state| state.expired(now_ms))?;
+        let state = self.boa_lock_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), BOA_LOCK_STATE_BYTES);
+        Some(state)
+    }
 
     pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.pillar_state }
 
@@ -4489,6 +4520,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             DAUB_POISON_STATE_ID => DAUB_POISON_STATE_BYTES,
             BOSS_BLUE_QUAKE_STATE_ID => BOSS_BLUE_QUAKE_STATE_BYTES,
             KNIGHT_CUT_STATE_ID => KNIGHT_CUT_STATE_BYTES,
+            BOA_LOCK_STATE_ID => BOA_LOCK_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

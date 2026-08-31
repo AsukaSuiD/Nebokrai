@@ -1284,6 +1284,7 @@ use crate::gameserver::appserver::skills::blindstate::send_blind_state_visual;
 use crate::gameserver::appserver::skills::spiderwebstate::send_spider_web_state_visual;
 use crate::gameserver::appserver::skills::boalockstate::{
     expire_monster_boa_lock_state, expire_player_boa_lock_state,
+    send_boa_lock_state_visual,
 };
 use crate::gameserver::appserver::skills::snowstorm::{
     cancel_player_snow_storm, complete_player_snow_storm, execute_player_snow_storm,
@@ -30148,6 +30149,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_blind_state(login_tick_ms);
+        let loaded_boa_lock_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_boa_lock_state(login_tick_ms);
         let loaded_knock_out_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30299,6 +30305,21 @@ impl CGame {
                 state,
                 true,
                 || context.now_milliseconds(),
+            );
+        }
+        if let Some(state) = loaded_boa_lock_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_boa_lock_state_visual(
+                self,
+                region_id,
+                player.shape().identity(),
+                x,
+                y,
+                state,
+                true,
+                || login_tick_ms,
             );
         }
         if let Some(state) = loaded_knock_out_state
