@@ -16,6 +16,9 @@
 //! подтверждения приручения. Timestamp попытки атаки принадлежит расписанию
 //! ИИ и не подменяет отдельные reuse-таймеры установленных навыков. Остальные
 //! AI-ветви ниже остаются RAW.
+//! Внешний virtual `Attack(skill, target)` не запускает навык: он только
+//! передаёт identity в `SetTarget`; client-команда и `CPetsControl` проводят
+//! этот контракт через ordered список питомцев игрока.
 
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
@@ -486,7 +489,9 @@ pub(crate) fn approach_attack_range(
 
 // ============================================================================
 // FUNCTION: CMonsterAI::Attack
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// MATERIALIZED: `CServerRegion::set_listed_pets_target` назначает target
+// каждому разрешённому pet AI в canonical порядке списка владельца.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:252

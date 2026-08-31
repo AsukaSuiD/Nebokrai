@@ -2157,17 +2157,34 @@ impl CServerRegion {
         changed
     }
 
-    pub(crate) fn set_owned_pets_target(&mut self, player_id: i32, target: ShapeIdentity) -> usize {
-        if !self.registry.contains(target) {
+    /// Точный `CMoveShape::SetTargetForAllPets`: target обязан разрешаться как
+    /// `CMoveShape`, а питомцы обходятся в порядке canonical `m_vPet` игрока.
+    /// Повторная проверка master-а отсутствует и в исходнике: принадлежность
+    /// выражает сама запись списка, stale/non-monster элементы пропускаются.
+    pub(crate) fn set_listed_pets_target(
+        &mut self,
+        pets: &[super::moveshape::MoveShapePet],
+        target: ShapeIdentity,
+    ) -> usize {
+        if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE | NPC_TYPE)
+            || !self.registry.contains(target)
+        {
             return 0;
         }
         let mut changed = 0usize;
-        self.owned_monsters.for_each_mut(|_, monster| {
-            if monster.is_owned_pet(player_id) {
-                monster.set_pet_target(target);
-                changed = changed.wrapping_add(1);
+        for pet in pets {
+            if pet.object_type != MONSTER_TYPE {
+                continue;
             }
-        });
+            let Some(monster) = self.owned_monsters.get_mut(&pet.id) else {
+                continue;
+            };
+            if monster.active_ai().is_none() {
+                continue;
+            }
+            monster.set_pet_target(target);
+            changed = changed.wrapping_add(1);
+        }
         changed
     }
 

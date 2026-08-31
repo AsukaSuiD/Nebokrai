@@ -17923,14 +17923,16 @@ impl CGame {
         target_type: i32,
         target_id: i32,
     ) -> Option<usize> {
-        let player = self.players.get(&player_id)?;
-        if player.in_changing_server() || player.in_changing_region() {
-            return None;
-        }
-        let region_id = player.server_region_id()?;
+        let (region_id, pets) = {
+            let player = self.players.get(&player_id)?;
+            if player.in_changing_server() || player.in_changing_region() {
+                return None;
+            }
+            (player.server_region_id()?, player.active_pets().to_vec())
+        };
         let mut owner = self.take_region_owner(region_id)?;
-        let changed = owner.base_mut().set_owned_pets_target(
-            player_id,
+        let changed = owner.base_mut().set_listed_pets_target(
+            &pets,
             ShapeIdentity {
                 object_type: target_type,
                 id: target_id,

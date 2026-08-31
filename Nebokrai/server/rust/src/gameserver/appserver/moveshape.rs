@@ -5566,20 +5566,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::SetTargetForAllPets
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2911
-// RVA: 0x000CE790
-// ADDRESS: 004ce790
-// PROTOTYPE: void __thiscall SetTargetForAllPets(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CMoveShape::SetCurrentPetsMode
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
