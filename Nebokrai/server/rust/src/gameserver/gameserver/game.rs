@@ -36888,9 +36888,9 @@ impl CGame {
     }
 
     /// Материализует `OnBeenKilled → OnLoseTarget` перед уже достигнутым
-    /// синхронным `CPlayer::OnDied`. Завершается только начатый обычный навык:
-    /// ожидающая команда остаётся в FIFO до оживления, а независимая очередь
-    /// боевой феи принадлежит отдельной war-soul ветви ИИ.
+    /// синхронным `CPlayer::OnDied`. Начатый обычный навык получает исходный
+    /// `End(1)`; ожидающая команда остаётся в FIFO до оживления, а независимая
+    /// очередь боевой феи принадлежит отдельной war-soul ветви ИИ.
     fn interrupt_active_player_skill_after_death<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -36912,7 +36912,7 @@ impl CGame {
         let materialized_end = self.end_materialized_player_skill(
             player_id,
             current_skill_id,
-            MaterializedSkillEndCause::Interruption,
+            MaterializedSkillEndCause::ClientRequest,
             runtime,
         );
         let interrupted = if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
