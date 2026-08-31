@@ -26,7 +26,8 @@
 //! wire `field_24` не применяется, initial action остаётся `0`, а refresh
 //! меняет только HP до обязательного `0xBF60F`. Gate/flag block применяет
 //! собственный base-region, поэтому startup decoder не требует process-side
-//! build owner-а. Area lookup сохраняет
+//! build owner-а. `ClearRegion` возвращает ordered build publications и
+//! canonical `CGame` отправляет их после возврата owner-а. Area lookup сохраняет
 //! `random(map.size())` и mutating `operator[]`; base fallback теперь замкнут
 //! через `CServerRegion` и `CCountryParam`. `SetEnterPosXY` сохраняет fight-only
 //! gate, same-region comparison, игнорирование random bool и player SetPos;
@@ -71,7 +72,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::build::{
-    BuildBlockUpdate, BuildClientUpdate, BuildInit, BuildRuntimeContext, CBuild,
+    BuildBlockUpdate, BuildClientPublication, BuildClientUpdate, BuildInit, CBuild,
 };
 use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
@@ -188,6 +189,12 @@ impl<T> CountryRegionRuntimeContext for T where
 pub(crate) struct CountryGuardRefreshTargets {
     pub(crate) monster_ids: Vec<i32>,
     pub(crate) spawn_indices: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CountryClearRefreshEffects {
+    pub(crate) guard_targets: CountryGuardRefreshTargets,
+    pub(crate) build_updates: Vec<BuildClientPublication>,
 }
 
 pub(crate) trait CountryReturnPointContext {
@@ -391,20 +398,9 @@ impl CServerCountryRegion {
         }
     }
 
-    pub(crate) fn update_city_gate_to_client<Context: CityGateRuntimeContext>(
-        &self,
-        city_gate_id: i32,
-        camp: i32,
-        context: &mut Context,
-    ) {
-        let Some(gate) = self.gates(camp).and_then(|gates| gates.get(&city_gate_id)) else {
-            return;
-        };
-        update_city_gate_object(self.base.id, gate, context);
-    }
-
-    pub(crate) fn refresh_gates<Context: CityGateRuntimeContext>(&mut self, context: &mut Context) {
+    pub(crate) fn refresh_gates(&mut self) -> Vec<BuildClientPublication> {
         let region_id = self.base.id;
+        let mut updates = Vec::new();
         let defend_ids: Vec<_> = self.defend_gates.keys().copied().collect();
         for gate_id in defend_ids {
             let update = refresh_city_gate_object_state(
@@ -415,13 +411,12 @@ impl CServerCountryRegion {
             if let Some(update) = update {
                 let _legacy_void = self.base.apply_build_block(update);
             }
-            update_city_gate_object(
+            updates.push(city_gate_publication(
                 region_id,
                 self.defend_gates
                     .get(&gate_id)
                     .expect("defend gate не удаляется во время refresh"),
-                context,
-            );
+            ));
         }
         let attack_ids: Vec<_> = self.attack_gates.keys().copied().collect();
         for gate_id in attack_ids {
@@ -433,36 +428,38 @@ impl CServerCountryRegion {
             if let Some(update) = update {
                 let _legacy_void = self.base.apply_build_block(update);
             }
-            update_city_gate_object(
+            updates.push(city_gate_publication(
                 region_id,
                 self.attack_gates
                     .get(&gate_id)
                     .expect("attack gate не удаляется во время refresh"),
-                context,
-            );
+            ));
         }
+        updates
     }
 
     /// Собственная refresh-часть country `ClearRegion`; следующий
     /// `KickOutAllPlayerToReturnPoint` исполняет владеющий картой игроков
     /// `CGame`, чтобы смена региона не уходила во внешний callback.
-    pub(crate) fn refresh_for_clear<Context: CityGateRuntimeContext>(
-        &mut self,
-        context: &mut Context,
-    ) -> CountryGuardRefreshTargets {
-        self.refresh_gates(context);
-        self.refresh_flags(context);
-        self.guard_refresh_targets()
+    pub(crate) fn refresh_for_clear(&mut self) -> CountryClearRefreshEffects {
+        let mut build_updates = self.refresh_gates();
+        build_updates.extend(self.refresh_flags());
+        CountryClearRefreshEffects {
+            guard_targets: self.guard_refresh_targets(),
+            build_updates,
+        }
     }
 
-    pub(crate) fn refresh_flags<Context: BuildRuntimeContext>(&mut self, context: &mut Context) {
+    pub(crate) fn refresh_flags(&mut self) -> Vec<BuildClientPublication> {
         let region_id = self.base.id;
+        let mut updates = Vec::new();
         for flag in self.defend_flags.values_mut() {
-            refresh_country_flag_object(region_id, flag, context);
+            updates.push(refresh_country_flag_object(region_id, flag));
         }
         for flag in self.attack_flags.values_mut() {
-            refresh_country_flag_object(region_id, flag, context);
+            updates.push(refresh_country_flag_object(region_id, flag));
         }
+        updates
     }
 
     pub(crate) fn get_return_point<Context: CountryReturnPointContext>(
@@ -1264,41 +1261,36 @@ fn apply_gate_action(gate: &mut CCityGate, action: u16) -> Option<BuildBlockUpda
     gate.set_action(action)
 }
 
-fn update_city_gate_object<Context: CityGateRuntimeContext>(
-    region_id: i32,
-    gate: &CCityGate,
-    context: &mut Context,
-) {
-    context.send_build_update(
+fn city_gate_publication(region_id: i32, gate: &CCityGate) -> BuildClientPublication {
+    BuildClientPublication {
         region_id,
-        gate.id(),
-        BuildClientUpdate {
+        build_id: gate.id(),
+        update: BuildClientUpdate {
             object_type: gate.object_type(),
             object_id: gate.id() as u32,
             action: gate.action(),
             max_hp: gate.max_hp(),
             hp: gate.hp(),
         },
-    );
+    }
 }
 
-fn refresh_country_flag_object<Context: BuildRuntimeContext>(
+fn refresh_country_flag_object(
     region_id: i32,
     flag: &mut CBuild,
-    context: &mut Context,
-) {
+) -> BuildClientPublication {
     flag.refresh_hp();
-    context.send_build_update(
+    BuildClientPublication {
         region_id,
-        flag.id(),
-        BuildClientUpdate {
+        build_id: flag.id(),
+        update: BuildClientUpdate {
             object_type: flag.object_type(),
             object_id: flag.id() as u32,
             action: flag.action(),
             max_hp: flag.max_hp(),
             hp: flag.hp(),
         },
-    );
+    }
 }
 
 fn read_country_gate_build(

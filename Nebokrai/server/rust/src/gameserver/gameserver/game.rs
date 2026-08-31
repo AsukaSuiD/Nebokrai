@@ -773,8 +773,7 @@ use crate::gameserver::appserver::servercityregion::{
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
-    CountryRegionRuntimeContext, CountryReturnPointContext, CountryReturnPointError,
-    CountrySecurityError,
+    CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
@@ -16166,16 +16165,28 @@ impl CGame {
             .flatten();
         self.restore_region_owner(ServerRegionOwner::City(region));
         if let Some(publication) = publication {
-            self.publish_city_build_update(publication);
+            self.publish_build_update(publication);
         }
         operated
     }
 
-    pub(crate) fn publish_city_build_update(&self, publication: BuildClientPublication) {
-        let Some(ServerRegionOwner::City(region)) = self.find_region(publication.region_id) else {
+    /// Исполняет общий city/country `0xBF60F` после возврата region owner-а:
+    /// canonical build/gate shape определяет spatial audience, typed snapshot
+    /// сохраняет доказанный порядок полей.
+    pub(crate) fn publish_build_update(&self, publication: BuildClientPublication) {
+        let Some(owner) = self.find_region(publication.region_id) else {
             return;
         };
-        let Some(origin) = region.city_gate_move_shape_by_id(publication.build_id) else {
+        let origin = match publication.update.object_type {
+            BUILD_OBJECT_TYPE => owner
+                .country_flag(publication.build_id)
+                .map(CBuild::move_shape),
+            CITY_GATE_OBJECT_TYPE => owner
+                .city_gate(publication.build_id)
+                .map(CCityGate::move_shape),
+            _ => None,
+        };
+        let Some(origin) = origin else {
             return;
         };
         let update = publication.update;
@@ -16186,7 +16197,7 @@ impl CGame {
         message.add_ulong(update.max_hp);
         message.add_ulong(update.hp);
         let delivery = self.send_game_shape_around(
-            &region.war.base,
+            owner.base(),
             origin.shape(),
             None,
             &message,
@@ -16195,7 +16206,7 @@ impl CGame {
             region_id = publication.region_id,
             build_id = publication.build_id,
             ?delivery,
-            "опубликовано состояние городских ворот"
+            "опубликовано состояние постройки региона"
         );
     }
 
@@ -46144,9 +46155,7 @@ impl CGame {
         region_id: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: CountryRegionRuntimeContext
-            + RegionRandomContext
-            + ScriptRegionChangeContext,
+        Runtime: ServerRegionMonsterContext + PlayerRegionChangeContext,
     {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
@@ -46155,13 +46164,17 @@ impl CGame {
             self.restore_region_owner(owner);
             return;
         };
-        let guard_targets = region.refresh_for_clear(runtime);
+        let effects = region.refresh_for_clear();
         self.restore_region_owner(owner);
+
+        for update in effects.build_updates {
+            self.publish_build_update(update);
+        }
 
         if !self.refresh_region_guards(
             region_id,
-            guard_targets.monster_ids,
-            guard_targets.spawn_indices,
+            effects.guard_targets.monster_ids,
+            effects.guard_targets.spawn_indices,
             runtime,
         ) {
             return;
@@ -46481,7 +46494,7 @@ impl CGame {
         let updates = region.refresh_and_close_gates();
         self.restore_region_owner(owner);
         for update in updates {
-            self.publish_city_build_update(update);
+            self.publish_build_update(update);
         }
     }
 

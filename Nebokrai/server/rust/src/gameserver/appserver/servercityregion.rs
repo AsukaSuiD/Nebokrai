@@ -65,7 +65,6 @@ use super::citygate::{CCityGate, CityGateHurtOwnerUpdate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
 use super::monster::CMonster;
-use super::moveshape::CMoveShape;
 use super::npc::CNpc;
 use super::organizingsystem::attackcitysys::{AttackCityMembershipBlock, CAttackCitySys};
 use super::region::{
@@ -685,13 +684,6 @@ impl CServerCityRegion {
                 hp: gate.hp(),
             },
         })
-    }
-
-    pub(crate) fn city_gate_move_shape_by_id(&self, city_gate_id: i32) -> Option<&CMoveShape> {
-        self.city_gates
-            .values()
-            .find(|state| state.gate.id() == city_gate_id)
-            .map(|state| state.gate.move_shape())
     }
 
     pub(crate) fn city_gate_is_close(&self, logical_id: i32) -> bool {

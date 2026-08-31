@@ -2179,7 +2179,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                         .restore_region_owner(ServerRegionOwner::City(city));
                     if let Some(effect) = effect {
                         for update in effect.build_updates {
-                            self.game.publish_city_build_update(update);
+                            self.game.publish_build_update(update);
                         }
                         self.write_city_war_log(
                             effect.log.string_id,
