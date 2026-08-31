@@ -41821,10 +41821,17 @@ impl CGame {
             };
             let player_attacker_found =
                 blow.attacker_type != PLAYER_TYPE || self.find_player(blow.attacker_id).is_some();
-            let faction_war_enemies = blow.attacker_faction_id > 0
+            let faction_war_enemies = blow.attacker_type == PLAYER_TYPE
+                && blow.attacker_faction_id > 0
+                && victim_faction > 0
                 && self
                     .find_player(blow.victim_id)
-                    .is_some_and(|victim| victim.is_enemy_faction_member(blow.attacker_faction_id));
+                    .is_some_and(|victim| {
+                        victim.is_enemy_faction_member(blow.attacker_faction_id)
+                            || self.find_player(blow.attacker_id).is_some_and(|attacker| {
+                                attacker.is_enemy_faction_member(victim_faction)
+                            })
+                    });
             match CPKSys::died_lost_goods(
                 &self.globe_setup,
                 security,
