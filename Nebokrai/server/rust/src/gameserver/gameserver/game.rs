@@ -3150,9 +3150,11 @@ pub(crate) trait PlayerReliveContext:
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
 {
-    fn auto_start_player_passive_skills(&mut self, player: &mut CPlayer);
-    fn player_enter_region_after_relive(&mut self, player: &mut CPlayer);
 }
+
+impl<T> PlayerReliveContext for T where
+    T: RegionRandomContext + GameContainerMessageRuntime + ScriptRegionChangeContext
+{}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GodsBattleNpcLog {
@@ -24333,12 +24335,12 @@ impl CGame {
         })
     }
 
-    /// Полный достигнутый путь `CPlayer::OnRelive`. Только ещё не
-    /// материализованные владельцы пассивных навыков и виртуального
-    /// `OnEnterRegion` остаются обратными вызовами среды; очистку спутников,
-    /// пересчёт свойств, движение, `OnChangeStates`, состояния покоя и мира,
-    /// виртуальный `GetReturnPoint`, смену региона и клиентские сообщения
-    /// исполняют владельцы `CPlayer` и `CGame`.
+    /// Полный достигнутый путь `CPlayer::OnRelive`. Первый
+    /// `AutoStartPassSkill` и следующий virtual `OnEnterRegion(true)` замкнуты
+    /// на тех же canonical player/region owner-ах; поэтому исходный двойной
+    /// запуск back-stage навыков сохраняется. Очистку спутников, пересчёт
+    /// свойств, движение, `OnChangeStates`, состояния покоя и мира, virtual
+    /// `GetReturnPoint`, смену региона и client publication исполняет `CGame`.
     pub(crate) fn relive_player<Context: PlayerReliveContext>(
         &mut self,
         player_id: i32,
@@ -24354,15 +24356,16 @@ impl CGame {
             tracing::trace!(player_id, relive_type, answer_delivery, "игрок уже жив");
             return;
         }
+        let region_id = player.server_region_id().unwrap_or_default();
+        let passive_skills_before_entry = self.begin_player_back_stage_skills(player_id);
         let (cleared_uncreated_pets, cleared_uncreated_carriage) = {
             let player = self
                 .find_player_mut(player_id)
                 .expect("игрок сохранён после синхронной проверки смерти");
-            context.auto_start_player_passive_skills(player);
-            let cleared = player.clear_relive_uncreated_companions();
-            context.player_enter_region_after_relive(player);
-            cleared
+            player.clear_relive_uncreated_companions()
         };
+        self.prepare_changed_player_region_entry(player_id, region_id);
+        self.finish_changed_player_region_entry(player_id, region_id);
         let (combat_property_delivery, tao_zhuang_ran) = self
             .update_player_properties(player_id)
             .expect("игрок сохранён после OnEnterRegion");
@@ -24383,6 +24386,7 @@ impl CGame {
             player_id,
             relive_type,
             ?owned,
+            passive_skills_before_entry,
             combat_property_delivery,
             tao_zhuang_ran,
             states_published = states_published.is_some(),
