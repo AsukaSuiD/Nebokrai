@@ -42318,7 +42318,7 @@ impl CGame {
         Some((canonical_identity, payload))
     }
 
-    fn shape_enter_message(identity: ShapeIdentity, payload: &[u8]) -> Option<CMessage> {
+    pub(crate) fn shape_enter_message(identity: ShapeIdentity, payload: &[u8]) -> Option<CMessage> {
         let mut message = CMessage::new(0x000b_f502);
         message.add_long(identity.object_type);
         message.add_long(identity.id);

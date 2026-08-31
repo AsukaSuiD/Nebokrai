@@ -7,6 +7,8 @@
 //! также последовательность client, World и Billing-отправок.
 //! Region selector `0x0E` берёт тот же legacy RNG у `CGame`, который был
 //! посеян `Init`; process runtime не хранит отдельную startup-последовательность.
+//! Runtime spawn `0x7F80A` здесь только декодируется; region mutation, общий
+//! RNG, city guard tail и spatial entry FIFO замкнуты в `runtimespawn` owner-е.
 //!
 //! Синхронно выполненные мутации и отправки диагностируются через `tracing` в
 //! месте возникновения. Диспетчер возвращает только успех либо типизированную
@@ -830,73 +832,16 @@ where
             } else {
                 Vec::new()
             };
-            let Some(mut owner) = game.take_region_owner(region_id) else {
-                tracing::warn!(kind, region_id, "runtime-создание монстров пропущено: регион отсутствует");
-                return Some(Ok(()));
-            };
-            let range_width = right.wrapping_sub(left);
-            let range_height = bottom.wrapping_sub(top);
-            // Exact case вызывает GetRandomPosInRange один раз до проверки
-            // count и отбрасывает результат, сохраняя расход RNG.
-            let initial_position = owner.base().region.get_random_pos_in_range(
+            game.spawn_runtime_monsters(
+                region_id,
+                &name,
+                requested_count,
                 left,
                 top,
-                range_width,
-                range_height,
-                script_context,
+                right,
+                bottom,
+                &script,
             );
-            let (area_width, area_height) = game.area_dimensions();
-            let mut completed = 0_i32;
-            if initial_position.is_ok() {
-                let mut remaining = requested_count;
-                while remaining > 0 {
-                    let position = match owner.base().region.get_random_pos_in_range(
-                        left,
-                        top,
-                        range_width,
-                        range_height,
-                        script_context,
-                    ) {
-                        Ok(position) => position,
-                        Err(block) => {
-                            tracing::warn!(kind, region_id, requested_count, completed, ?block, "runtime-создание монстров остановлено: позиция недоступна");
-                            break;
-                        }
-                    };
-                    match game.find_monster_property_by_origin_name(&name).cloned() {
-                        None => tracing::warn!(kind, region_id, ?position, name_bytes = name.len(), "runtime-создание монстра пропущено: свойства отсутствуют"),
-                        Some(property) => match owner.base_mut().add_monster(
-                            &property,
-                            position.x,
-                            position.y,
-                            -1,
-                            true,
-                            false,
-                            now_ms(script_context),
-                            area_width,
-                            area_height,
-                            game.skill_factory(),
-                            script_context,
-                        ) {
-                            Ok(monster_id) => {
-                                owner
-                                    .base_mut()
-                                    .find_monster_by_id_mut(monster_id)
-                                    .expect("успешный AddMonster публикует owned monster")
-                                    .set_script_file(&script);
-                                tracing::trace!(kind, region_id, ?position, monster_id, "runtime-монстр создан");
-                            }
-                            Err(block) => {
-                                tracing::warn!(kind, region_id, ?position, ?block, "runtime-монстр не создан");
-                            }
-                        },
-                    }
-                    completed = completed.wrapping_add(1);
-                    remaining = remaining.wrapping_sub(1);
-                }
-            }
-            game.restore_region_owner(owner);
-            tracing::trace!(kind, region_id, requested_count, completed, ?initial_position, name_bytes = name.len(), script_bytes = script.len(), "runtime-создание монстров обработано");
             return Some(Ok(()));
         }
 
@@ -955,20 +900,7 @@ where
             name,
             script,
         };
-        let Some(mut owner) = game.take_region_owner(region_id) else {
-            tracing::warn!(kind, region_id, "runtime-создание NPC пропущено: регион отсутствует");
-            return Some(Ok(()));
-        };
-        let spawn = game.add_region_npc_with_clock(
-            &mut owner,
-            &setup,
-            true,
-            true,
-            script_context,
-            |context| now_ms(context),
-        );
-        game.restore_region_owner(owner);
-        tracing::trace!(kind, region_id, ?setup, ?spawn, "runtime-создание NPC обработано");
+        game.spawn_runtime_npc(region_id, &setup);
         return Some(Ok(()));
     }
     if message.message_type() == MURDERER_UPDATE_RESPONSE {
