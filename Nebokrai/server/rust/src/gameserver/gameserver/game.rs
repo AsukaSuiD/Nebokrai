@@ -41702,8 +41702,9 @@ impl CGame {
     }
 
     /// Разрешает подтверждённый виртуальный клиентский сериализатор формы у
-    /// канонического владельца региона. Достигнуты ground `CGoods`, `CNpc` и
-    /// семейство `SummonedSkillShape`; остальные категории не имитируются.
+    /// канонического владельца региона. Достигнуты ground `CGoods`, `CNpc`,
+    /// `CMonster` и семейство `SummonedSkillShape`; остальные категории не
+    /// имитируются.
     pub(crate) fn serialize_owned_shape_snapshot(
         &self,
         region_id: i32,
@@ -41717,6 +41718,26 @@ impl CGame {
                 return None;
             }
             let payload = npc.encode_client_snapshot(true)?;
+            return Some((canonical_identity, payload));
+        }
+        if identity.object_type == MONSTER_TYPE {
+            let monster = self
+                .find_region(region_id)?
+                .base()
+                .find_monster_by_id(identity.id)?;
+            let canonical_identity = monster.move_shape().shape().identity();
+            if canonical_identity != identity {
+                return None;
+            }
+            let (property, master_name) = self.monster_client_snapshot_context(monster)?;
+            let mut now_milliseconds = now_milliseconds;
+            let now_ms = now_milliseconds();
+            let payload = monster.encode_client_snapshot(
+                property,
+                master_name,
+                now_ms,
+                &mut now_milliseconds,
+            )?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type == GOODS_TYPE {
