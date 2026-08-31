@@ -4,7 +4,8 @@
 //! максимальному HP через `u32`, затем ограничивает результат `i32::MAX`.
 //! Начальный визуальный пакет повторяется при каждом пересчёте свойств;
 //! завершение публикуется при замене или строгом истечении срока. DB-запись
-//! хранит остаток срока и знаковую прибавку максимального HP. Vtable exact EXE
+//! хранит остаток срока и знаковую прибавку максимального HP. Установка и
+//! истечение немедленно пересчитывают canonical maximum HP. Vtable exact EXE
 //! направляет `GetRemainedTime` на общее тело `CBlindState` по `0x005F2CD0`.
 
 use super::hearten::HEARTEN_SKILL_ID;
@@ -122,6 +123,7 @@ pub(crate) fn expire_player_hearten_state(
     };
     send_hearten_state_visual(game, player_id, state, false, || now_ms);
     let _ = game.publish_player_states(player_id);
+    let _ = game.update_player_properties(player_id);
     true
 }
 

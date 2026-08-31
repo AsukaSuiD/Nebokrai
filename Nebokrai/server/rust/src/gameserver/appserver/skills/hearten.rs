@@ -255,6 +255,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         send_hearten_state_visual(game, target_id, state, false, || 0);
     }
     let _ = game.publish_player_states(target_id);
+    let _ = game.update_player_properties(target_id);
     if let Some(state) = player_ai.hearten_mut() {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
