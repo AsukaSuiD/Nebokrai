@@ -41819,7 +41819,7 @@ impl CGame {
             }
             let mut now_milliseconds = now_milliseconds;
             let now_ms = now_milliseconds();
-            let payload = build.encode_client_snapshot(now_ms, &mut now_milliseconds)?;
+            let payload = build.encode_client_snapshot(true, now_ms, &mut now_milliseconds)?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 {
@@ -41830,7 +41830,7 @@ impl CGame {
             }
             let mut now_milliseconds = now_milliseconds;
             let now_ms = now_milliseconds();
-            let payload = gate.encode_client_snapshot(now_ms, &mut now_milliseconds)?;
+            let payload = gate.encode_client_snapshot(true, now_ms, &mut now_milliseconds)?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type != SUMMON_SHAPE_TYPE {

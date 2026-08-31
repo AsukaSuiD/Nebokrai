@@ -179,11 +179,12 @@ impl CCityGate {
 
     pub(crate) fn encode_client_snapshot(
         &self,
+        include_child: bool,
         now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         self.build
-            .encode_client_snapshot(now_ms, timed_state_now_milliseconds)
+            .encode_client_snapshot(include_child, now_ms, timed_state_now_milliseconds)
     }
 }
 

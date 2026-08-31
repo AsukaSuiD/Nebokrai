@@ -242,11 +242,12 @@ impl CBuild {
     /// `CMoveShape`, затем непрерывный 0x18-byte `m_Property` и WORD action.
     pub(crate) fn encode_client_snapshot(
         &self,
+        include_child: bool,
         now_ms: u32,
         timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         let mut payload = self.move_shape.encode_client_snapshot(
-            true,
+            include_child,
             self.hp == 0,
             now_ms,
             timed_state_now_milliseconds,
