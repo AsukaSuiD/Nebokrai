@@ -39692,7 +39692,7 @@ impl CGame {
                     self.end_detached_player_skill(
                         player_id,
                         skill_id,
-                        MaterializedSkillEndCause::Interruption,
+                        MaterializedSkillEndCause::ClientRequest,
                         player_ai,
                         runtime,
                     ) == Some(PlayerSkillEndRuntimeOutcome::Ended)
