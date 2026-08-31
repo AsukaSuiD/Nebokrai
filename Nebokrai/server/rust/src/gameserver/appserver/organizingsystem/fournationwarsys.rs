@@ -134,9 +134,6 @@ pub(crate) trait FourNationPhaseContext {
 }
 
 pub(crate) trait FourNationRegionRuntime {
-    fn add_four_nation_war_end_log(&mut self, war_number: i32);
-    fn add_four_nation_region_log(&mut self, text: &[u8]);
-    fn four_nation_now_millis(&mut self) -> u32;
     fn on_four_nation_declare(
         &mut self,
         region: &mut ServerNationRegion,

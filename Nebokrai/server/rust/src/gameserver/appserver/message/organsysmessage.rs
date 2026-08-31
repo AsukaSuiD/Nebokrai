@@ -68,11 +68,11 @@ use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameContainerMessageRuntime, GameWarRegionHandle,
     ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
-    format_legacy_text_fields,
+    format_legacy_text_fields, game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
-use crate::public::tools::add_game_error_log_text;
+use crate::public::tools::{add_game_error_log_text, add_game_log_text};
 use tracing::trace;
 
 pub(crate) trait GameOrganizingWarRuntime:
@@ -2241,15 +2241,14 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
                 return;
             };
 
-            self.runtime
-                .add_four_nation_region_log(b"ServerNationRegion::OnWarEnd");
+            add_game_log_text(b"ServerNationRegion::OnWarEnd");
             region.war.on_war_end(war_number);
 
             let end = CMessage::new(0xbf819);
             let _end_delivery = end.send_to_region(Some(&region.war.base), None, self.game);
             self.kick_out_four_nation_players(&mut region);
 
-            let awards = region.take_player_war_awards(|| self.runtime.four_nation_now_millis());
+            let awards = region.take_player_war_awards(game_tick_milliseconds);
             for award in awards {
                 let mut elapsed = CMessage::new(0x6031c);
                 elapsed.base_mut().add_long(award.player_id);
@@ -2266,7 +2265,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
                     ],
                     0x7f,
                 );
-                self.runtime.add_four_nation_region_log(&log);
+                add_game_log_text(&log);
 
                 let Some(previous_exploit) = self
                     .game
@@ -2352,7 +2351,12 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
     }
 
     fn add_war_end_log(&mut self, war_number: i32) {
-        self.runtime.add_four_nation_war_end_log(war_number);
+        let log = format_legacy_integer_fields(
+            b"CFourNationWarSys::OnWarEnd,lWarID:%d",
+            &[war_number.to_string()],
+            0xff,
+        );
+        add_game_log_text(&log);
     }
 }
 
