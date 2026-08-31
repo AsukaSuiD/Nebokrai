@@ -711,7 +711,7 @@ use crate::gameserver::appserver::monster::{
 };
 use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
+    CMoveShape, MoveShapeCommandBlock, MoveShapeResolver, UndeadState,
 };
 use crate::gameserver::appserver::build::{
     BUILD_OBJECT_TYPE, BuildClientPublication, CBuild,
@@ -41868,13 +41868,12 @@ impl CGame {
     /// сообщение окружающим,
     /// переставил пространственную принадлежность и поставил событие ожидания
     /// искусственному интеллекту на вычисленную владельцем длительность.
-    pub(crate) fn force_move_player<Context: MoveShapeCommandContext>(
+    pub(crate) fn force_move_player(
         &mut self,
         player_id: i32,
         destination_x: i32,
         destination_y: i32,
         duration_ms: u32,
-        context: &mut Context,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
         let mut player = self.players.remove(&player_id)?;
         let Some(region_id) = player.server_region_id() else {
@@ -41903,7 +41902,7 @@ impl CGame {
                 area_width,
                 area_height,
                 &around,
-                context,
+                game_tick_milliseconds,
             )
         };
         self.restore_region_owner(owner);
@@ -41914,14 +41913,13 @@ impl CGame {
     /// Координирует подтверждённый `ForceMove` навыка между каноническим
     /// владельцем цели, пространством региона, круговой доставкой и AI.
     #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца цели и атомарный порядок ForceMove")]
-    pub(crate) fn force_move_owned_shape<Context: MoveShapeCommandContext>(
+    pub(crate) fn force_move_owned_shape(
         &mut self,
         region: &mut CServerRegion,
         identity: ShapeIdentity,
         destination_x: i32,
         destination_y: i32,
         duration_ms: u32,
-        context: &mut Context,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
         let area_width = self.globe_setup.area_width();
         let area_height = self.globe_setup.area_height();
@@ -41946,7 +41944,7 @@ impl CGame {
                     area_width,
                     area_height,
                     &around,
-                    context,
+                    game_tick_milliseconds,
                 )
             };
             self.players.insert(identity.id, player);
@@ -41974,7 +41972,7 @@ impl CGame {
             area_width,
             area_height,
             &around,
-            context,
+            game_tick_milliseconds,
         )
     }
 

@@ -458,6 +458,13 @@ impl CPlayerAI {
         self.base_ai.begin_active_move(delay_ms, now_ms);
     }
 
+    /// Хвост `CMoveShape::ForceMove`: spatial mutation уже завершена, после
+    /// чего concrete player AI получает ожидание `ASA_STAND` на длительность
+    /// принудительного перемещения.
+    pub(crate) fn begin_forced_stand(&mut self, delay_ms: u32, now_ms: u32) {
+        self.base_ai.begin_active_stand(delay_ms, now_ms);
+    }
+
     pub(crate) fn stop_destination_move(&mut self) {
         self.base_ai.cancel_active_move();
     }

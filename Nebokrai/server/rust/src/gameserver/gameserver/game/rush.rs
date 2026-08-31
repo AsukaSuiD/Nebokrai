@@ -128,7 +128,7 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца состояния и пространственный эффект")]
-    pub(crate) fn apply_rush_control<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn apply_rush_control(
         &mut self,
         region_id: i32,
         target: ShapeIdentity,
@@ -137,7 +137,6 @@ impl CGame {
         destination_y: i32,
         duration_ms: u32,
         now_ms: u32,
-        runtime: &mut Runtime,
     ) -> bool {
         if target.object_type == PLAYER_TYPE {
             if !replace_player_rush_state(self, target.id, state, now_ms) {
@@ -145,7 +144,7 @@ impl CGame {
             }
             let Some(mut owner) = self.take_region_owner(region_id) else { return false };
             let moved = self.force_move_owned_shape(
-                owner.base_mut(), target, destination_x, destination_y, duration_ms, runtime,
+                owner.base_mut(), target, destination_x, destination_y, duration_ms,
             ).is_some();
             self.restore_region_owner(owner);
             return moved;
@@ -156,14 +155,14 @@ impl CGame {
             self, owner.base_mut(), target.id, state, now_ms,
         );
         let moved = installed && self.force_move_owned_shape(
-            owner.base_mut(), target, destination_x, destination_y, duration_ms, runtime,
+            owner.base_mut(), target, destination_x, destination_y, duration_ms,
         ).is_some();
         self.restore_region_owner(owner);
         moved
     }
 
     #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца состояния и пространственный эффект")]
-    pub(crate) fn apply_rush_2_control<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn apply_rush_2_control(
         &mut self,
         region_id: i32,
         target: ShapeIdentity,
@@ -172,13 +171,12 @@ impl CGame {
         destination_y: i32,
         duration_ms: u32,
         now_ms: u32,
-        runtime: &mut Runtime,
     ) -> bool {
         if target.object_type == PLAYER_TYPE {
             if !replace_player_rush_2_state(self, target.id, state, now_ms) { return false }
             let Some(mut owner) = self.take_region_owner(region_id) else { return false };
             let _ = self.force_move_owned_shape(
-                owner.base_mut(), target, destination_x, destination_y, duration_ms, runtime,
+                owner.base_mut(), target, destination_x, destination_y, duration_ms,
             );
             self.restore_region_owner(owner);
             return true;
@@ -188,7 +186,7 @@ impl CGame {
         let installed = replace_monster_rush_2_state(self, owner.base_mut(), target.id, state, now_ms);
         if installed {
             let _ = self.force_move_owned_shape(
-                owner.base_mut(), target, destination_x, destination_y, duration_ms, runtime,
+                owner.base_mut(), target, destination_x, destination_y, duration_ms,
             );
         }
         self.restore_region_owner(owner);

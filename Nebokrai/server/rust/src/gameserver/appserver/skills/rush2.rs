@@ -134,7 +134,6 @@ fn apply_targets<Runtime: GameMainLoopRuntime>(
             destination_y,
             move_speed.wrapping_mul(moved),
             now_ms,
-            runtime,
         );
         if !installed { continue }
         game.apply_owned_skill_contact(master, identity, region_id, contact.clone(), runtime);

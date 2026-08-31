@@ -8,14 +8,13 @@
 use super::*;
 
 impl CGame {
-    pub(crate) fn force_move_thunder_blow_2_target<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn force_move_thunder_blow_2_target(
         &mut self,
         region_id: i32,
         target: ShapeIdentity,
         destination_x: i32,
         destination_y: i32,
         duration_ms: u32,
-        runtime: &mut Runtime,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
         let mut owner = self.take_region_owner(region_id)?;
         let result = self.force_move_owned_shape(
@@ -24,7 +23,6 @@ impl CGame {
             destination_x,
             destination_y,
             duration_ms,
-            runtime,
         );
         self.restore_region_owner(owner);
         result

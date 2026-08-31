@@ -43,7 +43,6 @@ use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 use indexmap::IndexSet;
 
-use super::ai::baseai::{AiShapeAction, CBaseAI};
 use super::chbystate::{CHANGE_BODY_STATE_ID, ChangeBodyMutation, ChangeBodyState};
 use super::exstate::{
     EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind, ExtendedStateMutation,
@@ -489,12 +488,6 @@ pub(crate) enum MoveShapeCommandBlock {
     RegionCell(RegionCellAccessBlock),
     Position(RegionMembershipBlock),
     DetachedPosition(MoveShapePositionBlock),
-}
-
-pub(crate) trait MoveShapeCommandContext {
-    /// Возвращает concrete AI и соответствующий realtime timestamp одним
-    /// snapshot либо `None`, если AI у shape отсутствует.
-    fn ai_with_realtime_ms(&mut self, identity: ShapeIdentity) -> Option<(&mut CBaseAI, u32)>;
 }
 
 pub(crate) trait MoveShapeResolver: ShapeResolver {
@@ -3963,7 +3956,7 @@ impl CMoveShape {
         clippy::too_many_arguments,
         reason = "literal ForceMove сохраняет исходные аргументы и две достигнутые owner-границы"
     )]
-    pub(crate) fn force_move<Context: MoveShapeCommandContext>(
+    pub(crate) fn force_move(
         &mut self,
         server_region: Option<&mut CServerRegion>,
         destination_x: i32,
@@ -3971,7 +3964,6 @@ impl CMoveShape {
         duration_ms: u32,
         facts: MoveShapePositionFacts,
         around: &GameServerAroundRuntime<'_>,
-        context: &mut Context,
     ) -> Result<bool, MoveShapeCommandBlock> {
         let Some(server_region) = server_region else {
             return Ok(false);
@@ -4006,9 +3998,6 @@ impl CMoveShape {
         server_region
             .set_move_shape_tile_position(&mut self.shape, clamped_x, clamped_y, facts)
             .map_err(MoveShapeCommandBlock::Position)?;
-        if let Some((ai, now_ms)) = context.ai_with_realtime_ms(identity) {
-            ai.add_ai_event(AiShapeAction::Stand, duration_ms, 0, now_ms);
-        }
         Ok(true)
     }
 

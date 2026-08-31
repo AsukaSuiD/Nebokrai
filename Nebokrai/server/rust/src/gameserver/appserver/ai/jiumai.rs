@@ -191,7 +191,6 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
         destination.x,
         destination.y,
         0,
-        runtime,
     );
     true
 }

@@ -171,7 +171,7 @@ fn knockback(game: &CGame, region_id: i32, source_x: i32, source_y: i32, target:
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет состояние и ForceMove одной цели")]
-fn apply_target<Runtime: GameMainLoopRuntime>(game: &mut CGame, runtime: &mut Runtime, region_id: i32, player_id: i32, target: Target, state: KnightCutState, destination: (i32, i32, u32), move_speed: u32, now_ms: u32) {
+fn apply_target(game: &mut CGame, region_id: i32, player_id: i32, target: Target, state: KnightCutState, destination: (i32, i32, u32), move_speed: u32, now_ms: u32) {
     let installed = match target.identity.object_type {
         PLAYER_TYPE => replace_player_knight_cut_state(game, target.identity.id, state, now_ms),
         MONSTER_TYPE => {
@@ -183,7 +183,7 @@ fn apply_target<Runtime: GameMainLoopRuntime>(game: &mut CGame, runtime: &mut Ru
     if !installed { return }
     game.enter_player_combat_state(player_id);
     let Some(mut owner) = game.take_region_owner(region_id) else { return };
-    let _ = game.force_move_owned_shape(owner.base_mut(), target.identity, destination.0, destination.1, move_speed.wrapping_mul(destination.2), runtime);
+    let _ = game.force_move_owned_shape(owner.base_mut(), target.identity, destination.0, destination.1, move_speed.wrapping_mul(destination.2));
     game.restore_region_owner(owner);
 }
 
@@ -241,7 +241,7 @@ pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut
         let reduced = raw_duration.wrapping_sub(reank); let duration = if (reduced as i32) < 0 { 0 } else { reduced };
         let Some(destination) = knockback(game, region_id, source_x, source_y, target, back_steps) else { continue };
         let now_ms = runtime.now_milliseconds();
-        apply_target(game, runtime, region_id, player_id, target, KnightCutState::new(now_ms, duration), destination, move_speed, now_ms);
+        apply_target(game, region_id, player_id, target, KnightCutState::new(now_ms, duration), destination, move_speed, now_ms);
     }
     if let Some(execution) = player_ai.knight_cut_mut() { let _ = execution.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_knight_cut(game, player_id, player_ai, runtime); terminal(QueuedSkillExecutionState::Completed)

@@ -202,7 +202,6 @@ pub(crate) fn lose_guard_sword_target<Runtime: GameMainLoopRuntime>(
             destination_x,
             destination_y,
             0,
-            runtime,
         );
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
@@ -255,7 +254,6 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
                 destination.x,
                 destination.y,
                 0,
-                runtime,
             );
         }
         return CitySwordTraceOutcome::Handled;

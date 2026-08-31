@@ -10,7 +10,7 @@ use crate::gameserver::appserver::skills::knockoutstate::{
 };
 
 impl CGame {
-    pub(crate) fn apply_mosou_control<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn apply_mosou_control(
         &mut self,
         region_id: i32,
         target: ShapeIdentity,
@@ -19,7 +19,6 @@ impl CGame {
         destination_y: i32,
         duration_ms: u32,
         now_ms: u32,
-        runtime: &mut Runtime,
     ) -> bool {
         if target.object_type == PLAYER_TYPE {
             if !replace_player_knock_out_state(self, target.id, state, now_ms) {
@@ -27,7 +26,7 @@ impl CGame {
             }
             let Some(mut owner) = self.take_region_owner(region_id) else { return false };
             let moved = self.force_move_owned_shape(
-                owner.base_mut(), target, destination_x, destination_y, duration_ms, runtime,
+                owner.base_mut(), target, destination_x, destination_y, duration_ms,
             ).is_some();
             self.restore_region_owner(owner);
             return moved;
@@ -36,7 +35,7 @@ impl CGame {
         let Some(mut owner) = self.take_region_owner(region_id) else { return false };
         let installed = replace_monster_knock_out_state(self, owner.base_mut(), target.id, state, now_ms);
         let moved = installed && self.force_move_owned_shape(
-            owner.base_mut(), target, destination_x, destination_y, duration_ms, runtime,
+            owner.base_mut(), target, destination_x, destination_y, duration_ms,
         ).is_some();
         self.restore_region_owner(owner);
         moved

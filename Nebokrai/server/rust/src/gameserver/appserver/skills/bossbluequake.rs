@@ -787,7 +787,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             moved = moved.wrapping_add(1);
         }
         let duration_ms = properties.query_property(SKILL_USAGE_TARGET_MOVE_SPEED).wrapping_mul(moved);
-        let _ = game.force_move_owned_shape(region, identity, position.x, position.y, duration_ms, runtime);
+        let _ = game.force_move_owned_shape(region, identity, position.x, position.y, duration_ms);
     }
 }
 

@@ -297,7 +297,7 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
         let state = KnockOutState::new(state_now_ms, persist_ms);
         let _ = game.apply_mosou_control(
             region_id, target, state, destination_x, destination_y,
-            move_speed.wrapping_mul(moved), state_now_ms, runtime,
+            move_speed.wrapping_mul(moved), state_now_ms,
         );
     }
     if let Some(execution) = player_ai.mosou_mut() { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }

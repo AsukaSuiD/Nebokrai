@@ -423,7 +423,6 @@
 use crate::gameserver::appserver::exstate::ExtendedStateKind;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::message::gmmessage::publish_local_online_gm_list;
-use crate::gameserver::appserver::moveshape::MoveShapeCommandContext;
 use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
 use crate::gameserver::appserver::player::{
     CPlayer, PlayerLeiTingThingCountOutcome, PlayerProgress,
@@ -845,7 +844,6 @@ pub(crate) trait ScriptFunctionRuntime:
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
     + ScriptAwardAuthenticationContext
-    + MoveShapeCommandContext
     + ServerRegionMonsterContext
     + PlayerReliveContext
     + MonsterDeathContext
@@ -859,7 +857,6 @@ impl<T> ScriptFunctionRuntime for T where
         + GameContainerMessageRuntime
         + ScriptRegionChangeContext
         + ScriptAwardAuthenticationContext
-        + MoveShapeCommandContext
         + ServerRegionMonsterContext
         + PlayerReliveContext
         + MonsterDeathContext
@@ -6483,7 +6480,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                     .find_player_by_name(target_name)
                     .map(CPlayer::player_id)
             {
-                let _ = game.force_move_player(target_id, x, y, duration_ms as u32, runtime);
+                let _ = game.force_move_player(target_id, x, y, duration_ms as u32);
             }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }

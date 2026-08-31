@@ -37,7 +37,6 @@ impl CGame {
             destination_x,
             destination_y,
             duration_ms,
-            runtime,
         );
         self.restore_region_owner(owner);
         true

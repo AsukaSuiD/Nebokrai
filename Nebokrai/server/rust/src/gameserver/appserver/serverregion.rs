@@ -159,7 +159,7 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::monsterworld::MonsterWorld;
 use super::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionBlock,
+    CMoveShape, MoveShapeCommandBlock, MoveShapePositionBlock,
     MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
 };
 use super::npc::CNpc;
@@ -3850,7 +3850,7 @@ impl CServerRegion {
     /// одновременно отправил пакет, изменил пространственное членство и
     /// поставил исходное ожидание искусственному интеллекту.
     #[allow(clippy::too_many_arguments, reason = "граница сохраняет владельца, геометрию и длительность перемещения")]
-    pub(crate) fn force_move_owned_monster<Context: MoveShapeCommandContext>(
+    pub(crate) fn force_move_owned_monster(
         &mut self,
         monster_id: i32,
         destination_x: i32,
@@ -3860,7 +3860,7 @@ impl CServerRegion {
         area_width: i32,
         area_height: i32,
         around: &GameServerAroundRuntime<'_>,
-        context: &mut Context,
+        now_ms: impl FnOnce() -> u32,
     ) -> Option<Result<bool, MoveShapeCommandBlock>> {
         let mut taken = self.owned_monsters.take(monster_id)?;
         let facts = taken
@@ -3873,8 +3873,12 @@ impl CServerRegion {
             duration_ms,
             facts,
             around,
-            context,
         );
+        if matches!(result, Ok(true)) {
+            taken
+                .monster_mut()
+                .begin_active_ai_stand(duration_ms, now_ms());
+        }
         self.owned_monsters.restore(taken);
         Some(result)
     }

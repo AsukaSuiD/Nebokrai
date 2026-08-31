@@ -334,7 +334,7 @@ use super::goods::cgoodsbaseproperties::{
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::moveshape::{
-    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionFacts,
+    CMoveShape, MoveShapeCommandBlock, MoveShapePositionFacts,
     MoveShapeSkill,
 };
 use super::particularstate::ParticularState;
@@ -6581,7 +6581,7 @@ impl CPlayer {
         self.move_shape.has_state_by_skill_id(state_id)
     }
 
-    pub(crate) fn force_move<Context: MoveShapeCommandContext>(
+    pub(crate) fn force_move(
         &mut self,
         server_region: &mut CServerRegion,
         destination_x: i32,
@@ -6590,18 +6590,21 @@ impl CPlayer {
         area_width: i32,
         area_height: i32,
         around: &GameServerAroundRuntime<'_>,
-        context: &mut Context,
+        now_ms: impl FnOnce() -> u32,
     ) -> Result<bool, MoveShapeCommandBlock> {
         let facts = self.movement_position_facts(area_width, area_height);
-        self.move_shape.force_move(
+        let moved = self.move_shape.force_move(
             Some(server_region),
             destination_x,
             destination_y,
             duration_ms,
             facts,
             around,
-            context,
-        )
+        )?;
+        if moved {
+            self.player_ai.begin_forced_stand(duration_ms, now_ms());
+        }
+        Ok(moved)
     }
 
     /// Клиентский ИИ и сценарные `WalkStep`/`RunStep` используют обычного

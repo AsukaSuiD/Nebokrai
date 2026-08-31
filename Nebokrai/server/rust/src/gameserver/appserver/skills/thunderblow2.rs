@@ -332,7 +332,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
             game, region_id, source_x, source_y, target, target_view.tile_x, target_view.tile_y, back_steps,
         );
         let _ = game.force_move_thunder_blow_2_target(
-            region_id, target, destination_x, destination_y, move_speed.wrapping_mul(moved), runtime,
+            region_id, target, destination_x, destination_y, move_speed.wrapping_mul(moved),
         );
     }
     let visual_target = game.base_magic_target_view(region_id, target).unwrap_or(target_view);
