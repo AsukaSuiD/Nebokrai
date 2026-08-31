@@ -39,27 +39,33 @@ use crate::gameserver::appserver::country::countrywarsys::{
 use crate::gameserver::appserver::goods::cbattlefairyproperty::BattleFairyComposeDecodeError;
 use crate::gameserver::appserver::goods::cgoodsfactory::GoodsFactoryDecodeError;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
+use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::proxyserverregion::{CProxyServerRegion, ProxyRegionDecodeError};
+use crate::gameserver::appserver::region::RegionRandomContext;
 use crate::gameserver::appserver::script::variablelist::GameVariableSnapshotError;
 use crate::gameserver::appserver::servercityregion::{
-    CServerCityRegion, CityRegionDecodeContext, CityRegionDecodeError,
+    CServerCityRegion, CityRegionDecodeError,
 };
 use crate::gameserver::appserver::servercountryregion::{
-    CServerCountryRegion, CountryRegionDecodeContext, CountryRegionDecodeError,
+    CServerCountryRegion, CountryRegionDecodeError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CServerGodsBattleRegion, GodsBattleTopTenDecodeError,
 };
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, ServerRegionDecodeError, ServerRegionNpcSetup, ServerRegionSetupDecodeError,
+    CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
+    ServerRegionMembershipContext, ServerRegionMonsterContext,
+    ServerRegionMonsterEffectsContext, ServerRegionNpcContext, ServerRegionNpcSetup,
+    ServerRegionSetupDecodeError,
 };
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GameNetworkInitializationError, GodsBattleNpcSpawnContext,
-    ServerRegionOwner,
+    CGame, GameMainLoopRuntime, GameNetworkInitializationError, ServerRegionOwner,
     colored_player_notice_message, format_legacy_text_fields,
 };
 use crate::gameserver::gameserver::honorranks::HonorRanksDecodeError;
@@ -2484,9 +2490,74 @@ fn read_start_long(
     Ok(value)
 }
 
-pub(crate) trait InitialRegionStartupContext:
-    CityRegionDecodeContext + CountryRegionDecodeContext + GodsBattleNpcSpawnContext
+pub(crate) trait InitialRegionStartupContext: ServerRegionDecodeEffectsContext {}
+
+impl<Context: ServerRegionDecodeEffectsContext + ?Sized> InitialRegionStartupContext for Context {}
+
+/// Адаптер inherited base virtuals для subtype-ов без одноаргументного
+/// guard-owner. Country `AddGurdMonster/AddGuardIndex` принимают дополнительный
+/// camp и принадлежат отдельной battle-side цепочке, поэтому сюда не входят.
+struct InheritedBaseGuardContext<'a, Context> {
+    context: &'a mut Context,
+}
+
+impl<Context: RegionRandomContext> RegionRandomContext for InheritedBaseGuardContext<'_, Context> {
+    fn random_below(&mut self, bound: i32) -> i32 {
+        self.context.random_below(bound)
+    }
+}
+
+impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
+    for InheritedBaseGuardContext<'_, Context>
 {
+    fn move_shape_entered_area(&mut self, identity: ShapeIdentity) {
+        self.context.move_shape_entered_area(identity);
+    }
+}
+
+impl<Context: ServerRegionNpcContext> ServerRegionNpcContext
+    for InheritedBaseGuardContext<'_, Context>
+{
+    fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
+        self.context.log_npc_position_failure(npc_name);
+    }
+
+    fn send_npc_entered_around(&mut self, npc: &CNpc) {
+        self.context.send_npc_entered_around(npc);
+    }
+}
+
+impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
+    for InheritedBaseGuardContext<'_, Context>
+{
+    fn send_monster_entered_around(&mut self, monster: &CMonster) {
+        self.context.send_monster_entered_around(monster);
+    }
+
+    fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
+        self.context
+            .log_monster_variant_failure(region_id, refresh_index);
+    }
+
+    fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
+        self.context.log_monster_position_failure(origin_name);
+    }
+}
+
+impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterContext
+    for InheritedBaseGuardContext<'_, Context>
+{
+    fn register_guard_monster(&mut self, _monster_id: i32) {}
+
+    fn register_guard_index(&mut self, _refresh_index: i32) {}
+}
+
+impl<Context: ServerRegionDecodeEffectsContext> ServerRegionDecodeEffectsContext
+    for InheritedBaseGuardContext<'_, Context>
+{
+    fn now_millis(&mut self) -> u32 {
+        self.context.now_millis()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2534,6 +2605,7 @@ where
     let owner = match subtype {
         0 => {
             let mut region = CServerRegion::default();
+            let mut base_context = InheritedBaseGuardContext { context };
             if let Err(error) = region.decord_from_byte_array(
                 source,
                 cursor,
@@ -2542,7 +2614,7 @@ where
                 area_height,
                 game.monster_registry(),
                 game.skill_factory(),
-                context,
+                &mut base_context,
             ) {
                 return Some(Err(InitialRegionStartupError::Base(error)));
             }
@@ -2550,6 +2622,7 @@ where
         }
         1 => {
             let mut region = CServerVillageRegion::default();
+            let mut base_context = InheritedBaseGuardContext { context };
             if let Err(error) = region.decord_from_byte_array(
                 source,
                 cursor,
@@ -2558,7 +2631,7 @@ where
                 area_height,
                 game.monster_registry(),
                 game.skill_factory(),
-                context,
+                &mut base_context,
             ) {
                 return Some(Err(InitialRegionStartupError::War(error)));
             }
@@ -2582,6 +2655,7 @@ where
         }
         3 => {
             let mut region = CServerCountryRegion::default();
+            let mut base_context = InheritedBaseGuardContext { context };
             if let Err(error) = region.decord_from_byte_array(
                 source,
                 cursor,
@@ -2590,7 +2664,7 @@ where
                 area_height,
                 game.monster_registry(),
                 game.skill_factory(),
-                context,
+                &mut base_context,
             ) {
                 return Some(Err(InitialRegionStartupError::Country(error)));
             }
@@ -2598,6 +2672,7 @@ where
         }
         4 => {
             let mut region = ServerNationRegion::default();
+            let mut base_context = InheritedBaseGuardContext { context };
             if let Err(error) = region.decord_from_byte_array(
                 source,
                 cursor,
@@ -2606,7 +2681,7 @@ where
                 area_height,
                 game.monster_registry(),
                 game.skill_factory(),
-                context,
+                &mut base_context,
             ) {
                 return Some(Err(InitialRegionStartupError::War(error)));
             }
@@ -2614,8 +2689,15 @@ where
         }
         5 => {
             let mut region = CServerGodsBattleRegion::default();
+            let mut base_context = InheritedBaseGuardContext { context };
             if let Err(error) =
-                game.decode_initial_gods_battle_region(&mut region, source, cursor, true, context)
+                game.decode_initial_gods_battle_region(
+                    &mut region,
+                    source,
+                    cursor,
+                    true,
+                    &mut base_context,
+                )
             {
                 return Some(Err(InitialRegionStartupError::War(error)));
             }
