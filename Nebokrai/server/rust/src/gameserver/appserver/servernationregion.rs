@@ -21,6 +21,9 @@
 //! объединяет base pass, magic-stone replacements и altar contender tail.
 //! Virtual `GetDiedStateTime` замкнут тем же `CGame` death caller-ом через
 //! signed GlobeSetup field: wrapping seconds→milliseconds и деление пополам.
+//! PDB дополнительно подтверждает пять `m_pShenShou` и пять
+//! `m_bShenShouDie`; их создание и death-семантика пока не материализованы,
+//! но не выносятся в process runtime.
 
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
@@ -431,6 +434,7 @@ impl ServerNationRegion {
         self.flag_belong_to_id = 0;
         self.lost_morale.fill(0);
         self.nation_failed.fill(false);
+        self.treasure_boxes.fill(0);
         self.magic_stone_attacked.fill(false);
         self.jin_wei_jun_attacked.fill(false);
         self.guard_attacked.fill(false);

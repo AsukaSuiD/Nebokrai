@@ -19,15 +19,15 @@
 //! Полная фазовая цепочка `0x7FE3C..0x7FE45` сохраняет проверку индекса,
 //! DUTH/Mass/Fight, различия local/proxy lookup, очистку process-wide времени
 //! и morale, пятизначный signup payload и atomic take пяти результатов.
-//! Не материализованные внутри `ServerNationRegion` shape/NPC/player effects
-//! являются обязательной runtime-границей с mutable concrete owner-ом. Direct
-//! morale `0x7FE49` и replacement player-war-time `0x7FE47` принадлежат тому же
-//! process owner-у; остальные player-war-time queries ниже ещё сохраняют RAW.
+//! Region/shape/NPC/player effects фаз исполняют concrete `CGame` и
+//! `ServerNationRegion`; отдельного process runtime у FourNation больше нет.
+//! Direct morale `0x7FE49` и replacement player-war-time `0x7FE47` принадлежат
+//! тому же game owner-у; остальные player-war-time queries ниже ещё сохраняют
+//! RAW.
 
 use std::collections::BTreeMap;
 use thiserror::Error;
 
-use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::public::date::TagTime;
 
@@ -131,14 +131,6 @@ pub(crate) trait FourNationPhaseContext {
     fn on_clear_war(&mut self, region: Self::Region, war_number: i32);
     fn take_war_results(&mut self, region: Self::Region) -> [u32; 5];
     fn add_war_end_log(&mut self, war_number: i32);
-}
-
-pub(crate) trait FourNationRegionRuntime {
-    fn reset_four_nation_region_combat_state(
-        &mut self,
-        region: &mut ServerNationRegion,
-        war_number: i32,
-    );
 }
 
 impl CFourNationWarSys {

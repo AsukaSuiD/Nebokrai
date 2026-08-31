@@ -53,9 +53,7 @@ use thiserror::Error;
 use super::super::organizingsystem::attackcitysys::{
     AttackCityDecodeError, AttackCityMembershipBlock, AttackCityPhaseContext, CAttackCitySys,
 };
-use super::super::organizingsystem::fournationwarsys::{
-    FourNationPhaseContext, FourNationRegionRuntime,
-};
+use super::super::organizingsystem::fournationwarsys::FourNationPhaseContext;
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarPhaseContext,
 };
@@ -82,7 +80,6 @@ use tracing::trace;
 pub(crate) trait GameOrganizingWarRuntime:
     CityRegionContext
     + VillageRegionContext
-    + FourNationRegionRuntime
     + RegionRandomContext
     + ScriptRegionChangeContext
     + GameContainerMessageRuntime
@@ -2379,8 +2376,6 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
                     message.send_to_player(self.game.net_server(), award.player_id);
             }
 
-            self.runtime
-                .reset_four_nation_region_combat_state(&mut region, war_number);
             region.reset_materialized_war_state();
             self.game
                 .restore_region_owner(ServerRegionOwner::Nation(region));
