@@ -40565,13 +40565,12 @@ impl CGame {
         calculated.min(maximum)
     }
 
-    fn spawn_contribution_item_monsters<Runtime: GameMainLoopRuntime>(
+    fn spawn_contribution_item_monsters(
         &mut self,
         region_id: i32,
         tile_x: i32,
         tile_y: i32,
         base_contribution: i32,
-        runtime: &mut Runtime,
     ) {
         let (_, _, item_modifier) = self.contribute_setup.country_city_modifiers();
         let value = contribution_percent(base_contribution, item_modifier);
@@ -40588,42 +40587,20 @@ impl CGame {
         else {
             return;
         };
-        let Some(mut owner) = self.take_region_owner(region_id) else {
-            return;
-        };
-        for _ in 0..item.count {
-            let position = owner
-                .base()
-                .region
-                .get_random_pos_in_range(tile_x - 5, tile_y - 5, 10, 10, runtime)
-                .ok();
-            let Some(position) = position.filter(|position| position.found) else {
-                continue;
-            };
-            let now_ms = runtime.now_milliseconds();
-            let _ = owner.base_mut().add_monster(
-                &property,
-                position.x,
-                position.y,
-                0,
-                false,
-                false,
-                now_ms,
-                self.area_width,
-                self.area_height,
-                &self.skill_factory,
-                runtime,
-            );
-        }
-        self.restore_region_owner(owner);
+        self.spawn_contribution_item_monster_group(
+            region_id,
+            &property,
+            item.count,
+            tile_x,
+            tile_y,
+        );
     }
 
-    fn apply_victim_region_contribution_loss<Runtime: GameMainLoopRuntime>(
+    fn apply_victim_region_contribution_loss(
         &mut self,
         victim_id: i32,
         region_country: u8,
         no_contribute: bool,
-        runtime: &mut Runtime,
     ) -> Vec<i32> {
         let Some((victim_country, victim_level, current, region_id, tile_x, tile_y)) =
             self.find_player(victim_id).and_then(|player| {
@@ -40647,7 +40624,7 @@ impl CGame {
             return vec![self.send_player_other_info(victim_id, &text)];
         }
         let base = self.contribution_base(victim_level);
-        self.spawn_contribution_item_monsters(region_id, tile_x, tile_y, base, runtime);
+        self.spawn_contribution_item_monsters(region_id, tile_x, tile_y, base);
         let (loss_modifier, _, _) = self.contribute_setup.country_city_modifiers();
         let loss = if victim_country == region_country {
             base
@@ -40737,7 +40714,6 @@ impl CGame {
                 blow.victim_id,
                 region_country,
                 no_contribute,
-                runtime,
             );
             tracing::trace!(victim_id = blow.victim_id, deliveries = ?deliveries, "применена потеря вклада от монстра");
             return Some(());
@@ -40804,7 +40780,6 @@ impl CGame {
                 blow.victim_id,
                 region_country,
                 no_contribute,
-                runtime,
             );
             client_deliveries = client_deliveries.wrapping_add(deliveries.len());
             tracing::trace!(
@@ -40838,7 +40813,6 @@ impl CGame {
                         blow.victim_id,
                         region_country,
                         no_contribute,
-                        runtime,
                     );
                     client_deliveries = client_deliveries.wrapping_add(deliveries.len());
                     tracing::trace!(
@@ -40899,7 +40873,6 @@ impl CGame {
                             .and_then(|player| player.shape().get_tile_y().ok())
                             .unwrap_or_default(),
                         base,
-                        runtime,
                     );
                 }
                 let (loss_modifier, gain_modifier, _) =

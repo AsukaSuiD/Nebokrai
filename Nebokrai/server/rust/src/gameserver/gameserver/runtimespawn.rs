@@ -135,6 +135,77 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 }
 
 impl CGame {
+    /// Contribution-death item spawn: общий RNG, concrete region mutation,
+    /// city guard hooks и fresh-entry принадлежат `CGame`, а death owner
+    /// передаёт только уже вычисленные gameplay inputs.
+    pub(crate) fn spawn_contribution_item_monster_group(
+        &mut self,
+        region_id: i32,
+        property: &crate::setup::monsterlist::MonsterProperties,
+        count: u32,
+        tile_x: i32,
+        tile_y: i32,
+    ) {
+        self.with_legacy_random_stream(|game, random| {
+            let Some(mut owner) = game.take_region_owner(region_id) else {
+                return;
+            };
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let (area_width, area_height) = game.area_dimensions();
+            for _ in 0..count {
+                let position = owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(
+                        tile_x.wrapping_sub(5),
+                        tile_y.wrapping_sub(5),
+                        10,
+                        10,
+                        &mut context,
+                    )
+                    .ok();
+                let Some(position) = position.filter(|position| position.found) else {
+                    continue;
+                };
+                let _ = owner.base_mut().add_monster(
+                    property,
+                    position.x,
+                    position.y,
+                    0,
+                    false,
+                    false,
+                    game_tick_milliseconds(),
+                    area_width,
+                    area_height,
+                    game.skill_factory(),
+                    &mut context,
+                );
+            }
+            if let ServerRegionOwner::City(region) = &mut owner {
+                for monster_id in context.guard_monsters.drain(..) {
+                    region.add_gurd_monster(monster_id);
+                }
+                for refresh_index in context.guard_indices.drain(..) {
+                    region.add_guard_index(refresh_index);
+                }
+            }
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            game.restore_region_owner(owner);
+            game.publish_runtime_spawn_effects(region_id, effects);
+        });
+    }
+
     /// Reached GodsBattle `ChangeNpcFaction` spawn tail. Concrete region,
     /// monster registry mutation, RNG, entry wire и GodsBattle log остаются у
     /// `CGame`; contend runtime больше не изображает region effect owner.
