@@ -121,7 +121,7 @@
 //! Reached `SetMe("dwVigour")` пишет поле как generic DWORD без
 //! `SetVigour` clamp, затем проводит обязательный virtual
 //! `UpdateProperty` и публикует полный player `0xBF721` через тот
-//! же properties runtime, который уже обслуживает equipment/fairy paths.
+//! же canonical `CGame` owner, который обслуживает equipment/fairy paths.
 //! Тот же owner доводит battle-fairy script `9400..9411` до canonical players,
 //! enhancement/equipment goods, общего RNG, skill/property mutation, client
 //! wire и file audit; goods reset `0x8FC29` вызывает его напрямую.
@@ -168,6 +168,8 @@
 //! Item-use ChangeBody guard использует этот же configuration owner и live
 //! player state; прошедший addon script добавляет состояние через canonical
 //! script dispatcher, property recompute и around visual publication.
+//! Appellation, extended и ChangeBody add/delete/expiry полностью замкнуты в
+//! нём же и больше не принимают фиктивный script/main-loop context.
 //! DaKong/WordsFilter/JJC levels `0x2B/0x31/0x32` проходят общий lookup/filter
 //! FIFO pass с исходными clear/append, partial publication и success logs.
 //! TaoZhuang и CiQing/LingBao `0x34/0x35` проходят общий enhancement FIFO pass:
@@ -17157,7 +17159,7 @@ impl CGame {
             .and_then(CPlayer::server_region_id)
             .is_some_and(|source_region_id| source_region_id != target_region_id)
         {
-            self.change_body_after_region_transition(player_id, context);
+            self.change_body_after_region_transition(player_id);
         }
         let Some(source_region_id) = self
             .find_player(player_id)
@@ -18139,7 +18141,7 @@ impl CGame {
             nation_timing_finished = self
                 .finish_nation_war_timing_on_player_lost(player_id, || runtime.now_milliseconds());
             self.drop_particular_goods_on_player_lost(player_id, runtime);
-            change_body_states_ended = self.change_body_after_player_lost(player_id, runtime);
+            change_body_states_ended = self.change_body_after_player_lost(player_id);
         }
 
         if !changing_server && !changing_region && fight_state_count > 0 {
@@ -27421,12 +27423,11 @@ impl CGame {
             .map(CPlayer::attempt_appellation_id)
     }
 
-    pub(crate) fn add_script_appellation_state<Context>(
+    pub(crate) fn add_script_appellation_state(
         &mut self,
         player_id: i32,
         state_id: u32,
         now_ms: u32,
-        context: &mut Context,
     ) -> u32 {
         let mutation = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
@@ -27442,18 +27443,17 @@ impl CGame {
             self.send_appellation_visual(player_id, state, true, now_ms);
         }
         if mutation.state_list_changed {
-            self.refresh_script_change_body_properties(player_id, context);
+            self.refresh_script_change_body_properties(player_id);
             self.send_script_player_state_changed(player_id);
         }
         mutation.legacy_return
     }
 
-    pub(crate) fn delete_script_appellation_state<Context>(
+    pub(crate) fn delete_script_appellation_state(
         &mut self,
         player_id: i32,
         state_id: u32,
         now_ms: u32,
-        context: &mut Context,
     ) -> u32 {
         let Some(player) = self.players.get_mut(&player_id) else {
             return 0;
@@ -27463,7 +27463,7 @@ impl CGame {
             self.send_appellation_visual(player_id, state, false, now_ms);
         }
         if mutation.state_list_changed {
-            self.refresh_script_change_body_properties(player_id, context);
+            self.refresh_script_change_body_properties(player_id);
             self.send_script_player_state_changed(player_id);
         }
         mutation.legacy_return
@@ -27510,13 +27510,12 @@ impl CGame {
                 .contains(&goods_base_index)
     }
 
-    pub(crate) fn add_script_extended_state<Context>(
+    pub(crate) fn add_script_extended_state(
         &mut self,
         player_id: i32,
         state_id: u32,
         kind: ExtendedStateKind,
         now_ms: u32,
-        context: &mut Context,
     ) -> u32 {
         if kind == ExtendedStateKind::Original
             && self
@@ -27524,7 +27523,7 @@ impl CGame {
                 .query_skill_base_properties(kind.state_id(), state_id as i32)
                 .is_some_and(|properties| properties.query_property(20_010) == 0x12f)
         {
-            self.remove_script_god_bless_state(player_id, now_ms, context);
+            self.remove_script_god_bless_state(player_id, now_ms);
         }
         let mutation = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
@@ -27540,7 +27539,7 @@ impl CGame {
             self.send_extended_state_visual(player_id, added, true, now_ms);
         }
         if !mutation.removed.is_empty() || mutation.added.is_some() {
-            self.refresh_script_change_body_properties(player_id, context);
+            self.refresh_script_change_body_properties(player_id);
             self.send_script_player_state_changed(player_id);
         }
         mutation.legacy_return
@@ -27550,11 +27549,10 @@ impl CGame {
     /// `RemoveState(SKILL_GOD_BLESS)` до поиска/replacement extended state.
     /// End-visual и `OnChangeStates` поэтому также завершаются до новой
     /// мутации, даже если последующее создание extended state откажет.
-    fn remove_script_god_bless_state<Context>(
+    fn remove_script_god_bless_state(
         &mut self,
         player_id: i32,
         now_ms: u32,
-        context: &mut Context,
     ) -> bool {
         let removed = self.find_player_mut(player_id).and_then(|player| {
             let delivery = player.server_region_id().and_then(|region_id| {
@@ -27575,18 +27573,17 @@ impl CGame {
                 self, region_id, identity, tile_x, tile_y, state, false, now_ms,
             );
         }
-        self.refresh_script_change_body_properties(player_id, context);
+        self.refresh_script_change_body_properties(player_id);
         self.send_script_player_state_changed(player_id);
         true
     }
 
-    pub(crate) fn delete_script_extended_state<Context>(
+    pub(crate) fn delete_script_extended_state(
         &mut self,
         player_id: i32,
         state_id: u32,
         kind: ExtendedStateKind,
         now_ms: u32,
-        context: &mut Context,
     ) -> u32 {
         let mutation = self
             .find_player_mut(player_id)
@@ -27596,18 +27593,17 @@ impl CGame {
             self.send_extended_state_visual(player_id, removed, false, now_ms);
         }
         if !mutation.removed.is_empty() {
-            self.refresh_script_change_body_properties(player_id, context);
+            self.refresh_script_change_body_properties(player_id);
             self.send_script_player_state_changed(player_id);
         }
         mutation.legacy_return
     }
 
-    pub(crate) fn delete_script_extended_state_by_type<Context>(
+    pub(crate) fn delete_script_extended_state_by_type(
         &mut self,
         player_id: i32,
         state_type: u16,
         now_ms: u32,
-        context: &mut Context,
     ) -> u32 {
         let Some(mutation) = self
             .find_player_mut(player_id)
@@ -27619,7 +27615,7 @@ impl CGame {
             self.send_extended_state_visual(player_id, removed, false, now_ms);
         }
         if !mutation.removed.is_empty() {
-            self.refresh_script_change_body_properties(player_id, context);
+            self.refresh_script_change_body_properties(player_id);
             self.send_script_player_state_changed(player_id);
         }
         mutation.legacy_return
@@ -27670,11 +27666,10 @@ impl CGame {
         let _ = self.send_player_shape_around(player_id, None, &message);
     }
 
-    fn update_player_extended_states<Context>(
+    fn update_player_extended_states(
         &mut self,
         player_id: i32,
         now_ms: u32,
-        context: &mut Context,
     ) -> (usize, u32) {
         let (expired, item_due) = self
             .find_player_mut(player_id)
@@ -27684,7 +27679,7 @@ impl CGame {
         let mut items_consumed = 0_u32;
         for (kind, state_id) in expired {
             ended += usize::from(
-                self.delete_script_extended_state(player_id, state_id, kind, now_ms, context) != 0,
+                self.delete_script_extended_state(player_id, state_id, kind, now_ms) != 0,
             );
         }
         for (kind, state_id, item_index, item_amount) in item_due {
@@ -27704,7 +27699,7 @@ impl CGame {
                 let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
                     .send_to_player(self.net_server(), player_id);
                 ended += usize::from(
-                    self.delete_script_extended_state(player_id, state_id, kind, now_ms, context)
+                    self.delete_script_extended_state(player_id, state_id, kind, now_ms)
                         != 0,
                 );
                 continue;
@@ -27726,7 +27721,7 @@ impl CGame {
             items_consumed = items_consumed.wrapping_add(removed);
             if removed != item_amount {
                 ended += usize::from(
-                    self.delete_script_extended_state(player_id, state_id, kind, now_ms, context)
+                    self.delete_script_extended_state(player_id, state_id, kind, now_ms)
                         != 0,
                 );
             }
@@ -27734,11 +27729,10 @@ impl CGame {
         (ended, items_consumed)
     }
 
-    fn update_player_appellation_states<Context>(
+    fn update_player_appellation_states(
         &mut self,
         player_id: i32,
         now_ms: u32,
-        context: &mut Context,
     ) -> (usize, u32) {
         let (expired, item_due) = self
             .find_player_mut(player_id)
@@ -27748,7 +27742,7 @@ impl CGame {
         let mut items_consumed = 0_u32;
         for state_id in expired {
             ended += usize::from(
-                self.delete_script_appellation_state(player_id, state_id, now_ms, context) != 0,
+                self.delete_script_appellation_state(player_id, state_id, now_ms) != 0,
             );
         }
         for (state_id, item_index, item_amount) in item_due {
@@ -27768,7 +27762,7 @@ impl CGame {
                 let _ = colored_player_notice_message(0xffff_ffff, 0, &text)
                     .send_to_player(self.net_server(), player_id);
                 ended += usize::from(
-                    self.delete_script_appellation_state(player_id, state_id, now_ms, context) != 0,
+                    self.delete_script_appellation_state(player_id, state_id, now_ms) != 0,
                 );
                 continue;
             }
@@ -27789,7 +27783,7 @@ impl CGame {
             items_consumed = items_consumed.wrapping_add(removed);
             if removed != item_amount {
                 ended += usize::from(
-                    self.delete_script_appellation_state(player_id, state_id, now_ms, context) != 0,
+                    self.delete_script_appellation_state(player_id, state_id, now_ms) != 0,
                 );
             }
         }
@@ -27891,12 +27885,11 @@ impl CGame {
         false
     }
 
-    pub(crate) fn add_script_change_body_state<Context>(
+    pub(crate) fn add_script_change_body_state(
         &mut self,
         player_id: i32,
         state_id: u32,
         now_ms: u32,
-        context: &mut Context,
     ) -> u32 {
         if self.script_change_body_check(player_id, false) == 0 {
             return 0;
@@ -27924,16 +27917,15 @@ impl CGame {
                 .filter_map(|(index, (skill_id, _))| (*skill_id != 0).then_some(index + 12))
                 .chain(std::iter::once(17)),
         );
-        self.refresh_script_change_body_properties(player_id, context);
+        self.refresh_script_change_body_properties(player_id);
         self.send_script_player_state_changed(player_id);
         mutation.legacy_return
     }
 
-    pub(crate) fn delete_script_change_body_state<Context>(
+    pub(crate) fn delete_script_change_body_state(
         &mut self,
         player_id: i32,
         state_id: u32,
-        context: &mut Context,
     ) -> u32 {
         let mutation = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
@@ -27947,18 +27939,14 @@ impl CGame {
         };
         self.send_change_body_visual(player_id, removed, false);
         self.send_change_body_hotkeys(player_id, 12..=23);
-        self.refresh_script_change_body_properties(player_id, context);
+        self.refresh_script_change_body_properties(player_id);
         self.send_script_player_state_changed(player_id);
         mutation.legacy_return
     }
 
     /// Exact client `0x8FA15`: завершает первый `m_vStates` элемент с
     /// `CState::m_lID == 0x37`, затем исполняет `CPlayer::UpdateProperty`.
-    pub(crate) fn end_first_player_change_body_state<Context>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) -> Option<u32> {
+    pub(crate) fn end_first_player_change_body_state(&mut self, player_id: i32) -> Option<u32> {
         let state_id = self
             .find_player(player_id)
             .and_then(CPlayer::first_change_body_state_id)?;
@@ -27971,16 +27959,15 @@ impl CGame {
         let removed = mutation.removed.as_ref()?;
         self.send_change_body_visual(player_id, removed, false);
         self.send_change_body_hotkeys(player_id, 12..=23);
-        self.refresh_script_change_body_properties(player_id, context);
+        self.refresh_script_change_body_properties(player_id);
         Some(state_id)
     }
 
-    fn end_change_body_states<Context>(
+    fn end_change_body_states(
         &mut self,
         player_id: i32,
         state_ids: Vec<u32>,
         notice_id: Option<&[u8]>,
-        context: &mut Context,
     ) {
         for state_id in state_ids {
             if let Some(notice_id) = notice_id {
@@ -27988,15 +27975,14 @@ impl CGame {
                 let _ = colored_player_notice_message(0xffff_ffff, 0, text)
                     .send_to_player(self.net_server(), player_id);
             }
-            let _ = self.delete_script_change_body_state(player_id, state_id, context);
+            let _ = self.delete_script_change_body_state(player_id, state_id);
         }
     }
 
-    fn update_player_change_body_states<Context>(
+    fn update_player_change_body_states(
         &mut self,
         player_id: i32,
         now_ms: u32,
-        context: &mut Context,
     ) -> usize {
         let expired = self
             .find_player(player_id)
@@ -28004,7 +27990,7 @@ impl CGame {
             .unwrap_or_default();
         let mut ended = expired.len();
         for state_id in expired {
-            self.end_change_body_states(player_id, vec![state_id], Some(b"GS1145"), context);
+            self.end_change_body_states(player_id, vec![state_id], Some(b"GS1145"));
         }
         let death_ended = self
             .find_player(player_id)
@@ -28013,7 +27999,7 @@ impl CGame {
             .unwrap_or_default();
         if !death_ended.is_empty() {
             ended = ended.wrapping_add(death_ended.len());
-            self.change_body_after_player_death(player_id, context);
+            self.change_body_after_player_death(player_id);
         }
         ended
     }
@@ -28261,11 +28247,11 @@ impl CGame {
             expire_player_battle_fairy_attribute_states(self, player_id, now_ms, runtime);
         let defense_shields_ended = expire_player_defense_shields(self, player_id, now_ms);
         let change_body_states_ended =
-            self.update_player_change_body_states(player_id, now_ms, runtime);
+            self.update_player_change_body_states(player_id, now_ms);
         let (extended_states_ended, extended_items_consumed) =
-            self.update_player_extended_states(player_id, now_ms, runtime);
+            self.update_player_extended_states(player_id, now_ms);
         let (appellation_states_ended, appellation_items_consumed) =
-            self.update_player_appellation_states(player_id, now_ms, runtime);
+            self.update_player_appellation_states(player_id, now_ms);
         let ride_ended = self.update_player_ride_state(player_id, now_ms, runtime);
         tracing::trace!(
             player_id,
@@ -28377,49 +28363,33 @@ impl CGame {
         removed
     }
 
-    pub(crate) fn change_body_after_region_transition<Context>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) {
+    pub(crate) fn change_body_after_region_transition(&mut self, player_id: i32) {
         let state_ids = self
             .find_player_mut(player_id)
             .map(CPlayer::change_body_region_transition_end_ids)
             .unwrap_or_default();
-        self.end_change_body_states(player_id, state_ids, Some(b"GS1146"), context);
+        self.end_change_body_states(player_id, state_ids, Some(b"GS1146"));
     }
 
-    pub(crate) fn change_body_after_player_lost<Context>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) -> usize {
+    pub(crate) fn change_body_after_player_lost(&mut self, player_id: i32) -> usize {
         let state_ids = self
             .find_player_mut(player_id)
             .map(CPlayer::change_body_player_lost_end_ids)
             .unwrap_or_default();
         let ended = state_ids.len();
-        self.end_change_body_states(player_id, state_ids, None, context);
+        self.end_change_body_states(player_id, state_ids, None);
         ended
     }
 
-    fn change_body_after_player_death<Context>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) {
+    fn change_body_after_player_death(&mut self, player_id: i32) {
         let state_ids = self
             .find_player(player_id)
             .map(CPlayer::change_body_death_end_ids)
             .unwrap_or_default();
-        self.end_change_body_states(player_id, state_ids, None, context);
+        self.end_change_body_states(player_id, state_ids, None);
     }
 
-    fn refresh_script_change_body_properties<Context>(
-        &mut self,
-        player_id: i32,
-        _context: &mut Context,
-    ) {
+    fn refresh_script_change_body_properties(&mut self, player_id: i32) {
         let properties = match self.find_player(player_id) {
             Some(player) => self.recompute_player_properties(player),
             None => return,
@@ -41149,7 +41119,7 @@ impl CGame {
         while self.end_script_auto_protect_state(blow.victim_id) {
             let _ = self.publish_player_states(blow.victim_id);
         }
-        self.change_body_after_player_death(blow.victim_id, runtime);
+        self.change_body_after_player_death(blow.victim_id);
         let nation = self.player_died_in_nation_region(blow.victim_id, runtime);
         tracing::trace!(
             victim_id = blow.victim_id,
@@ -46099,7 +46069,7 @@ impl CGame {
                         let player_ids = owner.base().registered_player_ids();
                         self.restore_region_owner(owner);
                         for change in &region_changes {
-                            self.change_body_after_region_transition(change.player_id, runtime);
+                            self.change_body_after_region_transition(change.player_id);
                         }
                         let returned_players = player_ids.len();
                         for player_id in player_ids {
@@ -46136,7 +46106,7 @@ impl CGame {
             }
             self.restore_region_owner(owner);
             for change in &region_changes {
-                self.change_body_after_region_transition(change.player_id, runtime);
+                self.change_body_after_region_transition(change.player_id);
             }
             trace_region_ai_pass(
                 region_id,

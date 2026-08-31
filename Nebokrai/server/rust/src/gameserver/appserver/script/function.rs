@@ -5122,10 +5122,10 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let now_ms = runtime.now_milliseconds();
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_UNDEAD_STATE => {
-                    game.add_script_appellation_state(player_id, state_id, now_ms, runtime)
+                    game.add_script_appellation_state(player_id, state_id, now_ms)
                 }
                 SCRIPT_FUNCTION_DELETE_UNDEAD_STATE => {
-                    game.delete_script_appellation_state(player_id, state_id, now_ms, runtime)
+                    game.delete_script_appellation_state(player_id, state_id, now_ms)
                 }
                 SCRIPT_FUNCTION_GET_UNDEAD_STATE => game
                     .find_player(player_id)
@@ -5175,11 +5175,11 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_EX_STATE | SCRIPT_FUNCTION_ADD_EX_STATE_NEW => {
                     let now_ms = runtime.now_milliseconds();
-                    game.add_script_extended_state(player_id, state_id, kind, now_ms, runtime)
+                    game.add_script_extended_state(player_id, state_id, kind, now_ms)
                 }
                 SCRIPT_FUNCTION_DELETE_EX_STATE | SCRIPT_FUNCTION_DELETE_EX_STATE_NEW => {
                     let now_ms = runtime.now_milliseconds();
-                    game.delete_script_extended_state(player_id, state_id, kind, now_ms, runtime)
+                    game.delete_script_extended_state(player_id, state_id, kind, now_ms)
                 }
                 SCRIPT_FUNCTION_GET_EX_STATE | SCRIPT_FUNCTION_GET_EX_STATE_NEW => game
                     .find_player(player_id)
@@ -5205,10 +5205,10 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let legacy_return = match function_id {
                 SCRIPT_FUNCTION_ADD_CHANGE_BODY_STATE => {
                     let now_ms = runtime.now_milliseconds();
-                    game.add_script_change_body_state(player_id, state_id, now_ms, runtime)
+                    game.add_script_change_body_state(player_id, state_id, now_ms)
                 }
                 SCRIPT_FUNCTION_DELETE_CHANGE_BODY_STATE => {
-                    game.delete_script_change_body_state(player_id, state_id, runtime)
+                    game.delete_script_change_body_state(player_id, state_id)
                 }
                 SCRIPT_FUNCTION_GET_CHANGE_BODY_STATE => game
                     .find_player(player_id)
@@ -8144,7 +8144,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             let now_ms = runtime.now_milliseconds();
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: game
-                    .delete_script_extended_state_by_type(player_id, state_type, now_ms, runtime)
+                    .delete_script_extended_state_by_type(player_id, state_type, now_ms)
                     as i32,
             })
         }
@@ -8379,10 +8379,10 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
         let now_ms = runtime.now_milliseconds();
         let legacy_return = match function_id {
             SCRIPT_FUNCTION_ADD_APPELLATION_STATE => {
-                game.add_script_appellation_state(player_id, state_id as u32, now_ms, runtime)
+                game.add_script_appellation_state(player_id, state_id as u32, now_ms)
             }
             SCRIPT_FUNCTION_DEL_APPELLATION_STATE => {
-                game.delete_script_appellation_state(player_id, state_id as u32, now_ms, runtime)
+                game.delete_script_appellation_state(player_id, state_id as u32, now_ms)
             }
             SCRIPT_FUNCTION_GET_APPELLATION_STATE => game
                 .get_script_appellation_state(player_id, state_id as u32)

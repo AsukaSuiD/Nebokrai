@@ -1421,7 +1421,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
             trace_player_message_outcome(message_type, Some(player_id), "heartbeat подтверждён");
         }
         END_CHANGE_BODY_STATE => {
-            let ended = game.end_first_player_change_body_state(player_id, runtime);
+            let ended = game.end_first_player_change_body_state(player_id);
             tracing::trace!(
                 message_type,
                 player_id,
