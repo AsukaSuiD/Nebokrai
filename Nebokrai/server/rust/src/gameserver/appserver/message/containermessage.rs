@@ -722,6 +722,20 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         trace("источник и назначение совпадают");
         return Some(Ok(()));
     }
+    if route == EnhancementMessageRoute::GroundPickup
+        && (!(0..=11).contains(&request.destination_container_extend_id)
+            || request.destination_container_extend_id == 5)
+    {
+        trace("недопустимый контейнер назначения для поднятия предмета");
+        return Some(Ok(()));
+    }
+    if route == EnhancementMessageRoute::GroundDrop
+        && (!(0..=11).contains(&request.source_container_extend_id)
+            || request.source_container_extend_id == 5)
+    {
+        trace("недопустимый исходный контейнер для выбрасывания предмета");
+        return Some(Ok(()));
+    }
     if route == EnhancementMessageRoute::EnhancementSelect
         && (request.source_container_extend_id == 4
             || request.source_container_extend_id == 5
