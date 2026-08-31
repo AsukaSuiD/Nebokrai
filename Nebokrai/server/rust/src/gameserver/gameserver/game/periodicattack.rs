@@ -751,6 +751,9 @@ impl CGame {
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_shape_position_around(region_id, x, y, &died);
+        if !carriage && !tamed {
+            return;
+        }
         let _ = self.gods_battle_monster_died(
             region_id,
             target_id,
@@ -772,16 +775,6 @@ impl CGame {
             {
                 owner.clear_active_carriage(target_id);
             }
-        } else if !tamed {
-            self.finish_monster_kill_effects(
-                region_id,
-                target_id,
-                master.master_id,
-                x,
-                y,
-                &property,
-                runtime,
-            );
         } else if target_master.master_type == PLAYER_TYPE
             && let Some(owner) = self.find_player_mut(target_master.master_id)
         {

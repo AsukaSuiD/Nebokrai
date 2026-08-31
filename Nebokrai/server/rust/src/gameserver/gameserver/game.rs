@@ -1223,6 +1223,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
 use crate::gameserver::appserver::skills::knightcutstate::{
     expire_monster_knight_cut_state, expire_player_knight_cut_state,
 };
+use crate::gameserver::appserver::ai::baseai::PassiveDeathAction;
 use crate::gameserver::appserver::ai::jiumai::{
     retarget_jiumai_after_hurt, synchronize_jiumai_target_loss,
 };
@@ -33492,6 +33493,9 @@ impl CGame {
         died.add_long(0);
         died.add_byte(0);
         let _ = self.send_shape_position_around(region_id, tile_x, tile_y, &died);
+        if !carriage && !tamed {
+            return true;
+        }
         let _ = self.gods_battle_monster_died(region_id, monster_id, PLAYER_TYPE, player_id);
         let _ = self.monster_on_died(region_id, monster_id, player_id, runtime);
         if carriage {
@@ -33508,10 +33512,6 @@ impl CGame {
             {
                 master_player.clear_active_carriage(monster_id);
             }
-        } else if !tamed {
-            self.finish_monster_kill_effects(
-                region_id, monster_id, player_id, tile_x, tile_y, &property, runtime,
-            );
         } else if master.master_type == PLAYER_TYPE
             && let Some(master_player) = self.find_player_mut(master.master_id)
         {
@@ -38014,51 +38014,90 @@ impl CGame {
 
     fn apply_monster_attack_deaths<Runtime: GameMainLoopRuntime>(
         &mut self,
-        region_id: i32,
+        _region_id: i32,
         deaths: Vec<MonsterAttackDeath>,
         runtime: &mut Runtime,
     ) {
         for death in deaths {
-            let blow = match death {
-                MonsterAttackDeath::Player(killing_blow) => {
-                    let _ = self.player_on_death(killing_blow, runtime);
-                    continue;
-                }
-                MonsterAttackDeath::Monster(blow) => blow,
-            };
-            let _ = self.gods_battle_monster_died(
-                region_id,
-                blow.victim_id,
-                MONSTER_TYPE,
-                blow.attacker_id,
-            );
-            let _ = self.monster_on_died(region_id, blow.victim_id, blow.master_id, runtime);
-            self.finish_monster_kill_effects(
-                region_id,
-                blow.victim_id,
-                blow.master_id,
-                blow.target_x,
-                blow.target_y,
-                &blow.property,
-                runtime,
-            );
-            let mut exit = CMessage::new(0x000b_f504);
-            exit.add_long(MONSTER_TYPE);
-            exit.add_long(blow.victim_id);
-            exit.add_long(0);
-            exit.add_ulong(blow.pos_x_bits);
-            exit.add_ulong(blow.pos_y_bits);
-            let _ = self.send_shape_position_around(
-                region_id,
-                blow.target_x,
-                blow.target_y,
-                &exit,
-            );
-            if let Some(mut owner) = self.take_region_owner(region_id) {
-                owner.base_mut().finish_owned_monster_death(blow.victim_id);
-                self.restore_region_owner(owner);
-            }
+            let MonsterAttackDeath::Player(killing_blow) = death;
+            let _ = self.player_on_death(killing_blow, runtime);
         }
+    }
+
+    /// Завершает достигнутый `CBaseAI::OnBeenKilled -> CMonster::OnDied`
+    /// только после допуска пассивной AI FIFO. До этой границы удар уже
+    /// изменил HP/action и отправил BF60B, но monster owner остаётся в регионе:
+    /// callback войны, награды/drop/script, BF504 и staging выполняются здесь
+    /// один раз и в прежнем наблюдаемом порядке.
+    fn finish_owned_monster_ai_death<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        let snapshot = self.find_region(region_id).and_then(|owner| {
+            let region = owner.base();
+            let monster = region.find_monster_by_id(monster_id)?;
+            let killing_attack = monster.killed_by()?;
+            let property = self
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?
+                .clone();
+            if monster.is_tamed() || monster.is_carriage(&property) {
+                return None;
+            }
+            let shape = monster.move_shape().shape();
+            let killer_player_id = match killing_attack.attacker_type {
+                PLAYER_TYPE => killing_attack.attacker_id,
+                MONSTER_TYPE => region
+                    .find_monster_by_id(killing_attack.attacker_id)
+                    .map(CMonster::master_info)
+                    .filter(|master| master.master_type == PLAYER_TYPE)
+                    .map_or(0, |master| master.master_id),
+                _ => 0,
+            };
+            Some((
+                killing_attack,
+                killer_player_id,
+                property,
+                shape.get_tile_x().ok()?,
+                shape.get_tile_y().ok()?,
+                shape.get_pos_x().to_bits(),
+                shape.get_pos_y().to_bits(),
+            ))
+        });
+        let Some((attack, killer_player_id, property, x, y, pos_x_bits, pos_y_bits)) = snapshot
+        else {
+            return false;
+        };
+
+        let _ = self.gods_battle_monster_died(
+            region_id,
+            monster_id,
+            attack.attacker_type,
+            attack.attacker_id,
+        );
+        let _ = self.monster_on_died(region_id, monster_id, killer_player_id, runtime);
+        self.finish_monster_kill_effects(
+            region_id,
+            monster_id,
+            killer_player_id,
+            x,
+            y,
+            &property,
+            runtime,
+        );
+        let mut exit = CMessage::new(0x000b_f504);
+        exit.add_long(MONSTER_TYPE);
+        exit.add_long(monster_id);
+        exit.add_long(0);
+        exit.add_ulong(pos_x_bits);
+        exit.add_ulong(pos_y_bits);
+        let _ = self.send_shape_position_around(region_id, x, y, &exit);
+        if let Some(mut owner) = self.take_region_owner(region_id) {
+            owner.base_mut().finish_owned_monster_death(monster_id);
+            self.restore_region_owner(owner);
+        }
+        true
     }
 
     /// Тонко координирует владельца региона для самостоятельного ИИ слабого
@@ -44020,6 +44059,9 @@ impl CGame {
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_shape_position_around(region_id, x, y, &died);
+        if !carriage && !tamed {
+            return true;
+        }
         let _ = self.gods_battle_monster_died(
             region_id,
             target_id,
@@ -44041,16 +44083,6 @@ impl CGame {
             {
                 owner.clear_active_carriage(target_id);
             }
-        } else if !tamed {
-            self.finish_monster_kill_effects(
-                region_id,
-                target_id,
-                master.master_id,
-                x,
-                y,
-                &property,
-                runtime,
-            );
         } else if target_master.master_type == PLAYER_TYPE
             && let Some(owner) = self.find_player_mut(target_master.master_id)
         {
@@ -45683,6 +45715,7 @@ impl CGame {
                     let mut active_action_completed = false;
                     let mut change_skill_pending = false;
                     let mut search_enemy_pending = false;
+                    let mut passive_death = PassiveDeathAction::None;
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         let processed = monster.process_reached_defense_actions();
                         if processed != 0 {
@@ -45693,32 +45726,50 @@ impl CGame {
                                 "обработаны пассивные Defense-события монстра"
                             );
                         }
-                        monster.queue_search_after_active_move(ai_type, now_ms);
-                        move_pending = monster.advance_active_ai_move(now_ms);
-                        if !move_pending && monster.active_ai_attack_pending() {
-                            if monster.base_attack_cast().is_some() {
-                                attack_pending = true;
-                            } else {
-                                monster.finish_active_ai_attack(now_ms);
-                                active_action_completed = true;
-                            }
-                        } else {
-                            search_enemy_pending = monster.active_ai_search_enemy_pending();
-                            if !search_enemy_pending {
-                                change_skill_pending = monster.active_ai_change_skill_pending();
-                            }
+                        if processed == 0 {
+                            passive_death = monster.process_reached_death_action();
                         }
-                        if !attack_pending
-                            && !move_pending
-                            && !active_action_completed
-                            && !search_enemy_pending
-                            && !change_skill_pending
-                        {
-                            schedule_ready = monster.advance_active_ai_stand(now_ms)
-                                && monster.primary_ai_queues_idle();
+                        if passive_death == PassiveDeathAction::WaitingForMove {
+                            move_pending = monster.advance_active_ai_move(now_ms);
+                        } else if passive_death == PassiveDeathAction::None {
+                            monster.queue_search_after_active_move(ai_type, now_ms);
+                            move_pending = monster.advance_active_ai_move(now_ms);
+                            if !move_pending && monster.active_ai_attack_pending() {
+                                if monster.base_attack_cast().is_some() {
+                                    attack_pending = true;
+                                } else {
+                                    monster.finish_active_ai_attack(now_ms);
+                                    active_action_completed = true;
+                                }
+                            } else {
+                                search_enemy_pending = monster.active_ai_search_enemy_pending();
+                                if !search_enemy_pending {
+                                    change_skill_pending = monster.active_ai_change_skill_pending();
+                                }
+                            }
+                            if !attack_pending
+                                && !move_pending
+                                && !active_action_completed
+                                && !search_enemy_pending
+                                && !change_skill_pending
+                            {
+                                schedule_ready = monster.advance_active_ai_stand(now_ms)
+                                    && monster.primary_ai_queues_idle();
+                            }
                         }
                     }
                     self.restore_region_owner(owner);
+                    if passive_death == PassiveDeathAction::Ready {
+                        let _ = self.finish_owned_monster_ai_death(
+                            region_id,
+                            monster_id,
+                            runtime,
+                        );
+                        continue;
+                    }
+                    if passive_death == PassiveDeathAction::WaitingForMove {
+                        continue;
+                    }
                     if move_pending {
                         continue;
                     }

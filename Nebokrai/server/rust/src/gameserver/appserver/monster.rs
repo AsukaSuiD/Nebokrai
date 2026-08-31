@@ -79,7 +79,7 @@
 use std::collections::BTreeMap;
 
 use super::ai::aifactory::{ActiveMonsterAi, MonsterAiBinding, MonsterAiKind};
-use super::ai::baseai::{AiShapeAction, CBaseAI};
+use super::ai::baseai::{AiShapeAction, CBaseAI, PassiveDeathAction};
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
 use super::ai::carriage::{
@@ -1132,17 +1132,18 @@ impl CMonster {
 
     pub(crate) fn when_been_killed(&mut self, now_ms: u32) {
         self.base_ai.when_been_killed(now_ms);
-        self.ai_target = None;
-        if let Some(state) = self.passive_gladiator_ai.as_mut() {
-            state.clear();
-        }
-        if let Some(state) = self.smart_gladiator_ai.as_mut() {
-            state.clear();
-        }
     }
 
     pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
         self.base_ai.process_reached_defense_actions()
+    }
+
+    pub(crate) fn process_reached_death_action(&mut self) -> PassiveDeathAction {
+        let action = self.base_ai.process_reached_death_action();
+        if action != PassiveDeathAction::None {
+            self.ai_target = None;
+        }
+        action
     }
 
     pub(crate) fn advance_active_ai_stand(&mut self, now_ms: u32) -> bool {

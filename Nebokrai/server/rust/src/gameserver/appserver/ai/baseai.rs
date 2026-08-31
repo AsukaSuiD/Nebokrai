@@ -25,7 +25,10 @@
 //! владелец спит. City/country guard refresh также достигает точный `Clear`
 //! обычных active/passive очередей и dormancy-флага без затрагивания war-soul
 //! FIFO.
-//! Указатель владельца, остальные действия и обработчики ниже остаются
+//! Пассивный `Died` также исполняет точный `OnBeenKilled`: из active FIFO
+//! сохраняется только первый `Move`, цель отпускается на каждом
+//! повторном проходе, а owner death разрешается лишь после завершения этого
+//! движения. Указатель владельца и остальные обработчики ниже остаются
 //! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
@@ -51,6 +54,13 @@ pub(crate) struct AiEvent {
     pub(crate) beginning_time_ms: u32,
     pub(crate) delay_ms: u32,
     pub(crate) handling: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PassiveDeathAction {
+    None,
+    WaitingForMove,
+    Ready,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -135,6 +145,34 @@ impl CBaseAI {
             processed = processed.wrapping_add(1);
         }
         processed
+    }
+
+    /// Выполняет точный `ASA_DIED -> OnBeenKilled` после того, как caller
+    /// отдельным проходом снял предшествующий Defense-префикс. Исходник
+    /// отбрасывает все active-события до первого Move, сохраняет только этот
+    /// Move со всеми его часами/handling и повторяет обработчик, пока движение
+    /// не завершится. Нулевая задержка Died снимает событие в том же проходе,
+    /// в котором owner death становится разрешён.
+    pub(crate) fn process_reached_death_action(&mut self) -> PassiveDeathAction {
+        if !self.passive_actions.front().is_some_and(|event| {
+            event.action == AiShapeAction::Died && event.handling == 0
+        }) {
+            return PassiveDeathAction::None;
+        }
+
+        let retained_move = self
+            .active_actions
+            .iter()
+            .find(|event| event.action == AiShapeAction::Move)
+            .copied();
+        self.active_actions.clear();
+        if let Some(event) = retained_move {
+            self.active_actions.push_back(event);
+            PassiveDeathAction::WaitingForMove
+        } else {
+            self.passive_actions.pop_front();
+            PassiveDeathAction::Ready
+        }
     }
 
     /// Выполняет достигнутую `Stand`-ветвь `ProcessActiveAction` и сообщает,

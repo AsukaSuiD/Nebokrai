@@ -2,9 +2,9 @@
 //!
 //! Конкретный навык сохраняет формулу, RNG и выбор целей у своего владельца.
 //! Здесь остаются общие `CFightDefense::PreDefense`, изменение цели, точные
-//! пакеты ранения и смерти и семантические хвосты, которые `CGame` применяет после
-//! возврата владельца региона. Смерти игроков и монстров проходят одним
-//! `MonsterAttackDeath` в порядке их фактического возникновения.
+//! пакеты ранения и смерти и семантические хвосты. Смерть игрока передаётся
+//! наружу после возврата владельца региона; смерть обычного монстра остаётся
+//! в его `CBaseAI` как пассивный `Died` и завершается runtime-владельцем AI.
 
 use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
@@ -88,21 +88,8 @@ pub(crate) fn monster_attack_cell_candidates(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct MonsterVictimDeath {
-    pub(crate) victim_id: i32,
-    pub(crate) attacker_id: i32,
-    pub(crate) master_id: i32,
-    pub(crate) target_x: i32,
-    pub(crate) target_y: i32,
-    pub(crate) pos_x_bits: u32,
-    pub(crate) pos_y_bits: u32,
-    pub(crate) property: MonsterProperties,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MonsterAttackDeath {
     Player(PlayerKillingBlow),
-    Monster(MonsterVictimDeath),
 }
 
 #[derive(Clone, Debug)]
@@ -553,24 +540,6 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 .base_mut()
                 .add(&target_shape.get_pos_y().to_bits().to_le_bytes());
             let _ = game.send_game_shape_around(region, target_shape, None, &vanished);
-        } else if let Some(property) = target_monster_property {
-            let (Ok(target_x), Ok(target_y)) =
-                (target_shape.get_tile_x(), target_shape.get_tile_y())
-            else {
-                return;
-            };
-            deaths.push(MonsterAttackDeath::Monster(MonsterVictimDeath {
-                victim_id: target.id,
-                attacker_id: monster_id,
-                master_id: (attacker_master.master_type == PLAYER_TYPE)
-                    .then_some(attacker_master.master_id)
-                    .unwrap_or(0),
-                target_x,
-                target_y,
-                pos_x_bits: target_shape.get_pos_x().to_bits(),
-                pos_y_bits: target_shape.get_pos_y().to_bits(),
-                property,
-            }));
         }
     } else {
         let mut hurt = CMessage::new(0x000b_f60a);
