@@ -686,6 +686,49 @@ impl CMoveShape {
         Some(payload)
     }
 
+    /// Материализует общий `CMoveShape::AddToByteArray_ForClient` для всех
+    /// распознанных canonical state records. Неизвестный record не позволяет
+    /// доказать следующий offset, поэтому serializer возвращает `None`, а не
+    /// публикует неверный count или сдвинутые поля.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        include_child: bool,
+        is_dead: bool,
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        let states = self.serialized_ex_states(now_ms, timed_state_now_milliseconds);
+        let declared_count = if states.is_empty() {
+            0usize
+        } else {
+            usize::try_from(read_u32(&states, 0)?).ok()?
+        };
+        let offsets = known_state_record_offsets(&states);
+        if offsets.len() != declared_count {
+            return None;
+        }
+        let total_count = declared_count.checked_add(self.team_recruitment_states.len())?;
+        let mut payload = Vec::new();
+        self.shape
+            .add_to_byte_array(&mut payload, include_child)
+            .then_some(())?;
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u8(u8::from(is_dead));
+        writer.write_i32(i32::try_from(total_count).ok()?);
+        for offset in offsets {
+            writer.write_i32(read_i32(&states, offset)?);
+            writer.write_i32(read_i32(&states, offset + 4)?);
+            writer.write_i32(read_i32(&states, offset + 8)?);
+        }
+        for state in &self.team_recruitment_states {
+            writer.write_i32(state.state_id());
+            writer.write_i32(state.client_state_time());
+            writer.write_u32(state.initial_additional_data());
+            writer.write_c_string(state.team_name());
+        }
+        Some(payload)
+    }
+
     /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не
     /// сериализуется и проверяется ordinary `OnBeenAttacked` owner-ом.
     pub(crate) const fn set_god(&mut self, enabled: bool) {
