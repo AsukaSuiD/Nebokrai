@@ -5,10 +5,12 @@
 //! вступление, идентичность команды и главы, общее распределение по умолчанию,
 //! точная сериализация сеанса и участников, а также локальные выход, смена
 //! главы, исключение, роспуск, распределение, чат и восстановление удалённого
-//! снимка с публикациями World и клиенту. Обход заданий и сценариев команды
-//! выполняет `CGame`, потому что он владеет картой локальных игроков, очередью
-//! сценариев и маршрутом World. Остальные переходы состояния и ИИ остаются
-//! RAW. Статические `QuestTeamData/CompleteTeamData` заменены принадлежащей
+//! снимка с публикациями World и клиенту. Минутный `AI`-контроль удаляет из
+//! локального registry проекцию, когда на GameServer не осталось ни одного её
+//! игрока. Обход заданий и сценариев команды выполняет `CGame`, потому что он
+//! владеет картой локальных игроков, очередью сценариев и маршрутом World.
+//! Остальные переходы состояния остаются RAW. Статические
+//! `QuestTeamData/CompleteTeamData` заменены принадлежащей
 //! `CGame` очередью повторов: вход задаёт ID команды, стадия сеанса отправляет
 //! `0x60008`, а успешный `0x7FD08` снимает запрос.
 
@@ -21,6 +23,7 @@ pub(crate) struct CTeam {
     team_id: u32,
     leader_id: i32,
     allocation_scheme: i32,
+    last_checked_time_stamp: u32,
     team_name: Vec<u8>,
     password: Vec<u8>,
 }
@@ -31,6 +34,7 @@ impl CTeam {
             team_id,
             leader_id: 0,
             allocation_scheme: 1,
+            last_checked_time_stamp: 0,
             team_name: Vec::new(),
             password: Vec::new(),
         }
@@ -46,6 +50,7 @@ impl CTeam {
             team_id,
             leader_id,
             allocation_scheme: 1,
+            last_checked_time_stamp: 0,
             team_name,
             password,
         }
@@ -93,6 +98,17 @@ impl CTeam {
 
     pub(crate) const fn set_allocation_scheme(&mut self, allocation_scheme: i32) {
         self.allocation_scheme = allocation_scheme;
+    }
+
+    /// Exact `AI`: первый вызов только запоминает timestamp. После наступления
+    /// минутной границы timestamp намеренно не обновляется, поэтому live team
+    /// проверяется на каждом следующем проходе session loop.
+    pub(crate) fn idle_check_due(&mut self, now_ms: u32) -> bool {
+        if self.last_checked_time_stamp == 0 {
+            self.last_checked_time_stamp = now_ms;
+            return false;
+        }
+        self.last_checked_time_stamp.wrapping_add(60_000) <= now_ms
     }
 }
 

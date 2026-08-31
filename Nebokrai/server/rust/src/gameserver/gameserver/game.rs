@@ -15719,6 +15719,26 @@ impl CGame {
         }
     }
 
+    fn garbage_collect_idle_team_sessions(&mut self, now_ms: u32) -> usize {
+        let idle = {
+            let (session_factory, players) = (&mut self.session_factory, &self.players);
+            session_factory.idle_team_sessions(now_ms, |player_id| {
+                players.contains_key(&player_id)
+            })
+        };
+        for (session_id, team_id) in &idle {
+            self.team_session_ids.remove(team_id);
+            let plug_ids = self.session_factory.garbage_collect_session(*session_id);
+            tracing::trace!(
+                session_id,
+                team_id,
+                ?plug_ids,
+                "удалена локальная проекция группы без игроков"
+            );
+        }
+        idle.len()
+    }
+
     /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,
     /// true публикует полученный caller-ом `_time` sample.
     pub(crate) const fn set_auction_state(&mut self, enabled: bool, wall_time_seconds: u32) {
@@ -47488,6 +47508,8 @@ impl CGame {
             let started = runtime.now_milliseconds();
             let _team_snapshot_requests =
                 self.run_team_snapshot_queries(runtime.now_milliseconds());
+            let _idle_team_sessions =
+                self.garbage_collect_idle_team_sessions(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();
@@ -47509,6 +47531,8 @@ impl CGame {
             self.process_messages(runtime);
             let _team_snapshot_requests =
                 self.run_team_snapshot_queries(runtime.now_milliseconds());
+            let _idle_team_sessions =
+                self.garbage_collect_idle_team_sessions(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
                 .session_factory
                 .garbage_collect_terminal_equipment_sessions();

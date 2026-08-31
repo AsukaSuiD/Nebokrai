@@ -479,6 +479,37 @@ impl CSessionFactory {
             .collect()
     }
 
+    /// Достигнутая derived-часть `CTeam::AI`: возвращает только локальные
+    /// team-проекции, у которых после минутной границы не осталось ни одного
+    /// живого player-owner-а на этом GameServer.
+    pub(crate) fn idle_team_sessions(
+        &mut self,
+        now_ms: u32,
+        mut owner_is_local: impl FnMut(i32) -> bool,
+    ) -> Vec<(i32, u32)> {
+        let session_ids: Vec<i32> = self.teams.keys().copied().collect();
+        session_ids
+            .into_iter()
+            .filter_map(|session_id| {
+                if !self.teams.get_mut(&session_id)?.idle_check_due(now_ms) {
+                    return None;
+                }
+                let has_local_player = self
+                    .sessions
+                    .get(&session_id)?
+                    .plug_ids_storage()
+                    .iter()
+                    .filter_map(|plug_id| self.teammates.get(plug_id))
+                    .map(CTeamate::owner_id)
+                    .any(&mut owner_is_local);
+                if has_local_player {
+                    return None;
+                }
+                Some((session_id, self.teams.get(&session_id)?.team_id()))
+            })
+            .collect()
+    }
+
     pub(crate) fn team_member_descriptors(&self, session_id: i32) -> Option<Vec<(i32, i32, i32)>> {
         let session = self.sessions.get(&session_id)?;
         self.teams.get(&session_id)?;
