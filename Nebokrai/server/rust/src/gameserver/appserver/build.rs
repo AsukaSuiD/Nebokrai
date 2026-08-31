@@ -19,8 +19,10 @@
 //! позволяет `CGame` выполнить city send после возврата region owner-а;
 //! оставшийся runtime context обслуживает country-owner. Общий client
 //! serializer использует тот же canonical `CMoveShape`, а не
-//! повторно собранный shadow-prefix. AI, combat и остальная поверхность ниже
-//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! повторно собранный shadow-prefix. Достигнутая базовая атака также использует
+//! этого owner-а для attackability, свойств защиты, HP/death mutation и точного
+//! освобождения footprint. Автономный AI и остальная поверхность ниже остаются
+//! `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use super::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::moveshape::CMoveShape;
@@ -168,6 +170,20 @@ impl CBuild {
 
     pub(crate) fn set_hp(&mut self, hp: u32) {
         self.hp = hp;
+    }
+
+    pub(crate) const fn is_combat_available(&self) -> bool {
+        self.action() != 6 && self.hp != 0
+    }
+
+    /// Стадия `ApplyFinalDamage` меняет только HP. Смертельные callbacks и
+    /// packet выполняются раньше отдельного virtual `SetAction(6)`.
+    pub(crate) fn apply_combat_damage(&mut self, damage: u32) {
+        self.hp = self.hp.saturating_sub(damage);
+    }
+
+    pub(crate) fn finish_combat_death(&mut self) -> Option<BuildBlockUpdate> {
+        (self.hp == 0).then(|| self.set_action(6)).flatten()
     }
 
     pub(crate) fn refresh_hp(&mut self) {

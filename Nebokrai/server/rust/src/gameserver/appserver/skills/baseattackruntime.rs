@@ -7,13 +7,15 @@
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
+    BUILD_OBJECT_TYPE, CITY_GATE_OBJECT_TYPE,
     BaseAttackExecutionState, CGame, CGuid, CMessage, CMonster, CPlayer, CPlayerAI,
     GAP_WEAPON_DAMAGE_LEVEL, GameMainLoopRuntime, MONSTER_TYPE,
     MonsterKillingAttack, PLAYER_TYPE, PlayerKillingBlow, PlayerSkillDispatch,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    SKILL_USAGE_USER_HIT_MODIFIER, ShapeIdentity, SkillStage, defend_monster_base_attack,
-    defend_player_base_attack, finish_blind_states_on_defense, finish_player_base_attack,
+    SKILL_USAGE_USER_HIT_MODIFIER, ScriptExecutionContext, ShapeIdentity, SkillStage,
+    defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
+    finish_blind_states_on_defense, finish_player_base_attack,
     finish_player_blind_states_on_defense, game_legacy_random, get_line_direction, real_distance,
     retarget_jiumai_after_hurt, time_reached,
 };
@@ -61,6 +63,12 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 monster.shape_view(property)
             })
             .map(|view| (target, view)),
+        PlayerSkillDispatch::Object { target, .. }
+            if target.object_type == BUILD_OBJECT_TYPE as i32
+                || target.object_type == CITY_GATE_OBJECT_TYPE as i32 => player
+                .server_region_id()
+                .and_then(|region_id| game.find_shape_in_region(region_id, target))
+                .map(|view| (target, view)),
         _ => None,
     };
 
@@ -189,6 +197,22 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             .and_then(|owner| owner.base().find_monster_by_id(target_identity.id))
             .is_none_or(|monster| monster.hit_points() == 0 || monster.move_shape().is_god());
         if monster_unavailable {
+            let _ = game.send_base_attack_failure(player_id, 2);
+            finish_player_base_attack(game, player_id, player_ai, runtime);
+            return rejected();
+        }
+    }
+    if let Some((target_identity, _)) = target
+        && (target_identity.object_type == BUILD_OBJECT_TYPE as i32
+            || target_identity.object_type == CITY_GATE_OBJECT_TYPE as i32)
+    {
+        let available = game
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id)
+            .is_some_and(|region_id| {
+                game.stationary_build_attackable_by_player(player_id, region_id, target_identity)
+            });
+        if !available {
             let _ = game.send_base_attack_failure(player_id, 2);
             finish_player_base_attack(game, player_id, player_ai, runtime);
             return rejected();
@@ -839,6 +863,42 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         if let Some(attacker) = game.find_player_mut(player_id) {
             attacker.movement_shape_mut().set_action(1);
         }
+    } else if target_type == BUILD_OBJECT_TYPE as i32
+        || target_type == CITY_GATE_OBJECT_TYPE as i32
+    {
+        let Some(region_id) = game
+            .find_player(player_id)
+            .and_then(CPlayer::server_region_id)
+        else {
+            finish_player_base_attack(game, player_id, player_ai, runtime);
+            return rejected();
+        };
+        let identity = ShapeIdentity {
+            object_type: target_type,
+            id: target_id,
+            ex_id: CGuid::GUID_INVALID,
+        };
+        if !game.stationary_build_attackable_by_player(player_id, region_id, identity)
+            || !execute_player_stationary_attack(
+                game,
+                player_id,
+                region_id,
+                identity,
+                skill_level,
+                hit_modifier,
+                target_x,
+                target_y,
+                runtime,
+            )
+        {
+            let _ = game.send_base_attack_failure(player_id, 2);
+            finish_player_base_attack(game, player_id, player_ai, runtime);
+            return rejected();
+        }
+        first_contact = true;
+        if let Some(attacker) = game.find_player_mut(player_id) {
+            attacker.movement_shape_mut().set_action(1);
+        }
     }
     let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
     let _ = player_ai.advance_base_attack(SkillStage::Attack, SkillStage::Apply);
@@ -848,4 +908,212 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         first_contact,
         killing_blow,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_player_stationary_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    region_id: i32,
+    identity: ShapeIdentity,
+    skill_level: i32,
+    hit_modifier: i32,
+    target_x: i32,
+    target_y: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(target) = game.stationary_build_combat_snapshot(region_id, identity) else {
+        return false;
+    };
+    if target.hp == 0 {
+        return false;
+    }
+    let (
+        mut attacker_properties,
+        attacker_occupation,
+        attacker_team,
+        attacker_faction,
+        attacker_union,
+    ) = {
+        let Some(attacker) = game.find_player(player_id) else {
+            return false;
+        };
+        (
+            attacker.combat_properties(),
+            attacker.occupation(),
+            attacker.team_id(),
+            attacker.faction_id(),
+            attacker.union_id(),
+        )
+    };
+    let [
+        blast_attack,
+        blast_defense,
+        element_blast_attack,
+        element_blast_defense,
+        full_miss,
+    ] = game.globe_setup.base_combat_scales();
+    if attacker_properties.blast_attack_scale() < 1.0 {
+        attacker_properties.blast_attack_scale_bits = blast_attack.max(1.0).to_bits();
+    }
+    if attacker_properties.blast_defense_scale() < 0.01 {
+        attacker_properties.blast_defense_scale_bits = blast_defense.max(0.01).to_bits();
+    }
+    if attacker_properties.element_blast_attack_scale() < 1.0 {
+        attacker_properties.element_blast_attack_scale_bits =
+            element_blast_attack.max(1.0).to_bits();
+    }
+    if attacker_properties.element_blast_defense_scale() < 0.01 {
+        attacker_properties.element_blast_defense_scale_bits =
+            element_blast_defense.max(0.01).to_bits();
+    }
+    if attacker_properties.full_miss_scale() < 0.01 {
+        attacker_properties.full_miss_scale_bits = full_miss.max(0.01).to_bits();
+    }
+    if attacker_properties.critical_rate() < 1.0 {
+        attacker_properties.critical_rate_bits =
+            game.globe_setup.critical_rate().max(1.0).to_bits();
+    }
+
+    let weapon_level = game
+        .find_player(player_id)
+        .and_then(|player| player.equipment().get_goods(2))
+        .map_or(0, |goods| {
+            goods.addon_property_value(&game.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
+        });
+    let (weapon_divisor, weapon_minimum) = game.globe_setup.weapon_damage_factors();
+    let mut damage_factor = if weapon_divisor == 0.0 {
+        1.0
+    } else {
+        weapon_level.max(0) as f32 / weapon_divisor
+    };
+    damage_factor = damage_factor.min(1.0).max(weapon_minimum);
+    let minimum = attacker_properties.minimum_attack as i32;
+    let maximum = attacker_properties.maximum_attack as i32;
+    let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
+    let physical = minimum.wrapping_add(game_legacy_random(&mut game.random_state, span));
+    let mut attack = AttackInformation {
+        skill_id: BASE_ATTACK_SKILL_ID,
+        skill_level: skill_level as u8,
+        attacker_type: PLAYER_TYPE,
+        attacker_id: player_id,
+        attacker_team_id: attacker_team,
+        attacker_faction_id: attacker_faction,
+        attacker_union_id: attacker_union,
+        hit_modifier,
+        damage_factor,
+        damage_modifier: 0,
+        critical: false,
+        blast_attack: false,
+        full_miss: 0,
+        damages: vec![
+            AttackPower {
+                kind: AttackPowerType::Physical,
+                hp_damage: physical.max(0),
+                mp_damage: 0,
+            },
+            AttackPower {
+                kind: AttackPowerType::Element,
+                hp_damage: attacker_properties.add_element_attack as i32,
+                mp_damage: 0,
+            },
+            AttackPower {
+                kind: AttackPowerType::Soul,
+                hp_damage: i32::from(attacker_properties.add_soul_attack),
+                mp_damage: 0,
+            },
+        ],
+    };
+    if game_legacy_random(&mut game.random_state, 100) < i32::from(attacker_properties.cch) {
+        attack.critical = true;
+        let critical_rate = game.globe_setup.critical_rate();
+        for power in &mut attack.damages {
+            power.hp_damage =
+                ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+        }
+    }
+    let mut random = |maximum| game_legacy_random(&mut game.random_state, maximum);
+    defend_build_base_attack(
+        &mut attack,
+        attacker_properties,
+        attacker_occupation,
+        target.defense,
+        target.element_resistance,
+        &game.globe_setup,
+        &mut random,
+    );
+
+    if attack.full_miss != 0 {
+        let mut missed = CMessage::new(0x000b_f612);
+        missed.add_byte(attack.full_miss);
+        missed.add_long(identity.object_type);
+        missed.add_long(identity.id);
+        let _ = game.send_shape_position_around(region_id, target_x, target_y, &missed);
+        return true;
+    }
+    let damage = attack.hp_damage().min(target.hp);
+    if damage == 0 {
+        return true;
+    }
+    let Some(mutation) = game.apply_stationary_build_damage(player_id, region_id, identity, damage)
+    else {
+        return false;
+    };
+
+    if mutation.died {
+        let physical_damage = attack
+            .damages
+            .iter()
+            .find(|power| power.kind == AttackPowerType::Physical)
+            .map_or(0, |power| power.hp_damage.max(0) as u32)
+            .min(target.hp);
+        if !mutation.script.is_empty() {
+            let _ = game.run_script_file(
+                &mutation.script,
+                ScriptExecutionContext {
+                    player_id: Some(player_id),
+                    region_id: Some(region_id),
+                    ..ScriptExecutionContext::default()
+                },
+                runtime,
+            );
+        }
+        let mut died = CMessage::new(0x000b_f60b);
+        died.add_long(PLAYER_TYPE);
+        died.add_long(player_id);
+        died.add_long(identity.object_type);
+        died.add_long(identity.id);
+        died.add_ulong(physical_damage);
+        died.base_mut().add_char(1);
+        CGame::append_base_attack_tail(&mut died, &attack);
+        let _ = game.send_shape_position_around(region_id, target_x, target_y, &died);
+        if !game.finish_stationary_build_death(region_id, identity) {
+            return false;
+        }
+    } else {
+        let records: Vec<_> = attack
+            .damages
+            .iter()
+            .filter(|power| power.hp_damage > 0)
+            .collect();
+        let mut hurt = CMessage::new(0x000b_f60a);
+        hurt.add_long(PLAYER_TYPE);
+        hurt.add_long(player_id);
+        hurt.add_long(identity.object_type);
+        hurt.add_long(identity.id);
+        hurt.add_byte(records.len() as u8);
+        for power in records {
+            hurt.add_byte(match power.kind {
+                AttackPowerType::Physical => 0,
+                AttackPowerType::Element => 1,
+                AttackPowerType::Soul => 2,
+                AttackPowerType::Poison => 3,
+            });
+            hurt.add_ulong(power.hp_damage as u32);
+        }
+        hurt.add_ulong(mutation.current_hp);
+        CGame::append_base_attack_tail(&mut hurt, &attack);
+        let _ = game.send_shape_position_around(region_id, target_x, target_y, &hurt);
+    }
+    true
 }

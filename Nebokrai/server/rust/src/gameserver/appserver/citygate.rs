@@ -10,9 +10,10 @@
 //! Rust хранит derived-owner поверх canonical `CBuild/CMoveShape`: identity,
 //! позиция, action/state и общий property block не дублируются. `BuildBlockUpdate`
 //! оставляет изменение карты владельцу региона, но сохраняет момент эффекта:
-//! action и `m_lChangeState` меняются до вызова старого `SetBlock`. AI, damage,
-//! inherited client serializer принадлежит `CBuild`; AI, attackability и
-//! combat callbacks ниже пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! action и `m_lChangeState` меняются до вызова старого `SetBlock`. Inherited
+//! client serializer и damage принадлежат `CBuild`; достигнутая базовая атака
+//! сохраняет derived attackability и hurt callback. Автономный AI ниже пока
+//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use super::build::{BuildBlockUpdate, BuildInit, CBuild};
 use super::moveshape::CMoveShape;
@@ -147,6 +148,14 @@ impl CCityGate {
 
     pub(crate) const fn move_shape(&self) -> &CMoveShape {
         self.build.move_shape()
+    }
+
+    pub(crate) const fn build(&self) -> &CBuild {
+        &self.build
+    }
+
+    pub(crate) fn build_mut(&mut self) -> &mut CBuild {
+        &mut self.build
     }
 
     pub(crate) const fn object_type(&self) -> u32 {

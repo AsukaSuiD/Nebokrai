@@ -777,9 +777,9 @@ use crate::gameserver::appserver::servercityregion::{
     CServerCityRegion, CityGuardRefreshTargets, CityReturnPointContext, CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
-    CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
-    CountryGuardRefreshTargets, CountryReturnPointContext, CountryReturnPointError,
-    CountrySecurityError,
+    CServerCountryRegion, CountryCampContext, CountryContendContext, CountryContendEntryContext,
+    CountryContendPlayer, CountryGuardRefreshTargets, CountryMoveShape,
+    CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
@@ -1212,7 +1212,7 @@ use crate::gameserver::appserver::skills::curestate::{
     expire_monster_cure_state, send_cure_state_visual,
 };
 use crate::gameserver::appserver::skills::fightdefense::{
-    defend_monster_base_attack, defend_player_base_attack,
+    defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
 };
 use crate::gameserver::appserver::skills::fury::{
     cancel_player_fury, execute_player_fury, is_fury_dispatch, FURY_SKILL_ID,
@@ -4449,6 +4449,60 @@ impl ServerRegionOwner {
         }
     }
 
+    pub(crate) fn stationary_build(&self, identity: ShapeIdentity) -> Option<&CBuild> {
+        match self {
+            Self::City(region) if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 => region
+                .city_gates
+                .values()
+                .find(|state| state.gate.id() == identity.id)
+                .map(|state| state.gate.build()),
+            Self::Country(region) => match identity.object_type {
+                kind if kind == CITY_GATE_OBJECT_TYPE as i32 => region
+                    .defend_gates
+                    .get(&identity.id)
+                    .or_else(|| region.attack_gates.get(&identity.id))
+                    .map(CCityGate::build),
+                kind if kind == BUILD_OBJECT_TYPE as i32 => region
+                    .defend_flags
+                    .get(&identity.id)
+                    .or_else(|| region.attack_flags.get(&identity.id)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn stationary_build_mut(
+        &mut self,
+        identity: ShapeIdentity,
+    ) -> Option<&mut CBuild> {
+        match self {
+            Self::City(region) if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 => region
+                .city_gates
+                .values_mut()
+                .find(|state| state.gate.id() == identity.id)
+                .map(|state| state.gate.build_mut()),
+            Self::Country(region) => match identity.object_type {
+                kind if kind == CITY_GATE_OBJECT_TYPE as i32 => {
+                    if region.defend_gates.contains_key(&identity.id) {
+                        region.defend_gates.get_mut(&identity.id).map(CCityGate::build_mut)
+                    } else {
+                        region.attack_gates.get_mut(&identity.id).map(CCityGate::build_mut)
+                    }
+                }
+                kind if kind == BUILD_OBJECT_TYPE as i32 => {
+                    if region.defend_flags.contains_key(&identity.id) {
+                        region.defend_flags.get_mut(&identity.id)
+                    } else {
+                        region.attack_flags.get_mut(&identity.id)
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Возвращает concrete country symbol, чей `CBuild` является canonical
     /// owner-ом shape и property client snapshot.
     pub(crate) fn country_flag(&self, build_id: i32) -> Option<&CBuild> {
@@ -4532,6 +4586,31 @@ impl ServerRegionOwner {
             Self::Nation(region) => region.war.reset_war_state(war_number, state),
             Self::GodsBattle(region) => region.war.reset_war_state(war_number, state),
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BuildCombatSnapshot {
+    pub(crate) hp: u32,
+    pub(crate) defense: u32,
+    pub(crate) element_resistance: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BuildCombatMutation {
+    pub(crate) current_hp: u32,
+    pub(crate) died: bool,
+    pub(crate) script: Vec<u8>,
+}
+
+struct KnownCountryCamp {
+    player_id: i32,
+    country: u8,
+}
+
+impl CountryCampContext for KnownCountryCamp {
+    fn country_player_country(&mut self, player_id: i32) -> Option<u8> {
+        (player_id == self.player_id).then_some(self.country)
     }
 }
 
@@ -43205,6 +43284,150 @@ impl CGame {
     pub(crate) fn region_symbol_attackable(&self, region_id: i32) -> bool {
         self.find_region(region_id)
             .is_some_and(ServerRegionOwner::symbol_is_attackable)
+    }
+
+    pub(crate) fn stationary_build_combat_snapshot(
+        &self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> Option<BuildCombatSnapshot> {
+        let owner = self.find_region(region_id)?;
+        let build = owner.stationary_build(identity)?;
+        let view = build.shape_view();
+        (view.identity == identity).then(|| BuildCombatSnapshot {
+            hp: build.hp(),
+            defense: build.defence(),
+            element_resistance: build.element_resistance(),
+        })
+    }
+
+    /// Точный virtual `CBuild/CCityGate::IsAttackAble` для player-attacker.
+    /// Country-цели делегируются существующему camp owner-у, обычные символы
+    /// используют `SymbolIsAttackAble`, а городские ворота требуют активной
+    /// войны и защищают owning faction/union.
+    pub(crate) fn stationary_build_attackable_by_player(
+        &self,
+        player_id: i32,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> bool {
+        let Some(player) = self.find_player(player_id) else {
+            return false;
+        };
+        if player.server_region_id() != Some(region_id) {
+            return false;
+        }
+        let Some(owner) = self.find_region(region_id) else {
+            return false;
+        };
+        let Some(build) = owner.stationary_build(identity) else {
+            return false;
+        };
+        if !build.is_combat_available()
+            || (identity.object_type == CITY_GATE_OBJECT_TYPE as i32 && build.action() == 7)
+        {
+            return false;
+        }
+
+        if owner.base().war_region_type == 3 {
+            let ServerRegionOwner::Country(country_region) = owner else {
+                return false;
+            };
+            let mut context = KnownCountryCamp {
+                player_id,
+                country: player.country(),
+            };
+            let target = Some(CountryMoveShape {
+                object_type: identity.object_type,
+                id: identity.id,
+            });
+            let attacker = Some(CountryMoveShape {
+                object_type: PLAYER_TYPE,
+                id: player_id,
+            });
+            return match identity.object_type {
+                kind if kind == CITY_GATE_OBJECT_TYPE as i32 => country_region
+                    .gate_is_attack_able(target, attacker, &mut context)
+                    .unwrap_or(false),
+                kind if kind == BUILD_OBJECT_TYPE as i32 => country_region
+                    .flag_is_attack_able(target, attacker, &mut context)
+                    .unwrap_or(false),
+                _ => false,
+            };
+        }
+
+        if identity.object_type == BUILD_OBJECT_TYPE as i32 {
+            return owner.symbol_is_attackable();
+        }
+        let ServerRegionOwner::City(city_region) = owner else {
+            return false;
+        };
+        city_region.war.base.get_city_state() == 3
+            && city_region.guard_is_attackable(
+                PLAYER_TYPE,
+                player.faction_id(),
+                player.union_id(),
+            )
+    }
+
+    pub(crate) fn apply_stationary_build_damage(
+        &mut self,
+        player_id: i32,
+        region_id: i32,
+        identity: ShapeIdentity,
+        damage: u32,
+    ) -> Option<BuildCombatMutation> {
+        let attacker_country = self.find_player(player_id).map(CPlayer::country)?;
+        let mut owner = self.take_region_owner(region_id)?;
+        let mutation = owner.stationary_build_mut(identity).map(|build| {
+            let script = build.script.clone();
+            build.apply_combat_damage(damage);
+            (build.hp(), build.hp() == 0, script)
+        });
+        let Some((current_hp, died, script)) = mutation else {
+            self.restore_region_owner(owner);
+            return None;
+        };
+        if !died
+            && identity.object_type == CITY_GATE_OBJECT_TYPE as i32
+            && let ServerRegionOwner::City(region) = &mut owner
+        {
+            let _ = region.city_gate_on_been_hurted(identity.id, PLAYER_TYPE, player_id);
+        }
+        if died
+            && identity.object_type == BUILD_OBJECT_TYPE as i32
+            && let ServerRegionOwner::Country(region) = &mut owner
+        {
+            // Country override `OnSymbolDestroy` завершает активную войну через
+            // уже восстановленный `OnFlagDestroy`; победившая сторона берётся
+            // от реального player-attacker-а.
+            region.on_flag_destroy(region_id, i32::from(attacker_country));
+        }
+        self.restore_region_owner(owner);
+        Some(BuildCombatMutation {
+            current_hp,
+            died,
+            script,
+        })
+    }
+
+    pub(crate) fn finish_stationary_build_death(
+        &mut self,
+        region_id: i32,
+        identity: ShapeIdentity,
+    ) -> bool {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let update = owner
+            .stationary_build_mut(identity)
+            .and_then(CBuild::finish_combat_death);
+        let finished = update.is_some();
+        if let Some(update) = update {
+            let _ = owner.base_mut().apply_build_block(update);
+        }
+        self.restore_region_owner(owner);
+        finished
     }
 
     /// Exact facts для трёх client skill family. `CPlayer::GetAI` не может

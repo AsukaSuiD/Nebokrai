@@ -180,6 +180,111 @@ pub(crate) fn defend_monster_base_attack(
     }
 }
 
+/// Ветка общего `CFightDefense::Defense` для `CBuild`: target не является
+/// player/monster, поэтому level modifier, PvP factor, avoid и state hooks не
+/// применяются. При этом player-attacker сохраняет свои blast/critical scales
+/// и исходный порядок RNG: hit, затем по одному blast-броску для physical и
+/// element damage.
+pub(crate) fn defend_build_base_attack(
+    attack: &mut AttackInformation,
+    attacker: PlayerCombatProperties,
+    attacker_occupation: u8,
+    defense: u32,
+    element_resistance: u32,
+    setup: &GlobeSetupSnapshot,
+    random: &mut dyn FnMut(i32) -> i32,
+) {
+    let (minimum_hit, maximum_hit) = setup.player_hit_limits(attacker_occupation);
+    let hit = maximum_hit
+        .wrapping_add(attack.hit_modifier)
+        .clamp(minimum_hit, maximum_hit);
+    if hit <= random(100) {
+        for power in &mut attack.damages {
+            power.hp_damage = 0;
+        }
+        attack.damage_modifier = 0;
+        attack.full_miss = 2;
+        return;
+    }
+
+    for power in &mut attack.damages {
+        match power.kind {
+            AttackPowerType::Physical => {
+                if random(100) < i32::from(attacker.blast_attack) {
+                    power.hp_damage = truncate_original(
+                        f64::from(power.hp_damage) * f64::from(attacker.blast_attack_scale()),
+                    );
+                    let scale = f64::from(attacker.blast_defense_scale());
+                    power.hp_damage = if attack.critical {
+                        power.hp_damage.wrapping_add(truncate_original(
+                            f64::from(defense)
+                                * scale
+                                * f64::from(attacker.critical_rate())
+                                * -0.5,
+                        ))
+                    } else {
+                        power.hp_damage.wrapping_sub(truncate_original(
+                            f64::from(defense / 2) * scale,
+                        ))
+                    };
+                    attack.blast_attack = true;
+                } else if attack.critical {
+                    power.hp_damage = power.hp_damage.wrapping_add(truncate_original(
+                        f64::from(defense) * f64::from(attacker.critical_rate()) * -0.5,
+                    ));
+                } else {
+                    power.hp_damage = power.hp_damage.wrapping_sub(defense as i32 / 2);
+                }
+                power.hp_damage = power.hp_damage.max(1);
+            }
+            AttackPowerType::Element => {
+                if random(100) < i32::from(attacker.blast_element_attack) {
+                    power.hp_damage = truncate_original(
+                        f64::from(power.hp_damage)
+                            * f64::from(attacker.element_blast_attack_scale()),
+                    );
+                    let scale = f64::from(attacker.element_blast_defense_scale());
+                    power.hp_damage = if attack.critical {
+                        power.hp_damage.wrapping_add(truncate_original(
+                            f64::from(element_resistance)
+                                * scale
+                                * f64::from(attacker.critical_rate())
+                                * -0.5,
+                        ))
+                    } else {
+                        power.hp_damage.wrapping_sub(truncate_original(
+                            f64::from(element_resistance / 2) * scale,
+                        ))
+                    };
+                    attack.blast_attack = true;
+                } else if attack.critical {
+                    power.hp_damage = power.hp_damage.wrapping_add(truncate_original(
+                        f64::from(element_resistance)
+                            * f64::from(attacker.critical_rate())
+                            * -0.5,
+                    ));
+                } else {
+                    power.hp_damage = power
+                        .hp_damage
+                        .wrapping_sub(element_resistance as i32 / 2);
+                }
+                power.hp_damage = power.hp_damage.max(1);
+            }
+            AttackPowerType::Soul => {
+                // `CBuild` наследует нулевую реализацию soul resistance.
+                power.hp_damage = power.hp_damage.max(0);
+            }
+            AttackPowerType::Poison => {}
+        }
+        if power.hp_damage > 0 {
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(attack.damage_factor),
+            )
+            .max(1);
+        }
+    }
+}
+
 pub(crate) fn defend_player_base_attack(
     attack: &mut AttackInformation,
     attacker: PlayerCombatProperties,
