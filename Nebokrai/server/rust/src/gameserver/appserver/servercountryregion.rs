@@ -86,16 +86,15 @@ use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
 };
-use super::servercityregion::{CityGateRuntimeContext, city_gate_footprint_is_clear};
+use super::servercityregion::city_gate_footprint_is_clear;
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError,
-    ServerRegionMonsterContext, ServerRegionMonsterRectBlock, ServerReturnPlayer,
+    ServerRegionMonsterRectBlock, ServerReturnPlayer,
     ServerReturnSetupBlock,
 };
 use super::serverwarregion::{
     ContendArithmeticBlock, ContendState, RegionDecodeInputBlock, read_region_array,
 };
-use crate::gameserver::gameserver::game::GameClockContext;
 
 const WC_DEFEND: i32 = 0;
 const WC_ATTACK: i32 = 1;
@@ -178,15 +177,6 @@ pub(crate) enum CountryEntryError {
 pub(crate) trait CountryRegionDecodeContext: ServerRegionDecodeContext {}
 
 impl<Context: ServerRegionDecodeContext + ?Sized> CountryRegionDecodeContext for Context {}
-
-pub(crate) trait CountryRegionRuntimeContext:
-    CityGateRuntimeContext + ServerRegionMonsterContext + GameClockContext
-{}
-
-impl<T> CountryRegionRuntimeContext for T where
-    T: CityGateRuntimeContext + ServerRegionMonsterContext + GameClockContext
-{
-}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CountryGuardRefreshTargets {

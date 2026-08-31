@@ -8,6 +8,9 @@
 //! замену кода сообщения и выбор адресатов после запуска фазы войны.
 //! Результаты уже выполненных мутаций и отправок публикуются через `tracing` в
 //! месте возникновения и не образуют дерево отчётов.
+//! После замыкания country guard/build lifecycle у `CGame` весь dispatcher
+//! требует только достигнутый player-region/nation контракт; прежняя общая
+//! country runtime-граница с gate/monster callbacks удалена.
 //!
 //! Сохранена неоднозначность кода `0x7FF15`: восьмибайтовый устаревший ответ
 //! распознаётся отдельно, а неопределённое чтение за концом исходного буфера не
@@ -17,19 +20,15 @@
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
 };
-use super::super::region::RegionRandomContext;
-use super::super::servercountryregion::{CountryBattleStateBlock, CountryRegionRuntimeContext};
+use super::super::servercountryregion::CountryBattleStateBlock;
 use crate::gameserver::gameserver::game::{CGame, ScriptRegionChangeContext, ServerRegionOwner};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::nets::netserver::message::CMessage;
 use std::mem::size_of;
 
-pub(crate) trait GameCountryWarRuntime:
-    CountryRegionRuntimeContext
-    + RegionRandomContext
-    + ScriptRegionChangeContext
-{
-}
+pub(crate) trait GameCountryWarRuntime: ScriptRegionChangeContext {}
+
+impl<T: ScriptRegionChangeContext + ?Sized> GameCountryWarRuntime for T {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryWarMessageDispatchError<SideError> {
