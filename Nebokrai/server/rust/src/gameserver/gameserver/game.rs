@@ -3305,9 +3305,9 @@ fn append_gods_battle_number(output: &mut Vec<u8>, label: &[u8], value: i32) {
     output.extend_from_slice(value.to_string().as_bytes());
 }
 
-pub(crate) trait NationCombatContext: ServerRegionNpcContext + GameClockContext {}
+pub(crate) trait NationCombatContext: GameClockContext {}
 
-impl<T> NationCombatContext for T where T: ServerRegionNpcContext + GameClockContext {}
+impl<T> NationCombatContext for T where T: GameClockContext {}
 
 pub(crate) trait NationContendContext:
     NationCombatContext + ServerRegionMonsterContext
@@ -13025,7 +13025,7 @@ impl CGame {
                                     script,
                                     x,
                                     y,
-                                    runtime,
+                                    runtime.now_milliseconds(),
                                 );
                                 treasure_spawns = treasure_spawns.wrapping_add(1);
                                 tracing::trace!(
@@ -13206,14 +13206,57 @@ impl CGame {
         }
     }
 
-    fn spawn_nation_treasure_box<Context: NationCombatContext>(
-        &self,
+    fn add_nation_npc_owned(
+        &mut self,
+        region: &mut ServerNationRegion,
+        setup: &ServerRegionNpcSetup,
+        now_ms: u32,
+    ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
+        let (area_width, area_height) = self.area_dimensions();
+        let position_failure_template = self.get_string_by_id(b"GS0233").to_vec();
+        let mut context = GameNationNpcRefreshContext {
+            random_state: &mut self.random_state,
+            position_failure_template: &position_failure_template,
+            effects: Vec::new(),
+        };
+        let spawn = region.war.base.add_npc(
+            setup,
+            true,
+            true,
+            now_ms,
+            area_width,
+            area_height,
+            &mut context,
+        );
+        let effects = std::mem::take(&mut context.effects);
+        drop(context);
+        for effect in effects {
+            match effect {
+                GameNationNpcRefreshEffect::Log(text) => add_game_log_text(&text),
+                GameNationNpcRefreshEffect::NpcEntry(origin, message) => {
+                    if let Err(error) =
+                        self.send_game_shape_around(&region.war.base, &origin, None, &message)
+                    {
+                        tracing::warn!(
+                            region_id = region.war.base.id,
+                            ?error,
+                            "не опубликован вход NPC войны наций"
+                        );
+                    }
+                }
+            }
+        }
+        spawn
+    }
+
+    fn spawn_nation_treasure_box(
+        &mut self,
         region: &mut ServerNationRegion,
         name_id: &[u8],
         script: &[u8],
         x: i32,
         y: i32,
-        context: &mut Context,
+        now_ms: u32,
     ) -> Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock> {
         let setup = ServerRegionNpcSetup {
             show_list: true,
@@ -13228,16 +13271,7 @@ impl CGame {
             name: self.get_string_by_id(name_id).to_vec(),
             script: script.to_vec(),
         };
-        let (area_width, area_height) = self.area_dimensions();
-        region.war.base.add_npc(
-            &setup,
-            true,
-            true,
-            context.now_milliseconds(),
-            area_width,
-            area_height,
-            context,
-        )
+        self.add_nation_npc_owned(region, &setup, now_ms)
     }
 
     pub(crate) fn send_game_shape_around(
@@ -13798,8 +13832,8 @@ impl CGame {
     }
 
     /// Reached `CMonster::OnDied` Nation callback. Context оставляет снаружи
-    /// только уже существующие spatial/AI callbacks полноценного `AddNpc` и
-    /// process log sinks; state и все client/World packets исполняются здесь.
+    /// только clock; RNG, полноценный `AddNpc`, spatial entry, журналы, state
+    /// и все client/World packets исполняются владельцами `CGame`.
     pub(crate) fn monster_on_died<Context: NationCombatContext>(
         &mut self,
         region_id: i32,
@@ -13891,7 +13925,7 @@ impl CGame {
                     &mut region,
                     mutation.defender_country,
                     mutation.attacker_country,
-                    context,
+                    context.now_milliseconds(),
                 );
                 yu_ying_shi_spawn_count = yu_ying_shi_spawn_count.wrapping_add(1);
             }
@@ -13902,7 +13936,7 @@ impl CGame {
                     &mut region,
                     mutation.defender_country,
                     mutation.defender_country,
-                    context,
+                    context.now_milliseconds(),
                 );
                 yu_ying_shi_spawn_count = yu_ying_shi_spawn_count.wrapping_add(1);
             }
@@ -14007,12 +14041,12 @@ impl CGame {
         }
     }
 
-    fn spawn_nation_yu_ying_shi<Context: NationCombatContext>(
-        &self,
+    fn spawn_nation_yu_ying_shi(
+        &mut self,
         region: &mut ServerNationRegion,
         country: u8,
         notify_country: u8,
-        context: &mut Context,
+        now_ms: u32,
     ) {
         let (script, x, y, coordinates): (&[u8], i32, i32, &[u8]) = match country {
             1 => (
@@ -14054,16 +14088,7 @@ impl CGame {
             name: self.get_string_by_id(b"GS1136").to_vec(),
             script: script.to_vec(),
         };
-        let (area_width, area_height) = self.area_dimensions();
-        let spawn = region.war.base.add_npc(
-            &setup,
-            true,
-            true,
-            context.now_milliseconds(),
-            area_width,
-            area_height,
-            context,
-        );
+        let spawn = self.add_nation_npc_owned(region, &setup, now_ms);
         if spawn.is_err() {
             tracing::warn!(
                 country,
