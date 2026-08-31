@@ -916,11 +916,26 @@ impl CMonster {
         let factor = |index: usize| f32::from_bits(self.factors[index]);
         let scaled =
             |value: u32, index: usize| ((value as f32) * factor(index)).round_ties_even() as u32;
+        let mut element_resistance = property.element_resistant;
+        if let Some(state) = self.move_shape.taiji_state() {
+            element_resistance = state.apply_to_monster(element_resistance);
+        }
+        element_resistance = if element_resistance as i32 > 0 {
+            element_resistance
+        } else {
+            1
+        };
+        if self.tamed
+            && self.master_info.master_type == 400
+            && self.master_info.master_id != 0
+        {
+            element_resistance = scaled(element_resistance, 3);
+        }
         let mut properties = MonsterCombatProperties {
             level: property.level as u8,
             defense: scaled(property.defence, 5),
             dodge: property.dodge,
-            element_resistance: scaled(property.element_resistant, 3),
+            element_resistance,
             soul_resistance: property.soul_resistant as u16,
             attack_avoid: property.attack_avoid,
             element_avoid: property.element_avoid,
@@ -994,7 +1009,7 @@ impl CMonster {
 
     pub(crate) fn battle_fairy_element_modify(&self, mut value: i32) -> i32 {
         if let Some(state) = self.move_shape.origin_state() {
-            value = state.apply_to_monster();
+            value = state.apply_to_monster(value);
         }
         for state in self.move_shape.reached_property_states() {
             match state {
@@ -1011,7 +1026,15 @@ impl CMonster {
         for state in self.move_shape.battle_fairy_attribute_states() {
             value = state.apply_to_monster_element(value);
         }
-        value
+        let mut value = value.max(0) as u32;
+        if self.tamed
+            && self.master_info.master_type == 400
+            && self.master_info.master_id != 0
+        {
+            value = ((value as f32) * f32::from_bits(self.factors[2]))
+                .round_ties_even() as u32;
+        }
+        value as i32
     }
 
     /// Точная завершающая часть владельца защиты `CMonster::OnBeenHurted`.

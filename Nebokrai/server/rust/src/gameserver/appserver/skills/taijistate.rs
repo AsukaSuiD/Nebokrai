@@ -3,8 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает постоянное
 //! состояние `0x12d` без собственного визуального эффекта. Для игрока
 //! `OnUpdateProperties` использует младшие 16 бит параметра и насыщает
-//! сопротивление стихиям до `i32::MAX`. Ветка монстра остаётся сохранённым
-//! псевдокодом до появления настоящего исполнителя навыка монстра.
+//! сопротивление стихиям до `i32::MAX`. Монстр передаёт полный signed gain в
+//! wrapping-additive `CMonster::SetElementResistant`; minimum/factor остаются
+//! у итогового monster property getter-а.
 
 use super::taiji::TAIJI_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -33,6 +34,10 @@ impl TaiJiState {
             .wrapping_add(u32::from(self.player_element_resistance_gain()))
             .min(i32::MAX as u32);
         properties
+    }
+
+    pub(crate) const fn apply_to_monster(self, value: u32) -> u32 {
+        value.wrapping_add(self.element_resistance_gain as u32)
     }
 }
 
@@ -65,7 +70,7 @@ impl TaiJiState {
 // ============================================================================
 // FUNCTION: CTaiJiState::OnUpdateProperties
 // STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: `TaiJiState::apply_to_player`; monster-ветвь остаётся RAW.
+// IMPLEMENTED: `TaiJiState::apply_to_player` и `TaiJiState::apply_to_monster`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\taijistate.cpp:37

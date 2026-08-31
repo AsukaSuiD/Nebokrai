@@ -3,7 +3,8 @@
 //! Игрок получает знаково расширенные младшие 16 бит параметра через
 //! wrapping-сложение с `element_modify`. Состояние `304` не имеет собственного
 //! таймера или визуального сообщения. Monster-ветвь передаёт полный signed gain
-//! в `SetElementModify`, поэтому заменяет значение, а не складывает его.
+//! в wrapping-additive `SetElementModify`; clamp/factor применяет итоговый
+//! monster property getter.
 //! Constructor RVA `0x00201210` задаёт ID `0x130` и нулевой gain.
 
 use super::origin::ORIGIN_SKILL_ID;
@@ -28,7 +29,7 @@ impl OriginState {
         value.wrapping_add((self.element_modify_gain as i16) as i32)
     }
 
-    pub(crate) const fn apply_to_monster(self) -> i32 {
-        self.element_modify_gain
+    pub(crate) const fn apply_to_monster(self, value: i32) -> i32 {
+        value.wrapping_add(self.element_modify_gain)
     }
 }
