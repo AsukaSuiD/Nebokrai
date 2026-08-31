@@ -13517,6 +13517,33 @@ impl CGame {
             .then(|| self.nation_monster_damaged(region_id, monster_id, attacker_id))?
     }
 
+    /// Typed dispatch достигнутого `CCityGate::OnBeenHurted`: `CGame`
+    /// разрешает region owner, а city-region разрешает runtime child-ID и
+    /// хранит последние attacker-поля. Боевой расчёт `CBuild` остаётся
+    /// отдельным предшествующим owner-ом и здесь не подменяется.
+    pub(crate) fn city_gate_on_been_hurted(
+        &mut self,
+        region_id: i32,
+        city_gate_id: i32,
+        attacker_type: i32,
+        attacker_id: i32,
+    ) -> bool {
+        let Some(owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let ServerRegionOwner::City(mut region) = owner else {
+            self.restore_region_owner(owner);
+            return false;
+        };
+        let updated = region.city_gate_on_been_hurted(
+            city_gate_id,
+            attacker_type,
+            attacker_id,
+        );
+        self.restore_region_owner(ServerRegionOwner::City(region));
+        updated
+    }
+
     pub(crate) fn nation_monster_damaged(
         &mut self,
         region_id: i32,

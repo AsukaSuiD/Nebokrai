@@ -734,6 +734,24 @@ impl CServerCityRegion {
         true
     }
 
+    /// Находит concrete gate по runtime child-ID, с которым объект
+    /// зарегистрирован в base region, и сразу применяет точный owner-effect
+    /// `CCityGate::OnBeenHurted`. Logical ID таблицы `tagCityGate` здесь не
+    /// участвует: combat lookup исходно приходит по identity объекта.
+    pub(crate) fn city_gate_on_been_hurted(
+        &mut self,
+        city_gate_id: i32,
+        attacker_type: i32,
+        attacker_id: i32,
+    ) -> bool {
+        let update = self
+            .city_gates
+            .values()
+            .find(|state| state.city_gate_id == city_gate_id)
+            .map(|state| state.gate.on_been_hurted(attacker_type, attacker_id));
+        update.is_some_and(|update| self.apply_gate_hurt_owner_update(update))
+    }
+
     pub(crate) fn guard_refresh_targets(&self) -> CityGuardRefreshTargets {
         CityGuardRefreshTargets {
             monster_ids: self.guard_monsters.iter().copied().collect(),
