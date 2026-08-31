@@ -41608,17 +41608,20 @@ impl CGame {
             }
         }
 
-        let city_war_enemies = self.find_player(blow.victim_id).is_some_and(|victim| {
-            victim.is_city_war_enemy_faction_member(murderer_faction)
-                || self.find_player(murderer_id).is_some_and(|murderer| {
-                    murderer.is_city_war_enemy_faction_member(victim.faction_id())
-                })
-        });
-        let faction_war_enemies = victim_faction > 0
+        let city_war_enemies = murderer_faction > 0
+            && victim_faction > 0
+            && self.find_player(blow.victim_id).is_some_and(|victim| {
+                victim.is_city_war_enemy_faction_member(murderer_faction)
+                    || self.find_player(murderer_id).is_some_and(|murderer| {
+                        murderer.is_city_war_enemy_faction_member(victim_faction)
+                    })
+            });
+        let faction_war_enemies = murderer_faction > 0
+            && victim_faction > 0
             && self.find_player(blow.victim_id).is_some_and(|victim| {
                 victim.is_enemy_faction_member(murderer_faction)
                     || self.find_player(murderer_id).is_some_and(|murderer| {
-                        murderer.is_enemy_faction_member(victim.faction_id())
+                        murderer.is_enemy_faction_member(victim_faction)
                     })
             });
         let country_identity = self.player_country_identity(murderer_id);
