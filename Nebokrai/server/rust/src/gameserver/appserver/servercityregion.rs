@@ -664,13 +664,13 @@ impl CServerCityRegion {
         };
         context.send_build_update(
             self.war.base.id,
-            gate.id,
+            gate.id(),
             BuildClientUpdate {
-                object_type: gate.object_type,
-                object_id: gate.id as u32,
-                action: gate.action,
-                max_hp: gate.max_hp,
-                hp: gate.hp,
+                object_type: gate.object_type(),
+                object_id: gate.id() as u32,
+                action: gate.action(),
+                max_hp: gate.max_hp(),
+                hp: gate.hp(),
             },
         );
     }
@@ -686,7 +686,7 @@ impl CServerCityRegion {
         let Some(gate) = self.city_gates.get(&logical_id).map(|state| &state.gate) else {
             return -1;
         };
-        match gate.action {
+        match gate.action() {
             7 => 0,
             0 | 1 => 1,
             6 => 2,

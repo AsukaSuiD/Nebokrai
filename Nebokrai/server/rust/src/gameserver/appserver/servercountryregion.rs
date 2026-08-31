@@ -383,7 +383,7 @@ impl CServerCountryRegion {
         let Some(gate) = self.gates(camp).and_then(|gates| gates.get(&city_gate_id)) else {
             return -1;
         };
-        match gate.action {
+        match gate.action() {
             7 => 0,
             0 | 1 => 1,
             6 => 2,
@@ -1271,13 +1271,13 @@ fn update_city_gate_object<Context: CityGateRuntimeContext>(
 ) {
     context.send_build_update(
         region_id,
-        gate.id,
+        gate.id(),
         BuildClientUpdate {
-            object_type: gate.object_type,
-            object_id: gate.id as u32,
-            action: gate.action,
-            max_hp: gate.max_hp,
-            hp: gate.hp,
+            object_type: gate.object_type(),
+            object_id: gate.id() as u32,
+            action: gate.action(),
+            max_hp: gate.max_hp(),
+            hp: gate.hp(),
         },
     );
 }

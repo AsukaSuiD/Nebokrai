@@ -682,6 +682,7 @@ use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
 use crate::gameserver::appserver::build::{BUILD_OBJECT_TYPE, CBuild};
+use crate::gameserver::appserver::citygate::{CITY_GATE_OBJECT_TYPE, CCityGate};
 use crate::gameserver::appserver::autoprotectstate::AUTO_PROTECT_STATE_ID;
 use crate::gameserver::appserver::particularstate::{
     ParticularState, particular_state_visual_message,
@@ -4233,7 +4234,7 @@ impl ServerRegionOwner {
             Self::City(region) => region
                 .city_gates
                 .values()
-                .find(|state| state.gate.id == identity.id)
+                .find(|state| state.gate.id() == identity.id)
                 .map(|state| state.gate.shape_view())
                 .filter(|view| view.identity == identity),
             Self::Country(region) => region
@@ -4263,6 +4264,23 @@ impl ServerRegionOwner {
             .defend_flags
             .get(&build_id)
             .or_else(|| region.attack_flags.get(&build_id))
+    }
+
+    /// Разрешает derived `CCityGate` у обоих владельцев, где он реально
+    /// создаётся: city использует logical-key map, country — runtime-ID map.
+    pub(crate) fn city_gate(&self, city_gate_id: i32) -> Option<&CCityGate> {
+        match self {
+            Self::City(region) => region
+                .city_gates
+                .values()
+                .find(|state| state.gate.id() == city_gate_id)
+                .map(|state| &state.gate),
+            Self::Country(region) => region
+                .defend_gates
+                .get(&city_gate_id)
+                .or_else(|| region.attack_gates.get(&city_gate_id)),
+            _ => None,
+        }
     }
 
     pub(crate) const fn region_id(&self) -> i32 {
@@ -41802,6 +41820,17 @@ impl CGame {
             let mut now_milliseconds = now_milliseconds;
             let now_ms = now_milliseconds();
             let payload = build.encode_client_snapshot(now_ms, &mut now_milliseconds)?;
+            return Some((canonical_identity, payload));
+        }
+        if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 {
+            let gate = self.find_region(region_id)?.city_gate(identity.id)?;
+            let canonical_identity = gate.move_shape().shape().identity();
+            if canonical_identity != identity {
+                return None;
+            }
+            let mut now_milliseconds = now_milliseconds;
+            let now_ms = now_milliseconds();
+            let payload = gate.encode_client_snapshot(now_ms, &mut now_milliseconds)?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type != SUMMON_SHAPE_TYPE {

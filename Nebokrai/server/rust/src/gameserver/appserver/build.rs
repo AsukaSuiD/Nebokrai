@@ -159,11 +159,11 @@ impl CBuild {
         self.set_hp(self.max_hp);
     }
 
-    pub(crate) fn hp(&self) -> u32 {
+    pub(crate) const fn hp(&self) -> u32 {
         self.hp
     }
 
-    pub(crate) fn max_hp(&self) -> u32 {
+    pub(crate) const fn max_hp(&self) -> u32 {
         self.max_hp
     }
 

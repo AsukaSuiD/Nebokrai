@@ -7,15 +7,16 @@
 //! обычной постройки тем, что action `6` и `7` освобождают footprint, а любой
 //! другой action ставит block `3`.
 //!
-//! Rust хранит только уже достигнутое runtime-состояние base/build: identity,
-//! позицию, action/state, HP и параметры footprint. `BuildBlockUpdate`
+//! Rust хранит derived-owner поверх canonical `CBuild/CMoveShape`: identity,
+//! позиция, action/state и общий property block не дублируются. `BuildBlockUpdate`
 //! оставляет изменение карты владельцу региона, но сохраняет момент эффекта:
 //! action и `m_lChangeState` меняются до вызова старого `SetBlock`. AI, damage,
-//! attacker set и combat callbacks ниже пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! inherited client serializer принадлежит `CBuild`; AI, attackability и
+//! combat callbacks ниже пока остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
-use super::build::{BuildBlockUpdate, legacy_build_title_tile};
-use super::shape::{ShapeFigure, ShapeIdentity, ShapeView};
-use crate::public::guid::CGuid;
+use super::build::{BuildBlockUpdate, BuildInit, CBuild};
+use super::moveshape::CMoveShape;
+use super::shape::{ShapeIdentity, ShapeView};
 
 pub(crate) const CITY_GATE_OBJECT_TYPE: u32 = 0x4B0;
 
@@ -46,24 +47,7 @@ pub(crate) struct CityGateInit {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CCityGate {
-    pub(crate) object_type: u32,
-    pub(crate) id: i32,
-    pub(crate) graphics_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) direction: i32,
-    pub(crate) state: u16,
-    pub(crate) action: u16,
-    pub(crate) change_state: i32,
-    pub(crate) hp: u32,
-    pub(crate) max_hp: u32,
-    pub(crate) defence: u32,
-    pub(crate) width_increment: i32,
-    pub(crate) tile_x: i32,
-    pub(crate) tile_y: i32,
-    pub(crate) height_increment: i32,
-    pub(crate) element_resistance: u32,
-    pub(crate) script: Vec<u8>,
+    build: CBuild,
 }
 
 impl CCityGate {
@@ -71,99 +55,75 @@ impl CCityGate {
     /// Начальный `SetAction` выполнил сам factory boundary, поэтому повторный
     /// tile-map effect здесь не выдаётся.
     pub(crate) fn from_created(init: CityGateInit) -> Self {
-        let direction = if (0..8).contains(&init.direction) {
-            init.direction
-        } else {
-            0
-        };
-        let script = if init.script.is_empty() || init.script == b"0" {
-            Vec::new()
-        } else {
-            init.script
-        };
-        Self {
-            object_type: CITY_GATE_OBJECT_TYPE,
+        let mut build = CBuild::from_created(BuildInit {
             id: init.id,
             graphics_id: init.graphics_id,
             region_id: init.region_id,
             name: init.name,
-            direction,
-            state: 0,
-            action: init.action,
-            change_state: 0,
-            hp: init.max_hp as u32,
-            max_hp: init.max_hp as u32,
-            defence: init.defence as u32,
+            direction: init.direction,
+            max_hp: init.max_hp,
+            defence: init.defence,
             width_increment: init.width_increment,
-            tile_x: legacy_build_title_tile(init.tile_x),
-            tile_y: legacy_build_title_tile(init.tile_y),
+            tile_x: init.tile_x,
+            tile_y: init.tile_y,
             height_increment: init.height_increment,
-            element_resistance: init.element_resistance as u32,
-            script,
-        }
+            element_resistance: init.element_resistance,
+            script: init.script,
+        });
+        build.move_shape_mut().shape_mut().set_identity(ShapeIdentity {
+            object_type: CITY_GATE_OBJECT_TYPE as i32,
+            id: init.id,
+            ex_id: crate::public::guid::CGuid::GUID_INVALID,
+        });
+        build.move_shape_mut().shape_mut().set_action(init.action);
+        Self { build }
     }
 
     /// Меняет action и возвращает точный отложенный эффект старого `SetBlock`.
     /// При неизменившемся action оригинал не трогал ни change-state, ни карту.
     pub(crate) fn set_action(&mut self, action: u16) -> Option<BuildBlockUpdate> {
-        if self.action == action {
+        if self.action() == action {
             return None;
         }
-        self.change_state = 0;
-        self.action = action;
+        self.build.move_shape_mut().shape_mut().set_change_state(0);
+        self.build.move_shape_mut().shape_mut().set_action(action);
         Some(BuildBlockUpdate {
-            region_id: self.region_id,
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
-            width_increment: self.width_increment as u8,
-            height_increment: self.height_increment as u8,
+            region_id: self.region_id(),
+            tile_x: self.build.tile_x,
+            tile_y: self.build.tile_y,
+            width_increment: self.build.width_increment as u8,
+            height_increment: self.build.height_increment as u8,
             block: if action == 6 || action == 7 { 0 } else { 3 },
         })
     }
 
     pub(crate) fn refresh_hp(&mut self) {
-        self.hp = self.max_hp;
+        self.build.refresh_hp();
     }
 
     pub(crate) fn footprint(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
-            region_id: self.region_id,
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
-            width_increment: self.width_increment as u8,
-            height_increment: self.height_increment as u8,
+            region_id: self.region_id(),
+            tile_x: self.build.tile_x,
+            tile_y: self.build.tile_y,
+            width_increment: self.build.width_increment as u8,
+            height_increment: self.build.height_increment as u8,
             block: 0,
         }
     }
 
     pub(crate) fn shape_view(&self) -> ShapeView {
-        ShapeView {
-            identity: ShapeIdentity {
-                object_type: self.object_type as i32,
-                id: self.id,
-                ex_id: CGuid::GUID_INVALID,
-            },
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
-            pos_x_bits: (self.tile_x as f32).to_bits(),
-            pos_y_bits: (self.tile_y as f32).to_bits(),
-            figure: ShapeFigure::from_directions([
-                self.height_increment as u8,
-                self.height_increment as u8,
-                self.width_increment as u8,
-                self.width_increment as u8,
-            ]),
-        }
+        self.build.shape_view()
     }
 
     pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
-            region_id: self.region_id,
-            tile_x: self.tile_x,
-            tile_y: self.tile_y,
-            width_increment: self.width_increment as u8,
-            height_increment: self.height_increment as u8,
-            block: if self.action == 6 || self.action == 7 {
+            region_id: self.region_id(),
+            tile_x: self.build.tile_x,
+            tile_y: self.build.tile_y,
+            width_increment: self.build.width_increment as u8,
+            height_increment: self.build.height_increment as u8,
+            block: if self.action() == 6 || self.action() == 7 {
                 0
             } else {
                 3
@@ -179,10 +139,51 @@ impl CCityGate {
         attacker_id: i32,
     ) -> CityGateHurtOwnerUpdate {
         CityGateHurtOwnerUpdate {
-            region_id: self.region_id,
+            region_id: self.region_id(),
             attacker_type,
             attacker_id,
         }
+    }
+
+    pub(crate) const fn move_shape(&self) -> &CMoveShape {
+        self.build.move_shape()
+    }
+
+    pub(crate) const fn object_type(&self) -> u32 {
+        self.build.object_type()
+    }
+
+    pub(crate) const fn id(&self) -> i32 {
+        self.build.id()
+    }
+
+    pub(crate) const fn region_id(&self) -> i32 {
+        self.build.region_id()
+    }
+
+    pub(crate) const fn action(&self) -> u16 {
+        self.build.action()
+    }
+
+    pub(crate) fn name(&self) -> &[u8] {
+        self.build.name()
+    }
+
+    pub(crate) const fn hp(&self) -> u32 {
+        self.build.hp()
+    }
+
+    pub(crate) const fn max_hp(&self) -> u32 {
+        self.build.max_hp()
+    }
+
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        self.build
+            .encode_client_snapshot(now_ms, timed_state_now_milliseconds)
     }
 }
 
