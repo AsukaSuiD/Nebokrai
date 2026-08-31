@@ -6,7 +6,9 @@
 //! лука либо арбалета, блокирует движение на задержку и передаёт попадание
 //! региональному `CArcheryPhalanx`. Формулы и порядок RNG применяются только
 //! при достижении цели снарядом. Обычное, отказное и клиентское завершение
-//! после `Begin` используют общий подтверждённый `CBaseAttack`-хвост.
+//! после `Begin` используют общий подтверждённый `CBaseAttack`-хвост. Как и
+//! исходный `CState::GetSufferer`, owner принимает player/NPC/monster/build/gate;
+//! NPC отклоняется как мёртвый, а постройки проходят region-owned defence.
 
 use super::archeryphalanx::CArcheryPhalanx;
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
@@ -14,7 +16,6 @@ use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::basemagic::{
@@ -29,8 +30,6 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const PLAYER_TYPE: i32 = 400;
-// `PlayerSkillDispatch` несёт canonical `CShape::GetType`, как и region map.
-const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const ARCHERY_SKILL_ID: u32 = 2;
 
@@ -165,18 +164,7 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize + 1 {
             game.send_base_magic_failure(player_id, 0x0b);
-            let target_name = match target.object_type {
-                PLAYER_TYPE => game
-                    .find_player(target.id)
-                    .map(CPlayer::player_name)
-                    .unwrap_or_default(),
-                MONSTER_TYPE => game
-                    .find_region(region_id)
-                    .and_then(|owner| owner.base().find_monster_by_id(target.id))
-                    .map(CMonster::display_name)
-                    .unwrap_or_default(),
-                _ => &[],
-            };
+            let target_name = game.base_magic_target_name(region_id, target).unwrap_or_default();
             game.send_skill_system_info_with_text(player_id, b"GS0280", target_name);
             return rejected();
         }
@@ -204,14 +192,7 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
                 return rejected();
             }
         }
-        let target_dead = match target.object_type {
-            PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-            MONSTER_TYPE => game
-                .find_region(region_id)
-                .and_then(|owner| owner.base().find_monster_by_id(target.id))
-                .is_none_or(|monster| monster.hit_points() == 0),
-            _ => true,
-        };
+        let target_dead = game.base_magic_target_dead(region_id, target);
         if target_dead {
             game.send_base_magic_failure(player_id, 10);
             game.send_skill_system_info(player_id, b"GS0285");
@@ -277,14 +258,7 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     };
-    let target_dead = match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-        MONSTER_TYPE => game
-            .find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target.id))
-            .is_none_or(|monster| monster.hit_points() == 0),
-        _ => true,
-    };
+    let target_dead = game.base_magic_target_dead(region_id, target);
     if target_dead {
         game.send_base_magic_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");

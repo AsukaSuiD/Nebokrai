@@ -39168,6 +39168,58 @@ impl CGame {
         }
     }
 
+    /// Общий точный `CState::GetSufferer`-факт для навыков с объектной целью.
+    /// `CNpc::LossHP` всегда возвращает ноль, поэтому его combat HP остаётся
+    /// нулевым и `CMoveShape::IsDied` отклоняет NPC до создания снаряда.
+    pub(crate) fn base_magic_target_dead(
+        &self,
+        region_id: i32,
+        target: ShapeIdentity,
+    ) -> bool {
+        match target.object_type {
+            PLAYER_TYPE => self.find_player(target.id).is_none_or(CPlayer::is_dead),
+            NPC_TYPE => true,
+            MONSTER_TYPE => self
+                .find_region(region_id)
+                .and_then(|owner| owner.base().find_monster_by_id(target.id))
+                .is_none_or(|monster| monster.hit_points() == 0),
+            kind if kind == BUILD_OBJECT_TYPE as i32 || kind == CITY_GATE_OBJECT_TYPE as i32 => {
+                self.stationary_build_combat_snapshot(region_id, target)
+                    .is_none_or(|build| build.hp == 0)
+            }
+            _ => true,
+        }
+    }
+
+    pub(crate) fn base_magic_target_name(
+        &self,
+        region_id: i32,
+        target: ShapeIdentity,
+    ) -> Option<&[u8]> {
+        match target.object_type {
+            PLAYER_TYPE => self
+                .find_player(target.id)
+                .filter(|player| player.server_region_id() == Some(region_id))
+                .map(CPlayer::player_name),
+            NPC_TYPE => self
+                .find_region(region_id)?
+                .base()
+                .find_npc_by_id(target.id)
+                .map(CNpc::name),
+            MONSTER_TYPE => self
+                .find_region(region_id)?
+                .base()
+                .find_monster_by_id(target.id)
+                .map(CMonster::display_name),
+            kind if kind == BUILD_OBJECT_TYPE as i32 || kind == CITY_GATE_OBJECT_TYPE as i32 => {
+                self.find_region(region_id)?
+                    .stationary_build(target)
+                    .map(CBuild::name)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn base_magic_path(
         &self,
         region_id: i32,
@@ -45092,17 +45144,21 @@ impl CGame {
         true
     }
 
-    /// Точная ветвь `CBaseMagicPhalanx::Attack` для `CBuild/CCityGate`.
-    /// Оригинальный virtual `GetLevel` обеих построек возвращает `1`; затем
-    /// снаряд передаёт рассчитанную атаку общему `CFightDefense::Defense`.
-    fn apply_base_magic_to_stationary_build<Runtime: GameMainLoopRuntime>(
+    /// Точная ветвь `CBaseMagicPhalanx/CArcheryPhalanx::Attack` для
+    /// `CBuild/CCityGate`. Оригинальный virtual `GetLevel` обеих построек
+    /// возвращает `1`; затем снаряд передаёт рассчитанную атаку общему
+    /// `CFightDefense::Defense`.
+    fn apply_player_projectile_to_stationary_build<Runtime: GameMainLoopRuntime>(
         &mut self,
         phalanx: &SummonedSkillShape,
         target: ShapeIdentity,
         region_id: i32,
         runtime: &mut Runtime,
     ) -> bool {
-        if !matches!(phalanx, SummonedSkillShape::BaseMagic(_)) {
+        if !matches!(
+            phalanx,
+            SummonedSkillShape::BaseMagic(_) | SummonedSkillShape::Archery(_)
+        ) {
             return false;
         }
         let master = phalanx.master();
@@ -45837,7 +45893,7 @@ impl CGame {
                     ),
                     kind if kind == BUILD_OBJECT_TYPE as i32
                         || kind == CITY_GATE_OBJECT_TYPE as i32 => self
-                        .apply_base_magic_to_stationary_build(
+                        .apply_player_projectile_to_stationary_build(
                             &phalanx,
                             target,
                             region_id,
