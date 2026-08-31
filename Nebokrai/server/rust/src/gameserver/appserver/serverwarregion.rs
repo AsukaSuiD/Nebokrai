@@ -162,6 +162,23 @@ pub(crate) trait WarRegionContext {
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool);
 }
 
+pub(crate) trait WarRegionClearContext {
+    /// Узкий exact tail `ClearRegion`: schedule membership и global lookup
+    /// здесь не вызываются, нужны только reset wire и region-local state.
+    fn send_contend_time(&mut self, player_id: i32, time: i32);
+    fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool);
+}
+
+impl<Context: WarRegionContext + ?Sized> WarRegionClearContext for Context {
+    fn send_contend_time(&mut self, player_id: i32, time: i32) {
+        WarRegionContext::send_contend_time(self, player_id, time);
+    }
+
+    fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
+        WarRegionContext::set_region_player_contend_state(self, region_id, player_id, state);
+    }
+}
+
 /// Узкий context входа в захват. Script caller не обязан подменять заглушками
 /// AI/victory effects, которые `OnEnterContend` никогда не вызывает.
 pub(crate) trait WarContendEntryContext: WarRegionContext {
@@ -614,7 +631,7 @@ impl CServerWarRegion {
         Ok(())
     }
 
-    pub(crate) fn clear_region<Context: WarRegionContext>(&mut self, context: &mut Context) {
+    pub(crate) fn clear_region<Context: WarRegionClearContext>(&mut self, context: &mut Context) {
         for contender in &self.contenders {
             context.send_contend_time(contender.player_id, 0);
             context.set_region_player_contend_state(self.base.id, contender.player_id, false);

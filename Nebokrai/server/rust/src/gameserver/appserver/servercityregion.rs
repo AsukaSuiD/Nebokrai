@@ -48,8 +48,8 @@
 //! исполняют через канонические region и wire owners. Message, localized
 //! `OnClearOtherPlayer` возвращает ordered player snapshot владельцу `CGame`,
 //! который применяет точный faction-фильтр и обычную смену региона до
-//! принадлежащего city-owner-у прохода ворот. Message, localized war-log и
-//! остальные player-transition эффекты остаются точным context-контрактом.
+//! принадлежащего city-owner-у прохода ворот. Localized war-log исполняет
+//! `CGame`, а context сохраняет только contender-state и публикацию ворот.
 //! Прямой `OnWinSymbol` внутри `OnFactionVictory` у этой сборки указывает на
 //! точный no-op `0x004A8750`; Rust не сохраняет для него фиктивный callback.
 //! Timeout возвращает victory/log snapshot: `CGame` шлёт `0x60138` после
@@ -78,8 +78,8 @@ use super::serverregion::{
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{
-    CServerWarRegion, ContendState, RegionDecodeInputBlock, WarContendContext, WarRegionContext,
-    WarRegionDecodeError, read_region_array,
+    CServerWarRegion, ContendState, RegionDecodeInputBlock, WarContendContext,
+    WarRegionClearContext, WarRegionDecodeError, read_region_array,
 };
 
 const OC_OPEN: i32 = 0;
@@ -552,7 +552,7 @@ impl CServerCityRegion {
         context: &mut Context,
     ) -> Option<CityWarLogEffect>
     where
-        Context: WarRegionContext + CityGateRuntimeContext,
+        Context: WarRegionClearContext + CityGateRuntimeContext,
     {
         if self.war.base.war_number != war_number || self.war.base.city_state == 0 {
             return None;
@@ -601,7 +601,7 @@ impl CServerCityRegion {
 
     pub(crate) fn clear_region<Context>(&mut self, context: &mut Context)
     where
-        Context: WarRegionContext + CityGateRuntimeContext,
+        Context: WarRegionClearContext + CityGateRuntimeContext,
     {
         self.war.clear_region(context);
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();

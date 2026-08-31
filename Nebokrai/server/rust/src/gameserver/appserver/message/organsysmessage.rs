@@ -57,18 +57,18 @@ use super::super::organizingsystem::fournationwarsys::FourNationPhaseContext;
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarPhaseContext,
 };
+use super::super::build::{BuildClientUpdate, BuildRuntimeContext};
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
 use super::super::servercityregion::CityGateRuntimeContext;
 use super::super::serverregion::{
     RegionMembershipBlock, RegionTaxSessionKind, ServerRegionMonsterContext,
     ServerRegionNpcSetup,
 };
-use super::super::serverwarregion::WarRegionContext;
+use super::super::serverwarregion::{WarRegionClearContext, WarRegionContext};
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
-    CGame, GameClockContext, GameContainerMessageRuntime, GameWarRegionHandle,
-    LegacyFormatArgument, ScriptRegionChangeContext, ServerRegionOwner,
+    CGame, GameWarRegionHandle, LegacyFormatArgument, ScriptRegionChangeContext, ServerRegionOwner,
     colored_player_notice_message, format_legacy_mixed, format_legacy_text_fields,
     game_tick_milliseconds,
 };
@@ -78,13 +78,10 @@ use crate::public::tools::{add_game_error_log_text, add_game_log_text, put_strin
 use tracing::trace;
 
 pub(crate) trait GameOrganizingWarRuntime:
-    WarRegionContext
-    + CityGateRuntimeContext
+    CityGateRuntimeContext
     + RegionRandomContext
     + ScriptRegionChangeContext
-    + GameContainerMessageRuntime
     + ServerRegionMonsterContext
-    + GameClockContext
 {
 }
 
@@ -1622,6 +1619,30 @@ struct GameOrganizingWarContext<'a, Runtime> {
     runtime: &'a mut Runtime,
 }
 
+struct CityWarEndContext<'a, Runtime> {
+    game: &'a mut CGame,
+    runtime: &'a mut Runtime,
+}
+
+impl<Runtime> WarRegionClearContext for CityWarEndContext<'_, Runtime> {
+    fn send_contend_time(&mut self, player_id: i32, time: i32) {
+        WarRegionClearContext::send_contend_time(self.game, player_id, time);
+    }
+
+    fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
+        WarRegionClearContext::set_region_player_contend_state(
+            self.game, region_id, player_id, state,
+        );
+    }
+}
+
+impl<Runtime: BuildRuntimeContext> BuildRuntimeContext for CityWarEndContext<'_, Runtime> {
+    fn send_build_update(&mut self, region_id: i32, build_id: i32, update: BuildClientUpdate) {
+        self.runtime
+            .send_build_update(region_id, build_id, update);
+    }
+}
+
 enum ContendSchedule<'a> {
     AttackCity(&'a CAttackCitySys),
     Village(&'a CVillageWarSys),
@@ -2185,23 +2206,42 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                     self.game.find_region(region_id),
                     Some(ServerRegionOwner::Village(_))
                 ) {
+                    self.game.end_village_war(region_id, war_number);
+                    return;
+                }
+                if matches!(
+                    self.game.find_region(region_id),
+                    Some(ServerRegionOwner::City(_))
+                ) {
+                    let Some(owner) = self.game.take_region_owner(region_id) else {
+                        return;
+                    };
+                    let ServerRegionOwner::City(mut city) = owner else {
+                        self.game.restore_region_owner(owner);
+                        return;
+                    };
+                    let effect = {
+                        let mut context = CityWarEndContext {
+                            game: self.game,
+                            runtime: self.runtime,
+                        };
+                        city.on_war_end(war_number, &mut context)
+                    };
                     self.game
-                        .end_village_war(region_id, war_number, self.runtime);
+                        .restore_region_owner(ServerRegionOwner::City(city));
+                    if let Some(effect) = effect {
+                        self.write_city_war_log(
+                            effect.string_id,
+                            effect.war_number,
+                            &effect.region_name,
+                        );
+                    }
                     return;
                 }
                 let Some(region) = self.game.find_region_mut(region_id) else {
                     return;
                 };
                 match region {
-                    ServerRegionOwner::City(region) => {
-                        if let Some(effect) = region.on_war_end(war_number, self.runtime) {
-                            self.write_city_war_log(
-                                effect.string_id,
-                                effect.war_number,
-                                &effect.region_name,
-                            );
-                        }
-                    }
                     ServerRegionOwner::Nation(region) => region.war.on_war_end(war_number),
                     ServerRegionOwner::GodsBattle(region) => region.war.on_war_end(war_number),
                     region => region.base_mut().on_war_end(war_number),

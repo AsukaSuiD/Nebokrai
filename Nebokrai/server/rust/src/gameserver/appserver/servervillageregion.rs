@@ -33,8 +33,8 @@ use super::serverregion::ServerRegionDecodeError;
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{
-    CServerWarRegion, ContendState, WarContendContext, WarRegionContext, WarRegionDecodeContext,
-    WarRegionDecodeError,
+    CServerWarRegion, ContendState, WarContendContext, WarRegionClearContext,
+    WarRegionDecodeContext, WarRegionDecodeError,
 };
 
 pub(crate) trait VillageOwnerContext {
@@ -166,7 +166,7 @@ impl CServerVillageRegion {
         }
     }
 
-    pub(crate) fn begin_war_end<Context: WarRegionContext>(
+    pub(crate) fn begin_war_end<Context: WarRegionClearContext>(
         &mut self,
         war_number: i32,
         context: &mut Context,

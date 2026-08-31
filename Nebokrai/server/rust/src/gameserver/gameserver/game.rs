@@ -782,7 +782,8 @@ use crate::gameserver::appserver::serverregion::{
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, SymbolCaptureLog, WarContendContext, WarContendEntryContext,
-    WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError, WarRegionOwnership,
+    WarRegionClearContext, WarRegionContext, WarRegionDecodeContext, WarRegionDecodeError,
+    WarRegionOwnership,
 };
 use crate::gameserver::appserver::teamstate::{
     CTeamState, team_state_end_message, team_state_update_message,
@@ -46102,14 +46103,7 @@ impl CGame {
     /// очистки удаляет по одному первому совпавшему предмету каждого имени у
     /// каждого region-player, затем запускает 60-секундное вытеснение и
     /// сбрасывает ownership.
-    pub(crate) fn end_village_war<Runtime>(
-        &mut self,
-        region_id: i32,
-        war_number: i32,
-        runtime: &mut Runtime,
-    ) where
-        Runtime: WarRegionContext,
-    {
+    pub(crate) fn end_village_war(&mut self, region_id: i32, war_number: i32) {
         let Some(owner) = self.take_region_owner(region_id) else {
             return;
         };
@@ -46117,7 +46111,7 @@ impl CGame {
             self.restore_region_owner(owner);
             return;
         };
-        let targets = region.begin_war_end(war_number, runtime);
+        let targets = region.begin_war_end(war_number, self);
         self.restore_region_owner(ServerRegionOwner::Village(region));
         let Some(targets) = targets else {
             return;
@@ -46784,6 +46778,27 @@ pub(crate) async fn game_thread_func<Runtime: GameThreadRuntime>(
     GameThreadReport {
         main_loop_calls,
         initialization,
+    }
+}
+
+impl WarRegionClearContext for CGame {
+    fn send_contend_time(&mut self, player_id: i32, time: i32) {
+        let mut message = CMessage::new(0x000b_ff29);
+        message.add_long(time);
+        let _ = message.send_to_player(self.net_server(), player_id);
+    }
+
+    fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
+        if self
+            .find_player(player_id)
+            .is_none_or(|player| player.server_region_id() != Some(region_id))
+        {
+            return;
+        }
+        let Some(region) = self.find_region(region_id).map(|owner| owner.base().clone()) else {
+            return;
+        };
+        let _ = self.publish_war_player_contend_state(&region, player_id, state);
     }
 }
 
