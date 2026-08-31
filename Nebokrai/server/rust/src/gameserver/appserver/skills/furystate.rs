@@ -8,7 +8,11 @@
 //! `0xBFE03/04`.
 //! `GetRemainedTime` разделяет exact-тело `CFuryState` по `0x00605E10`:
 //! положительный остаток вычисляется после отдельного второго чтения часов.
+//! Serializer `0x005E7330` и exact `Unserialize` `0x005FD660` задают
+//! 12-байтовую запись `ID + remaining time + attack gain`; несколько записей
+//! сохраняют исходный порядок наложения.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
@@ -16,6 +20,7 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const FURY_STATE_SKILL_ID: u32 = 0x1a3;
+pub(crate) const FURY_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FuryState {
@@ -39,6 +44,25 @@ impl FuryState {
 
     pub(crate) const fn skill_id(self) -> u32 {
         FURY_STATE_SKILL_ID
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != FURY_STATE_SKILL_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(0, reader.read_u32()?, reader.read_i32()?))
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+    pub(crate) fn encoded_for_install(self) -> [u8; FURY_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; FURY_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; FURY_STATE_BYTES] {
+        let mut bytes = [0; FURY_STATE_BYTES];
+        bytes[..4].copy_from_slice(&FURY_STATE_SKILL_ID.to_le_bytes());
+        bytes[4..8].copy_from_slice(&remaining.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.attack_gain_percent.to_le_bytes());
+        bytes
     }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
@@ -169,10 +193,6 @@ pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
     }
     count
 }
-
-// Остаётся неизвестной только загрузка старого сохранённого состояния: она
-// начинает новый локальный срок и читает два `long` после продвижения cursor.
-// До достижения DB/load caller-а это тело сохраняется как исходный материал.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

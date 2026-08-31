@@ -4805,6 +4805,13 @@ impl CPlayer {
         self.move_shape.push_fury_state(state);
     }
 
+    pub(crate) fn activate_loaded_fury_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::furystate::FuryState> {
+        self.move_shape.activate_loaded_fury_states(now_ms)
+    }
+
     pub(crate) fn take_expired_fury_states(
         &mut self,
         now_ms: u32,

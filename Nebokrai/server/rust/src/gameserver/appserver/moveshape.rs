@@ -89,7 +89,9 @@ use crate::gameserver::appserver::skills::heal::{HEAL_SKILL_ID, is_heal_skill};
 use crate::gameserver::appserver::skills::healstate::{
     HEAL_STATE_BYTES, HealState,
 };
-use crate::gameserver::appserver::skills::furystate::FuryState;
+use crate::gameserver::appserver::skills::furystate::{
+    FURY_STATE_BYTES, FURY_STATE_SKILL_ID, FuryState,
+};
 use crate::gameserver::appserver::skills::ragebreakstate::{
     RAGE_BREAK_STATE_BYTES, RAGE_BREAK_STATE_ID, RageBreakState,
 };
@@ -1003,6 +1005,16 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        let fury_offsets: Vec<_> = known_state_record_offsets(&payload)
+            .into_iter()
+            .filter(|offset| read_u32(&payload, *offset) == Some(FURY_STATE_SKILL_ID))
+            .collect();
+        for (state, offset) in self.fury_states.iter().zip(fury_offsets) {
+            let record = state.encoded(&mut timed_state_now_milliseconds);
+            if let Some(destination) = payload.get_mut(offset..offset + FURY_STATE_BYTES) {
+                destination.copy_from_slice(&record);
+            }
+        }
         if let Some(state) = self.agility_state_2 {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
@@ -1242,6 +1254,12 @@ impl CMoveShape {
             .copied()
             .filter(|offset| read_u32(&states, *offset).is_some_and(is_heal_skill))
             .filter_map(|offset| HealState::decode(&states, offset, state_owner).ok())
+            .collect();
+        self.fury_states = known_offsets
+            .iter()
+            .copied()
+            .filter(|offset| read_u32(&states, *offset) == Some(FURY_STATE_SKILL_ID))
+            .filter_map(|offset| FuryState::decode(&states, offset).ok())
             .collect();
         self.cure_state = known_offsets
             .iter()
@@ -2252,7 +2270,15 @@ impl CMoveShape {
     }
 
     pub(crate) fn push_fury_state(&mut self, state: FuryState) {
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.fury_states.push(state);
+    }
+
+    pub(crate) fn activate_loaded_fury_states(&mut self, now_ms: u32) -> Vec<FuryState> {
+        for state in &mut self.fury_states {
+            *state = state.activate_loaded(now_ms);
+        }
+        self.fury_states.clone()
     }
 
     pub(crate) fn fury_states(&self) -> &[FuryState] {
@@ -2264,7 +2290,14 @@ impl CMoveShape {
         let mut position = 0;
         while position < self.fury_states.len() {
             if self.fury_states[position].expired(now_ms) {
+                let serialized_offset = known_state_record_offsets(&self.ex_states)
+                    .into_iter()
+                    .filter(|offset| read_u32(&self.ex_states, *offset) == Some(FURY_STATE_SKILL_ID))
+                    .nth(position);
                 expired.push(self.fury_states.remove(position));
+                if let Some(offset) = serialized_offset {
+                    self.remove_serialized_state_record_at(offset, FURY_STATE_BYTES);
+                }
             } else {
                 position += 1;
             }
@@ -2588,6 +2621,10 @@ impl CMoveShape {
         else {
             return false;
         };
+        self.remove_serialized_state_record_at(offset, amount)
+    }
+
+    fn remove_serialized_state_record_at(&mut self, offset: usize, amount: usize) -> bool {
         let Some(end) = offset.checked_add(amount).filter(|end| *end <= self.ex_states.len()) else {
             return false;
         };
@@ -4656,6 +4693,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             ROAR_STATE_ID => ROAR_STATE_BYTES,
             PILLAR_STATE_ID => PILLAR_STATE_BYTES,
             RAGE_BREAK_STATE_ID => RAGE_BREAK_STATE_BYTES,
+            FURY_STATE_SKILL_ID => FURY_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

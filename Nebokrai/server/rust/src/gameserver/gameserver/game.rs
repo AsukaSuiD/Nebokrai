@@ -1214,7 +1214,7 @@ use crate::gameserver::appserver::skills::fury::{
     cancel_player_fury, execute_player_fury, is_fury_dispatch, FURY_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::furystate::{
-    expire_monster_fury_states, expire_player_fury_states,
+    expire_monster_fury_states, expire_player_fury_states, send_fury_state_visual,
 };
 use crate::gameserver::appserver::skills::bossbluefurystate::{
     expire_monster_boss_blue_fury_state, expire_player_boss_blue_fury_state,
@@ -30231,6 +30231,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_heal_states(login_tick_ms);
+        let loaded_fury_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_fury_states(login_tick_ms);
         self.players
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
@@ -30567,6 +30572,26 @@ impl CGame {
                     state,
                     true,
                     || context.now_milliseconds(),
+                );
+            }
+        }
+        if let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            for state in loaded_fury_states {
+                send_fury_state_visual(
+                    self,
+                    region_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: expected_player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    x,
+                    y,
+                    state,
+                    true,
+                    login_tick_ms,
                 );
             }
         }
