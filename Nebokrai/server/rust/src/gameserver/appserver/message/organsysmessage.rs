@@ -24,6 +24,9 @@
 //! Обновление списков городских и деревенских contender-ов также читает
 //! faction, публикует `0xBFF29` и меняет `0xBFF28` через canonical `CGame`,
 //! не делегируя эти четыре операции process runtime-у.
+//! FourNation declare и refresh также принадлежат concrete Nation owner-у:
+//! первый сбрасывает подтверждённое боевое состояние, второй восстанавливает
+//! четыре исходных magic-stone NPC только при отсутствии каждого имени.
 //! Village timeout сохраняет `0x60136 → GS0240`: первый эффект отправляет
 //! `CGame`, второй остаётся у достигнутого war-log sink.
 //! Village end передаёт `goods × players` snapshot владельцу `CGame` и
@@ -60,6 +63,7 @@ use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
 use super::super::servercityregion::CityRegionContext;
 use super::super::serverregion::{
     RegionMembershipBlock, RegionTaxSessionKind, ServerRegionMonsterContext,
+    ServerRegionNpcSetup,
 };
 use super::super::servervillageregion::VillageRegionContext;
 use super::super::serverwarregion::WarRegionContext;
@@ -1726,6 +1730,71 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
         self.game.restore_region_owner(owner);
     }
 
+    /// Exact `ServerNationRegion::OnRefreshRegion` tail: после state reset
+    /// четыре magic-stone NPC проверяются и при отсутствии создаются в
+    /// исходном порядке с `remember=true, sendAround=true`.
+    fn refresh_four_nation_magic_stones(&mut self, region_id: i32) {
+        let setups = [
+            (b"GS1084".as_slice(), 0x20c, 0xfb, 0x35, 4),
+            (b"GS1085".as_slice(), 0x20d, 0xf8, 0x1c1, 0),
+            (b"GS1086".as_slice(), 0x20e, 0x25, 0xfc, 2),
+            (b"GS1087".as_slice(), 0x20f, 0x1dc, 0x105, 6),
+        ]
+        .map(|(name_id, picture_id, x, y, direction)| ServerRegionNpcSetup {
+            show_list: true,
+            picture_id,
+            left: x,
+            top: y,
+            right: x,
+            bottom: y,
+            count: 1,
+            direction,
+            time: 3_600_000,
+            name: self.game.get_string_by_id(name_id).to_vec(),
+            script: Vec::new(),
+        });
+        let (area_width, area_height) = self.game.area_dimensions();
+        let Some(owner) = self.game.take_region_owner(region_id) else {
+            return;
+        };
+        let ServerRegionOwner::Nation(mut region) = owner else {
+            self.game.restore_region_owner(owner);
+            return;
+        };
+        for setup in setups {
+            match region.war.base.find_npc_by_name(&setup.name) {
+                Ok(Some(_)) => continue,
+                Err(block) => {
+                    tracing::warn!(
+                        region_id,
+                        matches = block.matches,
+                        name = %String::from_utf8_lossy(&setup.name),
+                        "имя magic-stone NPC неоднозначно при refresh"
+                    );
+                    continue;
+                }
+                Ok(None) => {}
+            }
+            let spawn = region.war.base.add_npc(
+                &setup,
+                true,
+                true,
+                self.runtime.now_milliseconds(),
+                area_width,
+                area_height,
+                self.runtime,
+            );
+            tracing::trace!(
+                region_id,
+                name = %String::from_utf8_lossy(&setup.name),
+                ?spawn,
+                "обработано восстановление magic-stone NPC"
+            );
+        }
+        self.game
+            .restore_region_owner(ServerRegionOwner::Nation(region));
+    }
+
     fn kick_out_four_nation_players(
         &mut self,
         region: &mut super::super::servernationregion::ServerNationRegion,
@@ -2172,7 +2241,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
         &mut self,
         region: Self::Region,
         war_number: i32,
-        sign_up_counts: [i32; 5],
+        _sign_up_counts: [i32; 5],
     ) {
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
@@ -2180,8 +2249,6 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
         if let Some(ServerRegionOwner::Nation(region)) = self.game.find_region_mut(region_id) {
             region.war.on_war_declare(war_number);
             region.reset_for_war_declare();
-            self.runtime
-                .on_four_nation_declare(region, war_number, sign_up_counts);
         }
     }
 
@@ -2215,15 +2282,13 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
         let GameWarRegionHandle::Local(region_id) = region else {
             return;
         };
-        let Some(region) = self.game.find_region_mut(region_id) else {
-            return;
-        };
-        match region {
-            ServerRegionOwner::Nation(region) => {
+        match self.game.find_region_mut(region_id) {
+            Some(ServerRegionOwner::Nation(region)) => {
                 region.reset_for_region_refresh();
-                self.runtime.on_four_nation_refresh(region, war_number)
+                self.refresh_four_nation_magic_stones(region_id);
             }
-            region => region.base_mut().on_refresh_region(war_number),
+            Some(region) => region.base_mut().on_refresh_region(war_number),
+            None => {}
         }
     }
 

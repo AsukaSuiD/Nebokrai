@@ -134,13 +134,6 @@ pub(crate) trait FourNationPhaseContext {
 }
 
 pub(crate) trait FourNationRegionRuntime {
-    fn on_four_nation_declare(
-        &mut self,
-        region: &mut ServerNationRegion,
-        war_number: i32,
-        sign_up_counts: [i32; 5],
-    );
-    fn on_four_nation_refresh(&mut self, region: &mut ServerNationRegion, war_number: i32);
     fn reset_four_nation_region_combat_state(
         &mut self,
         region: &mut ServerNationRegion,
