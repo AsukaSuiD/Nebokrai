@@ -71,10 +71,11 @@ use super::region::{
 };
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
-    ServerRegionMonsterContext,
+    ServerRegionMembershipContext, ServerRegionMonsterContext,
     ServerRegionMonsterEffectsContext, ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext,
     ServerRegionNpcSpawnEffectsContext, ServerReturnPlayer, ServerReturnSetupBlock,
 };
+use super::shape::ShapeIdentity;
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{
@@ -140,6 +141,14 @@ struct CityGuardDecodeContext<'a, Context> {
 impl<Context: RegionRandomContext> RegionRandomContext for CityGuardDecodeContext<'_, Context> {
     fn random_below(&mut self, bound: i32) -> i32 {
         self.context.random_below(bound)
+    }
+}
+
+impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn move_shape_entered_area(&mut self, identity: ShapeIdentity) {
+        self.context.move_shape_entered_area(identity);
     }
 }
 

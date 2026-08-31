@@ -56,12 +56,12 @@ use crate::gameserver::appserver::servergodsbattleregion::{
 use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
-    ServerRegionMonsterContext,
+    ServerRegionMembershipContext, ServerRegionMonsterContext,
     ServerRegionMonsterEffectsContext, ServerRegionMonsterSpawnEffectsContext,
     ServerRegionNpcContext,
     ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSetup, ServerRegionSetupDecodeError,
 };
-use crate::gameserver::appserver::shape::CShape;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
@@ -2493,10 +2493,10 @@ fn read_start_long(
     Ok(value)
 }
 
-pub(crate) trait InitialRegionStartupContext: RegionRandomContext {}
+pub(crate) trait InitialRegionStartupContext: ServerRegionMembershipContext {}
 
 impl<Context> InitialRegionStartupContext for Context where
-    Context: RegionRandomContext + ?Sized
+    Context: ServerRegionMembershipContext + ?Sized
 {
 }
 
@@ -2521,7 +2521,15 @@ impl<Context: RegionRandomContext> RegionRandomContext for InitialRegionClockCon
     }
 }
 
-impl<Context: RegionRandomContext> ServerRegionNpcSpawnEffectsContext
+impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
+    for InitialRegionClockContext<'_, Context>
+{
+    fn move_shape_entered_area(&mut self, identity: ShapeIdentity) {
+        self.context.move_shape_entered_area(identity);
+    }
+}
+
+impl<Context: ServerRegionMembershipContext> ServerRegionNpcSpawnEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
     fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
@@ -2533,7 +2541,7 @@ impl<Context: RegionRandomContext> ServerRegionNpcSpawnEffectsContext
     }
 }
 
-impl<Context: RegionRandomContext> ServerRegionMonsterSpawnEffectsContext
+impl<Context: ServerRegionMembershipContext> ServerRegionMonsterSpawnEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
@@ -2556,7 +2564,7 @@ impl<Context: RegionRandomContext> ServerRegionMonsterSpawnEffectsContext
     }
 }
 
-impl<Context: RegionRandomContext> ServerRegionMonsterEffectsContext
+impl<Context: ServerRegionMembershipContext> ServerRegionMonsterEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
     fn send_monster_entered_around(&mut self, _region: &CServerRegion, monster: &CMonster) {
@@ -2596,6 +2604,14 @@ struct InheritedBaseGuardContext<'a, Context> {
 impl<Context: RegionRandomContext> RegionRandomContext for InheritedBaseGuardContext<'_, Context> {
     fn random_below(&mut self, bound: i32) -> i32 {
         self.context.random_below(bound)
+    }
+}
+
+impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
+    for InheritedBaseGuardContext<'_, Context>
+{
+    fn move_shape_entered_area(&mut self, identity: ShapeIdentity) {
+        self.context.move_shape_entered_area(identity);
     }
 }
 
