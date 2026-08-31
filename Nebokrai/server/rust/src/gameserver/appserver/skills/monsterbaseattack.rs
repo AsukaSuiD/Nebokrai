@@ -148,10 +148,11 @@ use crate::gameserver::appserver::ai::smartgladiator::select_smart_gladiator_ene
 use crate::gameserver::appserver::ai::stupidarcher::search_stupid_archer_enemy;
 use crate::gameserver::appserver::ai::warattackmonster::select_country_war_enemy;
 use crate::gameserver::appserver::ai::vilcouguardwithsword::select_village_country_guard_enemy;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -292,6 +293,37 @@ fn release_reciprocal_monster_target<Runtime: GameMainLoopRuntime>(
     } else if let Some(target) = region.find_monster_by_id_mut(target_id) {
         target.clear_ai_target();
     }
+}
+
+/// `CPet::GetPetMaster` сначала разрешает игрока глобальной таблицей, а для
+/// остальных типов — ровно зарегистрированный `CMoveShape` текущего региона.
+/// Боевой schedule использует найденную форму только как центр ограничения
+/// преследования; отсутствие master-а оставляет прежний центр на питомце.
+fn pet_combat_master_anchor(
+    game: &CGame,
+    region: &CServerRegion,
+    master: MasterInfo,
+) -> Option<(i32, i32)> {
+    if master.master_type == 0 || master.master_id == 0 {
+        return None;
+    }
+    if master.master_type == PLAYER_TYPE {
+        let master = game.find_player(master.master_id)?;
+        return Some((
+            master.shape().get_tile_x().ok()?,
+            master.shape().get_tile_y().ok()?,
+        ));
+    }
+    let identity = ShapeIdentity {
+        object_type: master.master_type,
+        id: master.master_id,
+        ex_id: CGuid::GUID_INVALID,
+    };
+    if !region.registered_shape_identities().contains(&identity) {
+        return None;
+    }
+    let master = game.resolve_shape(identity)?;
+    Some((master.tile_x, master.tile_y))
 }
 
 fn default_monster_attack_skill_id(game: &CGame, skills: &[MonsterSkill]) -> u16 {
@@ -1470,17 +1502,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     };
 
     if tamed && cast.is_none() && pet_action == 0 {
-        let (anchor_x, anchor_y) = (attacker_master.master_type == PLAYER_TYPE
-            && attacker_master.master_id != 0)
-            .then(|| game.find_player(attacker_master.master_id))
-            .flatten()
-            .filter(|master| master.server_region_id() == Some(region.id))
-            .and_then(|master| {
-                Some((
-                    master.shape().get_tile_x().ok()?,
-                    master.shape().get_tile_y().ok()?,
-                ))
-            })
+        let (anchor_x, anchor_y) = pet_combat_master_anchor(game, region, attacker_master)
             .unwrap_or((monster_x, monster_y));
         let anchor_distance = target_x
             .wrapping_sub(anchor_x)
