@@ -5,7 +5,8 @@
 //! переполнением, завершается только при строгом `started + keep < now` и при
 //! вычислении положительного клиентского остатка второй раз читает часы.
 //! Жизненный цикл принадлежит `CanonicalStateStorage`; DB-запись хранит
-//! остаток срока и WORD-прибавку полного уклонения.
+//! остаток срока и WORD-прибавку полного уклонения. Истечение сразу запускает
+//! полный пересчёт свойств, чтобы снятая прибавка не оставалась в combat snapshot.
 
 use super::agility2::AGILITY_2_SKILL_ID;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -91,6 +92,7 @@ pub(crate) fn expire_player_agility_state_2(
         .is_some();
     if ended {
         let _ = game.publish_player_states(player_id);
+        let _ = game.update_player_properties(player_id);
     }
     ended
 }

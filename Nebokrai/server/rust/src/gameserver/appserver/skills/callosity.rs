@@ -5,6 +5,7 @@
 //! один порядок: две проверки ресурсов, запрет движения, повторная проверка
 //! с необратимым расходом MP до проверки RP, задержка, удаление первого
 //! конфликтующего состояния, наложение нового состояния и `OnChangeStates`.
+//! Новый коэффициент немедленно проходит через полный `UpdateProperty`.
 //! Общий `SkillExecutionKernel` хранит только стадии и часы команды; форматы
 //! сообщений, частичная мутация и два независимых времени восстановления
 //! остаются здесь. Клиентская отмена сохраняет уже списанные ресурсы и
@@ -254,6 +255,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     }
     send_callosity_state_begin(game, player_id, state);
     let _ = game.publish_player_states(player_id);
+    let _ = game.update_player_properties(player_id);
     if let Some(state) = player_ai.callosity_mut() {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);

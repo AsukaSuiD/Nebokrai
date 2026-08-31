@@ -7,9 +7,10 @@
 //! намеренно не ставит запрет движения, хотя завершение всё равно снимает его.
 //! Три постоянных состояния взаимно заменяются, а временная `CAgility2`
 //! заменяет только себя. Различающиеся свойства и жизненный цикл принадлежат
-//! `CanonicalStateStorage` и вызывающему `CGame`, а не общему
-//! `SkillExecutionKernel`. Клиентская отмена проходит через тот же семейный
-//! владелец и не откатывает уже выполненный расход MP.
+//! `CanonicalStateStorage` и вызывающему `CGame`; после замены состояние
+//! немедленно входит в полный `UpdateProperty`, а не ждёт постороннего
+//! пересчёта. Клиентская отмена проходит через тот же семейный владелец и не
+//! откатывает уже выполненный расход MP.
 
 use super::agility2::begin_agility_2_state;
 pub(crate) use super::agility2::AGILITY_2_SKILL_ID;
@@ -315,6 +316,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     };
     send_agility_family_state_visual(game, player_id, skill_id, true, client_time);
     let _ = game.publish_player_states(player_id);
+    let _ = game.update_player_properties(player_id);
     if let Some(state) = player_ai.agility_family_mut() {
         let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack);
