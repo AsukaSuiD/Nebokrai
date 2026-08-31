@@ -4296,7 +4296,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GamePlayerMessageRuntime
     + NationContendContext
     + GodsBattleNpcContendContext
-    + ServerRegionMonsterContext
     + GameExitRuntime
 {}
 
@@ -18854,9 +18853,7 @@ impl CGame {
     /// Подтверждение клиента `8F801` завершает отложенную локальную смену в
     /// точном порядке `CServerRegion::OnMessage`: spatial add, `BF502/BF501`,
     /// погода, девять соседних area и лишь затем `CPlayer::OnEnterRegion`.
-    pub(crate) fn enter_changed_player_region<
-        Context: NationCombatContext + ServerRegionMonsterContext,
-    >(
+    pub(crate) fn enter_changed_player_region<Context: PlayerRegionChangeContext>(
         &mut self,
         player_id: i32,
         region_id: i32,

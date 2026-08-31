@@ -15,8 +15,7 @@
 
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::shape::SHAPE_CHANGE_REGION;
-use crate::gameserver::appserver::serverregion::ServerRegionMonsterContext;
-use crate::gameserver::gameserver::game::{CGame, NationCombatContext};
+use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 use crate::setup::regionrouter::RegionRoutePoint;
 use tracing::{debug, trace};
@@ -36,7 +35,7 @@ pub(crate) fn dispatch_game_region_message<Context>(
     context: &mut Context,
 ) -> Option<Result<(), GameRegionMessageError>>
 where
-    Context: NationCombatContext + ServerRegionMonsterContext + ScriptFunctionRuntime,
+    Context: ScriptFunctionRuntime,
 {
     let message_type = message.message_type() as u32;
     if !matches!(message_type, ENTER_CHANGED_REGION | CHANGE_CONNECTED_REGION) {
