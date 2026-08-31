@@ -1042,6 +1042,14 @@ impl BattleFairySkillDispatch {
             | Self::Object { skill_id, .. } => skill_id,
         }
     }
+
+    pub(crate) const fn skill_level(self) -> i32 {
+        match self {
+            Self::SelfTarget { skill_level, .. }
+            | Self::Point { skill_level, .. }
+            | Self::Object { skill_level, .. } => skill_level,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

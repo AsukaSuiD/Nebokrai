@@ -34146,14 +34146,17 @@ impl CGame {
             player.summon_battle_fairy(battle_fairy_enabled, mode, &self.goods_factory)
         };
         let interrupted_skill = if report.outcome == BattleFairySummonOutcome::Recalled {
-            self.find_player_mut(player_id).is_some_and(|player| {
+            self.find_player_mut(player_id).and_then(|player| {
                 player
                     .player_ai_mut()
                     .cancel_active_battle_fairy_skill()
             })
         } else {
-            false
+            None
         };
+        if let Some(dispatch) = interrupted_skill {
+            self.send_battle_fairy_skill_end(player_id, dispatch);
+        }
         if let Some(action) = report.spatial_action {
             let spatial_applied = report.region_id.is_some_and(|region_id| {
                 let Some(region) = self.regions.get_mut(&region_id) else {
@@ -34177,7 +34180,7 @@ impl CGame {
             player_id,
             mode,
             ?report.outcome,
-            interrupted_skill,
+            interrupted_skill = interrupted_skill.is_some(),
             "призыв боевой феи обработан"
         );
         Some(())
@@ -36139,11 +36142,14 @@ impl CGame {
                         .player_ai_mut()
                         .queue_battle_fairy_skill(dispatch);
                     if outcome == BattleFairySkillQueueOutcome::ActiveRejected {
-                        self.players
+                        let interrupted = self.players
                             .get_mut(&player_id)
                             .expect("активный навык боевой феи сохраняет canonical player")
                             .player_ai_mut()
                             .cancel_active_battle_fairy_skill();
+                        if let Some(active) = interrupted {
+                            self.send_battle_fairy_skill_end(player_id, active);
+                        }
                         self.send_battle_fairy_skill_failure(player_id, 2);
                     }
                     trace!(
