@@ -36139,6 +36139,11 @@ impl CGame {
                         .player_ai_mut()
                         .queue_battle_fairy_skill(dispatch);
                     if outcome == BattleFairySkillQueueOutcome::ActiveRejected {
+                        self.players
+                            .get_mut(&player_id)
+                            .expect("активный навык боевой феи сохраняет canonical player")
+                            .player_ai_mut()
+                            .cancel_active_battle_fairy_skill();
                         self.send_battle_fairy_skill_failure(player_id, 2);
                     }
                     trace!(

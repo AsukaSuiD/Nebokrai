@@ -2293,8 +2293,9 @@ impl CPlayerAI {
         self.current_battle_fairy_skill.is_some()
     }
 
-    /// Общий унаследованный `End(false)` для spatial удаления war-soul.
-    /// Выбранный skill ID и ещё не начатый FIFO-хвост намеренно сохраняются.
+    /// Общий унаследованный `End(false)` для отмены активного war-soul skill:
+    /// его вызывают spatial удаление духа и повторный запрос уже подготовленного
+    /// навыка. Выбранный skill ID и ещё не начатый FIFO-хвост сохраняются.
     pub(crate) fn cancel_active_battle_fairy_skill(&mut self) -> bool {
         let Some(dispatch) = self.current_battle_fairy_skill else {
             return false;
