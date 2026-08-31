@@ -40110,7 +40110,7 @@ impl CGame {
         can_schedule: bool,
         runtime: &mut Runtime,
     ) -> (usize, usize) {
-        let mut execution_count = 0;
+        let mut execution_count: usize = 0;
         let mut player_execution_count = 0;
         let active_player_skill = self
             .find_player(player_id)
