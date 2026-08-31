@@ -37154,7 +37154,10 @@ impl CGame {
         attackable
     }
 
-    pub(crate) fn guard_monster_attackable(
+    /// Exact monster-side `CMonster::IsAttackAble(player)`: проверяет, может ли
+    /// указанный игрок атаковать монстра-охранника. Это направление не
+    /// совпадает с `CPlayer::IsAttackAble(monster)`, используемым самим ИИ.
+    pub(crate) fn monster_attackable_by_player(
         &self,
         attacker_id: i32,
         region_id: i32,
@@ -37172,14 +37175,10 @@ impl CGame {
         let permissions = player.pk_permissions();
         match property.ai as i32 {
             8..=9 => permissions.player,
-            10..=11 => match region {
-                ServerRegionOwner::City(city) => city.guard_is_attackable(
-                    PLAYER_TYPE,
-                    player.faction_id(),
-                    player.union_id(),
-                ),
-                _ => true,
-            },
+            10..=11 => !((player.faction_id() != 0
+                && player.faction_id() == region.base().owned_city_faction())
+                || (player.union_id() != 0
+                    && player.union_id() == region.base().owned_city_union())),
             13 => {
                 if u32::from(player.country()) == property.race {
                     permissions.player
@@ -37210,6 +37209,56 @@ impl CGame {
                 }
             }
             _ => true,
+        }
+    }
+
+    /// Exact player-side `CPlayer::IsAttackAble(monster)` для уже разрешённого
+    /// живого monster attacker-а. Обычный монстр допустим без PK-фильтра;
+    /// специальные охранники сохраняют свои country/city правила. Приручённая
+    /// ветвь делегирует владельцу-игроку, как исходный virtual recursion.
+    pub(crate) fn player_attackable_by_monster(
+        &self,
+        target_player_id: i32,
+        region_id: i32,
+        attacker_property: &crate::setup::monsterlist::MonsterProperties,
+        attacker_tamed: bool,
+        attacker_master: crate::gameserver::appserver::masterinfo::MasterInfo,
+    ) -> bool {
+        let Some(player) = self.find_player(target_player_id) else {
+            return false;
+        };
+        if player.city_war_died_state() || player.server_region_id() != Some(region_id) {
+            return false;
+        }
+        if attacker_tamed {
+            if attacker_master.master_type != PLAYER_TYPE || attacker_master.master_id == 0 {
+                return true;
+            }
+            return attacker_master.master_id != target_player_id
+                && self.player_base_attackable(attacker_master.master_id, target_player_id);
+        }
+        if attacker_property.kind != 5 {
+            return true;
+        }
+        let Some(region) = self.find_region(region_id) else {
+            return false;
+        };
+        match attacker_property.ai as i32 {
+            10..=11 => match region {
+                ServerRegionOwner::City(city) => city.guard_is_attackable(
+                    PLAYER_TYPE,
+                    player.faction_id(),
+                    player.union_id(),
+                ),
+                _ => true,
+            },
+            15..=16 => region.base().country == 0 || player.country() != region.base().country,
+            19..=21 => {
+                u32::from(player.country()) != attacker_property.race
+                    || player.is_badman(self.globe_setup.pk_count_per_kill())
+            }
+            23 => true,
+            _ => player.is_badman(self.globe_setup.pk_count_per_kill()),
         }
     }
 
@@ -37247,7 +37296,13 @@ impl CGame {
                 || (player.union_id() != 0
                     && player.union_id() == region.base().owned_city_union()));
         }
-        self.guard_monster_attackable(target_player, region_id, attacker_property)
+        self.player_attackable_by_monster(
+            target_player,
+            region_id,
+            attacker_property,
+            attacker_tamed,
+            attacker_master,
+        )
     }
 
     fn apply_guard_monster_first_attack(
@@ -44448,7 +44503,7 @@ impl CGame {
         else {
             return false;
         };
-        if target_health == 0 || god || !self.guard_monster_attackable(master.master_id, region_id, &property) {
+        if target_health == 0 || god || !self.monster_attackable_by_player(master.master_id, region_id, &property) {
             return false;
         }
         let owned_target_player = ((tamed || carriage)

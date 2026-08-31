@@ -189,7 +189,7 @@ impl CGame {
         };
         health != 0
             && !god
-            && self.guard_monster_attackable(master.master_id, region_id, property)
+            && self.monster_attackable_by_player(master.master_id, region_id, property)
             && (!(tamed || carriage)
                 || self.owned_skill_monster_attackable(master, target_master))
     }
@@ -493,7 +493,7 @@ impl CGame {
         };
         if target_health == 0
             || god
-            || !self.guard_monster_attackable(master.master_id, region_id, &property)
+            || !self.monster_attackable_by_player(master.master_id, region_id, &property)
             || ((tamed || carriage)
                 && !self.owned_skill_monster_attackable(master, target_master))
         {

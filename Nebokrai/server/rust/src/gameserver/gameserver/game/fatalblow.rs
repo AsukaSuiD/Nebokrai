@@ -92,7 +92,7 @@ impl CGame {
                 };
                 if monster.hit_points() == 0
                     || monster.move_shape().is_god()
-                    || !self.guard_monster_attackable(master.master_id, region_id, property)
+                    || !self.monster_attackable_by_player(master.master_id, region_id, property)
                 {
                     return Some(false);
                 }

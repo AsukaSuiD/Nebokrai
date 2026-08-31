@@ -48,7 +48,7 @@ impl CGame {
                 let Some(monster) = region.find_monster_by_id(target.id) else { return false };
                 if monster.hit_points() == 0 || monster.move_shape().is_god() || monster.move_shape().weak_state().is_some() { return false; }
                 let Some(property) = monster.base_property_key().and_then(|key| self.find_monster_property_by_origin_name(key)) else { return false };
-                if !self.guard_monster_attackable(master.master_id, region_id, property) { return false; }
+                if !self.monster_attackable_by_player(master.master_id, region_id, property) { return false; }
                 let target_master = monster.master_info();
                 if (monster.is_tamed() || monster.is_carriage(property)) && target_master.master_type == PLAYER_TYPE && target_master.master_id != 0 {
                     if target_master.master_id == master.master_id {

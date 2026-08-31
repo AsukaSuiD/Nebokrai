@@ -50,7 +50,13 @@ pub(crate) fn select_guard_with_bow_target(
         if player.server_region_id() != Some(region.id)
             || player.is_dead()
             || !player.is_badman(game.globe_setup().pk_count_per_kill())
-            || !game.guard_monster_attackable(player_id, region.id, property)
+            || !game.player_attackable_by_monster(
+                player_id,
+                region.id,
+                property,
+                false,
+                monster.master_info(),
+            )
         {
             continue;
         }

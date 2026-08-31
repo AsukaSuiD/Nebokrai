@@ -202,8 +202,13 @@ pub(crate) fn monster_attackable_by_monster(
             }
             return game.player_base_attackable(attacker_master.master_id, target_player_id);
         }
-        return attacker_property.kind != 5
-            || game.guard_monster_attackable(target_player_id, region_id, attacker_property);
+        return game.player_attackable_by_monster(
+            target_player_id,
+            region_id,
+            attacker_property,
+            attacker_tamed,
+            attacker_master,
+        );
     }
     attacker_tamed || attacker_property.kind == 5
 }
@@ -233,8 +238,13 @@ pub(crate) fn owned_monster_attackable(
             }
             return game.player_base_attackable(attacker_master.master_id, target_identity.id);
         }
-        return attacker_property.kind != 5
-            || game.guard_monster_attackable(target_identity.id, region_id, attacker_property);
+        return game.player_attackable_by_monster(
+            target_identity.id,
+            region_id,
+            attacker_property,
+            attacker_tamed,
+            attacker_master,
+        );
     }
     if target.carriage {
         return game.carriage_attackable_by_monster(

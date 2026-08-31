@@ -736,9 +736,9 @@ impl CServerCityRegion {
     }
 
     /// Exact `CServerCityRegion::GuardIsAttackAble`: вне active city-war
-    /// state базовый результат остаётся true. Во время state `3` стража не
-    /// атакует player-а своей owning faction либо owning union; нулевые owner
-    /// IDs никогда не создают защитного совпадения.
+    /// state базовый результат остаётся true. Во время state `3` player своей
+    /// owning faction либо owning union не может быть второй стороной атаки
+    /// городского стража; нулевые owner IDs не создают защитного совпадения.
     pub(crate) fn guard_is_attackable(
         &self,
         target_type: i32,

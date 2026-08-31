@@ -459,7 +459,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             finish_player_base_attack(game, player_id, player_ai, runtime);
             return rejected();
         }
-        if !game.guard_monster_attackable(player_id, region_id, &monster_property) {
+        if !game.monster_attackable_by_player(player_id, region_id, &monster_property) {
             let _ = game.send_base_attack_failure(player_id, 2);
             finish_player_base_attack(game, player_id, player_ai, runtime);
             return rejected();

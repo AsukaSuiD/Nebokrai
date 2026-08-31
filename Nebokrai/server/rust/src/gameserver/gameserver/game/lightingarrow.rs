@@ -56,7 +56,7 @@ impl CGame {
             Some((property, monster))
         }) else { return false };
         if monster.hit_points() == 0 || monster.move_shape().is_god()
-            || !self.guard_monster_attackable(master.master_id, region_id, property) { return false }
+            || !self.monster_attackable_by_player(master.master_id, region_id, property) { return false }
         if !(monster.is_tamed() || monster.is_carriage(property)) { return true }
         let owner = monster.master_info();
         if owner.master_type != PLAYER_TYPE || owner.master_id == 0 { return true }

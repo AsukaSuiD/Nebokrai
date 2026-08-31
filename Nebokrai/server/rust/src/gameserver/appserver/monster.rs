@@ -70,6 +70,9 @@
 //! остаются у регионального runtime-владельца.
 //! City/country guard refresh восстанавливает HP, очищает существующий
 //! `CBaseAI` и оставляет формирование `0xBF60F` координирующему `CGame`.
+//! Два направления virtual `IsAttackAble` разведены явно: этот owner
+//! проверяет monster-target относительно player/monster attacker-а, а
+//! обратную player-target политику хранит `CPlayer` и координирует `CGame`.
 //! Формулы групповой квоты и поправки опыта также принадлежат этому owner-у;
 //! состав живой группы, множители игрока/региона и выдачу координирует `CGame`.
 //! Там же разрешается `GetBeneficiary`: при непригодности прямого кандидата
@@ -2074,7 +2077,10 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::IsAttackAble
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// MATERIALIZED: player-attacker, monster-attacker и carriage/tamed ветви
+// связаны через `CGame::monster_attackable_by_player`,
+// `monster_attackable_by_monster` и `carriage_attackable_by_monster`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1028

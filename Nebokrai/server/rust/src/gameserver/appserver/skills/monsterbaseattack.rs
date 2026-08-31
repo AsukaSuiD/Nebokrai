@@ -1502,7 +1502,13 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         || (!tamed
             && property.kind == 5
             && target.object_type == PLAYER_TYPE
-            && !game.guard_monster_attackable(target.id, region.id, &property))
+            && !game.player_attackable_by_monster(
+                target.id,
+                region.id,
+                &property,
+                tamed,
+                attacker_master,
+            ))
     {
         if tamed {
             lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);

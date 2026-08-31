@@ -65,6 +65,10 @@
 //! PvP preferences `0x8FA05` хранят пять live permission flags, которые
 //! downstream player/skill AI читает при выборе обычных, team, union,
 //! criminal и country целей; unknown selector только потребляет вход.
+//! `CPlayer::IsAttackAble` материализован двумя достигнутыми направлениями:
+//! player-attacker проходит общую PvP/security политику, monster-attacker —
+//! точные tame, city/country guard и criminal ветви. Их нельзя объединять с
+//! одноимённой monster-side проверкой обратного направления.
 //! Межсерверная прогрессия `0x7FA08/09/0B` использует собственную карту
 //! навыков и поля уровня с опытом: перегрузки по имени делегируют фабрике
 //! поиск ID, а `SetLevel` возвращает фракционное последствие вызывающему коду
@@ -15870,7 +15874,9 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 
 // ============================================================================
 // FUNCTION: CPlayer::IsAttackAble
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// MATERIALIZED: player/player ветвь находится в `CGame::player_base_attackable`
+// и level gate, player/monster — в `CGame::player_attackable_by_monster`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:10335

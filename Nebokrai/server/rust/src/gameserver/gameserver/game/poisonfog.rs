@@ -26,7 +26,7 @@ impl CGame {
                 let (Ok(x), Ok(y)) = (monster.move_shape().shape().get_tile_x(), monster.move_shape().shape().get_tile_y()) else { return false };
                 if region.block_at(x, y) == Some(2) { return false }
                 let Some(property) = monster.base_property_key().and_then(|key| self.find_monster_property_by_origin_name(key)) else { return false };
-                if !self.guard_monster_attackable(master.master_id, region_id, property) { return false }
+                if !self.monster_attackable_by_player(master.master_id, region_id, property) { return false }
                 let target_master = monster.master_info();
                 if (monster.is_tamed() || monster.is_carriage(property)) && target_master.master_type == PLAYER_TYPE && target_master.master_id != 0 {
                     return if target_master.master_id == master.master_id { master.permitted_to_kill_criminal != 0 } else { self.player_base_attackable(master.master_id, target_master.master_id) };
