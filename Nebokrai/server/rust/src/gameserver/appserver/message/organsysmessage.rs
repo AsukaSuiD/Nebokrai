@@ -21,6 +21,8 @@
 //! region spawn owners без прежних monster/spawn callbacks runtime-а.
 //! `0x7FE24` аналогично передаёт полный city player/gate проход `CGame`, не
 //! оставляя возврат игроков внешнему callback-у.
+//! War phase runtime ограничен фактическим `CPlayer::ChangeRegion` контрактом;
+//! Nation NPC/monster combat остаётся только у соседних OrganSys handlers.
 //! Обновление списков городских и деревенских contender-ов также читает
 //! faction, публикует `0xBFF29` и меняет `0xBFF28` через canonical `CGame`,
 //! не делегируя эти четыре операции process runtime-у.
@@ -69,16 +71,18 @@ use super::super::serverwarregion::{WarRegionClearContext, WarRegionContext};
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
-    CGame, GameWarRegionHandle, LegacyFormatArgument, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message, format_legacy_mixed, format_legacy_text_fields,
-    game_tick_milliseconds,
+    CGame, GameWarRegionHandle, LegacyFormatArgument, PlayerRegionChangeContext,
+    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
+    format_legacy_mixed, format_legacy_text_fields, game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
 use crate::public::tools::{add_game_error_log_text, add_game_log_text, put_string_to_file};
 use tracing::trace;
 
-pub(crate) trait GameOrganizingWarRuntime: ScriptRegionChangeContext {}
+pub(crate) trait GameOrganizingWarRuntime: PlayerRegionChangeContext {}
+
+impl<T: PlayerRegionChangeContext + ?Sized> GameOrganizingWarRuntime for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FourNationReliveBlock {
@@ -534,9 +538,7 @@ fn dispatch_organizing_client_response(
 }
 
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
-pub(crate) fn dispatch_game_organizing_message<
-    Runtime: GameOrganizingWarRuntime + ScriptRegionChangeContext,
->(
+pub(crate) fn dispatch_game_organizing_message<Runtime: ScriptRegionChangeContext>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,

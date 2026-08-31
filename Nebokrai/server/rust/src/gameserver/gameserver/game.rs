@@ -2325,14 +2325,27 @@ impl<T> MonsterDeathContext for T where
 {
 }
 
-/// ChangeRegion использует только уже материализованные clock, spatial,
-/// container и property owners вызывающей среды.
-pub(crate) trait ScriptRegionChangeContext:
-    NationCombatContext + GameContainerMessageRuntime
+/// Exact внешняя поверхность `CPlayer::ChangeRegion`: общий RNG, container
+/// publication и wrapping clock. Nation NPC/monster combat этому owner-у не
+/// принадлежит.
+pub(crate) trait PlayerRegionChangeContext:
+    RegionRandomContext + GameContainerMessageRuntime + GameClockContext
 {
 }
 
-impl<T> ScriptRegionChangeContext for T where T: NationCombatContext + GameContainerMessageRuntime {}
+impl<T> PlayerRegionChangeContext for T where
+    T: RegionRandomContext + GameContainerMessageRuntime + GameClockContext
+{
+}
+
+/// Script-вызовы смены региона дополнительно живут в runtime-е, который
+/// обслуживает соседние Nation combat функции того же dispatcher-а.
+pub(crate) trait ScriptRegionChangeContext:
+    PlayerRegionChangeContext + NationCombatContext
+{
+}
+
+impl<T> ScriptRegionChangeContext for T where T: PlayerRegionChangeContext + NationCombatContext {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerLoginBlock {
@@ -5869,7 +5882,7 @@ impl CGame {
     /// Exact same-region carriage prefix `CPlayer::ChangeRegion`: только
     /// близкая повозка в исходном регионе переносится в случайную свободную
     /// клетку `7×7` вокруг ещё не нормализованных координат назначения.
-    fn move_same_region_player_carriage<Context: ScriptRegionChangeContext>(
+    fn move_same_region_player_carriage<Context: PlayerRegionChangeContext>(
         &mut self,
         source_owner: &mut ServerRegionOwner,
         player: &mut CPlayer,
@@ -17121,9 +17134,7 @@ impl CGame {
     /// пространственную позицию и в исходном порядке отправляет сообщения
     /// клиенту и WorldServer.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn change_player_region<
-        Context: ScriptRegionChangeContext,
-    >(
+    pub(crate) fn change_player_region<Context: PlayerRegionChangeContext>(
         &mut self,
         player_id: i32,
         target_region_id: i32,
@@ -46472,7 +46483,7 @@ impl CGame {
         _war_number: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: RegionRandomContext + ScriptRegionChangeContext,
+        Runtime: PlayerRegionChangeContext,
     {
         let Some(owner) = self.take_region_owner(region_id) else {
             return;
@@ -46600,7 +46611,7 @@ impl CGame {
         player_id: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: RegionRandomContext + ScriptRegionChangeContext,
+        Runtime: PlayerRegionChangeContext,
     {
         let Some(player) = self.find_player(player_id) else {
             warn!(target: "miracle_server::gameserver::ai", source_region_id, player_id, "невозможно вернуть отсутствующего игрока из региона");
