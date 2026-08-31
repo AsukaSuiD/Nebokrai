@@ -126,7 +126,9 @@ use crate::gameserver::appserver::skills::poisonarrowstate::{
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
-use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
+use crate::gameserver::appserver::skills::spriteburnstate::{
+    SPRITE_BURN_STATE_BYTES, SpriteBurnState,
+};
 use crate::gameserver::appserver::skills::spiderwebstate::{
     SPIDER_WEB_STATE_BYTES, SpiderWebState,
 };
@@ -914,6 +916,9 @@ impl CMoveShape {
         if let Some(state) = self.soul_collect_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded());
         }
+        if let Some(state) = self.sprite_burn_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds));
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1088,6 +1093,12 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(SOUL_COLLECT_STATE_ID))
             .and_then(|offset| SoulCollectState::decode(&states, offset).ok());
+        self.periodic_attack_order.shift_remove(&super::skills::spriteburn::SPRITE_BURN_SKILL_ID);
+        self.curable_state_order.shift_remove(&super::skills::spriteburn::SPRITE_BURN_SKILL_ID);
+        self.sprite_burn_state = known_offsets.iter().copied()
+            .find(|offset| read_u32(&states, *offset) == Some(super::skills::spriteburn::SPRITE_BURN_SKILL_ID))
+            .and_then(|offset| SpriteBurnState::decode(&states, offset, 0).ok());
+        if let Some(state) = self.sprite_burn_state { self.periodic_attack_order.insert(state.skill_id()); self.curable_state_order.insert(state.skill_id()); }
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2598,19 +2609,35 @@ impl CMoveShape {
         &mut self,
         state: SpriteBurnState,
     ) -> Option<SpriteBurnState> {
+        let exists = known_state_record_offsets(&self.ex_states).into_iter()
+            .any(|offset| read_u32(&self.ex_states, offset) == Some(state.skill_id()));
+        if exists { update_known_state_record(&mut self.ex_states, state.skill_id(), &state.encoded_for_install()); }
+        else { self.append_serialized_state_record(&state.encoded_for_install()); }
         self.periodic_attack_order.insert(state.skill_id());
         self.curable_state_order.insert(state.skill_id());
         self.sprite_burn_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_sprite_burn_state(&mut self, now_ms: u32) -> Option<SpriteBurnState> {
+        let mut state = self.sprite_burn_state?; state.activate_loaded(now_ms); self.sprite_burn_state = Some(state); Some(state)
     }
 
     pub(crate) fn take_sprite_burn_state_for_ai(&mut self) -> Option<SpriteBurnState> {
         self.sprite_burn_state.take()
     }
 
+    pub(crate) fn restore_sprite_burn_state_after_ai(&mut self, state: SpriteBurnState) { debug_assert!(self.sprite_burn_state.is_none()); self.sprite_burn_state = Some(state); }
+
+    pub(crate) fn finish_sprite_burn_state_after_ai(&mut self) {
+        self.remove_serialized_state_record(super::skills::spriteburn::SPRITE_BURN_SKILL_ID, SPRITE_BURN_STATE_BYTES);
+        self.finish_periodic_attack_state(super::skills::spriteburn::SPRITE_BURN_SKILL_ID);
+    }
+
     pub(crate) fn take_sprite_burn_state(&mut self) -> Option<SpriteBurnState> {
         let state = self.sprite_burn_state.take()?;
         self.periodic_attack_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), SPRITE_BURN_STATE_BYTES);
         Some(state)
     }
 
@@ -4377,6 +4404,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => GOD_BLESS_STATE_BYTES,
             WEAK_STATE_ID => WEAK_STATE_BYTES,
             SOUL_COLLECT_STATE_ID => SOUL_COLLECT_STATE_BYTES,
+            super::skills::spriteburn::SPRITE_BURN_SKILL_ID => SPRITE_BURN_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

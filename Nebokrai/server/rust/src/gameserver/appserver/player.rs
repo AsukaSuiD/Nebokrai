@@ -5300,6 +5300,9 @@ impl CPlayer {
     ) -> Option<super::skills::spriteburnstate::SpriteBurnState> {
         self.move_shape.take_sprite_burn_state_for_ai()
     }
+    pub(crate) fn restore_sprite_burn_state_after_ai(&mut self, state: super::skills::spriteburnstate::SpriteBurnState) { self.move_shape.restore_sprite_burn_state_after_ai(state); }
+    pub(crate) fn finish_sprite_burn_state_after_ai(&mut self) { self.move_shape.finish_sprite_burn_state_after_ai(); }
+    pub(crate) fn activate_loaded_sprite_burn_state(&mut self, now_ms: u32) -> Option<super::skills::spriteburnstate::SpriteBurnState> { self.move_shape.activate_loaded_sprite_burn_state(now_ms) }
 
     pub(crate) fn take_sprite_burn_state(
         &mut self,
