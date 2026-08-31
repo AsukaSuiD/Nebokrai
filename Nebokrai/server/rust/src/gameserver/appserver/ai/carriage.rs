@@ -6,17 +6,12 @@
 //! оставляет пространственное перемещение, привязку игрока, журналирование,
 //! пакеты и фактическое удаление.
 //!
-//! `CPet::GetPetMaster`, унаследованный повозкой, разрешает игрока через
-//! глобальный реестр, а любой другой тип — только через текущий регион. В Rust
-//! эта развилка выражена типизированной ссылкой; технические конструкторы и
-//! RTTI исходника заменены обычным владением `CMonster`.
+//! Унаследованный `CPet::GetPetMaster` материализован общим pet-owner-ом;
+//! технические конструкторы и RTTI исходника заменены обычным владением
+//! `CMonster`.
 
-use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
+use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates};
 use crate::gameserver::appserver::skills::baseattack::real_distance;
-use crate::public::guid::CGuid;
-
-const PLAYER_TYPE: i32 = 400;
 
 pub(crate) const CARRIAGE_FOLLOWING: i32 = 0;
 pub(crate) const CARRIAGE_STAYING: i32 = 1;
@@ -51,29 +46,6 @@ pub(crate) enum CarriageMovementPlan {
     Move { x: i32, y: i32 },
     Wait,
     Follow,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CarriageMasterRef {
-    Player(i32),
-    Region(ShapeIdentity),
-}
-
-/// Безопасный эквивалент унаследованного `CPet::GetPetMaster`: нулевой master
-/// не разрешается, игрок ищется глобально, остальные типы остаются привязаны к
-/// реестру текущего региона.
-pub(crate) const fn carriage_master_ref(master: MasterInfo) -> Option<CarriageMasterRef> {
-    if master.master_type == 0 || master.master_id == 0 {
-        None
-    } else if master.master_type == PLAYER_TYPE {
-        Some(CarriageMasterRef::Player(master.master_id))
-    } else {
-        Some(CarriageMasterRef::Region(ShapeIdentity {
-            object_type: master.master_type,
-            id: master.master_id,
-            ex_id: CGuid::GUID_INVALID,
-        }))
-    }
 }
 
 pub(crate) fn plan_carriage_movement(

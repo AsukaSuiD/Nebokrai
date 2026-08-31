@@ -699,12 +699,12 @@ use crate::gameserver::appserver::message::skillmessage::{
 use crate::gameserver::appserver::message::teammessage::dispatch_game_team_message;
 use crate::gameserver::appserver::message::unibillmessage::dispatch_increment_shop_billing_message;
 use crate::gameserver::appserver::ai::carriage::{
-    CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts, CarriageMasterRef,
-    CarriageMovementPlan, carriage_master_ref, plan_carriage_movement,
+    CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts, CarriageMovementPlan,
+    plan_carriage_movement,
 };
 use crate::gameserver::appserver::ai::pet::{
-    PetLifecycleFacts, PetLifecycleNotice, execute_owned_pet_active_search,
-    execute_owned_pet_follow,
+    PetLifecycleFacts, PetLifecycleNotice, PetMasterRef, execute_owned_pet_active_search,
+    execute_owned_pet_follow, pet_master_ref,
 };
 use crate::gameserver::appserver::monster::{
     CMonster, MonsterExperienceFormula, MonsterKillingAttack,
@@ -38021,27 +38021,54 @@ impl CGame {
             return Some(false);
         }
 
-        let master_snapshot = (master.master_type == PLAYER_TYPE && master.master_id != 0)
-            .then(|| self.find_player(master.master_id))
-            .flatten()
-            .filter(|player| player.server_region_id() == Some(region_id))
-            .and_then(|player| {
-                Some((
-                    player.shape_view()?,
-                    player.learned_skill_level(MONSTER_TAMING_SKILL_ID),
-                    player.active_pets().len() as u32,
-                ))
-            });
+        let master_ref = pet_master_ref(master);
+        let master_snapshot = match master_ref {
+            Some(PetMasterRef::Player(player_id)) => self
+                .find_player(player_id)
+                .filter(|player| player.server_region_id() == Some(region_id))
+                .and_then(|player| {
+                    Some((
+                        player.shape_view()?,
+                        Some((
+                            player.learned_skill_level(MONSTER_TAMING_SKILL_ID),
+                            player.active_pets().len() as u32,
+                        )),
+                    ))
+                }),
+            Some(PetMasterRef::Region(identity)) => {
+                let view = match identity.object_type {
+                    MONSTER_TYPE => owner
+                        .base()
+                        .find_monster_by_id(identity.id)
+                        .and_then(|monster| {
+                            let property = self.find_monster_property_by_origin_name(
+                                monster.base_property_key()?,
+                            )?;
+                            monster.shape_view(property)
+                        }),
+                    NPC_TYPE => owner
+                        .base()
+                        .find_npc_by_id(identity.id)
+                        .and_then(|npc| npc.shape_view()),
+                    _ => None,
+                };
+                view.map(|view| (view, None))
+            }
+            None => None,
+        };
+        let master_is_player = matches!(master_ref, Some(PetMasterRef::Player(_)));
         let master_present = master_snapshot.is_some();
-        let master_close = master_snapshot.is_some_and(|(view, _, _)| view.distance(pet_view) < 33);
-        let reclaimable = master_snapshot.is_some_and(|(_, level, pet_count)| {
-            level != 0
-                && self
-                    .skill_factory
-                    .query_skill_base_properties(MONSTER_TAMING_SKILL_ID, level)
-                    .is_some_and(|properties| {
-                        pet_count < properties.query_property(SKILL_USAGE_PET_AMOUNT_LIMIT)
-                    })
+        let master_close = master_snapshot.is_some_and(|(view, _)| view.distance(pet_view) < 33);
+        let reclaimable = master_snapshot.is_some_and(|(_, taming)| {
+            taming.is_some_and(|(level, pet_count)| {
+                level != 0
+                    && self
+                        .skill_factory
+                        .query_skill_base_properties(MONSTER_TAMING_SKILL_ID, level)
+                        .is_some_and(|properties| {
+                            pet_count < properties.query_property(SKILL_USAGE_PET_AMOUNT_LIMIT)
+                        })
+            })
         });
         let safe_cell = owner
             .base()
@@ -38064,6 +38091,7 @@ impl CGame {
 
         if let Some(notice) = outcome.notice
             && master_present
+            && master_is_player
         {
             let text = match notice {
                 PetLifecycleNotice::AgeWarning => self.get_string_by_id(b"GS0010").to_vec(),
@@ -38078,6 +38106,7 @@ impl CGame {
                 .send_to_player(self.net_server(), master.master_id);
         }
         if outcome.reclaim
+            && master_is_player
             && let Some(player) = self.find_player_mut(master.master_id)
             && !player
                 .active_pets()
@@ -38087,7 +38116,10 @@ impl CGame {
             player.add_active_pet(MONSTER_TYPE, monster_id, i32::from(pet_figure.get(0)));
         }
         if outcome.vanish {
-            if master_present && let Some(player) = self.find_player_mut(master.master_id) {
+            if master_present
+                && master_is_player
+                && let Some(player) = self.find_player_mut(master.master_id)
+            {
                 let _ = player.remove_active_pet(MONSTER_TYPE, monster_id);
             }
             owner
@@ -38164,13 +38196,13 @@ impl CGame {
             return false;
         };
         let now_ms = runtime.now_milliseconds();
-        let master_ref = carriage_master_ref(master);
+        let master_ref = pet_master_ref(master);
         let master_snapshot = match master_ref {
-            Some(CarriageMasterRef::Player(player_id)) => self
+            Some(PetMasterRef::Player(player_id)) => self
                 .find_player(player_id)
                 .filter(|player| player.server_region_id() == Some(region_id))
                 .map(|player| (player.shape().clone(), Some(player.active_carriage_id()))),
-            Some(CarriageMasterRef::Region(identity)) => {
+            Some(PetMasterRef::Region(identity)) => {
                 let shape = match identity.object_type {
                     MONSTER_TYPE => owner
                         .base()
@@ -38289,7 +38321,7 @@ impl CGame {
         };
         if !vanish && master_outcome.checked {
             if master_outcome.rebound
-                && matches!(master_ref, Some(CarriageMasterRef::Player(_)))
+                && matches!(master_ref, Some(PetMasterRef::Player(_)))
                 && let Some(player) = self.find_player_mut(master.master_id)
             {
                 player.bind_active_carriage(monster_id);

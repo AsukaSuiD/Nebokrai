@@ -10,6 +10,9 @@
 //! переводит действие в `FOLLOWING`.
 //! Поиск живых владельцев, пространственное перемещение, пакеты и удаление
 //! остаются у `CGame`; состояние хранится ровно один раз внутри `CMonster`.
+//! `GetPetMaster` разрешает игрока глобально, а остальные типы — только через
+//! реестр текущего региона; эта же typed-развилка используется унаследованной
+//! повозкой и боевым ограничением преследования.
 //!
 //! Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 //! Декомпилятор: Ghidra 12.1.2
@@ -18,11 +21,13 @@
 //! боевые и событийные ветви `CPet`.
 
 use crate::gameserver::appserver::monster::CMonster;
+use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::public::guid::CGuid;
 
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
@@ -62,6 +67,29 @@ pub(crate) struct PetLifecycleOutcome {
     pub(crate) reclaim: bool,
     pub(crate) vanish: bool,
     pub(crate) clear_target: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PetMasterRef {
+    Player(i32),
+    Region(ShapeIdentity),
+}
+
+/// Безопасный эквивалент `CPet::GetPetMaster`: нулевой master не разрешается,
+/// игрок ищется глобально, остальные типы остаются привязаны к текущему
+/// `CServerRegion`.
+pub(crate) const fn pet_master_ref(master: MasterInfo) -> Option<PetMasterRef> {
+    if master.master_type == 0 || master.master_id == 0 {
+        None
+    } else if master.master_type == PLAYER_TYPE {
+        Some(PetMasterRef::Player(master.master_id))
+    } else {
+        Some(PetMasterRef::Region(ShapeIdentity {
+            object_type: master.master_type,
+            id: master.master_id,
+            ex_id: CGuid::GUID_INVALID,
+        }))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

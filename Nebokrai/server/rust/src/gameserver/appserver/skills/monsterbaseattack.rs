@@ -141,7 +141,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
 use crate::gameserver::appserver::ai::pet::{
-    lose_pet_target_and_search, queue_pet_idle,
+    PetMasterRef, lose_pet_target_and_search, pet_master_ref, queue_pet_idle,
 };
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
@@ -153,7 +153,7 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
+use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -305,25 +305,10 @@ fn pet_combat_master_anchor(
     region: &CServerRegion,
     master: MasterInfo,
 ) -> Option<(i32, i32)> {
-    if master.master_type == 0 || master.master_id == 0 {
-        return None;
-    }
-    if master.master_type == PLAYER_TYPE {
-        let master = game.find_player(master.master_id)?;
-        return Some((
-            master.shape().get_tile_x().ok()?,
-            master.shape().get_tile_y().ok()?,
-        ));
-    }
-    let identity = ShapeIdentity {
-        object_type: master.master_type,
-        id: master.master_id,
-        ex_id: CGuid::GUID_INVALID,
+    let master = match pet_master_ref(master)? {
+        PetMasterRef::Player(player_id) => game.find_player(player_id)?.shape_view()?,
+        PetMasterRef::Region(identity) => game.find_shape_in_region(region.id, identity)?,
     };
-    if !region.registered_shape_identities().contains(&identity) {
-        return None;
-    }
-    let master = game.resolve_shape(identity)?;
     Some((master.tile_x, master.tile_y))
 }
 
