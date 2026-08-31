@@ -37204,7 +37204,7 @@ impl CGame {
         target: ShapeIdentity,
         runtime: &mut Runtime,
     ) {
-        let Some((current_skill_id, interrupted_delayed_skill, default_attack_skill_id)) = self
+        let Some((current_skill_id, interrupted_active_skill, default_attack_skill_id)) = self
             .find_player(player_id)
             .and_then(|player| {
                 let matches_target = matches!(
@@ -37212,64 +37212,15 @@ impl CGame {
                     Some(PlayerSkillDispatch::Object { target: current, .. }) if current == target
                 );
                 matches_target.then(|| {
-                    let interrupted_delayed_skill = player.player_ai().base_magic().is_some()
-                || player.player_ai().archery().is_some()
-                || player.player_ai().heartless_arrow().is_some()
-                || player.player_ai().heartless_arrow_area().is_some()
-                || player.player_ai().lighting_arrow().is_some()
-                || player.player_ai().lighting_arrow_2().is_some()
-                || player.player_ai().meteor_arrow_mass().is_some()
-                || player.player_ai().meteor_arrow().is_some()
-                || player.player_ai().rain_arrow().is_some()
-                || player.player_ai().poison_moth().is_some()
-                || player.player_ai().kerosene().is_some()
-                || player.player_ai().ignition().is_some()
-                || player.player_ai().blind().is_some()
-                || player.player_ai().blood_rose().is_some()
-                || player.player_ai().scorpion().is_some()
-                || player.player_ai().boa_lock().is_some()
-                || player.player_ai().falling_star().is_some()
-                || player.player_ai().explosive_arrow().is_some()
-                || player.player_ai().strike().is_some()
-                || player.player_ai().agility_family().is_some()
-                || player.player_ai().callosity().is_some()
-                || player.player_ai().mosou().is_some()
-                || player.player_ai().ghost_cut().is_some()
-                || player.player_ai().knight_cut().is_some()
-                || player.player_ai().army_break().is_some()
-                || player.player_ai().rage().is_some()
-                || player.player_ai().rage_break().is_some()
-                || player.player_ai().fury().is_some()
-                || player.player_ai().flash().is_some()
-                || player.player_ai().swallow().is_some()
-                || player.player_ai().leaf_cut().is_some()
-                || player.player_ai().ju_cut().is_some()
-                || player.player_ai().lightning_sword().is_some()
-                || player.player_ai().little_flash().is_some()
-                || player.player_ai().little_star().is_some()
-                || player.player_ai().path_projectile().is_some()
-                || player.player_ai().direct_projectile().is_some()
-                || player.player_ai().yunsheng_lightning().is_some()
-                || player.player_ai().corpse_ptomaine().is_some()
-                || player.player_ai().monster_thorn().is_some()
-                || player.player_ai().spider_mist().is_some()
-                || player.player_ai().spider_web().is_some()
-                || player.player_ai().spider_poison().is_some()
-                || player.player_ai().summon_creature().is_some()
-                || player.player_ai().boss_blue_fury().is_some()
-                || player.player_ai().boss_blue_quake().is_some()
-                || player.player_ai().boss_fiend_penetrate().is_some()
-                || player.player_ai().sprite_burn().is_some()
-                || player.player_ai().wide_arc_attack().is_some()
-                || player.player_ai().lord_fast_attack().is_some()
-                || player.player_ai().thunder_slash().is_some()
-                || player.player_ai().pillar().is_some()
-                || player.player_ai().rush().is_some()
-                || player.player_ai().rush_2().is_some()
-                || player.player_ai().knock_out().is_some();
+                    // `m_pCurrentSkill` является исходным владельцем факта
+                    // начатого навыка. Concrete execution может ещё не быть
+                    // материализован в Rust, поэтому перечисление известных
+                    // адаптеров оставляло current skill и move-lock висеть
+                    // после удаления его object-target.
+                    let interrupted_active_skill = player.current_skill_id().is_some();
                     (
                         player.current_skill_id(),
-                        interrupted_delayed_skill,
+                        interrupted_active_skill,
                         player.default_attack_skill_id(self.goods_factory()),
                     )
                 })
@@ -37290,7 +37241,7 @@ impl CGame {
         } else {
             self.find_player_mut(player_id).is_some_and(|player| {
                 let released = player.player_ai_mut().release_object_target(target);
-                if released && interrupted_delayed_skill {
+                if released && interrupted_active_skill {
                     player.set_skill_moveable(true);
                     player.set_current_skill_id(None);
                 }
