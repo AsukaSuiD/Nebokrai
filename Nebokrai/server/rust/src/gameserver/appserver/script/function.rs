@@ -7392,7 +7392,6 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 player_id,
                 original_name,
                 string_arguments[1],
-                runtime,
             );
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return })
         }

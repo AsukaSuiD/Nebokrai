@@ -29742,12 +29742,11 @@ impl CGame {
     /// Сценарная функция `3504 / AddCarriage`: вычисленные имена доходят до
     /// канонических свойств, размещения в регионе, привязки к игроку,
     /// публикации `C0205` и журналирования в World.
-    pub(crate) fn add_script_player_carriage<Context: ServerRegionMonsterContext>(
+    pub(crate) fn add_script_player_carriage(
         &mut self,
         player_id: i32,
         original_name: &[u8],
         script_file: Option<&[u8]>,
-        context: &mut Context,
     ) -> i32 {
         let Some((region_id, player_name, player_x, player_y)) =
             self.find_player(player_id).map(|player| {
@@ -29776,59 +29775,16 @@ impl CGame {
         else {
             return 0;
         };
-        let Some(mut owner) = self.take_region_owner(region_id) else {
+        let Some((monster_id, shape, health)) = self.spawn_script_carriage_monster(
+            region_id,
+            &property,
+            player_id,
+            player_x,
+            player_y,
+            script_file,
+            game_tick_milliseconds(),
+        ) else {
             return 0;
-        };
-        let position = owner
-            .base()
-            .region
-            .get_random_pos_in_range(
-                player_x.wrapping_sub(3),
-                player_y.wrapping_sub(3),
-                7,
-                7,
-                context,
-            )
-            .ok();
-        let Some(position) = position else {
-            self.restore_region_owner(owner);
-            return 0;
-        };
-        let monster_id = owner
-            .base_mut()
-            .add_monster(
-                &property,
-                position.x,
-                position.y,
-                -1,
-                true,
-                false,
-                context.now_milliseconds(),
-                self.area_width,
-                self.area_height,
-                &self.skill_factory,
-                context,
-            )
-            .ok();
-        let Some(monster_id) = monster_id else {
-            self.restore_region_owner(owner);
-            return 0;
-        };
-        let (shape, health) = {
-            let carriage = owner
-                .base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .expect("script AddCarriage сохраняет spawned owner");
-            carriage.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
-                master_type: PLAYER_TYPE,
-                master_id: player_id,
-                ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
-            });
-            carriage.set_carriage_action(0);
-            if let Some(script_file) = script_file.filter(|script| *script != b"0") {
-                carriage.set_script_file(script_file);
-            }
-            (carriage.move_shape().shape().clone(), carriage.hit_points())
         };
         if let Some(player) = self.find_player_mut(player_id) {
             player.bind_active_carriage(monster_id);
@@ -29841,7 +29797,9 @@ impl CGame {
         add_legacy_c_string(entered.base_mut(), &player_name);
         entered.add_ulong(health);
         entered.add_ulong(property.maximum_hp);
-        let _ = self.send_game_shape_around(owner.base(), &shape, None, &entered);
+        if let Some(owner) = self.find_region(region_id) {
+            let _ = self.send_game_shape_around(owner.base(), &shape, None, &entered);
+        }
         let _ = self.send_carriage_log_snapshot(
             player_id,
             property.index,
@@ -29850,7 +29808,6 @@ impl CGame {
             shape.get_tile_y().unwrap_or_default(),
             1,
         );
-        self.restore_region_owner(owner);
         1
     }
 

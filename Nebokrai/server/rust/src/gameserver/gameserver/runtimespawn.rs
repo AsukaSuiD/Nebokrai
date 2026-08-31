@@ -133,6 +133,96 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 }
 
 impl CGame {
+    /// Пространственная половина script `AddCarriage`: возвращает уже
+    /// опубликованного canonical monster после fresh-entry и guard hooks.
+    #[allow(clippy::too_many_arguments, reason = "literal AddCarriage сохраняет spawn inputs")]
+    pub(crate) fn spawn_script_carriage_monster(
+        &mut self,
+        region_id: i32,
+        property: &crate::setup::monsterlist::MonsterProperties,
+        player_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        script_file: Option<&[u8]>,
+        now_ms: u32,
+    ) -> Option<(i32, CShape, u32)> {
+        self.with_legacy_random_stream(|game, random| {
+            let mut owner = game.take_region_owner(region_id)?;
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let (area_width, area_height) = game.area_dimensions();
+            let spawned = (|| {
+                let position = owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(
+                        tile_x.wrapping_sub(3),
+                        tile_y.wrapping_sub(3),
+                        7,
+                        7,
+                        &mut context,
+                    )
+                    .ok()?;
+                let monster_id = owner
+                    .base_mut()
+                    .add_monster(
+                        property,
+                        position.x,
+                        position.y,
+                        -1,
+                        true,
+                        false,
+                        now_ms,
+                        area_width,
+                        area_height,
+                        game.skill_factory(),
+                        &mut context,
+                    )
+                    .ok()?;
+                let carriage = owner
+                    .base_mut()
+                    .find_monster_by_id_mut(monster_id)
+                    .expect("script AddCarriage сохраняет spawned owner");
+                carriage.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
+                    master_type: 400,
+                    master_id: player_id,
+                    ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
+                });
+                carriage.set_carriage_action(0);
+                if let Some(script_file) = script_file.filter(|script| *script != b"0") {
+                    carriage.set_script_file(script_file);
+                }
+                Some((
+                    monster_id,
+                    carriage.move_shape().shape().clone(),
+                    carriage.hit_points(),
+                ))
+            })();
+            if let ServerRegionOwner::City(region) = &mut owner {
+                for monster_id in context.guard_monsters.drain(..) {
+                    region.add_gurd_monster(monster_id);
+                }
+                for refresh_index in context.guard_indices.drain(..) {
+                    region.add_guard_index(refresh_index);
+                }
+            }
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            game.restore_region_owner(owner);
+            game.publish_runtime_spawn_effects(region_id, effects);
+            spawned
+        })
+    }
+
     /// Локальная ветвь script `CreateNpc`: script owner выбирает регион, а
     /// `CGame` сохраняет единую RNG-последовательность и исполняет region
     /// entry/log effects после возврата временно извлечённого owner-а.
