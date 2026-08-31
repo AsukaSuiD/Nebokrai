@@ -8,9 +8,20 @@
 //! и сообщения `0xBFD05`. Достигнутые обработчики распределения и чата
 //! создают `0xBFD08/09` из типизированных владельцев сессии. Регион, состояние
 //! участника и удалённое восстановление используют тот же типизированный
-//! разъём. `Lose`, `AI` и остальные недостигнутые ветви сохранены ниже как RAW.
+//! разъём. `IsPlugAvailable` сохраняет точное пятиминутное окно remote-owner-а
+//! и reconnect-сигнал для повторной публикации team snapshot; остальные
+//! недостигнутые ветви сохранены ниже как RAW.
 
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
+
+const PLAYER_LOSE_TIMEOUT_MS: u32 = 300_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TeamMateAvailability {
+    Available,
+    Recovered,
+    Expired,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeamate {
@@ -19,6 +30,7 @@ pub(crate) struct CTeamate {
     owner_id: i32,
     owner_region_id: i32,
     owner_name: Vec<u8>,
+    player_lose_time_stamp: u32,
 }
 
 impl CTeamate {
@@ -48,6 +60,7 @@ impl CTeamate {
                 .next()
                 .unwrap_or_default()
                 .to_vec(),
+            player_lose_time_stamp: 0,
         }
     }
 
@@ -69,6 +82,40 @@ impl CTeamate {
 
     pub(crate) const fn set_owner_region_id(&mut self, owner_region_id: i32) {
         self.owner_region_id = owner_region_id;
+    }
+
+    /// Exact `IsPlugAvailable` reconnect window. Отсутствующий локальный
+    /// player запускает пятиминутный срок только если его сохранённый регион
+    /// принадлежит этому GameServer; появление owner-а очищает срок и требует
+    /// повторной публикации полного team snapshot.
+    pub(crate) const fn availability(
+        &mut self,
+        now_ms: u32,
+        owner_is_local: bool,
+        owner_region_is_local: bool,
+    ) -> TeamMateAvailability {
+        if owner_is_local {
+            if self.player_lose_time_stamp != 0 {
+                self.player_lose_time_stamp = 0;
+                return TeamMateAvailability::Recovered;
+            }
+            return TeamMateAvailability::Available;
+        }
+        if self.player_lose_time_stamp == 0 {
+            if owner_region_is_local {
+                self.player_lose_time_stamp = now_ms;
+            }
+            return TeamMateAvailability::Available;
+        }
+        if self
+            .player_lose_time_stamp
+            .wrapping_add(PLAYER_LOSE_TIMEOUT_MS)
+            <= now_ms
+        {
+            TeamMateAvailability::Expired
+        } else {
+            TeamMateAvailability::Available
+        }
     }
 
     pub(crate) fn serialize(&self, output: &mut Vec<u8>) {

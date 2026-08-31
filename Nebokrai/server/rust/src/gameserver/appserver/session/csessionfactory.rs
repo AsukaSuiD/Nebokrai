@@ -60,7 +60,7 @@ use super::cpersonalshopseller::CPersonalShopSeller;
 use super::cplug::CPlug;
 use super::csession::CSession;
 use super::cteam::CTeam;
-use super::cteamate::CTeamate;
+use super::cteamate::{CTeamate, TeamMateAvailability};
 use super::ctrader::CTrader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -194,6 +194,21 @@ pub(crate) struct TeamMemberRemoved {
     pub(crate) player_id: i32,
     pub(crate) leader_id: i32,
     pub(crate) remaining_player_ids: Vec<i32>,
+}
+
+#[must_use = "recovered teammate требует восстановления membership и snapshot"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamMemberRecovered {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) player_id: i32,
+    pub(crate) snapshot: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TeamPlugAiReport {
+    pub(crate) recovered: Vec<TeamMemberRecovered>,
+    pub(crate) expired: Vec<TeamMemberRemoved>,
 }
 
 #[must_use = "team disband сохраняет ordered owners до registry GC"]
@@ -520,6 +535,97 @@ impl CSessionFactory {
                 self.disband_team(session_id)
             })
             .collect()
+    }
+
+    /// Base `CSession::AI` plug traversal для concrete teammate plugs. Один
+    /// missing/expired plug завершает проход конкретной session, как ранний
+    /// `return` исходного списка; recovered plugs продолжают ordered обход.
+    pub(crate) fn run_team_plug_ai(
+        &mut self,
+        now_ms: u32,
+        mut owner_is_local: impl FnMut(i32) -> bool,
+        mut region_is_local: impl FnMut(i32) -> bool,
+    ) -> TeamPlugAiReport {
+        let session_ids = self.teams.keys().copied().collect::<Vec<_>>();
+        let mut report = TeamPlugAiReport::default();
+        for session_id in session_ids {
+            if self
+                .sessions
+                .get(&session_id)
+                .is_none_or(|session| !session.is_available_prefix())
+            {
+                continue;
+            }
+            let plug_ids = self
+                .sessions
+                .get(&session_id)
+                .expect("active team session проверена")
+                .plug_ids_storage()
+                .to_vec();
+            for plug_id in plug_ids {
+                if !self.plugs.contains_key(&plug_id) {
+                    let _removed = self
+                        .sessions
+                        .get_mut(&session_id)
+                        .expect("team session остаётся active")
+                        .remove_plug(plug_id);
+                    break;
+                }
+                let availability = {
+                    let Some(teammate) = self.teammates.get_mut(&plug_id) else {
+                        continue;
+                    };
+                    teammate.availability(
+                        now_ms,
+                        teammate.owner_type() == 400 && owner_is_local(teammate.owner_id()),
+                        region_is_local(teammate.owner_region_id()),
+                    )
+                };
+                match availability {
+                    TeamMateAvailability::Available => {}
+                    TeamMateAvailability::Recovered => {
+                        let session = self
+                            .sessions
+                            .get(&session_id)
+                            .expect("recovered team session остаётся canonical");
+                        let team = self
+                            .teams
+                            .get(&session_id)
+                            .expect("recovered team owner остаётся canonical");
+                        let snapshot = team.serialize(
+                            session,
+                            now_ms,
+                            session
+                                .plug_ids_storage()
+                                .iter()
+                                .filter_map(|id| self.teammates.get(id)),
+                        );
+                        report.recovered.push(TeamMemberRecovered {
+                            session_id,
+                            team_id: team.team_id(),
+                            player_id: self
+                                .teammates
+                                .get(&plug_id)
+                                .expect("recovered teammate остаётся canonical")
+                                .owner_id(),
+                            snapshot,
+                        });
+                    }
+                    TeamMateAvailability::Expired => {
+                        let player_id = self
+                            .teammates
+                            .get(&plug_id)
+                            .expect("expired teammate остаётся до callback")
+                            .owner_id();
+                        if let Some(expired) = self.remove_team_member(session_id, player_id) {
+                            report.expired.push(expired);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        report
     }
 
     /// Достигнутая derived-часть `CTeam::AI`: возвращает только локальные

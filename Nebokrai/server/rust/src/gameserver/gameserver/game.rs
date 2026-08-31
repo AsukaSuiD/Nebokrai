@@ -15778,6 +15778,51 @@ impl CGame {
         expired.len()
     }
 
+    /// Base `CSession::AI` teammate traversal между lifetime gate и derived
+    /// `CTeam::AI`. Reconnect восстанавливает membership/snapshot, а истёкший
+    /// five-minute lose window публикует state `2` как обычный member-left.
+    fn run_team_plug_ai(&mut self, now_ms: u32) -> (usize, usize) {
+        let report = {
+            let (session_factory, players, regions) =
+                (&mut self.session_factory, &self.players, &self.regions);
+            session_factory.run_team_plug_ai(
+                now_ms,
+                |player_id| players.contains_key(&player_id),
+                |region_id| regions.contains_key(&region_id),
+            )
+        };
+        for recovered in &report.recovered {
+            if let Some(player) = self.players.get_mut(&recovered.player_id)
+                && player.team_id() == 0
+            {
+                player.set_team_membership(recovered.team_id as i32);
+            }
+            self.send_team_snapshot(recovered.player_id, &recovered.snapshot);
+            tracing::trace!(
+                session_id = recovered.session_id,
+                team_id = recovered.team_id,
+                player_id = recovered.player_id,
+                "восстановлен потерянный участник группы"
+            );
+        }
+        for expired in &report.expired {
+            let recipients = expired
+                .remaining_player_ids
+                .iter()
+                .copied()
+                .filter(|player_id| self.players.contains_key(player_id));
+            self.publish_team_member_left(expired.team_id, expired.player_id, recipients);
+            tracing::trace!(
+                session_id = expired.session_id,
+                team_id = expired.team_id,
+                player_id = expired.player_id,
+                leader_id = expired.leader_id,
+                "истёк срок потерянного участника группы"
+            );
+        }
+        (report.recovered.len(), report.expired.len())
+    }
+
     /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,
     /// true публикует полученный caller-ом `_time` sample.
     pub(crate) const fn set_auction_state(&mut self, enabled: bool, wall_time_seconds: u32) {
@@ -47562,6 +47607,7 @@ impl CGame {
                 self.run_team_snapshot_queries(runtime.now_milliseconds());
             let _expired_team_sessions =
                 self.expire_team_sessions(runtime.now_milliseconds());
+            let _team_plug_ai = self.run_team_plug_ai(runtime.now_milliseconds());
             let _idle_team_sessions =
                 self.garbage_collect_idle_team_sessions(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
@@ -47587,6 +47633,7 @@ impl CGame {
                 self.run_team_snapshot_queries(runtime.now_milliseconds());
             let _expired_team_sessions =
                 self.expire_team_sessions(runtime.now_milliseconds());
+            let _team_plug_ai = self.run_team_plug_ai(runtime.now_milliseconds());
             let _idle_team_sessions =
                 self.garbage_collect_idle_team_sessions(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
