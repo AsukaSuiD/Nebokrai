@@ -155,7 +155,9 @@ use crate::gameserver::appserver::skills::taijistate::TaiJiState;
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
     TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID,
 };
-use crate::gameserver::appserver::skills::weakstate::WeakState;
+use crate::gameserver::appserver::skills::weakstate::{
+    WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState,
+};
 use crate::gameserver::appserver::skills::wangshengstate::{
     WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID,
 };
@@ -1065,6 +1067,16 @@ impl CMoveShape {
         if self.god_bless_state.is_some() {
             self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
             self.god_bless_state_order = Some(self.reached_property_state_order);
+        }
+        self.weak_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(WEAK_STATE_ID))
+            .and_then(|offset| WeakState::decode(&states, offset).ok());
+        self.weak_state_order = None;
+        if self.weak_state.is_some() {
+            self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
+            self.weak_state_order = Some(self.reached_property_state_order);
         }
         self.strike_states = known_offsets
             .iter()
@@ -2616,14 +2628,19 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_weak_state(&mut self, state: WeakState) -> Option<WeakState> {
+        self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
         self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
         self.weak_state_order = Some(self.reached_property_state_order);
         self.weak_state.replace(state)
     }
 
+    pub(crate) fn activate_loaded_weak_state(&self) -> Option<WeakState> { self.weak_state }
+
     pub(crate) fn take_weak_state(&mut self) -> Option<WeakState> {
         let state = self.weak_state.take()?;
         self.weak_state_order = None;
+        self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
         Some(state)
     }
 
@@ -2631,6 +2648,7 @@ impl CMoveShape {
         let state = self.weak_state.filter(|state| !state.contains(tile_x, tile_y))?;
         self.weak_state = None;
         self.weak_state_order = None;
+        self.remove_serialized_state_record(state.skill_id(), WEAK_STATE_BYTES);
         Some(state)
     }
 
@@ -4341,6 +4359,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::spiderweb::SPIDER_WEB_SKILL_ID => SPIDER_WEB_STATE_BYTES,
             SEAL_STATE_ID => SEAL_STATE_BYTES,
             GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => GOD_BLESS_STATE_BYTES,
+            WEAK_STATE_ID => WEAK_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

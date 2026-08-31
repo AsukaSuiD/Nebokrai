@@ -5327,6 +5327,7 @@ impl CPlayer {
     ) -> Option<super::skills::weakstate::WeakState> {
         self.move_shape.replace_weak_state(state)
     }
+    pub(crate) fn activate_loaded_weak_state(&self) -> Option<super::skills::weakstate::WeakState> { self.move_shape.activate_loaded_weak_state() }
 
     pub(crate) fn replace_god_bless_state(&mut self, state: super::skills::godblessstate::GodBlessState) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.replace_god_bless_state(state) }
     pub(crate) fn activate_loaded_god_bless_state(&mut self, now_ms: u32) -> Option<super::skills::godblessstate::GodBlessState> { self.move_shape.activate_loaded_god_bless_state(now_ms) }

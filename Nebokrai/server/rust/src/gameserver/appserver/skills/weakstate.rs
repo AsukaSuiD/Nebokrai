@@ -6,9 +6,11 @@
 //! `0xFFFF` и ограничение `INT_MAX`; для монстра применяется то же знаковое
 //! вычитание к обеим границам атаки. `CGame` отвечает только за каноническую
 //! установку, перерасчёт независимого владельца и around-доставку.
-//! DB-восстановление без координат области не материализуется: неизвестная
-//! запись остаётся в закрытом legacy codec `CanonicalStateStorage`.
+//! Persisted-запись намеренно не содержит координаты области: exact EXE пишет
+//! ID, type `2`, нулевой remaining time и attack loss. После загрузки нулевой
+//! прямоугольник сохраняет native-поведение до первой проверки выхода.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -16,6 +18,7 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 
 pub(crate) const WEAK_STATE_ID: u32 = 0x12e;
+pub(crate) const WEAK_STATE_BYTES: usize = 16;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
@@ -31,6 +34,24 @@ pub(crate) struct WeakState {
 impl WeakState {
     pub(crate) const fn new(attack_loss: u32, center_x: i32, center_y: i32, length: i32, height: i32) -> Self {
         Self { attack_loss, center_x, center_y, length, height }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != WEAK_STATE_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        let _state_type = reader.read_u32()?;
+        let _remaining_time = reader.read_u32()?;
+        Ok(Self::new(reader.read_u32()?, 0, 0, 0, 0))
+    }
+
+    pub(crate) fn encoded(self) -> [u8; WEAK_STATE_BYTES] {
+        let mut bytes = [0; WEAK_STATE_BYTES];
+        for (index, value) in [WEAK_STATE_ID, 2, 0, self.attack_loss].into_iter().enumerate() {
+            bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
     }
 
     pub(crate) const fn attack_loss(self) -> u32 { self.attack_loss }
