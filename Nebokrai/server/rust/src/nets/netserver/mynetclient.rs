@@ -23,6 +23,9 @@
 //! `CSocketCommands::Clear`, destructor и deleting thunk заменены
 //! `Vec`/`CMsgQueue`/RAII. Component хранит owned `TcpStream`, resolved endpoint,
 //! control-send и один awaitable read/send шаг поверх общего `CClient`.
+//! EOF и подтверждённая системная ошибка TCP проходят один и тот же
+//! `OnClose -> HandleClose`: socket закрывается до публикации synthetic
+//! World/Billing сообщения, которое живой `CGame` обрабатывает в своём FIFO.
 //! `SetSendRevBuf` RVA `0x0001A650` передавал Windows `SO_SNDBUF=0`; Linux
 //! backpressure-эквивалент не доказан, поэтому эта socket-option остаётся
 //! локальным `BLOCKED_MISSING_FACT`, а не получает фиктивный вызов.
@@ -245,16 +248,30 @@ impl CMyNetClient {
                 .accept_received_bytes(&received)
                 .map(|messages| GameClientIoStep::Received { messages })
                 .map_err(GameClientIoError::Receive),
-            Ready::Read(Err(error)) | Ready::Write(Err(error)) => Err(GameClientIoError::Io(error)),
+            Ready::Read(Err(error)) | Ready::Write(Err(error)) => {
+                self.handle_transport_close()
+                    .map_err(|_| GameClientIoError::UnknownServerTypeClose)?;
+                Err(GameClientIoError::Io(error))
+            }
             Ready::Write(Ok(())) => {
                 let stream = self
                     .connection
                     .as_ref()
                     .ok_or(GameClientIoError::NotConnected)?;
-                self.send_queue
-                    .try_flush(stream)
-                    .map(GameClientIoStep::Sent)
-                    .map_err(GameClientIoError::Send)
+                match self.send_queue.try_flush(stream) {
+                    Ok(outcome) => Ok(GameClientIoStep::Sent(outcome)),
+                    Err(
+                        error
+                        @ (ClientSendError::WriteZero { .. } | ClientSendError::Io { .. }),
+                    ) => {
+                        self.handle_transport_close()
+                            .map_err(|_| GameClientIoError::UnknownServerTypeClose)?;
+                        Err(GameClientIoError::Send(error))
+                    }
+                    Err(error @ ClientSendError::UnsupportedFlags { .. }) => {
+                        Err(GameClientIoError::Send(error))
+                    }
+                }
             }
         }
     }
