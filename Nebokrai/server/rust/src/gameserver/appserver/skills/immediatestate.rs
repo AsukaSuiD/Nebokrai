@@ -4,9 +4,11 @@
 //! Владелец объединяет только подтверждённую одинаковую последовательность
 //! `Begin → Check → Calculate → Attack → Apply`. Идентификатор usage,
 //! формула значения и конкретное каноническое состояние остаются у пяти
-//! навыков семейства; `CGame` предоставляет canonical shape owner, свойства
-//! навыка и фактическую публикацию состояния.
+//! навыков семейства; завершение сохраняет общий для конкретного skill ID
+//! reuse-clock. `CGame` предоставляет canonical shape owner, свойства навыка,
+//! пересчёт производных характеристик и фактическую публикацию состояния.
 
+use super::baseattack::{time_reached, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
 use super::enlargefullmissstate::EnlargeFullMissState;
 use super::enlargemaxhp::{ENLARGE_MAX_HP_SKILL_ID, SKILL_USAGE_MAX_HP_GAIN};
@@ -120,6 +122,12 @@ pub(crate) fn execute_player_auto_start_immediate_state<Runtime: GameMainLoopRun
     }
     let _ = game.publish_player_states(player_id);
     let _ = game.update_player_properties(player_id);
+    let used_at_ms = runtime.now_milliseconds();
+    if let Some(player) = game.find_player_mut(player_id) {
+        player
+            .player_ai_mut()
+            .mark_immediate_state_used(skill_id, used_at_ms);
+    }
     true
 }
 
@@ -154,7 +162,30 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
+    let skill_level = game
+        .find_player(player_id)
+        .map_or(0, |player| player.learned_skill_level(skill_id));
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
+        if player_ai.immediate_state().is_some() {
+            if let Some(player) = game.find_player_mut(player_id) {
+                player.set_skill_moveable(true);
+                player.set_current_skill_id(None);
+            }
+        }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+
     if player_ai.immediate_state().is_none() {
+        let cooldown_now_ms = runtime.now_milliseconds();
+        let last_used_ms = player_ai.immediate_state_last_used_ms(skill_id);
+        if last_used_ms != 0
+            && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms)
+        {
+            game.send_base_magic_failure(player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"GS0278");
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         if let Some(player) = game.find_player_mut(player_id) {
@@ -167,17 +198,6 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-
-    let skill_level = game
-        .find_player(player_id)
-        .map_or(0, |player| player.learned_skill_level(skill_id));
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(true);
-            player.set_current_skill_id(None);
-        }
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
     let (usage, state_kind) = match skill_id {
         TAIJI_SKILL_ID => (
             SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN,
@@ -193,7 +213,6 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         _ => unreachable!(),
     };
     let gain = properties.query_property(usage) as i32;
-    let _state_started_at_ms = runtime.now_milliseconds();
     if let Some(player) = game.find_player_mut(player_id) {
         match state_kind {
             ImmediateStateKind::TaiJi => {
@@ -214,6 +233,7 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         }
     }
     let _ = game.publish_player_states(player_id);
+    let _ = game.update_player_properties(player_id);
     if let Some(state) = player_ai.immediate_state_mut() {
         let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
@@ -224,6 +244,6 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
-    let _last_used_at_ms = runtime.now_milliseconds();
+    player_ai.mark_immediate_state_used(skill_id, runtime.now_milliseconds());
     terminal(QueuedSkillExecutionState::Completed)
 }

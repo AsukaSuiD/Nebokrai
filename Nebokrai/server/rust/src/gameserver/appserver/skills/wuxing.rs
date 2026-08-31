@@ -3,8 +3,10 @@
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владельцы
 //! `wuxing{metal,wood,water,fire,earth}.cpp`. Навык всегда предпочитает
 //! собственного user-а sufferer-у, заменяет состояние того же ID в прежней
-//! позиции, затем вызывает полный `UpdateProperty` и `RestoreHpMp`.
+//! позиции, затем вызывает полный `UpdateProperty` и `RestoreHpMp`; базовое
+//! завершение сохраняет отдельный reuse-clock конкретного элемента.
 
+use super::baseattack::{time_reached, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::wuxingearth::WUXING_EARTH_SKILL_ID;
 use super::wuxingfire::WUXING_FIRE_SKILL_ID;
@@ -104,7 +106,7 @@ pub(crate) fn execute_player_auto_start_wuxing<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    _runtime: &mut Runtime,
+    runtime: &mut Runtime,
 ) -> bool {
     let skill_level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(skill_id));
     let state = game
@@ -118,6 +120,12 @@ pub(crate) fn execute_player_auto_start_wuxing<Runtime: GameMainLoopRuntime>(
     }
     if game.update_player_properties(player_id).is_some() {
         let _ = game.restore_player_hp_mp_states(player_id);
+    }
+    let used_at_ms = runtime.now_milliseconds();
+    if let Some(player) = game.find_player_mut(player_id) {
+        player
+            .player_ai_mut()
+            .mark_immediate_state_used(skill_id, used_at_ms);
     }
     true
 }
@@ -143,7 +151,27 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
+    let skill_level = game
+        .find_player(player_id)
+        .map_or(0, |player| player.learned_skill_level(skill_id));
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
+        if player_ai.immediate_state().is_some() {
+            finish_player(game, player_id);
+        }
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+
     if player_ai.immediate_state().is_none() {
+        let cooldown_now_ms = runtime.now_milliseconds();
+        let last_used_ms = player_ai.immediate_state_last_used_ms(skill_id);
+        if last_used_ms != 0
+            && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms)
+        {
+            game.send_base_magic_failure(player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"GS0278");
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         if let Some(player) = game.find_player_mut(player_id) {
@@ -153,13 +181,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
     } else if player_ai.immediate_state().is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-
-    let skill_level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(skill_id));
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        finish_player(game, player_id);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    let state = state_from_properties(skill_id, properties)
+    let state = state_from_properties(skill_id, &properties)
         .expect("WuXing ID проверен до чтения свойств");
 
     if let Some(player) = game.find_player_mut(player_id) {
@@ -175,6 +197,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player(game, player_id);
+    player_ai.mark_immediate_state_used(skill_id, runtime.now_milliseconds());
     terminal(QueuedSkillExecutionState::Completed)
 }
 

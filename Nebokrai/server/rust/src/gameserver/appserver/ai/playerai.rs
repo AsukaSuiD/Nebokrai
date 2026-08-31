@@ -59,7 +59,7 @@
 //! следованием. Обычная очередь действий игрока и очередь боевой феи
 //! исполняются независимо: движение игрока не приостанавливает стадии феи.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use super::baseai::CBaseAI;
 use crate::gameserver::appserver::player::{
@@ -360,6 +360,7 @@ pub(crate) struct CPlayerAI {
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     mana_shield_last_used_ms: u32,
     immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    immediate_state_last_used_ms: BTreeMap<u32, u32>,
     non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     swordship: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     gibe: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -2100,6 +2101,17 @@ impl CPlayerAI {
         &mut self,
     ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
         self.immediate_state.as_mut()
+    }
+
+    pub(crate) fn immediate_state_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.immediate_state_last_used_ms
+            .get(&skill_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn mark_immediate_state_used(&mut self, skill_id: u32, now_ms: u32) {
+        self.immediate_state_last_used_ms.insert(skill_id, now_ms);
     }
 
     pub(crate) const fn non_fun(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
