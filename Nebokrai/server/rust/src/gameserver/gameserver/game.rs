@@ -15696,7 +15696,7 @@ impl CGame {
         let _ = prompt.send_to_player(self.net_server(), player_id);
     }
 
-    pub(crate) fn submit_script_faction_creation<Context: ScriptRegionChangeContext>(
+    pub(crate) fn submit_script_faction_creation<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         session_id: i64,
@@ -15991,7 +15991,7 @@ impl CGame {
         true
     }
 
-    pub(crate) fn select_script_faction_war_target<Context: ScriptRegionChangeContext>(
+    pub(crate) fn select_script_faction_war_target<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         session_id: i64,

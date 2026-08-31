@@ -21,8 +21,9 @@
 //! region spawn owners без прежних monster/spawn callbacks runtime-а.
 //! `0x7FE24` аналогично передаёт полный city player/gate проход `CGame`, не
 //! оставляя возврат игроков внешнему callback-у.
-//! War phase runtime ограничен фактическим `CPlayer::ChangeRegion` контрактом;
-//! Nation NPC/monster combat остаётся только у соседних OrganSys handlers.
+//! Весь OrganSys runtime ограничен фактическим `CPlayer::ChangeRegion`
+//! контрактом; Nation NPC/monster combat и faction GameSave clock больше не
+//! расширяют dispatcher surface и исполняются concrete owners.
 //! Обновление списков городских и деревенских contender-ов также читает
 //! faction, публикует `0xBFF29` и меняет `0xBFF28` через canonical `CGame`,
 //! не делегируя эти четыре операции process runtime-у.
@@ -71,8 +72,8 @@ use super::super::serverwarregion::{WarRegionClearContext, WarRegionContext};
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
-    CGame, GameWarRegionHandle, LegacyFormatArgument, PlayerRegionChangeContext,
-    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
+    CGame, GameClockContext, GameWarRegionHandle, LegacyFormatArgument,
+    PlayerRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
     format_legacy_mixed, format_legacy_text_fields, game_tick_milliseconds,
 };
 use crate::nets::netserver::message::CMessage;
@@ -538,7 +539,7 @@ fn dispatch_organizing_client_response(
 }
 
 /// Подключает всю достигнутую OrganSys family к живому `CGame` owner-у.
-pub(crate) fn dispatch_game_organizing_message<Runtime: ScriptRegionChangeContext>(
+pub(crate) fn dispatch_game_organizing_message<Runtime: GameOrganizingWarRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -979,7 +980,7 @@ fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(
     Ok(())
 }
 
-fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
+fn dispatch_faction_lifecycle_message<Runtime: GameClockContext>(
     opcode: u32,
     message: &mut CMessage,
     game: &mut CGame,
