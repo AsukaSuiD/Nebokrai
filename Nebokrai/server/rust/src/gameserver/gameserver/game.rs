@@ -37172,7 +37172,14 @@ impl CGame {
         let permissions = player.pk_permissions();
         match property.ai as i32 {
             8..=9 => permissions.player,
-            10..=11 => region.symbol_is_attackable(),
+            10..=11 => match region {
+                ServerRegionOwner::City(city) => city.guard_is_attackable(
+                    PLAYER_TYPE,
+                    player.faction_id(),
+                    player.union_id(),
+                ),
+                _ => true,
+            },
             13 => {
                 if u32::from(player.country()) == property.race {
                     permissions.player

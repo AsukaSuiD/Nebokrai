@@ -3,7 +3,7 @@
 //! Фазовые callbacks RVA `0x001CF730`, `0x001CFA00..0x001CFD70`,
 //! `0x001D09F0`, ownership `0x001CED70/0x001CEF40`, victory `0x001CF1A0`,
 //! spatial `SetEnterPosXY/GetReturnPoint` `0x001CEE80/0x001CEF60`, virtual
-//! security `0x001CF0E0`,
+//! security/guard attackability `0x001CF0E0/0x001CF050`,
 //! decoder `0x001D10B0`, `AddCityGate` `0x001D0F00`, gate runtime
 //! `0x001CAAA0/0x001CF370..0x001CF640`, clear `0x001CF970`, guard refresh
 //! `0x001CF7C0` и direct timeout-forwarding `0x001CFEB0` имеют статус
@@ -50,6 +50,8 @@
 //! который применяет точный faction-фильтр и обычную смену региона до
 //! принадлежащего city-owner-у прохода ворот. Localized war-log исполняет
 //! `CGame`, а context сохраняет только contender-state и публикацию ворот.
+//! City-guard AI `10/11` использует concrete guard virtual: в fight-state
+//! owning faction/union защищены, остальные player targets разрешены.
 //! Прямой `OnWinSymbol` внутри `OnFactionVictory` у этой сборки указывает на
 //! точный no-op `0x004A8750`; Rust не сохраняет для него фиктивный callback.
 //! Timeout возвращает victory/log snapshot: `CGame` шлёт `0x60138` после
@@ -733,6 +735,27 @@ impl CServerCityRegion {
         }
     }
 
+    /// Exact `CServerCityRegion::GuardIsAttackAble`: вне active city-war
+    /// state базовый результат остаётся true. Во время state `3` стража не
+    /// атакует player-а своей owning faction либо owning union; нулевые owner
+    /// IDs никогда не создают защитного совпадения.
+    pub(crate) fn guard_is_attackable(
+        &self,
+        target_type: i32,
+        target_faction_id: i32,
+        target_union_id: i32,
+    ) -> bool {
+        if self.war.base.get_city_state() != 3 || target_type != 400 {
+            return true;
+        }
+        let owned_faction_id = self.war.base.owned_city_faction();
+        if owned_faction_id != 0 && target_faction_id == owned_faction_id {
+            return false;
+        }
+        let owned_union_id = self.war.base.owned_city_union();
+        owned_union_id == 0 || target_union_id != owned_union_id
+    }
+
     pub(crate) fn apply_gate_hurt_owner_update(
         &mut self,
         update: CityGateHurtOwnerUpdate,
@@ -1067,7 +1090,7 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::GuardIsAttackAble
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servercityregion.cpp:485
