@@ -92,6 +92,7 @@ use super::origin::ORIGIN_SKILL_ID;
 use super::promotion::{PROMOTION_SKILL_ID, execute_owned_monster_promotion};
 use super::skeletonarchery::SKELETON_ARCHERY_SKILL_ID;
 use super::snakebolt::{SNAKE_BOLT_SKILL_ID, execute_owned_snake_bolt};
+use super::snowstorm::{SNOW_STORM_SKILL_ID, execute_owned_monster_snow_storm};
 use super::spiderpoison::{SPIDER_POISON_SKILL_ID, execute_owned_spider_poison};
 use super::spidermist::{SPIDER_MIST_SKILL_ID, execute_owned_spider_mist};
 use super::spiderweb::{SPIDER_WEB_SKILL_ID, execute_owned_spider_web};
@@ -204,6 +205,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
             | ORIGIN_SKILL_ID
             | PROMOTION_SKILL_ID
             | YAKSHA_SLASH_SKILL_ID
+            | SNOW_STORM_SKILL_ID
     )
 }
 
@@ -675,6 +677,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     range_dispatch: &mut Option<MonsterRangeAttackDispatch>,
     wide_arc_dispatch: &mut Option<WideArcAttackDispatch>,
     projectile_dispatch: &mut Option<MonsterProjectileDispatch>,
+    snow_storm_entry: &mut Option<i32>,
 ) -> bool {
     let Some((
         property,
@@ -1002,6 +1005,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if skill_id == YAKSHA_SLASH_SKILL_ID {
         let skill_properties = skill_properties.clone();
         return execute_owned_monster_yaksha_slash(game, region, monster_id, target, skill.level, &skill_properties, &property, now_ms, runtime, deaths);
+    }
+    if skill_id == SNOW_STORM_SKILL_ID {
+        let skill_properties = skill_properties.clone();
+        return execute_owned_monster_snow_storm(game, region, monster_id, target, skill.level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
     }
     if matches!(skill_id, SKELETON_ARCHERY_SKILL_ID | CHUCK_STONE_SKILL_ID) {
         let skill_properties = skill_properties.clone();

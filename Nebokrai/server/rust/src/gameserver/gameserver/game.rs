@@ -1282,8 +1282,8 @@ use crate::gameserver::appserver::skills::snowstorm::{
     is_snow_storm_target, SNOW_STORM_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::snowstormphalanx::{
-    calculate_owned_snow_storm_attack, snow_storm_targets, CSnowStormPhalanx,
-    SnowStormPhalanxTick,
+    calculate_owned_snow_storm_attack, execute_owned_monster_snow_storm_target,
+    snow_storm_targets, CSnowStormPhalanx, SnowStormPhalanxTick,
 };
 use crate::gameserver::appserver::skills::weak::{
     cancel_player_weak, complete_player_weak, execute_player_weak, is_weak_target, WEAK_SKILL_ID,
@@ -38083,7 +38083,7 @@ impl CGame {
     }
 
     /// Достигнутый путь `CMonsterAI/CPet::OnSchedule` для
-    /// `0x2bd/0x2d1/0x2ef/0x197/0x191/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f5/0x1f6/0x1f7/0x1f8/0x1f9/0x1fa`,
+    /// `0x2bd/0x2d1/0x2ef/0x191/0x193/0x196/0x197/0x198/0x199/0x19a/0x19b/0x19c/0x19d/0x19e/0x19f/0x1a0/0x1a1/0x1a2/0x1a3/0x1a4/0x1a5/0x1a6/0x1a7/0x1f5/0x1f6/0x1f7/0x1f8/0x1f9/0x1fa`,
     /// включая их полностью достигнутые
     /// многокомандные списки с исходным взвешенным выбором:
     /// ответный удар, поиск и преследование агрессивного ИИ `0/3`, атака
@@ -38103,6 +38103,7 @@ impl CGame {
         let mut range_dispatch = None;
         let mut wide_arc_dispatch = None;
         let mut projectile_dispatch = None;
+        let mut snow_storm_entry = None;
         let handled = execute_owned_monster_base_attack(
             self,
             owner.base_mut(),
@@ -38112,6 +38113,7 @@ impl CGame {
             &mut range_dispatch,
             &mut wide_arc_dispatch,
             &mut projectile_dispatch,
+            &mut snow_storm_entry,
         );
         let _ = synchronize_jiumai_target_loss(owner.base_mut(), monster_id);
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
@@ -38119,6 +38121,9 @@ impl CGame {
         }
         self.restore_region_owner(owner);
         self.apply_monster_attack_deaths(region_id, deaths, runtime);
+        if let Some(phalanx_id) = snow_storm_entry {
+            let _ = self.send_snow_storm_phalanx_entry(region_id, phalanx_id, runtime);
+        }
         if let Some(dispatch) = wide_arc_dispatch {
             'cells: for (tile_x, tile_y) in dispatch.cells.iter().copied() {
                 let Some(owner) = self.take_region_owner(region_id) else {
@@ -44591,6 +44596,14 @@ impl CGame {
         ) = (tick, &phalanx)
         {
             for target in snow_storm_targets(self, region_id, snow_storm) {
+                if snow_storm.master().master_type == MONSTER_TYPE {
+                    let Some(mut owner) = self.take_region_owner(region_id) else { break };
+                    let mut deaths = Vec::new();
+                    let _ = execute_owned_monster_snow_storm_target(self, owner.base_mut(), snow_storm, target, sampled_at_ms, runtime, &mut deaths);
+                    self.restore_region_owner(owner);
+                    self.apply_monster_attack_deaths(region_id, deaths, runtime);
+                    continue;
+                }
                 match target.object_type {
                     PLAYER_TYPE => self.apply_summoned_skill_to_player(
                         &phalanx,

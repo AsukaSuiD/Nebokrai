@@ -4,20 +4,25 @@
 //! `appserver/skills/snowstorm.cpp`. Здесь находятся три достигнутых варианта
 //! цели, проверки пути, задержка повторного использования, расход MP, стадии
 //! `SkillExecutionKernel`,
-//! визуальный пакет и построение `CSnowStormPhalanx`. `CGame` только разрешает
-//! владельцев, регистрирует область и выполняет фактическую доставку.
+//! визуальный пакет и построение `CSnowStormPhalanx`. Player-owner расходует
+//! MP и блокирует движение; подтверждённый monster-owner пропускает оба
+//! player-only эффекта и создаёт область с нулевым element modifier. `CGame`
+//! только разрешает владельцев, регистрирует область и выполняет доставку.
 
 use super::baseattack::time_reached;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::snowstormphalanx::CSnowStormPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
+use crate::setup::monsterlist::MonsterProperties;
 
 pub(crate) const SNOW_STORM_SKILL_ID: u32 = 0x193;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -67,6 +72,69 @@ fn send_visual(game: &mut CGame, player_id: i32, skill_level: i32, action: u8, d
         message.add_long(y);
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
+}
+
+fn send_monster_visual(game: &CGame, region: &CServerRegion, monster_id: i32, skill_level: u16, action: u8, destination: Option<(i32, i32)>) {
+    let Some(monster) = region.find_monster_by_id(monster_id) else { return };
+    let mut message = CMessage::new(EFFECT_MESSAGE);
+    message.add_byte(action); message.add_long(SNOW_STORM_SKILL_ID as i32); message.base_mut().add_short(skill_level as i16);
+    message.add_long(MONSTER_TYPE); message.add_long(monster_id);
+    if action == 1 { message.add_long(monster.move_shape().shape().get_direction()); }
+    else { let Some((x, y)) = destination else { return }; message.add_long(0); message.add_long(0); message.add_long(x); message.add_long(y); }
+    let _ = game.send_game_shape_around(region, monster.move_shape().shape(), None, &message);
+}
+
+/// Object-target ветвь `CSnowStorm` для monster-owner-а. В отличие от игрока
+/// она не расходует MP и не блокирует движение; область получает нулевой
+/// element modifier, как исходный non-player dynamic-cast path.
+pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target: ShapeIdentity, skill_level: u16, properties: &super::skillbaseproperties::CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, entry: &mut Option<i32>) -> bool {
+    let Some((source, cast)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.base_attack_cast())) else { return false };
+    let master = MasterInfo { master_type: MONSTER_TYPE, master_id: monster_id, ..MasterInfo::default() };
+    let Some(target_view) = resolve_monster_snow_storm_target(game, region, target) else {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+        return true;
+    };
+    let (Ok(source_x), Ok(source_y)) = (source.get_tile_x(), source.get_tile_y()) else { return true };
+    let (target_x, target_y) = target_view;
+    let path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);
+    if cast.is_none() {
+        let interval = if region.find_monster_by_id(monster_id).is_some_and(|monster| monster.is_tamed()) { region.find_monster_by_id(monster_id).map(|monster| monster.pet_attack_properties(property).attack_interval).unwrap_or(property.attack_speed) } else { property.attack_speed };
+        if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
+        let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(SNOW_STORM_SKILL_ID)).unwrap_or_default();
+        if last_used != 0 && !time_reached(now_ms, last_used, reuse) { return true; }
+        let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+        if (maximum != 0 && path.len() > maximum as usize) || path.iter().any(|cell| cell.2 == 2) {
+            if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
+            return true;
+        }
+        let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().shape_mut().set_direction(direction); monster.begin_base_attack_cast(target, SNOW_STORM_SKILL_ID, skill_level, now_ms); }
+        send_monster_visual(game, region, monster_id, skill_level, 1, None);
+        return true;
+    }
+    let cast = cast.expect("активная снежная буря проверена выше");
+    if cast.dispatch().skill_id != SNOW_STORM_SKILL_ID || cast.dispatch().target != target { return false; }
+    if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME)) { return true; }
+    send_monster_visual(game, region, monster_id, skill_level, 2, Some((target_x, target_y)));
+    let summon_id = game.allocate_summon_shape_id();
+    let started_at_ms = runtime.now_milliseconds();
+    let mut phalanx = CSnowStormPhalanx::new(summon_id, master, started_at_ms, properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME), i32::from(skill_level), properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY), properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32, properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32, 0, properties.query_property(SKILL_USAGE_CONST));
+    phalanx.shape_mut().set_region_id(region.id);
+    let initialized = phalanx.initialize(target_x, target_y, &mut |maximum| game.skill_random_below(maximum));
+    let (area_width, area_height) = game.area_dimensions();
+    let summoned = initialized && region.add_snow_storm_phalanx(phalanx, target_x, target_y, area_width, area_height, started_at_ms, runtime).is_ok();
+    if summoned { *entry = Some(summon_id); }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate); let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack); let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply); let _ = monster.finish_base_attack_cast(now_ms); }
+    true
+}
+
+fn resolve_monster_snow_storm_target(game: &CGame, region: &CServerRegion, target: ShapeIdentity) -> Option<(i32, i32)> {
+    match target.object_type {
+        PLAYER_TYPE => { let player = game.find_player(target.id).filter(|player| player.server_region_id() == Some(region.id) && !player.is_dead())?; Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?)) }
+        MONSTER_TYPE => { let monster = region.find_monster_by_id(target.id).filter(|monster| monster.hit_points() != 0)?; Some((monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?)) }
+        _ => None,
+    }
 }
 
 fn restore_player_movement(game: &mut CGame, player_id: i32) {

@@ -8,13 +8,15 @@
 //! и применение атаки к независимым владельцам остаются у `CGame`.
 
 use super::snowstorm::SNOW_STORM_SKILL_ID;
+use super::monsterattack::{MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack, owned_monster_attackable, resolve_owned_monster_attack_target};
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::summonshape::SUMMON_SHAPE_TYPE;
-use crate::gameserver::gameserver::game::CGame;
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::guid::CGuid;
 
 const SCOPE_SIDE: i32 = 5;
@@ -91,6 +93,17 @@ pub(crate) fn calculate_owned_snow_storm_attack(
     }))
 }
 
+pub(crate) fn execute_owned_monster_snow_storm_target<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, phalanx: &CSnowStormPhalanx, target_identity: ShapeIdentity, now_ms: u32, runtime: &mut Runtime, deaths: &mut Vec<MonsterAttackDeath>) -> bool {
+    let master = phalanx.master();
+    let Some((property, tamed, policy_master)) = region.find_monster_by_id(master.master_id).and_then(|monster| Some((game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(), monster.is_tamed(), monster.master_info()))) else { return false };
+    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else { return false };
+    if target.dead || target.god || target.city_dead || !owned_monster_attackable(game, region.id, &property, tamed, policy_master, target_identity, &target) { return false; }
+    let attack = phalanx.calculate_element_attack(&mut |maximum| game.skill_random_below(maximum));
+    let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);
+    apply_owned_monster_attack_hit(game, region, runtime, now_ms, master.master_id, master, target_identity, &target.shape, target.health, target.mana, target.master, target.monster_property, target.tamed, target.carriage, attack, deaths);
+    true
+}
+
 impl CSnowStormPhalanx {
     #[allow(clippy::too_many_arguments, reason = "поля буквально соответствуют конструктору EXE")]
     pub(crate) fn new(id: i32, master: MasterInfo, started_at_ms: u32, lifetime_ms: u32, skill_level: i32, frequency_ms: u32, minimum_attack: i32, maximum_attack: i32, element_modifier: i32, target_count: u32) -> Self {
@@ -161,8 +174,12 @@ impl CSnowStormPhalanx {
     }
 
     pub(crate) fn calculate_attack(&self, combat: PlayerCombatProperties, occupation: u8, attacker_level: u8, random_below: &mut dyn FnMut(i32) -> i32) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
+        (self.calculate_element_attack(random_below), combat, occupation, attacker_level)
+    }
+
+    pub(crate) fn calculate_element_attack(&self, random_below: &mut dyn FnMut(i32) -> i32) -> AttackInformation {
         let width = self.maximum_attack.wrapping_sub(self.minimum_attack).wrapping_abs().wrapping_add(1);
         let damage = self.minimum_attack.wrapping_add(random_below(width)).wrapping_add(self.element_modifier).max(0);
-        (AttackInformation { skill_id: SNOW_STORM_SKILL_ID, skill_level: self.skill_level as u8, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 100, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }] }, combat, occupation, attacker_level)
+        AttackInformation { skill_id: SNOW_STORM_SKILL_ID, skill_level: self.skill_level as u8, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 100, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }] }
     }
 }
