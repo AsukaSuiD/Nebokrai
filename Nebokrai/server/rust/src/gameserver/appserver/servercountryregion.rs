@@ -1290,11 +1290,11 @@ fn refresh_country_flag_object<Context: BuildRuntimeContext>(
     flag.refresh_hp();
     context.send_build_update(
         region_id,
-        flag.id,
+        flag.id(),
         BuildClientUpdate {
-            object_type: flag.object_type,
-            object_id: flag.id as u32,
-            action: flag.action,
+            object_type: flag.object_type(),
+            object_id: flag.id() as u32,
+            action: flag.action(),
             max_hp: flag.max_hp(),
             hp: flag.hp(),
         },

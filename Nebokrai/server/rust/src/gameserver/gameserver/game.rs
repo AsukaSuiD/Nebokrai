@@ -681,6 +681,7 @@ use crate::gameserver::appserver::monster::{
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
+use crate::gameserver::appserver::build::{BUILD_OBJECT_TYPE, CBuild};
 use crate::gameserver::appserver::autoprotectstate::AUTO_PROTECT_STATE_ID;
 use crate::gameserver::appserver::particularstate::{
     ParticularState, particular_state_visual_message,
@@ -4250,6 +4251,18 @@ impl ServerRegionOwner {
                 .filter(|view| view.identity == identity),
             _ => None,
         }
+    }
+
+    /// Возвращает concrete country symbol, чей `CBuild` является canonical
+    /// owner-ом shape и property client snapshot.
+    pub(crate) fn country_flag(&self, build_id: i32) -> Option<&CBuild> {
+        let Self::Country(region) = self else {
+            return None;
+        };
+        region
+            .defend_flags
+            .get(&build_id)
+            .or_else(|| region.attack_flags.get(&build_id))
     }
 
     pub(crate) const fn region_id(&self) -> i32 {
@@ -41778,6 +41791,17 @@ impl CGame {
             }
             let mut payload = Vec::new();
             goods.serialize(&mut payload, true).then_some(())?;
+            return Some((canonical_identity, payload));
+        }
+        if identity.object_type == BUILD_OBJECT_TYPE as i32 {
+            let build = self.find_region(region_id)?.country_flag(identity.id)?;
+            let canonical_identity = build.move_shape().shape().identity();
+            if canonical_identity != identity {
+                return None;
+            }
+            let mut now_milliseconds = now_milliseconds;
+            let now_ms = now_milliseconds();
+            let payload = build.encode_client_snapshot(now_ms, &mut now_milliseconds)?;
             return Some((canonical_identity, payload));
         }
         if identity.object_type != SUMMON_SHAPE_TYPE {

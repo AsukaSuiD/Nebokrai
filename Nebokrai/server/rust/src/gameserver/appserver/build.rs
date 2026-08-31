@@ -8,7 +8,7 @@
 //! подтверждён factory RVA `0x000FC190` и country flag decoder
 //! `ServerCountryRegion::DecordFromByteArray` RVA `0x001CD3F0`.
 //!
-//! Rust хранит достигнутые identity/shape/property поля и byte-exact script.
+//! Rust хранит canonical `CMoveShape`, достигнутые property-поля и byte-exact script.
 //! `BuildBlockUpdate` применяет owning `CServerRegion`:
 //! обычный `CBuild` освобождает клетку только action `6`, тогда как subclass
 //! `CCityGate` также освобождает её при `7`. x87 `i32 -> f32 -> trunc i32`
@@ -17,9 +17,12 @@
 //! материализован в общий `ShapeView`, поэтому country flags участвуют в
 //! region membership и общем поиске боевых целей. Runtime context хранит
 //! только внешнюю client publication. AI, combat, client
-//! serialization и остальная поверхность ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Общий client serializer использует тот же canonical `CMoveShape`, а не
+//! повторно собранный shadow-prefix. AI, combat и остальная поверхность ниже
+//! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
+use super::legacycodec::LegacyWriter;
+use super::moveshape::CMoveShape;
 use super::shape::{ShapeFigure, ShapeIdentity, ShapeView};
 use crate::public::guid::CGuid;
 
@@ -68,15 +71,7 @@ pub(crate) trait BuildRuntimeContext {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CBuild {
-    pub(crate) object_type: u32,
-    pub(crate) id: i32,
-    pub(crate) graphics_id: i32,
-    pub(crate) region_id: i32,
-    pub(crate) name: Vec<u8>,
-    pub(crate) direction: i32,
-    pub(crate) state: u16,
-    pub(crate) action: u16,
-    pub(crate) change_state: i32,
+    move_shape: CMoveShape,
     pub(crate) hp: u32,
     pub(crate) max_hp: u32,
     pub(crate) defence: u32,
@@ -96,22 +91,35 @@ impl CBuild {
         } else {
             0
         };
-        let mut build = Self {
-            object_type: BUILD_OBJECT_TYPE,
+        let tile_x = legacy_build_title_tile(init.tile_x);
+        let tile_y = legacy_build_title_tile(init.tile_y);
+        let mut move_shape = CMoveShape::default();
+        move_shape.shape_mut().set_identity(ShapeIdentity {
+            object_type: BUILD_OBJECT_TYPE as i32,
             id: init.id,
-            graphics_id: init.graphics_id,
-            region_id: init.region_id,
-            name: init.name,
-            direction,
-            state: 0,
-            action: 0,
-            change_state: 0,
+            ex_id: CGuid::GUID_INVALID,
+        });
+        move_shape
+            .shape_mut()
+            .base_object_mut()
+            .set_graphics_id(init.graphics_id);
+        move_shape
+            .shape_mut()
+            .base_object_mut()
+            .set_name(&init.name);
+        move_shape.shape_mut().set_region_id(init.region_id);
+        move_shape
+            .shape_mut()
+            .set_pos_xy_base(tile_x as f32 + 0.5, tile_y as f32 + 0.5);
+        move_shape.shape_mut().set_direction(direction);
+        let mut build = Self {
+            move_shape,
             hp: init.max_hp as u32,
             max_hp: init.max_hp as u32,
             defence: init.defence as u32,
             width_increment: init.width_increment,
-            tile_x: legacy_build_title_tile(init.tile_x),
-            tile_y: legacy_build_title_tile(init.tile_y),
+            tile_x,
+            tile_y,
             height_increment: init.height_increment,
             element_resistance: init.element_resistance as u32,
             script: Vec::new(),
@@ -128,13 +136,13 @@ impl CBuild {
 
     /// При неизменившемся action оригинал не менял change-state и карту.
     pub(crate) fn set_action(&mut self, action: u16) -> Option<BuildBlockUpdate> {
-        if self.action == action {
+        if self.action() == action {
             return None;
         }
-        self.change_state = 0;
-        self.action = action;
+        self.move_shape.shape_mut().set_change_state(0);
+        self.move_shape.shape_mut().set_action(action);
         Some(BuildBlockUpdate {
-            region_id: self.region_id,
+            region_id: self.region_id(),
             tile_x: self.tile_x,
             tile_y: self.tile_y,
             width_increment: self.width_increment as u8,
@@ -167,17 +175,42 @@ impl CBuild {
         self.element_resistance
     }
 
+    pub(crate) const fn move_shape(&self) -> &CMoveShape {
+        &self.move_shape
+    }
+
+    pub(crate) const fn move_shape_mut(&mut self) -> &mut CMoveShape {
+        &mut self.move_shape
+    }
+
+    pub(crate) const fn object_type(&self) -> u32 {
+        self.move_shape.shape().identity().object_type as u32
+    }
+
+    pub(crate) const fn id(&self) -> i32 {
+        self.move_shape.shape().identity().id
+    }
+
+    pub(crate) const fn region_id(&self) -> i32 {
+        self.move_shape.shape().get_region_id()
+    }
+
+    pub(crate) const fn action(&self) -> u16 {
+        self.move_shape.shape().get_action()
+    }
+
+    pub(crate) fn name(&self) -> &[u8] {
+        self.move_shape.shape().base_object().get_name()
+    }
+
     pub(crate) fn shape_view(&self) -> ShapeView {
+        let shape = self.move_shape.shape();
         ShapeView {
-            identity: ShapeIdentity {
-                object_type: self.object_type as i32,
-                id: self.id,
-                ex_id: CGuid::GUID_INVALID,
-            },
+            identity: shape.identity(),
             tile_x: self.tile_x,
             tile_y: self.tile_y,
-            pos_x_bits: (self.tile_x as f32).to_bits(),
-            pos_y_bits: (self.tile_y as f32).to_bits(),
+            pos_x_bits: shape.get_pos_x().to_bits(),
+            pos_y_bits: shape.get_pos_y().to_bits(),
             figure: ShapeFigure::from_directions([
                 self.height_increment as u8,
                 self.height_increment as u8,
@@ -189,13 +222,37 @@ impl CBuild {
 
     pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
-            region_id: self.region_id,
+            region_id: self.region_id(),
             tile_x: self.tile_x,
             tile_y: self.tile_y,
             width_increment: self.width_increment as u8,
             height_increment: self.height_increment as u8,
-            block: if self.action == 6 { 0 } else { 3 },
+            block: if self.action() == 6 { 0 } else { 3 },
         }
+    }
+
+    /// Exact `CBuild::AddToByteArray`: общий current-state serializer
+    /// `CMoveShape`, затем непрерывный 0x18-byte `m_Property` и WORD action.
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        let mut payload = self.move_shape.encode_client_snapshot(
+            true,
+            self.hp == 0,
+            now_ms,
+            timed_state_now_milliseconds,
+        )?;
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u32(self.hp);
+        writer.write_u32(self.max_hp);
+        writer.write_u32(self.defence);
+        writer.write_i32(self.width_increment);
+        writer.write_i32(self.height_increment);
+        writer.write_u32(self.element_resistance);
+        writer.write_u16(self.action());
+        Some(payload)
     }
 }
 
@@ -231,7 +288,7 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 
 // ============================================================================
 // FUNCTION: CBuild::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:32
@@ -239,6 +296,8 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 // ADDRESS: 005dd140
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
 //
+// Реализовано выше как `encode_client_snapshot`: canonical CMoveShape prefix,
+// точный 0x18-byte property block и текущий WORD action.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
