@@ -13079,6 +13079,33 @@ impl CGame {
         message.send_to_around(Some(region), origin, excluded_player_id, &runtime)
     }
 
+    /// Материализует owner-side tail `CServerRegion::AddMonster`: property и
+    /// имя master-а разрешаются из канонических реестров `CGame`, затем exact
+    /// fresh `0xBF502` уходит через owning region.
+    pub(crate) fn send_fresh_monster_entered_around(
+        &self,
+        region: &CServerRegion,
+        monster: &CMonster,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let property = self
+            .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+        let master = monster.master_info();
+        let master_name = if master.master_type == PLAYER_TYPE && master.master_id != 0 {
+            self.find_player(master.master_id)
+                .map(|player| player.shape().base_object().get_name())
+                .unwrap_or_else(|| self.get_string_by_id(b"GS0119"))
+        } else {
+            self.get_string_by_id(b"GS0119")
+        };
+        let message = monster.build_fresh_enter_message(property, master_name)?;
+        Some(self.send_game_shape_around(
+            region,
+            monster.move_shape().shape(),
+            None,
+            &message,
+        ))
+    }
+
     pub(crate) fn send_game_position_around(
         &self,
         region: &CServerRegion,
