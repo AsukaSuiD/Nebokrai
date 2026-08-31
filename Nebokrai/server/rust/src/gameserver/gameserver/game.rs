@@ -29934,7 +29934,7 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn complete_world_player_login<Context: NationCombatContext + ScriptFunctionRuntime>(
+    pub(crate) fn complete_world_player_login<Context: ScriptFunctionRuntime>(
         &mut self,
         expected_player_id: i32,
         mut player: CPlayer,

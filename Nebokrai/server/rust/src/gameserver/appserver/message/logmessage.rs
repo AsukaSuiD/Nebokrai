@@ -14,8 +14,9 @@
 //! входа и не создаёт отчёт о уже выполненных действиях.
 
 use crate::gameserver::appserver::player::PlayerGameSaveCodecError;
+use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerLoginBlock, GamePlayerLoginPreludeError,
+    CGame, GamePlayerLoginBlock, GamePlayerLoginPreludeError,
     colored_player_notice_message, game_wall_time_seconds,
 };
 use crate::nets::netserver::message::CMessage;
@@ -39,7 +40,7 @@ pub(crate) enum GameLogMessageError {
     PlayerLogin(GamePlayerLoginBlock),
 }
 
-pub(crate) fn dispatch_game_log_message<Runtime: GameMainLoopRuntime>(
+pub(crate) fn dispatch_game_log_message<Runtime: ScriptFunctionRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -150,7 +151,7 @@ fn publish_login_kick_confirmation(game: &CGame, player_id: i32) -> i32 {
     confirmation.send(game, false).unwrap_or_default()
 }
 
-fn dispatch_player_login<Runtime: GameMainLoopRuntime>(
+fn dispatch_player_login<Runtime: ScriptFunctionRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
