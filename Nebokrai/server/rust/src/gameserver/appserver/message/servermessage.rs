@@ -2530,8 +2530,8 @@ impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcSpawnEffectsCon
 impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
-    fn send_monster_entered_around(&mut self, monster: &CMonster) {
-        self.context.send_monster_entered_around(monster);
+    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster) {
+        self.context.send_monster_entered_around(region, monster);
     }
 
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
@@ -2590,8 +2590,8 @@ impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcContext
 impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
     for InheritedBaseGuardContext<'_, Context>
 {
-    fn send_monster_entered_around(&mut self, monster: &CMonster) {
-        self.context.send_monster_entered_around(monster);
+    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster) {
+        self.context.send_monster_entered_around(region, monster);
     }
 
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {

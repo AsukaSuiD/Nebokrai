@@ -602,7 +602,7 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionNpcSpawnEffectsContext {
 }
 
 pub(crate) trait ServerRegionMonsterEffectsContext: ServerRegionMembershipContext {
-    fn send_monster_entered_around(&mut self, monster: &CMonster);
+    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster);
 
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32);
 
@@ -1336,11 +1336,11 @@ impl CServerRegion {
         self.owned_monsters.insert(id, monster);
         // Compatibility quirk exact EXE 0x0047EC50: пятый bool не читается,
         // а enter message отправляется безусловно.
-        context.send_monster_entered_around(
-            self.owned_monsters
-                .get(&id)
-                .expect("monster опубликован непосредственно перед send"),
-        );
+        let entered = self
+            .owned_monsters
+            .get(&id)
+            .expect("monster опубликован непосредственно перед send");
+        context.send_monster_entered_around(self, entered);
         self.total_spawned_monsters = self.total_spawned_monsters.wrapping_add(1);
         Ok(id)
     }
@@ -1418,11 +1418,11 @@ impl CServerRegion {
             context,
         )?;
         self.owned_monsters.insert(id, monster);
-        context.send_monster_entered_around(
-            self.owned_monsters
-                .get(&id)
-                .expect("призванный монстр опубликован перед сообщением о входе"),
-        );
+        let entered = self
+            .owned_monsters
+            .get(&id)
+            .expect("призванный монстр опубликован перед сообщением о входе");
+        context.send_monster_entered_around(self, entered);
         self.total_spawned_monsters = self.total_spawned_monsters.wrapping_add(1);
         Ok(id)
     }
