@@ -417,6 +417,26 @@ impl CMonster {
         Some(payload)
     }
 
+    /// Формирует exact `CServerRegion::AddMonster` envelope `0xBF502` для
+    /// только что созданного monster. Выбор around-получателей остаётся у
+    /// owning region/CGame и не дублируется в объекте.
+    pub(crate) fn build_fresh_enter_message(
+        &self,
+        property: &MonsterProperties,
+        master_name: &[u8],
+    ) -> Option<CMessage> {
+        let payload = self.encode_fresh_client_snapshot(property, master_name)?;
+        let identity = self.move_shape.shape().identity();
+        let mut message = CMessage::new(0x000b_f502);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.base_mut().add_guid(identity.ex_id);
+        message.add_long(i32::try_from(payload.len()).ok()?);
+        message.base_mut().add(&payload);
+        message.add_byte(0);
+        Some(message)
+    }
+
     pub(crate) const fn set_summoned_creature_lifecycle(
         &mut self,
         lifecycle: Option<SummonedCreatureLifecycle>,
