@@ -135,6 +135,107 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 }
 
 impl CGame {
+    /// Пространственная половина world-login pet restore. Taming limit и
+    /// progression factors вычисляет gameplay owner; здесь сохраняются
+    /// placement fallback, persisted pet state и fresh monster entry.
+    #[allow(clippy::too_many_arguments, reason = "login pet сохраняет persisted progression fields")]
+    pub(crate) fn spawn_login_pet_monster(
+        &mut self,
+        region_id: i32,
+        property: &crate::setup::monsterlist::MonsterProperties,
+        player_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        level: u32,
+        experience: u32,
+        health: u32,
+        factors: Option<[f32; 10]>,
+        now_ms: u32,
+    ) -> Option<(i32, CShape, u32)> {
+        self.with_legacy_random_stream(|game, random| {
+            let mut owner = game.take_region_owner(region_id)?;
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let (area_width, area_height) = game.area_dimensions();
+            let position = owner
+                .base()
+                .region
+                .get_random_pos_in_range(
+                    tile_x.wrapping_sub(3),
+                    tile_y.wrapping_sub(3),
+                    7,
+                    7,
+                    &mut context,
+                )
+                .unwrap_or(crate::gameserver::appserver::region::RegionRandomPosition {
+                    x: tile_x,
+                    y: tile_y,
+                    found: false,
+                });
+            let spawned = owner
+                .base_mut()
+                .add_monster(
+                    property,
+                    position.x,
+                    position.y,
+                    -1,
+                    true,
+                    false,
+                    now_ms,
+                    area_width,
+                    area_height,
+                    game.skill_factory(),
+                    &mut context,
+                )
+                .ok()
+                .map(|monster_id| {
+                    let pet = owner
+                        .base_mut()
+                        .find_monster_by_id_mut(monster_id)
+                        .expect("login pet AddMonster публикует concrete owner");
+                    pet.set_tamed(property.tamable == 1 && property.maximum_tame_attempt_count > 0);
+                    pet.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
+                        master_type: 400,
+                        master_id: player_id,
+                        ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
+                    });
+                    pet.set_pet_mode(1);
+                    pet.set_pet_progress(level, experience);
+                    if let Some(factors) = factors {
+                        pet.adjust_pet_factors(factors);
+                    }
+                    pet.set_hit_points(health);
+                    (
+                        monster_id,
+                        pet.move_shape().shape().clone(),
+                        pet.pet_maximum_hp(property),
+                    )
+                });
+            if let ServerRegionOwner::City(region) = &mut owner {
+                for monster_id in context.guard_monsters.drain(..) {
+                    region.add_gurd_monster(monster_id);
+                }
+                for refresh_index in context.guard_indices.drain(..) {
+                    region.add_guard_index(refresh_index);
+                }
+            }
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            game.restore_region_owner(owner);
+            game.publish_runtime_spawn_effects(region_id, effects);
+            spawned
+        })
+    }
+
     /// Пространственная половина world-login recreate повозки. Login owner
     /// передаёт сохранённые direction/HP/script; этот owner отвечает за RNG,
     /// region membership, guard hooks и fresh monster entry.

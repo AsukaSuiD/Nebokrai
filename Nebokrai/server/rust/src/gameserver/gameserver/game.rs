@@ -759,7 +759,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::proxyserverregion::CProxyServerRegion;
 use crate::gameserver::appserver::region::{
-    RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
+    RegionCellAccessBlock, RegionRandomContext, RegionReturnPoint,
     RegionSecurity,
 };
 use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
@@ -18912,7 +18912,7 @@ impl CGame {
                 nearby_deliveries += 1;
             }
             self.prepare_changed_player_region_entry(player_id, region_id);
-            self.restore_player_region_pets(player_id, region_id, context);
+            self.restore_player_region_pets(player_id, region_id);
             self.restore_player_region_carriage(player_id, region_id);
             self.finish_changed_player_region_entry(player_id, region_id);
             tracing::trace!(
@@ -29375,12 +29375,7 @@ impl CGame {
         self.login_validate_times.remove(&player_id);
     }
 
-    fn restore_player_region_pets<Context: ServerRegionMonsterContext>(
-        &mut self,
-        player_id: i32,
-        region_id: i32,
-        context: &mut Context,
-    ) {
+    fn restore_player_region_pets(&mut self, player_id: i32, region_id: i32) {
         let records = self
             .players
             .get_mut(&player_id)
@@ -29431,15 +29426,14 @@ impl CGame {
                 )
             })
             .unwrap_or_default();
-        let Some(mut owner) = self.take_region_owner(region_id) else {
+        if self.find_region(region_id).is_none() {
             tracing::warn!(
                 player_id,
                 region_id,
                 "питомцы при входе не восстановлены: регион отсутствует"
             );
             return;
-        };
-        let (area_width, area_height) = self.area_dimensions();
+        }
         for record in records.into_iter().take(amount) {
             let Some(property) = self
                 .find_monster_property_by_origin_name(&record.original_name)
@@ -29452,63 +29446,28 @@ impl CGame {
                 );
                 continue;
             };
-            let position = owner
-                .base()
-                .region
-                .get_random_pos_in_range(player_tile_x - 3, player_tile_y - 3, 7, 7, context)
-                .unwrap_or(RegionRandomPosition {
-                    x: player_tile_x,
-                    y: player_tile_y,
-                    found: false,
-                });
-            let monster_id = match owner.base_mut().add_monster(
-                &property,
-                position.x,
-                position.y,
-                -1,
-                true,
-                false,
-                context.now_milliseconds(),
-                area_width,
-                area_height,
-                &self.skill_factory,
-                context,
-            ) {
-                Ok(monster_id) => monster_id,
-                Err(_) => {
-                    tracing::warn!(
-                        player_id,
-                        original_name_bytes = record.original_name.len(),
-                        "питомец при входе не создан"
-                    );
-                    continue;
-                }
-            };
             let factors = self
                 .globe_setup
                 .pet_progression(record.level)
                 .map(|(_, factors)| factors);
-            let (shape, maximum_hp) = {
-                let pet = owner
-                    .base_mut()
-                    .find_monster_by_id_mut(monster_id)
-                    .expect("add_monster публикует owned monster до возврата ID");
-                pet.set_tamed(property.tamable == 1 && property.maximum_tame_attempt_count > 0);
-                pet.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
-                    master_type: 400,
-                    master_id: player_id,
-                    ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
-                });
-                pet.set_pet_mode(1);
-                pet.set_pet_progress(record.level, record.experience);
-                if let Some(factors) = factors {
-                    pet.adjust_pet_factors(factors);
-                }
-                pet.set_hit_points(record.health);
-                (
-                    pet.move_shape().shape().clone(),
-                    pet.pet_maximum_hp(&property),
-                )
+            let Some((monster_id, shape, maximum_hp)) = self.spawn_login_pet_monster(
+                region_id,
+                &property,
+                player_id,
+                player_tile_x,
+                player_tile_y,
+                record.level,
+                record.experience,
+                record.health,
+                factors,
+                game_tick_milliseconds(),
+            ) else {
+                tracing::warn!(
+                    player_id,
+                    original_name_bytes = record.original_name.len(),
+                    "питомец при входе не создан"
+                );
+                continue;
             };
             if let Some(player) = self.players.get_mut(&player_id) {
                 player.add_active_pet(600, monster_id, property.figure as u8 as i32);
@@ -29523,9 +29482,10 @@ impl CGame {
             message.add_ulong(record.experience);
             message.add_ulong(record.health);
             message.add_ulong(maximum_hp);
-            let around_delivery = self
-                .send_game_shape_around(owner.base(), &shape, None, &message)
-                .ok();
+            let around_delivery = self.find_region(region_id).and_then(|owner| {
+                self.send_game_shape_around(owner.base(), &shape, None, &message)
+                    .ok()
+            });
             tracing::trace!(
                 player_id,
                 monster_id,
@@ -29534,7 +29494,6 @@ impl CGame {
                 "питомец при входе восстановлен"
             );
         }
-        self.restore_region_owner(owner);
     }
 
     fn restore_player_region_carriage(
@@ -30300,7 +30259,7 @@ impl CGame {
                 }
             }
         }
-        self.restore_player_region_pets(expected_player_id, region_id, context);
+        self.restore_player_region_pets(expected_player_id, region_id);
         self.restore_player_region_carriage(expected_player_id, region_id);
 
         let first_login = self

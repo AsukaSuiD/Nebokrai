@@ -436,7 +436,7 @@ use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionTaxSessionKind, ServerRegionMonsterContext, ServerRegionNpcSetup,
+    CServerRegion, RegionTaxSessionKind, ServerRegionNpcSetup,
 };
 use crate::gameserver::appserver::serverwarregion::{
     ContendPlayerState, WarContendEntryContext, WarRegionContext,
@@ -843,7 +843,6 @@ pub(crate) trait ScriptFunctionRuntime:
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
     + ScriptAwardAuthenticationContext
-    + ServerRegionMonsterContext
     + PlayerReliveContext
     + MonsterDeathContext
 {
@@ -855,7 +854,6 @@ impl<T> ScriptFunctionRuntime for T where
         + GameContainerMessageRuntime
         + ScriptRegionChangeContext
         + ScriptAwardAuthenticationContext
-        + ServerRegionMonsterContext
         + PlayerReliveContext
         + MonsterDeathContext
 {
