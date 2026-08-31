@@ -111,8 +111,9 @@
 //! `1000/2000` ms timeout, client prompts и World requests; успешный create
 //! callback списывает обещанные packet goods и деньги через canonical player/
 //! container effects. Общий legacy async manager заменён узкими owned maps.
-//! Script city-gate path использует существующий owned `CServerCityRegion` и
-//! `CityGateRuntimeContext`; отдельное shadow-состояние ворот не вводится.
+//! Script city-gate path использует существующий owned `CServerCityRegion`,
+//! а exact client publication исполняет `CGame`; отдельное shadow-состояние
+//! ворот и process runtime callback не вводятся.
 //! Reached `SetMe("dwVigour")` пишет поле как generic DWORD без
 //! `SetVigour` clamp, затем проводит обязательный virtual
 //! `UpdateProperty` и публикует полный player `0xBF721` через тот
@@ -703,7 +704,9 @@ use crate::gameserver::appserver::monster::{
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
-use crate::gameserver::appserver::build::{BUILD_OBJECT_TYPE, CBuild};
+use crate::gameserver::appserver::build::{
+    BUILD_OBJECT_TYPE, BuildClientPublication, CBuild,
+};
 use crate::gameserver::appserver::citygate::{CITY_GATE_OBJECT_TYPE, CCityGate};
 use crate::gameserver::appserver::autoprotectstate::AUTO_PROTECT_STATE_ID;
 use crate::gameserver::appserver::particularstate::{
@@ -759,8 +762,7 @@ use crate::gameserver::appserver::script::variablelist::{
     CVariableList, GameVariableMutationOutcome, GameVariableSnapshotError,
 };
 use crate::gameserver::appserver::servercityregion::{
-    CServerCityRegion, CityGateRuntimeContext, CityGuardRefreshTargets,
-    CityReturnPointContext, CityReturnPointError,
+    CServerCityRegion, CityGuardRefreshTargets, CityReturnPointContext, CityReturnPointError,
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
@@ -16092,22 +16094,52 @@ impl CGame {
         }
     }
 
-    pub(crate) fn operate_script_city_gate<Context: CityGateRuntimeContext>(
+    pub(crate) fn operate_script_city_gate(
         &mut self,
         region_id: i32,
         gate_id: i32,
         operation: i32,
-        context: &mut Context,
     ) -> bool {
         let Some(ServerRegionOwner::City(mut region)) = self.take_region_owner(region_id) else {
             return false;
         };
         let operated = region.operator_city_gate(gate_id, operation);
-        if operated {
-            region.update_city_gate_to_client(gate_id, context);
-        }
+        let publication = operated
+            .then(|| region.city_gate_client_publication(gate_id))
+            .flatten();
         self.restore_region_owner(ServerRegionOwner::City(region));
+        if let Some(publication) = publication {
+            self.publish_city_build_update(publication);
+        }
         operated
+    }
+
+    pub(crate) fn publish_city_build_update(&self, publication: BuildClientPublication) {
+        let Some(ServerRegionOwner::City(region)) = self.find_region(publication.region_id) else {
+            return;
+        };
+        let Some(origin) = region.city_gate_move_shape_by_id(publication.build_id) else {
+            return;
+        };
+        let update = publication.update;
+        let mut message = CMessage::new(0x000b_f60f);
+        message.add_long(update.object_type as i32);
+        message.add_ulong(update.object_id);
+        message.add_short(update.action as i16);
+        message.add_ulong(update.max_hp);
+        message.add_ulong(update.hp);
+        let delivery = self.send_game_shape_around(
+            &region.war.base,
+            origin.shape(),
+            None,
+            &message,
+        );
+        tracing::trace!(
+            region_id = publication.region_id,
+            build_id = publication.build_id,
+            ?delivery,
+            "опубликовано состояние городских ворот"
+        );
     }
 
     /// Общий `public::random(max)` script-owner использует тот же process-wide
@@ -46319,7 +46351,7 @@ impl CGame {
         _war_number: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: CityGateRuntimeContext + RegionRandomContext + ScriptRegionChangeContext,
+        Runtime: RegionRandomContext + ScriptRegionChangeContext,
     {
         let Some(owner) = self.take_region_owner(region_id) else {
             return;
@@ -46348,8 +46380,11 @@ impl CGame {
             self.restore_region_owner(owner);
             return;
         };
-        region.refresh_and_close_gates(runtime);
+        let updates = region.refresh_and_close_gates();
         self.restore_region_owner(owner);
+        for update in updates {
+            self.publish_city_build_update(update);
+        }
     }
 
     fn refresh_region_guards<Runtime>(

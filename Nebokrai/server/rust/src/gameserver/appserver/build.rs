@@ -15,9 +15,10 @@
 //! для title coordinates сохранён общим helper-ом этого владельца. Owned
 //! `Vec<u8>` и `Drop` заменяют `std::string`/destructor noise. `GetFigure`
 //! материализован в общий `ShapeView`, поэтому country flags участвуют в
-//! region membership и общем поиске боевых целей. Runtime context хранит
-//! только внешнюю client publication. Общий client serializer использует
-//! тот же canonical `CMoveShape`, а не
+//! region membership и общем поиске боевых целей. Typed client publication
+//! позволяет `CGame` выполнить city send после возврата region owner-а;
+//! оставшийся runtime context обслуживает country-owner. Общий client
+//! serializer использует тот же canonical `CMoveShape`, а не
 //! повторно собранный shadow-prefix. AI, combat и остальная поверхность ниже
 //! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
@@ -62,6 +63,13 @@ pub(crate) struct BuildClientUpdate {
     pub(crate) action: u16,
     pub(crate) max_hp: u32,
     pub(crate) hp: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BuildClientPublication {
+    pub(crate) region_id: i32,
+    pub(crate) build_id: i32,
+    pub(crate) update: BuildClientUpdate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

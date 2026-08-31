@@ -60,9 +60,7 @@ use super::super::organizingsystem::fournationwarsys::FourNationPhaseContext;
 use super::super::organizingsystem::villagewarsys::{
     CVillageWarSys, VillageWarDecodeError, VillageWarPhaseContext,
 };
-use super::super::build::{BuildClientUpdate, BuildRuntimeContext};
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
-use super::super::servercityregion::CityGateRuntimeContext;
 use super::super::serverregion::{
     RegionMembershipBlock, RegionTaxSessionKind, ServerRegionNpcSetup,
 };
@@ -79,10 +77,7 @@ use crate::public::netsessionmanager::NetSessionCallbackOutcome;
 use crate::public::tools::{add_game_error_log_text, add_game_log_text, put_string_to_file};
 use tracing::trace;
 
-pub(crate) trait GameOrganizingWarRuntime:
-    CityGateRuntimeContext + ScriptRegionChangeContext
-{
-}
+pub(crate) trait GameOrganizingWarRuntime: ScriptRegionChangeContext {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FourNationReliveBlock {
@@ -945,7 +940,7 @@ fn dispatch_war_application_response(
 fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> Result<(), FactionLifecycleDispatchError> {
     let player_id = message
         .base_mut()
@@ -966,7 +961,7 @@ fn dispatch_city_gate_response<Runtime: GameOrganizingWarRuntime>(
     if !message.base_mut().unread_bytes().is_empty() {
         return Err(FactionLifecycleDispatchError::InvalidPayload);
     }
-    let operated = game.operate_script_city_gate(region_id, gate_id, operation, runtime);
+    let operated = game.operate_script_city_gate(region_id, gate_id, operation);
     let state = game.script_city_gate_state(region_id, gate_id);
     let notice_id = match (operation, state) {
         (0, 0) => Some(b"GS0042".as_slice()),
@@ -1618,12 +1613,11 @@ struct GameOrganizingWarContext<'a, Runtime> {
     runtime: &'a mut Runtime,
 }
 
-struct CityWarEndContext<'a, Runtime> {
+struct CityWarEndContext<'a> {
     game: &'a mut CGame,
-    runtime: &'a mut Runtime,
 }
 
-impl<Runtime> WarRegionClearContext for CityWarEndContext<'_, Runtime> {
+impl WarRegionClearContext for CityWarEndContext<'_> {
     fn send_contend_time(&mut self, player_id: i32, time: i32) {
         WarRegionClearContext::send_contend_time(self.game, player_id, time);
     }
@@ -1632,13 +1626,6 @@ impl<Runtime> WarRegionClearContext for CityWarEndContext<'_, Runtime> {
         WarRegionClearContext::set_region_player_contend_state(
             self.game, region_id, player_id, state,
         );
-    }
-}
-
-impl<Runtime: BuildRuntimeContext> BuildRuntimeContext for CityWarEndContext<'_, Runtime> {
-    fn send_build_update(&mut self, region_id: i32, build_id: i32, update: BuildClientUpdate) {
-        self.runtime
-            .send_build_update(region_id, build_id, update);
     }
 }
 
@@ -2220,19 +2207,19 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
                         return;
                     };
                     let effect = {
-                        let mut context = CityWarEndContext {
-                            game: self.game,
-                            runtime: self.runtime,
-                        };
+                        let mut context = CityWarEndContext { game: self.game };
                         city.on_war_end(war_number, &mut context)
                     };
                     self.game
                         .restore_region_owner(ServerRegionOwner::City(city));
                     if let Some(effect) = effect {
+                        for update in effect.build_updates {
+                            self.game.publish_city_build_update(update);
+                        }
                         self.write_city_war_log(
-                            effect.string_id,
-                            effect.war_number,
-                            &effect.region_name,
+                            effect.log.string_id,
+                            effect.log.war_number,
+                            &effect.log.region_name,
                         );
                     }
                     return;

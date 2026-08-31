@@ -58,11 +58,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::build::{BuildBlockUpdate, BuildClientUpdate, BuildRuntimeContext};
+use super::build::{
+    BuildBlockUpdate, BuildClientPublication, BuildClientUpdate, BuildRuntimeContext,
+};
 use super::citygate::{CCityGate, CityGateHurtOwnerUpdate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
 use super::monster::CMonster;
+use super::moveshape::CMoveShape;
 use super::npc::CNpc;
 use super::organizingsystem::attackcitysys::{AttackCityMembershipBlock, CAttackCitySys};
 use super::region::{
@@ -242,6 +245,12 @@ pub(crate) struct CityWarLogEffect {
     pub(crate) string_id: &'static str,
     pub(crate) war_number: i32,
     pub(crate) region_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CityWarEndEffect {
+    pub(crate) log: CityWarLogEffect,
+    pub(crate) build_updates: Vec<BuildClientPublication>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -550,32 +559,36 @@ impl CServerCityRegion {
         &mut self,
         war_number: i32,
         context: &mut Context,
-    ) -> Option<CityWarLogEffect>
+    ) -> Option<CityWarEndEffect>
     where
-        Context: WarRegionClearContext + CityGateRuntimeContext,
+        Context: WarRegionClearContext,
     {
         if self.war.base.war_number != war_number || self.war.base.city_state == 0 {
             return None;
         }
         self.war.on_war_end(war_number);
-        self.clear_region(context);
-        Some(CityWarLogEffect {
-            string_id: "GS0225",
-            war_number,
-            region_name: self.war.base.name.clone(),
+        let build_updates = self.clear_region(context);
+        Some(CityWarEndEffect {
+            log: CityWarLogEffect {
+                string_id: "GS0225",
+                war_number,
+                region_name: self.war.base.name.clone(),
+            },
+            build_updates,
         })
     }
 
-    pub(crate) fn refresh_and_close_gates<Context: CityGateRuntimeContext>(
-        &mut self,
-        context: &mut Context,
-    ) {
+    pub(crate) fn refresh_and_close_gates(&mut self) -> Vec<BuildClientPublication> {
+        let mut updates = Vec::new();
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
             let _ = self.operator_city_gate(logical_id, OC_REFRESH);
             let _ = self.operator_city_gate(logical_id, OC_CLOSE);
-            self.update_city_gate_to_client(logical_id, context);
+            if let Some(update) = self.city_gate_client_publication(logical_id) {
+                updates.push(update);
+            }
         }
+        updates
     }
 
     pub(crate) fn on_refresh_region(&self, _war_number: i32) -> CityGuardRefreshTargets {
@@ -599,16 +612,23 @@ impl CServerCityRegion {
         })
     }
 
-    pub(crate) fn clear_region<Context>(&mut self, context: &mut Context)
+    pub(crate) fn clear_region<Context>(
+        &mut self,
+        context: &mut Context,
+    ) -> Vec<BuildClientPublication>
     where
-        Context: WarRegionClearContext + CityGateRuntimeContext,
+        Context: WarRegionClearContext,
     {
         self.war.clear_region(context);
+        let mut updates = Vec::new();
         let logical_ids: Vec<_> = self.city_gates.keys().copied().collect();
         for logical_id in logical_ids {
             let _ = self.operator_city_gate(logical_id, OC_REFRESH);
-            self.update_city_gate_to_client(logical_id, context);
+            if let Some(update) = self.city_gate_client_publication(logical_id) {
+                updates.push(update);
+            }
         }
+        updates
     }
 
     pub(crate) fn operator_city_gate(&mut self, logical_id: i32, operation: i32) -> bool {
@@ -649,25 +669,29 @@ impl CServerCityRegion {
         true
     }
 
-    pub(crate) fn update_city_gate_to_client<Context: CityGateRuntimeContext>(
+    pub(crate) fn city_gate_client_publication(
         &self,
         logical_id: i32,
-        context: &mut Context,
-    ) {
-        let Some(gate) = self.city_gates.get(&logical_id).map(|state| &state.gate) else {
-            return;
-        };
-        context.send_build_update(
-            self.war.base.id,
-            gate.id(),
-            BuildClientUpdate {
+    ) -> Option<BuildClientPublication> {
+        let gate = &self.city_gates.get(&logical_id)?.gate;
+        Some(BuildClientPublication {
+            region_id: self.war.base.id,
+            build_id: gate.id(),
+            update: BuildClientUpdate {
                 object_type: gate.object_type(),
                 object_id: gate.id() as u32,
                 action: gate.action(),
                 max_hp: gate.max_hp(),
                 hp: gate.hp(),
             },
-        );
+        })
+    }
+
+    pub(crate) fn city_gate_move_shape_by_id(&self, city_gate_id: i32) -> Option<&CMoveShape> {
+        self.city_gates
+            .values()
+            .find(|state| state.gate.id() == city_gate_id)
+            .map(|state| state.gate.move_shape())
     }
 
     pub(crate) fn city_gate_is_close(&self, logical_id: i32) -> bool {
@@ -1127,7 +1151,8 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 // RVA: 0x001CF510
 //
 // IMPLEMENTED выше и VERIFIED_DISASSEMBLY: `0xBF60F` содержит type, runtime
-// object ID, action, max HP и HP именно в этом порядке; send-around — context.
+// object ID, action, max HP и HP именно в этом порядке; canonical send-around
+// после возврата region owner-а выполняет `CGame`.
 //
 
 // ============================================================================

@@ -433,7 +433,6 @@ use crate::gameserver::appserver::script::buffskillfunc::{
     run_buff_skill_script_function,
 };
 use crate::gameserver::appserver::script::variablelist::GameVariableValue;
-use crate::gameserver::appserver::servercityregion::CityGateRuntimeContext;
 use crate::gameserver::appserver::servercountryregion::{
     CountryContendEntryContext, CountryContendPlayer, CountryNullPlayerCancelBlock,
 };
@@ -845,7 +844,6 @@ pub(crate) trait ScriptFunctionRuntime:
     + CiQingComposeContext
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
-    + CityGateRuntimeContext
     + ScriptAwardAuthenticationContext
     + MoveShapeCommandContext
     + ServerRegionMonsterContext
@@ -860,7 +858,6 @@ impl<T> ScriptFunctionRuntime for T where
         + CiQingComposeContext
         + GameContainerMessageRuntime
         + ScriptRegionChangeContext
-        + CityGateRuntimeContext
         + ScriptAwardAuthenticationContext
         + MoveShapeCommandContext
         + ServerRegionMonsterContext
@@ -6315,7 +6312,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 let _ = colored_player_notice_message(0xffff_ffff, 0xffff_0000, text)
                     .send_to_player(game.net_server(), player_id);
             } else if function_id == SCRIPT_FUNCTION_OPERATE_CITY_GATE {
-                let _ = game.operate_script_city_gate(region_id, gate_id, operation, runtime);
+                let _ = game.operate_script_city_gate(region_id, gate_id, operation);
             } else {
                 let mut request = CMessage::new(0x0006_012f);
                 request.add_long(player_id);
