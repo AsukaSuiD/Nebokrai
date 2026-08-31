@@ -36533,6 +36533,11 @@ impl CGame {
                             runtime,
                         );
                         if let Some(player) = self.players.get_mut(&player_id) {
+                            if ended != Some(PlayerSkillEndRuntimeOutcome::Ended) {
+                                let _ = player
+                                    .player_ai_mut()
+                                    .finish_player_skill(dispatch, SkillTermination::Cancelled);
+                            }
                             player.restore_default_attack_skill_after_target_loss(
                                 default_attack_skill_id,
                             );
