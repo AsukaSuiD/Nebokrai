@@ -5,8 +5,9 @@
 //! Все четыре навыка создают на владельце постоянное состояние со значениями
 //! `SKILL_USAGE_TARGET_MIN_ATK_GAIN` и `SKILL_USAGE_TARGET_MAX_ATK_GAIN`.
 //! Состояния разных ID сосуществуют, повторный навык заменяет только прежнее
-//! состояние того же ID. Расходов, задержки, времени восстановления, RNG и
-//! отдельного сетевого эффекта в подтверждённом пути нет.
+//! состояние того же ID, после чего обе достигнутые ветви пересчитывают
+//! canonical свойства игрока. Расходов, задержки, времени восстановления, RNG
+//! и отдельного сетевого эффекта в подтверждённом пути нет.
 
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use super::swordshipstate::SwordshipState;
@@ -117,6 +118,7 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
         let _ = player.replace_swordship_state(state);
     }
     let _ = game.publish_player_states(player_id);
+    let _ = game.update_player_properties(player_id);
     if let Some(execution) = player_ai.swordship_mut() {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
