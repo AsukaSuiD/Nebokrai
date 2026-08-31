@@ -6,7 +6,10 @@
 //! Начало, выстрел и обязательное завершение используют визуальный тип `700`;
 //! ошибки используют отдельный префикс `4`. Проверки цели, cooldown, стадии,
 //! формирование пакетов и создание `CBattleFairyBaseMagicPhalanx` принадлежат
-//! этому owner-у. `CGame` только предоставляет владельцев, регион и доставку.
+//! этому owner-у. Общий `CState::GetSufferer` сохраняет player/NPC/monster/
+//! build/gate; NPC отклоняется как мёртвый, а постройки проходят собственный
+//! region-owned defence. `CGame` только предоставляет владельцев, регион и
+//! доставку.
 
 use super::baseattack::{real_distance, time_reached};
 use super::basemagic::{
@@ -27,8 +30,6 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 
 const PLAYER_TYPE: i32 = 400;
-// Target identity совпадает с canonical monster type region registry.
-const MONSTER_TYPE: i32 = 600;
 
 fn add_legacy_c_string(
     message: &mut crate::nets::basemessage::CBaseMessage,
@@ -211,14 +212,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             send_end(game, player_id, skill_level);
             return rejected();
         }
-        let target_dead = match target.object_type {
-            PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-            MONSTER_TYPE => game
-                .find_region(region_id)
-                .and_then(|owner| owner.base().find_monster_by_id(target.id))
-                .is_none_or(|monster| monster.hit_points() == 0),
-            _ => true,
-        };
+        let target_dead = game.base_magic_target_dead(region_id, target);
         if target_dead {
             game.send_battle_fairy_skill_failure(player_id, 10);
             game.send_skill_system_info(player_id, b"ZHGS0050");
@@ -268,14 +262,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         send_end(game, player_id, skill_level);
         return rejected();
     };
-    let target_dead = match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-        MONSTER_TYPE => game
-            .find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target.id))
-            .is_none_or(|monster| monster.hit_points() == 0),
-        _ => true,
-    };
+    let target_dead = game.base_magic_target_dead(region_id, target);
     if target_dead {
         game.send_battle_fairy_skill_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"ZHGS0050");

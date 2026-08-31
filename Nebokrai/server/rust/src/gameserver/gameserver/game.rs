@@ -45144,10 +45144,10 @@ impl CGame {
         true
     }
 
-    /// Точная ветвь `CBaseMagicPhalanx/CArcheryPhalanx::Attack` для
-    /// `CBuild/CCityGate`. Оригинальный virtual `GetLevel` обеих построек
-    /// возвращает `1`; затем снаряд передаёт рассчитанную атаку общему
-    /// `CFightDefense::Defense`.
+    /// Точная ветвь трёх базовых projectile-owner-ов для `CBuild/CCityGate`.
+    /// Оригинальный virtual `GetLevel` обеих построек возвращает `1`; магия
+    /// боевой феи уровень не запрашивает. Каждый снаряд затем передаёт свою
+    /// рассчитанную атаку общему `CFightDefense::Defense`.
     fn apply_player_projectile_to_stationary_build<Runtime: GameMainLoopRuntime>(
         &mut self,
         phalanx: &SummonedSkillShape,
@@ -45157,7 +45157,9 @@ impl CGame {
     ) -> bool {
         if !matches!(
             phalanx,
-            SummonedSkillShape::BaseMagic(_) | SummonedSkillShape::Archery(_)
+            SummonedSkillShape::BaseMagic(_)
+                | SummonedSkillShape::Archery(_)
+                | SummonedSkillShape::BattleFairyBaseMagic(_)
         ) {
             return false;
         }
