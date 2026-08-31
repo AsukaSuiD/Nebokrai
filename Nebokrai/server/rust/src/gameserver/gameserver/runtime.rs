@@ -17,7 +17,11 @@ use std::task::Poll;
 
 use tokio::task::{JoinHandle, JoinSet};
 
+use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::region::RegionRandomContext;
+use crate::gameserver::appserver::script::function::{
+    ScriptAwardAuthenticationContext, ScriptAwardAuthenticationSubmission,
+};
 use crate::nets::netserver::mynetclient::{GameClientIoError, GameClientIoStep};
 use crate::nets::netserver::mynetserver::CMyNetServer;
 use crate::nets::servers::{
@@ -25,8 +29,8 @@ use crate::nets::servers::{
 };
 
 use super::game::{
-    CGame, GameExitRuntime, GameNetworkRuntime, GameReleaseRuntime, GameRuntimePathOwner,
-    GameRuntimePaths, game_tick_milliseconds,
+    CGame, GameExitRuntime, GameMainLoopRuntime, GameNetworkRuntime, GameReleaseRuntime,
+    GameRuntimePathOwner, GameRuntimePaths, GameThreadRuntime, game_tick_milliseconds,
 };
 
 #[derive(Clone)]
@@ -285,6 +289,22 @@ impl RegionRandomContext for GameProcessRuntime {
     }
 }
 
+impl ScriptAwardAuthenticationContext for GameProcessRuntime {
+    fn submit_script_award_authentication(
+        &mut self,
+        _player: &CPlayer,
+        _patch_id: i32,
+        _information_type: i32,
+        _color: u32,
+        _background: u32,
+    ) -> ScriptAwardAuthenticationSubmission {
+        // UniBill/Bsip был загружаемым внешним provider-ом исходного процесса.
+        // В доступном комплекте нет ни его API, ни callback-а, поэтому здесь
+        // нельзя создавать фиктивный order ID или изображать успешную заявку.
+        ScriptAwardAuthenticationSubmission::ProviderUnavailable
+    }
+}
+
 impl GameRuntimePathOwner for GameProcessRuntime {
     fn runtime_paths(&self) -> GameRuntimePaths {
         GameProcessRuntime::runtime_paths(self)
@@ -338,3 +358,7 @@ impl GameNetworkRuntime for GameProcessRuntime {
         }
     }
 }
+
+impl GameMainLoopRuntime for GameProcessRuntime {}
+
+impl GameThreadRuntime for GameProcessRuntime {}

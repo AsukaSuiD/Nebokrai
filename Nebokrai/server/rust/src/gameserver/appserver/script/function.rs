@@ -822,11 +822,18 @@ const MAXIMUM_SCRIPT_SPAWN_COUNT: i32 = 4096;
 const SCRIPT_PLAYER_TYPE: i32 = 400;
 const SCRIPT_NPC_TYPE: i32 = 500;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScriptAwardAuthenticationSubmission {
+    Submitted { vendor_result: i32 },
+    ProviderUnavailable,
+}
+
 pub(crate) trait ScriptAwardAuthenticationContext {
-    /// Внешняя UniBill/Bsip граница exact `AwardAuthenByPatchID`: реализация
-    /// создаёт order IDs, удерживает pending bill record до callback-а и
-    /// возвращает immediate vendor result. `DrawAwards` исторически его
-    /// игнорирует и сообщает лишь факт принятия запроса.
+    /// Внешняя UniBill/Bsip граница exact `AwardAuthenByPatchID`: провайдер
+    /// создаёт order IDs, удерживает pending bill record до callback-а и при
+    /// ненулевом immediate vendor result удаляет запись. Сам исходный owner
+    /// имеет `void`-контракт, а `DrawAwards` всегда сообщает только принятие
+    /// локального сценарного запроса.
     fn submit_script_award_authentication(
         &mut self,
         player: &CPlayer,
@@ -834,7 +841,7 @@ pub(crate) trait ScriptAwardAuthenticationContext {
         information_type: i32,
         color: u32,
         background: u32,
-    ) -> i32;
+    ) -> ScriptAwardAuthenticationSubmission;
 }
 
 pub(crate) trait ScriptFunctionRuntime:
@@ -5091,13 +5098,20 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                         .send_to_player(game.net_server(), player_id);
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: -1 });
             }
-            let _ = runtime.submit_script_award_authentication(
+            let submission = runtime.submit_script_award_authentication(
                 player,
                 patch_id,
                 information_type,
                 color,
                 background,
             );
+            if submission == ScriptAwardAuthenticationSubmission::ProviderUnavailable {
+                tracing::warn!(
+                    player_id,
+                    patch_id,
+                    "внешний UniBill/Bsip provider награды не настроен; запрос не отправлен"
+                );
+            }
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 1 })
         }
         SCRIPT_FUNCTION_ADD_UNDEAD_STATE
