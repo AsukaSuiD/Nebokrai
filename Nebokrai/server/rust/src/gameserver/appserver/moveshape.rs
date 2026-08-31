@@ -130,7 +130,9 @@ use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
 use crate::gameserver::appserver::skills::spiderwebstate::{
     SPIDER_WEB_STATE_BYTES, SpiderWebState,
 };
-use crate::gameserver::appserver::skills::sealstate::SealState;
+use crate::gameserver::appserver::skills::sealstate::{
+    SEAL_STATE_BYTES, SEAL_STATE_ID, SealState,
+};
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::strikestate::{
     STRIKE_STATE_BYTES, STRIKE_STATE_ID, StrikeState,
@@ -4306,6 +4308,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             BLIND_STATE_ID => BLIND_STATE_BYTES,
             KNOCK_OUT_STATE_ID => KNOCK_OUT_STATE_BYTES,
             super::skills::spiderweb::SPIDER_WEB_SKILL_ID => SPIDER_WEB_STATE_BYTES,
+            SEAL_STATE_ID => SEAL_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

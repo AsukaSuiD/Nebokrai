@@ -5,7 +5,9 @@
 //! монстру движение и бой и публикует `0xBFE03`. Унаследованные от
 //! `CBlindState` таймер, `End` и реакция на защиту снимают оба запрета и
 //! публикуют `0xBFE04`; беззнаковая строгая проверка срока и порядок вставки
-//! сохраняются каноническим хранилищем. Конструктор по умолчанию и
+//! сохраняются каноническим хранилищем. Exact vtable также подтверждает
+//! 8-байтовую persisted-запись `ID + remaining time`; её размер подключён к
+//! общему codec без выдуманного player lifecycle. Конструктор по умолчанию и
 //! координатные перегрузки остаются в RAW ниже. Унаследованный клиентский срок
 //! использует общее тело `CBlindState` по `0x005F2CD0`.
 
@@ -16,6 +18,7 @@ use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const SEAL_STATE_ID: u32 = 0x138;
+pub(crate) const SEAL_STATE_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SealState {
