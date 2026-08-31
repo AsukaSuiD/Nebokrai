@@ -46,6 +46,9 @@
 //! Region-control `0x7FE26/27/2B/2C/2D` сохраняет map-order суточного сбора,
 //! приоритет local→proxy для ownership и exact virtual-аргументы, подтверждённые
 //! vtable `CServerRegion` в исходном EXE/PDB.
+//! City refresh `0x7FE2E` возвращает guard targets из owner-а; создание,
+//! регистрация и публикация монстров выполняются canonical `CGame`, поэтому
+//! organizing runtime больше не владеет monster/spatial effects.
 
 use std::ffi::CString;
 use thiserror::Error;
@@ -61,8 +64,7 @@ use super::super::build::{BuildClientUpdate, BuildRuntimeContext};
 use super::super::region::{RegionCellAccessBlock, RegionRandomContext};
 use super::super::servercityregion::CityGateRuntimeContext;
 use super::super::serverregion::{
-    RegionMembershipBlock, RegionTaxSessionKind, ServerRegionMonsterContext,
-    ServerRegionNpcSetup,
+    RegionMembershipBlock, RegionTaxSessionKind, ServerRegionNpcSetup,
 };
 use super::super::serverwarregion::{WarRegionClearContext, WarRegionContext};
 use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
@@ -78,10 +80,7 @@ use crate::public::tools::{add_game_error_log_text, add_game_log_text, put_strin
 use tracing::trace;
 
 pub(crate) trait GameOrganizingWarRuntime:
-    CityGateRuntimeContext
-    + RegionRandomContext
-    + ScriptRegionChangeContext
-    + ServerRegionMonsterContext
+    CityGateRuntimeContext + ScriptRegionChangeContext
 {
 }
 
