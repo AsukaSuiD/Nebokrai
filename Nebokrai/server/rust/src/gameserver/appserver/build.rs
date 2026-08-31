@@ -16,14 +16,14 @@
 //! `Vec<u8>` и `Drop` заменяют `std::string`/destructor noise. `GetFigure`
 //! материализован в общий `ShapeView`, поэтому country flags участвуют в
 //! region membership и общем поиске боевых целей. Runtime context хранит
-//! только внешнюю client publication. AI, combat, client
-//! Общий client serializer использует тот же canonical `CMoveShape`, а не
+//! только внешнюю client publication. Общий client serializer использует
+//! тот же canonical `CMoveShape`, а не
 //! повторно собранный shadow-prefix. AI, combat и остальная поверхность ниже
 //! остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
-use super::legacycodec::LegacyWriter;
+use super::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::moveshape::CMoveShape;
-use super::shape::{ShapeFigure, ShapeIdentity, ShapeView};
+use super::shape::{ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView};
 use crate::public::guid::CGuid;
 
 pub(crate) const BUILD_OBJECT_TYPE: u32 = 0x44C;
@@ -62,6 +62,13 @@ pub(crate) struct BuildClientUpdate {
     pub(crate) action: u16,
     pub(crate) max_hp: u32,
     pub(crate) hp: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BuildDecodeError {
+    Shape(ShapeDecodeError),
+    Property(LegacyReadBlock),
+    Coordinate(ShapeCoordinateBlock),
 }
 
 pub(crate) trait BuildRuntimeContext {
@@ -254,6 +261,49 @@ impl CBuild {
         writer.write_u16(self.action());
         Some(payload)
     }
+
+    /// Exact `CBuild::DecordFromByteArray`: base owner вызывает `CShape`, а
+    /// не `CMoveShape` decoder, затем копирует шесть little-endian DWORD из
+    /// непрерывного 0x18-byte `m_Property`.
+    pub(crate) fn decode_from_byte_array(
+        &mut self,
+        source: &[u8],
+        cursor: &mut usize,
+        include_child: bool,
+    ) -> Result<(), BuildDecodeError> {
+        self.move_shape
+            .shape_mut()
+            .decode_from_byte_array(source, cursor, include_child)
+            .map_err(BuildDecodeError::Shape)?;
+        let mut reader = LegacyReader::at(source, *cursor).map_err(BuildDecodeError::Property)?;
+        let hp = reader.read_u32().map_err(BuildDecodeError::Property)?;
+        let max_hp = reader.read_u32().map_err(BuildDecodeError::Property)?;
+        let defence = reader.read_u32().map_err(BuildDecodeError::Property)?;
+        let width_increment = reader.read_i32().map_err(BuildDecodeError::Property)?;
+        let height_increment = reader.read_i32().map_err(BuildDecodeError::Property)?;
+        let element_resistance = reader.read_u32().map_err(BuildDecodeError::Property)?;
+        let tile_x = self
+            .move_shape
+            .shape()
+            .get_tile_x()
+            .map_err(BuildDecodeError::Coordinate)?;
+        let tile_y = self
+            .move_shape
+            .shape()
+            .get_tile_y()
+            .map_err(BuildDecodeError::Coordinate)?;
+
+        *cursor = reader.position();
+        self.hp = hp;
+        self.max_hp = max_hp;
+        self.defence = defence;
+        self.width_increment = width_increment;
+        self.tile_x = tile_x;
+        self.tile_y = tile_y;
+        self.height_increment = height_increment;
+        self.element_resistance = element_resistance;
+        Ok(())
+    }
 }
 
 pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
@@ -304,7 +354,7 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 
 // ============================================================================
 // FUNCTION: CBuild::DecordFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:41
@@ -312,6 +362,8 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 // ADDRESS: 005dd180
 // PROTOTYPE: bool __thiscall DecordFromByteArray(uchar * param_1, long * param_2, bool param_3)
 //
+// Реализовано выше как `decode_from_byte_array`: exact CShape wire, затем
+// непрерывный 0x18-byte property block с safe-Rust проверкой границ.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
