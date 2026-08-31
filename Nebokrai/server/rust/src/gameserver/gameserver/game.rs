@@ -40597,7 +40597,7 @@ impl CGame {
             } else if concrete_gibe {
                 execute_player_gibe(self, player_id, dispatch, player_ai, runtime)
             } else {
-                self.send_battle_fairy_skill_failure(player_id, 2);
+                let _ = self.send_base_attack_failure(player_id, 2);
                 tracing::debug!(
                     player_id,
                     ?dispatch,
