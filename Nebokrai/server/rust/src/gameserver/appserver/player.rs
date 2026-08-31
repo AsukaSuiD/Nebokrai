@@ -5683,6 +5683,20 @@ impl CPlayer {
         self.move_shape.activate_loaded_leaf_cut_2_state(now_ms)
     }
 
+    pub(crate) fn activate_loaded_strike_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::strikestate::StrikeState> {
+        self.move_shape.activate_loaded_strike_states(now_ms)
+    }
+
+    pub(crate) fn take_expired_strike_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::skills::strikestate::StrikeState> {
+        self.move_shape.take_expired_strike_states(now_ms)
+    }
+
     pub(crate) fn replace_leaf_cut_3_state(
         &mut self,
         state: super::skills::leafcutstate3::LeafCutState3,

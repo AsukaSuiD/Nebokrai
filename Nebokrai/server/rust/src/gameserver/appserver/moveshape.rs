@@ -3542,6 +3542,26 @@ impl CMoveShape {
         Some(state)
     }
 
+    pub(crate) fn activate_loaded_strike_states(&mut self, now_ms: u32) -> Vec<StrikeState> {
+        for state in &mut self.strike_states { *state = state.activate_loaded(now_ms); }
+        for _ in 0..self.strike_states.len() { self.set_moveable(false); self.set_fightable(false); }
+        self.strike_states.clone()
+    }
+
+    pub(crate) fn take_expired_strike_states(&mut self, now_ms: u32) -> Vec<StrikeState> {
+        let mut ended = Vec::new();
+        let mut position = 0usize;
+        while position < self.strike_states.len() {
+            if !self.strike_states[position].expired(now_ms) { position += 1; continue; }
+            let state = self.strike_states.remove(position);
+            if let Some(offset) = known_state_record_offsets(&self.ex_states).into_iter().filter(|offset| read_u32(&self.ex_states, *offset) == Some(STRIKE_STATE_ID)).nth(position) {
+                self.remove_serialized_state_record_at(offset, STRIKE_STATE_BYTES);
+            }
+            self.set_moveable(true); self.set_fightable(true); ended.push(state);
+        }
+        ended
+    }
+
     pub(crate) fn kerosene_state(&self) -> Option<KeroseneState> { self.kerosene_state }
     pub(crate) fn replace_kerosene_state(&mut self, mut state: KeroseneState, now_ms: u32) -> Option<KeroseneState> {
         let previous = self.kerosene_state.take();

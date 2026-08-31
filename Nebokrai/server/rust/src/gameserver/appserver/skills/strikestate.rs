@@ -2,23 +2,24 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/strikestate.cpp`. Достигнутый путь загрузки сохраняет
-//! унаследованную запись `CState::Serialize`: идентификатор класса и четыре
-//! `i32` владельца/цели. Каноническое хранилище использует типизированное
-//! присутствие состояния для запрета предметов, а исходный payload остаётся
-//! единственным двоичным кодеком. Создание, снятие и visual-пакеты ниже
-//! остаются RAW до появления их настоящего вызывающего пути.
+//! exact-пару `CBlindState::Serialize/Unserialize` `0x005F51E0/0x005EAAC0`:
+//! идентификатор и остаток срока занимают восемь байт. Player-login повторно
+//! начинает срок, восстанавливает вложенные запреты движения/боя и публикует
+//! begin-визуал. Создание и снятие остаются RAW до настоящего runtime-caller-а.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
+use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
 
 pub(crate) const STRIKE_STATE_ID: u32 = 0xdd;
-pub(crate) const STRIKE_STATE_BYTES: usize = 20;
+pub(crate) const STRIKE_STATE_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct StrikeState {
-    user_type: i32,
-    user_id: i32,
-    sufferer_type: i32,
-    sufferer_id: i32,
+    started_at_ms: u32,
+    keep_time_ms: u32,
 }
 
 impl StrikeState {
@@ -31,17 +32,26 @@ impl StrikeState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self {
-            user_type: reader.read_i32()?,
-            user_id: reader.read_i32()?,
-            sufferer_type: reader.read_i32()?,
-            sufferer_id: reader.read_i32()?,
-        })
+        Ok(Self { started_at_ms: 0, keep_time_ms: reader.read_u32()? })
     }
 
     pub(crate) const fn skill_id(self) -> u32 {
         STRIKE_STATE_ID
     }
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool { now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) }
+}
+
+pub(crate) fn send_strike_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: StrikeState, begin: bool, now_ms: u32) {
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(STRIKE_STATE_ID as i32); if begin { message.add_ulong(state.client_time(|| now_ms)); message.add_ulong(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn expire_player_strike_states(game: &mut CGame, player_id: i32, now_ms: u32) -> usize {
+    let context = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?)));
+    let ended = game.find_player_mut(player_id).map(|player| player.take_expired_strike_states(now_ms)).unwrap_or_default();
+    if let Some((region_id, identity, x, y)) = context { for state in &ended { send_strike_state_visual(game, region_id, identity, x, y, *state, false, now_ms); } }
+    ended.len()
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

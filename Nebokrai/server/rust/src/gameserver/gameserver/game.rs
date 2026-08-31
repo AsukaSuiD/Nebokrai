@@ -1414,6 +1414,7 @@ use crate::gameserver::appserver::skills::leafcutstate3::{
     LeafCutState3, LEAF_CUT_3_STATE_ID, send_leaf_cut_3_state_visual,
     update_monster_leaf_cut_3_state, update_player_leaf_cut_3_state,
 };
+use crate::gameserver::appserver::skills::strikestate::{expire_player_strike_states, send_strike_state_visual};
 use crate::gameserver::appserver::skills::kerosene::{
     cancel_player_kerosene, complete_player_kerosene, execute_player_kerosene,
     is_kerosene_dispatch, KEROSENE_SKILL_ID,
@@ -28395,6 +28396,7 @@ impl CGame {
         let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_rush_2_state(self, player_id, now_ms);
         let _ = expire_player_blind_states(self, player_id, now_ms);
+        let strike_states_ended = expire_player_strike_states(self, player_id, now_ms);
         let _ = expire_player_boa_lock_state(self, player_id, now_ms);
         let _ = expire_player_boss_blue_quake_state(self, player_id, now_ms);
         let _ = expire_player_boss_blue_fury_state(self, player_id, now_ms, runtime);
@@ -28494,6 +28496,7 @@ impl CGame {
             weak_ended,
             god_bless_ended,
             roar_ended,
+            strike_states_ended,
             agility_state_2_ended,
             hearten_ended,
             cure_ended = expired_cure.is_some(),
@@ -30149,6 +30152,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_leaf_cut_3_state(login_tick_ms);
+        let loaded_strike_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_strike_states(login_tick_ms);
         let loaded_kerosene_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_kerosene_state(login_tick_ms);
         let loaded_poison_fog_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_poison_fog_state(login_tick_ms);
         let loaded_blind_state = self
@@ -30335,6 +30343,14 @@ impl CGame {
                 true,
                 login_tick_ms,
             );
+        }
+        if let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            let identity = player.shape().identity();
+            for state in loaded_strike_states {
+                send_strike_state_visual(self, region_id, identity, x, y, state, true, login_tick_ms);
+            }
         }
         if let Some(state) = loaded_poison_fog_state
             && let Some(player) = self.find_player(expected_player_id)
