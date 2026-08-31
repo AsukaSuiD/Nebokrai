@@ -17944,7 +17944,7 @@ impl CGame {
         true
     }
 
-    pub(crate) fn jjc_start_player<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn jjc_start_player<Runtime: PlayerRegionChangeContext>(
         &mut self,
         region_id: i32,
         player_id: i32,

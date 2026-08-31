@@ -8,7 +8,7 @@
 //! публикуется через `tracing`.
 
 use crate::gameserver::appserver::jjcsystem::JjcInfo;
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, PlayerRegionChangeContext};
 use crate::nets::netserver::message::CMessage;
 use tracing::{debug, trace};
 
@@ -37,7 +37,7 @@ fn decode_jjc_info(message: &mut CMessage) -> Option<JjcInfo> {
     })
 }
 
-pub(crate) fn dispatch_game_jjc_system_message<Runtime: GameMainLoopRuntime>(
+pub(crate) fn dispatch_game_jjc_system_message<Runtime: PlayerRegionChangeContext>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
