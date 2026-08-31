@@ -146,6 +146,9 @@ use crate::gameserver::appserver::skills::bossbluequakestate::BossBlueQuakeState
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
+use crate::gameserver::appserver::skills::tianshenxiafanstate::{
+    TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID,
+};
 use crate::gameserver::appserver::skills::weakstate::WeakState;
 use crate::gameserver::appserver::skills::wuxingstate::{WuXingState, WUXING_STATE_BYTES};
 use crate::gameserver::appserver::skills::godblessstate::GodBlessState;
@@ -4242,6 +4245,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
             ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
             BOSS_BLUE_FURY_STATE_ID => BOSS_BLUE_FURY_STATE_BYTES,
+            TIAN_SHEN_XIA_FAN_STATE_ID => TIAN_SHEN_XIA_FAN_STATE_BYTES,
             super::skills::poisonarrow::POISON_ARROW_SKILL_ID => POISON_ARROW_STATE_BYTES,
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);

@@ -1,6 +1,15 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Wire-граница сохранённого `CTianShenXiaFanState` (`0x335`).
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/skills/tianshenxiafanstate.cpp`. `Serialize` пишет три `DWORD`:
+//! ID, оставшееся время и уровень, поэтому запись занимает 12 байт. Нативный
+//! `Unserialize` асимметричен: он читает время как `WORD`, а level с `+6`;
+//! этот legacy defect потребуется сохранить при материализации DB-owner-а.
+//! Пока доказанный размер подключён к общему codec, чтобы такая запись не
+//! останавливала разбор следующих известных состояний.
+
+pub(crate) const TIAN_SHEN_XIA_FAN_STATE_ID: u32 = 0x335;
+pub(crate) const TIAN_SHEN_XIA_FAN_STATE_BYTES: usize = 12;
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb

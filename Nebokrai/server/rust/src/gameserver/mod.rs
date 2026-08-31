@@ -362,6 +362,7 @@ pub(crate) mod appserver {
         pub(crate) mod stateskill;
         pub(crate) mod taiji;
         pub(crate) mod taijistate;
+        pub(crate) mod tianshenxiafanstate;
         pub(crate) mod wangsheng;
         pub(crate) mod yakshaslash;
         pub(crate) mod wuxing;
