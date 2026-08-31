@@ -127,7 +127,9 @@ use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISO
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
 use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::skills::spriteburnstate::SpriteBurnState;
-use crate::gameserver::appserver::skills::spiderwebstate::SpiderWebState;
+use crate::gameserver::appserver::skills::spiderwebstate::{
+    SPIDER_WEB_STATE_BYTES, SpiderWebState,
+};
 use crate::gameserver::appserver::skills::sealstate::SealState;
 use crate::gameserver::appserver::skills::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::skills::strikestate::{
@@ -881,6 +883,18 @@ impl CMoveShape {
                 );
             }
         }
+        if let Some(state) = self.spider_web_state {
+            if let Some(offset) = known_state_record_offsets(&payload)
+                .into_iter()
+                .find(|offset| read_u32(&payload, *offset) == Some(state.skill_id()))
+            {
+                write_u32(
+                    &mut payload,
+                    offset + 4,
+                    state.client_time(&mut timed_state_now_milliseconds) as u32,
+                );
+            }
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1016,6 +1030,17 @@ impl CMoveShape {
             .find(|offset| read_u32(&states, *offset) == Some(KNOCK_OUT_STATE_ID))
             .and_then(|offset| KnockOutState::decode(&states, offset).ok());
         if let Some(state) = self.knock_out_state {
+            self.blind_state_order.insert(state.skill_id());
+            self.curable_state_order.insert(state.skill_id());
+        }
+        self.blind_state_order.shift_remove(&super::skills::spiderweb::SPIDER_WEB_SKILL_ID);
+        self.curable_state_order.shift_remove(&super::skills::spiderweb::SPIDER_WEB_SKILL_ID);
+        self.spider_web_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(super::skills::spiderweb::SPIDER_WEB_SKILL_ID))
+            .and_then(|offset| SpiderWebState::decode(&states, offset).ok());
+        if let Some(state) = self.spider_web_state {
             self.blind_state_order.insert(state.skill_id());
             self.curable_state_order.insert(state.skill_id());
         }
@@ -2549,9 +2574,19 @@ impl CMoveShape {
         &mut self,
         state: SpiderWebState,
     ) -> Option<SpiderWebState> {
+        self.remove_serialized_state_record(state.skill_id(), SPIDER_WEB_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.blind_state_order.insert(state.skill_id());
         self.curable_state_order.insert(state.skill_id());
         self.spider_web_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_spider_web_state(&mut self, now_ms: u32) -> Option<SpiderWebState> {
+        let state = self.spider_web_state?.activate_loaded(now_ms);
+        self.spider_web_state = Some(state);
+        self.set_moveable(false);
+        self.set_fightable(false);
+        Some(state)
     }
 
     pub(crate) const fn weak_state(&self) -> Option<WeakState> {
@@ -2662,6 +2697,7 @@ impl CMoveShape {
         self.spider_web_state = None;
         self.blind_state_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), SPIDER_WEB_STATE_BYTES);
         Some(state)
     }
 
@@ -2669,6 +2705,7 @@ impl CMoveShape {
         let state = self.spider_web_state.take()?;
         self.blind_state_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), SPIDER_WEB_STATE_BYTES);
         Some(state)
     }
 
@@ -4268,6 +4305,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             BLIND_STATE_ID => BLIND_STATE_BYTES,
             KNOCK_OUT_STATE_ID => KNOCK_OUT_STATE_BYTES,
+            super::skills::spiderweb::SPIDER_WEB_SKILL_ID => SPIDER_WEB_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

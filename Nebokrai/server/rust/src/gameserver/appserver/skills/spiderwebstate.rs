@@ -4,16 +4,20 @@
 //! `appserver/skills/spiderwebstate.cpp`. Состояние сохраняет wrapping-время,
 //! запрещает движение и бой через счётчики `CMoveShape`, снимает оба запрета
 //! при замене, истечении или защитном действии и публикует `0xBFE03/0xBFE04`.
-//! Координатные перегрузки и legacy-сериализация остаются RAW ниже. Vtable
-//! exact EXE подтверждает общий с `CBlindState` клиентский срок по
-//! `0x005F2CD0`, включая отдельное чтение clock для положительного остатка.
+//! Persisted-запись `ID + remaining time` декодируется, активируется при
+//! spatial login и удаляется вместе с canonical state. Vtable exact EXE
+//! подтверждает общий с `CBlindState` клиентский срок по `0x005F2CD0`,
+//! включая отдельное чтение clock для положительного остатка.
 
 use super::spiderweb::SPIDER_WEB_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+
+pub(crate) const SPIDER_WEB_STATE_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SpiderWebState {
@@ -29,12 +33,32 @@ impl SpiderWebState {
         }
     }
 
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != SPIDER_WEB_SKILL_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(0, reader.read_u32()?))
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
+        self.started_at_ms = now_ms;
+        self
+    }
+
     pub(crate) const fn skill_id(self) -> u32 {
         SPIDER_WEB_SKILL_ID
     }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
         now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; SPIDER_WEB_STATE_BYTES] {
+        let mut bytes = [0; SPIDER_WEB_STATE_BYTES];
+        bytes[..4].copy_from_slice(&SPIDER_WEB_SKILL_ID.to_le_bytes());
+        bytes[4..].copy_from_slice(&self.keep_time_ms.to_le_bytes());
+        bytes
     }
 
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {

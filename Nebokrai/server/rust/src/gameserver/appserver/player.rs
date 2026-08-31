@@ -5314,6 +5314,13 @@ impl CPlayer {
         self.move_shape.replace_spider_web_state(state)
     }
 
+    pub(crate) fn activate_loaded_spider_web_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::spiderwebstate::SpiderWebState> {
+        self.move_shape.activate_loaded_spider_web_state(now_ms)
+    }
+
     pub(crate) fn replace_weak_state(
         &mut self,
         state: super::skills::weakstate::WeakState,
