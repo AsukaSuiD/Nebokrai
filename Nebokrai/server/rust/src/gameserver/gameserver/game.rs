@@ -39708,16 +39708,17 @@ impl CGame {
             && can_schedule
             && let Some(dispatch) = player_ai.next_player_skill()
         {
-            let (is_rider, can_fight, current_skill_id) = self
+            let (is_rider, can_fight, current_skill_id, default_attack_skill_id) = self
                 .find_player(player_id)
                 .map(|player| {
                     (
                         player.is_rider(),
                         player.can_fight(),
                         player.current_skill_id(),
+                        Some(player.default_attack_skill_id(self.goods_factory())),
                     )
                 })
-                .unwrap_or((false, false, None));
+                .unwrap_or((false, false, None, None));
             let blocked_by_ride = !active_player_skill && is_rider;
             if blocked_by_ride || !can_fight {
                 let ended = if let Some(skill_id) = current_skill_id {
@@ -39744,6 +39745,13 @@ impl CGame {
                     }
                 }
                 let delivery = self.send_base_attack_failure(player_id, 2);
+                if let Some(default_attack_skill_id) = default_attack_skill_id
+                    && let Some(player) = self.find_player_mut(player_id)
+                {
+                    player.restore_default_attack_skill_after_target_loss(
+                        default_attack_skill_id,
+                    );
+                }
                 tracing::trace!(
                     player_id,
                     ?dispatch,
