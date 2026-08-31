@@ -5510,6 +5510,13 @@ impl CPlayer {
         self.move_shape.replace_rush_2_state(state)
     }
 
+    pub(crate) fn activate_loaded_rush_2_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::rushstate2::Rush2State> {
+        self.move_shape.activate_loaded_rush_2_state(now_ms)
+    }
+
     pub(crate) fn take_expired_rush_2_state(
         &mut self,
         now_ms: u32,
