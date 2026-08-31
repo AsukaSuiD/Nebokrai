@@ -57,10 +57,11 @@ use crate::gameserver::appserver::servernationregion::ServerNationRegion;
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
     ServerRegionMembershipContext, ServerRegionMonsterContext,
-    ServerRegionMonsterEffectsContext, ServerRegionNpcContext,
+    ServerRegionMonsterEffectsContext, ServerRegionMonsterSpawnEffectsContext,
+    ServerRegionNpcContext,
     ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSetup, ServerRegionSetupDecodeError,
 };
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
@@ -95,7 +96,7 @@ use crate::setup::incrementshoplist::IncrementShopDecodeError;
 use crate::setup::leitingsetup::ThingSetupCodecError;
 use crate::setup::lingbao::LingBaoDecodeError;
 use crate::setup::logsystem::LogSystemDecodeError;
-use crate::setup::monsterlist::MonsterListDecodeError;
+use crate::setup::monsterlist::{MonsterListDecodeError, MonsterRegistry};
 use crate::setup::newskillmonsterlist::NewSkillMonsterDecodeError;
 use crate::setup::playerlist::PlayerListDecodeError;
 use crate::setup::preciousboxconf::PreciousBoxDecodeError;
@@ -2492,17 +2493,20 @@ fn read_start_long(
 }
 
 pub(crate) trait InitialRegionStartupContext:
-    ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterEffectsContext
+    ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterSpawnEffectsContext
 {
 }
 
 impl<Context> InitialRegionStartupContext for Context where
-    Context: ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterEffectsContext + ?Sized
+    Context: ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterSpawnEffectsContext + ?Sized
 {
 }
 
 struct InitialRegionClockContext<'a, Context> {
     context: &'a mut Context,
+    monster_registry: MonsterRegistry,
+    default_master_name: Vec<u8>,
+    monster_entries: Vec<(CShape, CMessage)>,
 }
 
 impl<Context: RegionRandomContext> RegionRandomContext for InitialRegionClockContext<'_, Context> {
@@ -2527,13 +2531,9 @@ impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcSpawnEffectsCon
     }
 }
 
-impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
+impl<Context: ServerRegionMonsterSpawnEffectsContext> ServerRegionMonsterSpawnEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
-    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster) {
-        self.context.send_monster_entered_around(region, monster);
-    }
-
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
         self.context
             .log_monster_variant_failure(region_id, refresh_index);
@@ -2541,6 +2541,26 @@ impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsConte
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
         self.context.log_monster_position_failure(origin_name);
+    }
+}
+
+impl<Context: ServerRegionMonsterSpawnEffectsContext> ServerRegionMonsterEffectsContext
+    for InitialRegionClockContext<'_, Context>
+{
+    fn send_monster_entered_around(&mut self, _region: &CServerRegion, monster: &CMonster) {
+        let Some(property) = monster
+            .base_property_key()
+            .and_then(|key| self.monster_registry.get(key))
+        else {
+            return;
+        };
+        let Some(message) =
+            monster.build_fresh_enter_message(property, &self.default_master_name)
+        else {
+            return;
+        };
+        self.monster_entries
+            .push((monster.move_shape().shape().clone(), message));
     }
 }
 
@@ -2587,13 +2607,9 @@ impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcContext
     fn send_npc_entered_around(&mut self, _npc: &CNpc) {}
 }
 
-impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
+impl<Context: ServerRegionMonsterSpawnEffectsContext> ServerRegionMonsterSpawnEffectsContext
     for InheritedBaseGuardContext<'_, Context>
 {
-    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster) {
-        self.context.send_monster_entered_around(region, monster);
-    }
-
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
         self.context
             .log_monster_variant_failure(region_id, refresh_index);
@@ -2601,6 +2617,14 @@ impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsConte
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
         self.context.log_monster_position_failure(origin_name);
+    }
+}
+
+impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
+    for InheritedBaseGuardContext<'_, Context>
+{
+    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster) {
+        self.context.send_monster_entered_around(region, monster);
     }
 }
 
@@ -2662,7 +2686,12 @@ where
         Err(error) => return Some(Err(InitialRegionStartupError::SubtypeInput(error))),
     };
     let (area_width, area_height) = game.area_dimensions();
-    let mut startup_context = InitialRegionClockContext { context };
+    let mut startup_context = InitialRegionClockContext {
+        context,
+        monster_registry: game.monster_registry().clone(),
+        default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+        monster_entries: Vec::new(),
+    };
     let owner = match subtype {
         0 => {
             let mut region = CServerRegion::default();
@@ -2776,6 +2805,22 @@ where
         }
         subtype => return Some(Err(InitialRegionStartupError::UnknownSubtype(subtype))),
     };
+
+    // Техническая замена из-за Rust borrow-границы GodsBattle callback:
+    // original AddMonster посылает каждый кадр сразу, здесь startup без
+    // player sessions сохраняет тот же порядок кадров и выпускает их до
+    // публикации owner в CGame. Игровые мутации и RNG не откладываются.
+    let monster_entries = std::mem::take(&mut startup_context.monster_entries);
+    drop(startup_context);
+    for (origin, message) in monster_entries {
+        if let Err(error) = game.send_game_shape_around(owner.base(), &origin, None, &message) {
+            tracing::warn!(
+                region_id = owner.region_id(),
+                ?error,
+                "fresh monster региона запуска не опубликован вокруг"
+            );
+        }
+    }
 
     let region_id = owner.region_id();
     let added_to_region_list = game.find_region(region_id).is_none();

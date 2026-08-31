@@ -71,7 +71,7 @@ use super::region::{
 use super::serverregion::{
     CServerRegion, ServerRegionDecodeEffectsContext, ServerRegionDecodeError,
     ServerRegionMembershipContext, ServerRegionMonsterContext,
-    ServerRegionMonsterEffectsContext, ServerRegionNpcContext,
+    ServerRegionMonsterEffectsContext, ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext,
     ServerRegionNpcSpawnEffectsContext, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use super::shape::ShapeIdentity;
@@ -168,13 +168,9 @@ impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcContext
     fn send_npc_entered_around(&mut self, _npc: &CNpc) {}
 }
 
-impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
+impl<Context: ServerRegionMonsterSpawnEffectsContext> ServerRegionMonsterSpawnEffectsContext
     for CityGuardDecodeContext<'_, Context>
 {
-    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster) {
-        self.context.send_monster_entered_around(region, monster);
-    }
-
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
         self.context
             .log_monster_variant_failure(region_id, refresh_index);
@@ -182,6 +178,14 @@ impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsConte
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
         self.context.log_monster_position_failure(origin_name);
+    }
+}
+
+impl<Context: ServerRegionMonsterEffectsContext> ServerRegionMonsterEffectsContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster) {
+        self.context.send_monster_entered_around(region, monster);
     }
 }
 

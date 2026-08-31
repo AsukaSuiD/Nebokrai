@@ -601,12 +601,14 @@ pub(crate) trait ServerRegionNpcContext: ServerRegionNpcSpawnEffectsContext {
     fn send_npc_entered_around(&mut self, npc: &CNpc);
 }
 
-pub(crate) trait ServerRegionMonsterEffectsContext: ServerRegionMembershipContext {
-    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster);
-
+pub(crate) trait ServerRegionMonsterSpawnEffectsContext: ServerRegionMembershipContext {
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32);
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]);
+}
+
+pub(crate) trait ServerRegionMonsterEffectsContext: ServerRegionMonsterSpawnEffectsContext {
+    fn send_monster_entered_around(&mut self, region: &CServerRegion, monster: &CMonster);
 }
 
 pub(crate) trait ServerRegionMonsterContext: ServerRegionMonsterEffectsContext {
