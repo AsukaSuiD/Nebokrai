@@ -27,7 +27,10 @@
 //! меняет только HP до обязательного `0xBF60F`. Gate/flag block применяет
 //! собственный base-region, поэтому startup decoder не требует process-side
 //! build owner-а. `ClearRegion` возвращает ordered build publications и
-//! canonical `CGame` отправляет их после возврата owner-а. Area lookup сохраняет
+//! canonical `CGame` отправляет их после возврата owner-а. Guard spawn targets
+//! сохраняют исходный defend/attack camp; общий `CGame` adapter применяет
+//! созданные monster ID/index и fresh-entry effects после возврата owner-а.
+//! Area lookup сохраняет
 //! `random(map.size())` и mutating `operator[]`; base fallback теперь замкнут
 //! через `CServerRegion` и `CCountryParam`. `SetEnterPosXY` сохраняет fight-only
 //! gate, same-region comparison, игнорирование random bool и player SetPos;
@@ -188,7 +191,13 @@ impl<T> CountryRegionRuntimeContext for T where
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CountryGuardRefreshTargets {
     pub(crate) monster_ids: Vec<i32>,
-    pub(crate) spawn_indices: Vec<i32>,
+    pub(crate) spawn_indices: Vec<CountryGuardSpawnTarget>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountryGuardSpawnTarget {
+    pub(crate) spawn_index: i32,
+    pub(crate) camp: i32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -907,8 +916,16 @@ impl CServerCountryRegion {
             spawn_indices: self
                 .defend_guard_indices
                 .iter()
-                .chain(&self.attack_guard_indices)
-                .copied()
+                .map(|&spawn_index| CountryGuardSpawnTarget {
+                    spawn_index,
+                    camp: WC_DEFEND,
+                })
+                .chain(self.attack_guard_indices.iter().map(|&spawn_index| {
+                    CountryGuardSpawnTarget {
+                        spawn_index,
+                        camp: WC_ATTACK,
+                    }
+                }))
                 .collect(),
         }
     }

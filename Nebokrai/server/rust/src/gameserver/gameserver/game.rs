@@ -35,8 +35,8 @@
 //! schedule membership, flag owner, capture/victory callbacks и war-log tuple.
 //! City slot проводит тот же inherited AI через weekly AttackCity membership,
 //! defender/owner mutation, `0x60138` victory и общий capture-message/log tail.
-//! Организационный refresh городских стражей также замкнут здесь: process
-//! runtime больше не участвует; общий `CGame` RNG, guard registry,
+//! Организационный refresh городских и country-стражей также замкнут здесь:
+//! process runtime больше не участвует; общий `CGame` RNG, guard registry,
 //! `GS0231/GS0232`, fresh monster entry и spatial send исполняются через
 //! canonical region/CGame.
 //! Nation slot вызывает отдельный `ServerNationRegion::AI`: base-region pass,
@@ -773,7 +773,8 @@ use crate::gameserver::appserver::servercityregion::{
 };
 use crate::gameserver::appserver::servercountryregion::{
     CServerCountryRegion, CountryContendContext, CountryContendEntryContext, CountryContendPlayer,
-    CountryReturnPointContext, CountryReturnPointError, CountrySecurityError,
+    CountryGuardRefreshTargets, CountryReturnPointContext, CountryReturnPointError,
+    CountrySecurityError,
 };
 use crate::gameserver::appserver::servergodsbattleregion::{
     CGodsBattleMgr, CServerGodsBattleRegion, GodsBattleCancelByPlayer, GodsBattleContender,
@@ -3543,16 +3544,16 @@ struct GameCityRegionAiContext<'a, Runtime> {
     defence_side_faction_id: i32,
 }
 
-enum GameCityGuardRefreshEffect {
+enum GameWarGuardRefreshEffect {
     Log(Vec<u8>),
     MonsterEntry(CShape, CMessage),
 }
 
-/// Узкий adapter `CServerCityRegion::RefreshGuard`: исходный MSVCRT RNG,
-/// строки, monster registry и клиентские кадры остаются у владеющего ими
-/// `CGame`. Регистрация новых guard ID/index накапливается до возврата временно
-/// извлечённого region owner-а.
-struct GameCityGuardRefreshContext<'a> {
+/// Узкий adapter city/country `RefreshGuard`: исходный MSVCRT RNG, строки,
+/// monster registry и клиентские кадры остаются у владеющего ими `CGame`.
+/// Регистрация новых guard ID/index накапливается до возврата временно
+/// извлечённого region owner-а и затем относится к его точному camp.
+struct GameWarGuardRefreshContext<'a> {
     random_state: &'a mut u32,
     monster_registry: &'a MonsterRegistry,
     default_master_name: &'a [u8],
@@ -3560,18 +3561,18 @@ struct GameCityGuardRefreshContext<'a> {
     position_failure_template: &'a [u8],
     guard_monsters: Vec<i32>,
     guard_indices: Vec<i32>,
-    effects: Vec<GameCityGuardRefreshEffect>,
+    effects: Vec<GameWarGuardRefreshEffect>,
 }
 
-impl RegionRandomContext for GameCityGuardRefreshContext<'_> {
+impl RegionRandomContext for GameWarGuardRefreshContext<'_> {
     fn random_below(&mut self, bound: i32) -> i32 {
         game_legacy_random(self.random_state, bound)
     }
 }
 
-impl ServerRegionMonsterSpawnEffectsContext for GameCityGuardRefreshContext<'_> {
+impl ServerRegionMonsterSpawnEffectsContext for GameWarGuardRefreshContext<'_> {
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
-        self.effects.push(GameCityGuardRefreshEffect::Log(
+        self.effects.push(GameWarGuardRefreshEffect::Log(
             format_legacy_mixed(
                 self.variant_failure_template,
                 &[
@@ -3584,7 +3585,7 @@ impl ServerRegionMonsterSpawnEffectsContext for GameCityGuardRefreshContext<'_> 
     }
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
-        self.effects.push(GameCityGuardRefreshEffect::Log(
+        self.effects.push(GameWarGuardRefreshEffect::Log(
             format_legacy_mixed(
                 self.position_failure_template,
                 &[LegacyFormatArgument::Bytes(origin_name)],
@@ -3594,7 +3595,7 @@ impl ServerRegionMonsterSpawnEffectsContext for GameCityGuardRefreshContext<'_> 
     }
 }
 
-impl ServerRegionMonsterEffectsContext for GameCityGuardRefreshContext<'_> {
+impl ServerRegionMonsterEffectsContext for GameWarGuardRefreshContext<'_> {
     fn send_monster_entered_around(&mut self, _region: &CServerRegion, monster: &CMonster) {
         let Some(property) = monster
             .base_property_key()
@@ -3607,14 +3608,14 @@ impl ServerRegionMonsterEffectsContext for GameCityGuardRefreshContext<'_> {
         else {
             return;
         };
-        self.effects.push(GameCityGuardRefreshEffect::MonsterEntry(
+        self.effects.push(GameWarGuardRefreshEffect::MonsterEntry(
             monster.move_shape().shape().clone(),
             message,
         ));
     }
 }
 
-impl ServerRegionMonsterContext for GameCityGuardRefreshContext<'_> {
+impl ServerRegionMonsterContext for GameWarGuardRefreshContext<'_> {
     fn register_guard_monster(&mut self, monster_id: i32) {
         self.guard_monsters.push(monster_id);
     }
@@ -46155,7 +46156,7 @@ impl CGame {
         region_id: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: ServerRegionMonsterContext + PlayerRegionChangeContext,
+        Runtime: PlayerRegionChangeContext,
     {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
@@ -46171,12 +46172,7 @@ impl CGame {
             self.publish_build_update(update);
         }
 
-        if !self.refresh_region_guards(
-            region_id,
-            effects.guard_targets.monster_ids,
-            effects.guard_targets.spawn_indices,
-            runtime,
-        ) {
+        if !self.refresh_country_region_guards(region_id, effects.guard_targets) {
             return;
         }
 
@@ -46217,7 +46213,7 @@ impl CGame {
                 self.restore_region_owner(owner);
                 return;
             };
-            let mut context = GameCityGuardRefreshContext {
+            let mut context = GameWarGuardRefreshContext {
                 random_state: &mut self.random_state,
                 monster_registry: &self.monster_registry,
                 default_master_name: &default_master_name,
@@ -46256,8 +46252,8 @@ impl CGame {
             }
             for effect in effects {
                 match effect {
-                    GameCityGuardRefreshEffect::Log(text) => add_game_log_text(&text),
-                    GameCityGuardRefreshEffect::MonsterEntry(origin, message) => {
+                    GameWarGuardRefreshEffect::Log(text) => add_game_log_text(&text),
+                    GameWarGuardRefreshEffect::MonsterEntry(origin, message) => {
                         let Some(owner) = self.find_region(region_id) else {
                             return;
                         };
@@ -46498,43 +46494,84 @@ impl CGame {
         }
     }
 
-    fn refresh_region_guards<Runtime>(
+    fn refresh_country_region_guards(
         &mut self,
         region_id: i32,
-        monster_ids: Vec<i32>,
-        spawn_indices: Vec<i32>,
-        runtime: &mut Runtime,
-    ) -> bool
-    where
-        Runtime: ServerRegionMonsterContext + GameClockContext,
-    {
+        targets: CountryGuardRefreshTargets,
+    ) -> bool {
         let area_width = self.globe_setup.area_width();
         let area_height = self.globe_setup.area_height();
-        for monster_id in monster_ids {
+        let default_master_name = self.get_string_by_id(b"GS0119").to_vec();
+        let variant_failure_template = self.get_string_by_id(b"GS0231").to_vec();
+        let position_failure_template = self.get_string_by_id(b"GS0232").to_vec();
+        for monster_id in targets.monster_ids {
             self.refresh_guard_monster(region_id, monster_id);
         }
-        for spawn_index in spawn_indices {
-            let now_ms = runtime.now_milliseconds();
-            let Some(mut owner) = self.take_region_owner(region_id) else {
+        for target in targets.spawn_indices {
+            let Some(owner) = self.take_region_owner(region_id) else {
                 return false;
             };
-            let result = owner.base_mut().refresh_monster_group_by_index(
-                spawn_index,
-                now_ms,
+            let ServerRegionOwner::Country(mut region) = owner else {
+                self.restore_region_owner(owner);
+                return false;
+            };
+            let mut context = GameWarGuardRefreshContext {
+                random_state: &mut self.random_state,
+                monster_registry: &self.monster_registry,
+                default_master_name: &default_master_name,
+                variant_failure_template: &variant_failure_template,
+                position_failure_template: &position_failure_template,
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let result = region.base.refresh_monster_group_by_index(
+                target.spawn_index,
+                game_tick_milliseconds(),
                 area_width,
                 area_height,
                 &self.monster_registry,
                 &self.skill_factory,
-                runtime,
+                &mut context,
             );
-            self.restore_region_owner(owner);
+            for monster_id in context.guard_monsters.drain(..) {
+                region.add_gurd_monster(monster_id, target.camp);
+            }
+            for spawn_index in context.guard_indices.drain(..) {
+                region.add_guard_index(spawn_index, target.camp);
+            }
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            self.restore_region_owner(ServerRegionOwner::Country(region));
             if let Err(error) = result {
                 tracing::warn!(
                     region_id,
-                    spawn_index,
+                    spawn_index = target.spawn_index,
+                    camp = target.camp,
                     ?error,
-                    "не обновлена guard spawn-группа региона"
+                    "не обновлена guard spawn-группа country-региона"
                 );
+            }
+            for effect in effects {
+                match effect {
+                    GameWarGuardRefreshEffect::Log(text) => add_game_log_text(&text),
+                    GameWarGuardRefreshEffect::MonsterEntry(origin, message) => {
+                        let Some(owner) = self.find_region(region_id) else {
+                            return false;
+                        };
+                        if let Err(error) =
+                            self.send_game_shape_around(owner.base(), &origin, None, &message)
+                        {
+                            tracing::warn!(
+                                region_id,
+                                spawn_index = target.spawn_index,
+                                camp = target.camp,
+                                ?error,
+                                "не опубликован вход country guard-монстра"
+                            );
+                        }
+                    }
+                }
             }
         }
         true
