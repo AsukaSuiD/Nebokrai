@@ -90,9 +90,6 @@ const OC_DIED: i32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CityGateState {
-    pub(crate) logical_id: i32,
-    pub(crate) city_gate_id: i32,
-    pub(crate) name: Vec<u8>,
     pub(crate) gate: CCityGate,
 }
 
@@ -434,12 +431,7 @@ impl CServerCityRegion {
             .apply_build_block(gate.current_block_update());
         self.city_gates.insert(
             build.logical_id,
-            CityGateState {
-                logical_id: build.logical_id,
-                city_gate_id,
-                name: build.name,
-                gate,
-            },
+            CityGateState { gate },
         );
         Some(city_gate_id)
     }
@@ -699,14 +691,14 @@ impl CServerCityRegion {
     pub(crate) fn city_gate_id(&self, logical_id: i32) -> Option<i32> {
         self.city_gates
             .get(&logical_id)
-            .map(|gate| gate.city_gate_id)
+            .map(|state| state.gate.id())
     }
 
     /// Возвращает исходные name bytes без недоказанной смены кодировки.
     pub(crate) fn city_gate_name(&self, logical_id: i32) -> Option<&[u8]> {
         self.city_gates
             .get(&logical_id)
-            .map(|gate| gate.name.as_slice())
+            .map(|state| state.gate.name())
     }
 
     /// Exact virtual `AddGurdMonster`: повторный ID не меняет набор.
@@ -747,7 +739,7 @@ impl CServerCityRegion {
         let update = self
             .city_gates
             .values()
-            .find(|state| state.city_gate_id == city_gate_id)
+            .find(|state| state.gate.id() == city_gate_id)
             .map(|state| state.gate.on_been_hurted(attacker_type, attacker_id));
         update.is_some_and(|update| self.apply_gate_hurt_owner_update(update))
     }
