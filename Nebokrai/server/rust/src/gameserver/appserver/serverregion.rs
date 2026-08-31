@@ -1327,7 +1327,7 @@ impl CServerRegion {
             figure: CMonster::figure(property),
             ..ShapeRuntimeFacts::default()
         };
-        self.add_object(
+        self.add_fresh_move_object(
             monster.move_shape_mut().shape_mut(),
             facts,
             area_width,
@@ -1336,6 +1336,11 @@ impl CServerRegion {
             context,
         )?;
         self.owned_monsters.insert(id, monster);
+        self.owned_monsters
+            .get_mut(&id)
+            .expect("fresh monster опубликован непосредственно перед lifecycle")
+            .move_shape_mut()
+            .on_fresh_enter_region(self.id);
         // Compatibility quirk exact EXE 0x0047EC50: пятый bool не читается,
         // а enter message отправляется безусловно.
         let entered = self
@@ -1411,7 +1416,7 @@ impl CServerRegion {
             figure: CMonster::figure(property),
             ..ShapeRuntimeFacts::default()
         };
-        self.add_object(
+        self.add_fresh_move_object(
             monster.move_shape_mut().shape_mut(),
             facts,
             area_width,
@@ -1420,6 +1425,11 @@ impl CServerRegion {
             context,
         )?;
         self.owned_monsters.insert(id, monster);
+        self.owned_monsters
+            .get_mut(&id)
+            .expect("fresh summoned monster опубликован перед lifecycle")
+            .move_shape_mut()
+            .on_fresh_enter_region(self.id);
         let entered = self
             .owned_monsters
             .get(&id)
@@ -2790,7 +2800,7 @@ impl CServerRegion {
                 figure: ShapeFigure::default(),
                 ..ShapeRuntimeFacts::default()
             };
-            self.add_object(
+            self.add_fresh_move_object(
                 npc.move_shape_mut().shape_mut(),
                 facts,
                 area_width,
@@ -2801,6 +2811,11 @@ impl CServerRegion {
             .map_err(ServerRegionNpcSpawnBlock::Membership)?;
 
             self.owned_npcs.insert(id, npc);
+            self.owned_npcs
+                .get_mut(&id)
+                .expect("fresh NPC опубликован непосредственно перед lifecycle")
+                .move_shape_mut()
+                .on_fresh_enter_region(self.id);
             after_entry(self, id, context);
             created = created.wrapping_add(1);
             first_created_id.get_or_insert(id);
@@ -3572,6 +3587,28 @@ impl CServerRegion {
             now_ms,
             context,
             |_, _, _| {},
+            true,
+        )
+    }
+
+    fn add_fresh_move_object<Context: ServerRegionMembershipContext>(
+        &mut self,
+        shape: &mut CShape,
+        facts: ShapeRuntimeFacts,
+        area_width: i32,
+        area_height: i32,
+        now_ms: u32,
+        context: &mut Context,
+    ) -> Result<(), RegionMembershipBlock> {
+        self.add_object_with_area_entry(
+            shape,
+            facts,
+            area_width,
+            area_height,
+            now_ms,
+            context,
+            |_, _, _| {},
+            false,
         )
     }
 
@@ -3584,6 +3621,7 @@ impl CServerRegion {
         now_ms: u32,
         context: &mut Context,
         mut before_move_shape_entry: impl FnMut(&mut CServerRegion, usize, &mut Context),
+        notify_move_shape_entry: bool,
     ) -> Result<(), RegionMembershipBlock> {
         validate_area_span(area_width, area_height)?;
         let mut tile_x = shape
@@ -3593,6 +3631,7 @@ impl CServerRegion {
             .get_tile_y()
             .map_err(RegionMembershipBlock::ShapeCoordinate)?;
         shape.assign_to_server_region();
+        shape.set_region_id(self.id);
 
         if (tile_x < 0 || tile_x >= self.region.width || tile_y < 0 || tile_y >= self.region.height)
             && !self.region.cells.is_empty()
@@ -3631,7 +3670,7 @@ impl CServerRegion {
             shape.set_area_index(Some(area_index));
 
             before_move_shape_entry(self, area_index, context);
-            if facts.is_move_shape {
+            if facts.is_move_shape && notify_move_shape_entry {
                 context.move_shape_entered_area(identity);
             }
         } else {

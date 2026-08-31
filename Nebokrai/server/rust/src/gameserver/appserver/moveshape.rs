@@ -166,6 +166,7 @@ pub(crate) struct MoveShapeSkill {
     skill_type: u32,
     name: Vec<u8>,
     item_position: i32,
+    region_id: i32,
 }
 
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
@@ -423,6 +424,10 @@ impl MoveShapeSkill {
 
     pub(crate) const fn set_item_position(&mut self, position: i32) {
         self.item_position = position;
+    }
+
+    pub(crate) const fn region_id(&self) -> i32 {
+        self.region_id
     }
 }
 
@@ -756,6 +761,21 @@ impl CMoveShape {
 
     pub(crate) const fn can_fight(&self) -> bool {
         self.can_fight
+    }
+
+    /// Доказанная fresh-ветвь `CMoveShape::OnEnterRegion`: у только что
+    /// созданных monster/NPC state-vector пуст, поэтому `StartAllStates(false)`
+    /// не выдаёт эффектов. Остаются точный reset move/fight counters и
+    /// назначение region ID всем четырём категориям уже созданных skills.
+    pub(crate) fn on_fresh_enter_region(&mut self, region_id: i32) {
+        self.shape.set_region_id(region_id);
+        self.moveable_count = 0;
+        self.moveable = true;
+        self.can_fight_count = 0;
+        self.can_fight = true;
+        for skill in self.skills.values_mut() {
+            skill.region_id = region_id;
+        }
     }
 
     pub(crate) const fn skills(&self) -> &BTreeMap<u32, MoveShapeSkill> {
@@ -3702,6 +3722,7 @@ impl CMoveShape {
                 skill_type: SKILL_TYPE_DEFENSE,
                 name,
                 item_position: -1,
+                region_id: 0,
             },
         );
     }
@@ -3783,6 +3804,7 @@ impl CMoveShape {
                 skill_type,
                 name: properties.skill_name().to_vec(),
                 item_position: -1,
+                region_id: 0,
             },
         );
         true

@@ -18535,6 +18535,7 @@ impl CGame {
                     context.now_milliseconds()
                 });
             },
+            true,
         );
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
@@ -29707,6 +29708,7 @@ impl CGame {
                     context.now_milliseconds()
                 });
             },
+            true,
         );
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
