@@ -4,7 +4,7 @@
 //! `appserver/message packaging/cs2ccontainerobjectamountchange.cpp`.
 //! Сохраняется полный wire: source container type/id/extend/position, object
 //! type/GUID и итоговое amount. Прямая доставка идёт одному player, а
-//! shadow-callback-и выполняют `SendToSession` через ordered plug registry
+//! `SendToSession` разрешает получателей через ordered plug registry
 //! `CSessionFactory`.
 
 use crate::gameserver::gameserver::game::CGame;
@@ -71,5 +71,12 @@ impl CS2CContainerObjectAmountChange {
         message.base_mut().add_guid(self.object_id);
         message.add_ulong(self.amount);
         message.send_to_player(game.net_server(), player_id)
+    }
+
+    pub(crate) fn send_to_session(&self, game: &CGame, session_id: i32) -> Vec<i32> {
+        game.session_player_ids(session_id)
+            .into_iter()
+            .map(|player_id| self.send_to_player(game, player_id))
+            .collect()
     }
 }

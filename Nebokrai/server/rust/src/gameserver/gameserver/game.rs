@@ -14694,6 +14694,12 @@ impl CGame {
             .collect()
     }
 
+    pub(crate) fn session_player_ids(&self, session_id: i32) -> Vec<i32> {
+        self.session_factory
+            .session_player_ids(session_id)
+            .unwrap_or_default()
+    }
+
     fn finish_player_trade_session(&mut self, session_id: i32, aborted: bool) {
         let plug_ids = self
             .session_factory
@@ -20168,10 +20174,6 @@ impl CGame {
                 return Vec::new();
             }
         };
-        let player_ids = self
-            .session_factory
-            .session_player_ids(presence.owner_id)
-            .unwrap_or_default();
         match change {
             ShadowSourceChangeOutcome::AmountChanged(presence) => {
                 let mut message = CS2CContainerObjectAmountChange::default();
@@ -20183,12 +20185,10 @@ impl CGame {
                 message.set_source_container_extend_id(presence.container_extend_id);
                 message.set_object(goods.object_type, goods.ex_id);
                 message.set_object_amount(presence.record.goods_amount);
-                player_ids
-                    .into_iter()
-                    .map(|player_id| message.send_to_player(self, player_id))
-                    .collect()
+                message.send_to_session(self, presence.owner_id)
             }
-            ShadowSourceChangeOutcome::Removed(removed) => player_ids
+            ShadowSourceChangeOutcome::Removed(removed) => self
+                .session_player_ids(presence.owner_id)
                 .into_iter()
                 .map(|player_id| {
                     send_enhancement_shadow_deleted(self, player_id, goods, removed)

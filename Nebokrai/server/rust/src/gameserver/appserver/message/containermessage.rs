@@ -1717,16 +1717,15 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 return Some(Ok(()));
             }
         };
-        let delete_shadow_delivery = send_enhancement_shadow_deleted(
+        let delete_shadow_deliveries = send_shadow_deleted_to_session(
             game,
-            player_id,
             goods_identity.expect("clear validation сохраняет live source goods"),
             &removed.removed,
         );
         let move_delivery = send_rollback(game, player_id);
         tracing::trace!(
             ?removed,
-            delete_shadow_delivery,
+            ?delete_shadow_deliveries,
             move_delivery,
             "сессия снаряжения очищена"
         );
@@ -1756,16 +1755,15 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
                 return Some(Ok(()));
             }
         };
-        let delete_shadow_delivery = send_enhancement_shadow_deleted(
+        let delete_shadow_deliveries = send_shadow_deleted_to_session(
             game,
-            player_id,
             goods_identity.expect("shop clear validation сохраняет live source goods"),
             &removed.removed,
         );
         let move_delivery = send_rollback(game, player_id);
         tracing::trace!(
             ?removed,
-            delete_shadow_delivery,
+            ?delete_shadow_deliveries,
             move_delivery,
             "выбор личной лавки очищен"
         );
@@ -1895,9 +1893,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             .and_then(|player| player.get_goods_by_id(selection.goods.ex_id))
             .expect("equipment-session shadow сохраняет live source goods");
         let old_client_payload = game.encode_goods_for_old_client(goods);
-        let add_shadow_delivery = send_shadow_presence(
+        let add_shadow_deliveries = send_shadow_presence_to_session(
             game,
-            player_id,
             selection.goods,
             &selection.added.shadow.presence,
             &old_client_payload,
@@ -1906,7 +1903,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         tracing::trace!(
             ?selection,
             payload_bytes = old_client_payload.len(),
-            add_shadow_delivery,
+            ?add_shadow_deliveries,
             move_delivery,
             "предмет сессии снаряжения выбран"
         );
@@ -1937,9 +1934,8 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
             .and_then(|player| player.get_goods_by_id(selection.goods.ex_id))
             .expect("personal-shop shadow сохраняет live source goods");
         let old_client_payload = game.encode_goods_for_old_client(goods);
-        let add_shadow_delivery = send_shadow_presence(
+        let add_shadow_deliveries = send_shadow_presence_to_session(
             game,
-            player_id,
             selection.goods,
             &selection.added.shadow.presence,
             &old_client_payload,
@@ -1948,7 +1944,7 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         tracing::trace!(
             ?selection,
             payload_bytes = old_client_payload.len(),
-            add_shadow_delivery,
+            ?add_shadow_deliveries,
             move_delivery,
             "предмет личной лавки выбран"
         );
@@ -2064,23 +2060,28 @@ pub(crate) fn send_enhancement_shadow_deleted(
     goods: ShapeIdentity,
     removed: &ShadowRemovedReport,
 ) -> i32 {
+    shadow_delete_message(goods, removed).send_to_player(game, player_id)
+}
+
+fn send_shadow_deleted_to_session(
+    game: &CGame,
+    goods: ShapeIdentity,
+    removed: &ShadowRemovedReport,
+) -> Vec<i32> {
+    shadow_delete_message(goods, removed).send_to_session(game, removed.presence.owner_id)
+}
+
+fn shadow_delete_message(
+    goods: ShapeIdentity,
+    removed: &ShadowRemovedReport,
+) -> CS2CContainerObjectMove {
     let presence = &removed.presence;
-    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
-    message.add_byte(3);
-    message.add_long(presence.owner_type);
-    message.add_long(presence.owner_id);
-    message.add_long(presence.container_extend_id);
-    message.add_ulong(presence.position);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_ulong(0);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(goods.ex_id);
-    message.add_long(0);
-    message.base_mut().add_guid(CGuid::GUID_INVALID);
-    message.add_ulong(0);
-    message.send_to_player(game.net_server(), player_id)
+    let mut message = CS2CContainerObjectMove::default();
+    message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+    message.set_source_container(presence.owner_type, presence.owner_id, presence.position);
+    message.set_source_container_extend_id(presence.container_extend_id);
+    message.set_source_object(goods.object_type, goods.ex_id, 0);
+    message
 }
 
 fn send_enhancement_transfer_moved(
@@ -2234,23 +2235,30 @@ pub(crate) fn send_shadow_presence(
     presence: &ShadowPresenceReport,
     payload: &[u8],
 ) -> i32 {
-    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
-    message.add_byte(2);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_long(0);
-    message.add_ulong(0);
-    message.add_long(presence.owner_type);
-    message.add_long(presence.owner_id);
-    message.add_long(presence.container_extend_id);
-    message.add_ulong(presence.position);
-    message.add_long(0);
-    message.base_mut().add_guid(CGuid::GUID_INVALID);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(goods.ex_id);
-    message.add_ulong(payload.len() as u32);
-    message.base_mut().add(payload);
-    message.send_to_player(game.net_server(), player_id)
+    shadow_presence_message(goods, presence, payload).send_to_player(game, player_id)
+}
+
+fn send_shadow_presence_to_session(
+    game: &CGame,
+    goods: ShapeIdentity,
+    presence: &ShadowPresenceReport,
+    payload: &[u8],
+) -> Vec<i32> {
+    shadow_presence_message(goods, presence, payload).send_to_session(game, presence.owner_id)
+}
+
+fn shadow_presence_message(
+    goods: ShapeIdentity,
+    presence: &ShadowPresenceReport,
+    payload: &[u8],
+) -> CS2CContainerObjectMove {
+    let mut message = CS2CContainerObjectMove::default();
+    message.set_operation(ContainerObjectMoveOperation::NewObject);
+    message.set_destination_container(presence.owner_type, presence.owner_id, presence.position);
+    message.set_destination_container_extend_id(presence.container_extend_id);
+    message.set_destination_object(goods.object_type, goods.ex_id);
+    message.set_object_stream(payload.to_vec());
+    message
 }
 
 fn send_move_result(

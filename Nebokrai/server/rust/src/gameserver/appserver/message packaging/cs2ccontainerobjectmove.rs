@@ -6,8 +6,9 @@
 //! delete пишет только source amount, move/switch — обе amount, new — длину
 //! и old-client stream. Ground-goods owner использует тот же собранный
 //! `CMessage` для spatial around-send; выбор получателей остаётся у
-//! `GameServerAroundRuntime`. `SendToSession` пока не достигнут. Rust `Drop`
-//! заменяет технический MSVC destructor без отдельного adapter-а.
+//! `GameServerAroundRuntime`. `SendToSession` разрешает player-owner-ов через
+//! ordered plug registry `CSessionFactory`. Rust `Drop` заменяет технический
+//! MSVC destructor без отдельного adapter-а.
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -123,6 +124,14 @@ impl CS2CContainerObjectMove {
         }
         self.normalize_self_move();
         self.message().send_to_player(game.net_server(), player_id)
+    }
+
+    pub(crate) fn send_to_session(mut self, game: &CGame, session_id: i32) -> Vec<i32> {
+        self.normalize_self_move();
+        game.session_player_ids(session_id)
+            .into_iter()
+            .map(|player_id| self.message().send_to_player(game.net_server(), player_id))
+            .collect()
     }
 
     fn normalize_self_move(&mut self) {
