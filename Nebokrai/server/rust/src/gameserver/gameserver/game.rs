@@ -40352,6 +40352,7 @@ impl CGame {
             ) {
                 execute_battle_fairy_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else {
+                self.send_battle_fairy_skill_failure(player_id, 2);
                 tracing::debug!(
                     player_id,
                     ?dispatch,
