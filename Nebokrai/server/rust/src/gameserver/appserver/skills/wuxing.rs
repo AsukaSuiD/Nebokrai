@@ -104,7 +104,7 @@ pub(crate) fn execute_player_auto_start_wuxing<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let skill_level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(skill_id));
     let state = game
@@ -116,7 +116,7 @@ pub(crate) fn execute_player_auto_start_wuxing<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         let _ = player.replace_wuxing_state(state);
     }
-    if game.update_player_properties(player_id, runtime).is_some() {
+    if game.update_player_properties(player_id).is_some() {
         let _ = game.restore_player_hp_mp_states(player_id);
     }
     true
@@ -165,7 +165,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         let _ = player.replace_wuxing_state(state);
     }
-    if game.update_player_properties(player_id, runtime).is_some() {
+    if game.update_player_properties(player_id).is_some() {
         let _ = game.restore_player_hp_mp_states(player_id);
     }
     if let Some(execution) = player_ai.immediate_state_mut() {

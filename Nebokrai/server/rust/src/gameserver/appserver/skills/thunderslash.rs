@@ -159,7 +159,7 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { if rp_loss != 0 { player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16); } player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
-        let _ = game.update_player_properties(player_id, runtime); send_visual(game, player_id, level, None);
+        let _ = game.update_player_properties(player_id); send_visual(game, player_id, level, None);
         if let Some(state) = ai.thunder_slash_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started = ai.thunder_slash().map(SkillExecutionKernel::started_at_ms).unwrap_or_default();

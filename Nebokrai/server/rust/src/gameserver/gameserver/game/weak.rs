@@ -62,7 +62,7 @@ impl CGame {
         }
     }
 
-    pub(super) fn apply_weak_phalanx<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, phalanx: &CWeakPhalanx, runtime: &mut Runtime) -> usize {
+    pub(super) fn apply_weak_phalanx(&mut self, region_id: i32, phalanx: &CWeakPhalanx) -> usize {
         let center_x = phalanx.shape().get_tile_x().unwrap_or_default();
         let center_y = phalanx.shape().get_tile_y().unwrap_or_default();
         let state = WeakState::new(phalanx.attack_loss(), center_x, center_y, phalanx.length(), phalanx.height());
@@ -79,7 +79,7 @@ impl CGame {
                     });
                     if let Some((x, y)) = position {
                         send_weak_state_visual(self, region_id, target, x, y, state, true);
-                        let _ = self.update_player_properties(target.id, runtime);
+                        let _ = self.update_player_properties(target.id);
                         applied = applied.wrapping_add(1);
                     }
                 }
@@ -105,7 +105,7 @@ impl CGame {
         applied
     }
 
-    pub(super) fn finish_weak_phalanx_targets<Runtime: GameMainLoopRuntime>(&mut self, region_id: i32, phalanx: &CWeakPhalanx, runtime: &mut Runtime) -> usize {
+    pub(super) fn finish_weak_phalanx_targets(&mut self, region_id: i32, phalanx: &CWeakPhalanx) -> usize {
         let mut ended = 0usize;
         for target in weak_targets(self, region_id, phalanx) {
             match target.object_type {
@@ -118,7 +118,7 @@ impl CGame {
                     });
                     if let Some((x, y, state)) = removed {
                         send_weak_state_visual(self, region_id, target, x, y, state, false);
-                        let _ = self.update_player_properties(target.id, runtime);
+                        let _ = self.update_player_properties(target.id);
                         ended = ended.wrapping_add(1);
                     }
                 }

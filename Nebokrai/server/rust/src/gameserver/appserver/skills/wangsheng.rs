@@ -171,7 +171,7 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_health(player.health().wrapping_add(hp_gain));
     }
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     if let Some(state) = player_ai.wangsheng_mut() {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);

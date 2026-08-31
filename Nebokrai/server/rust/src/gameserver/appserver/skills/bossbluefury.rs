@@ -318,7 +318,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     send_boss_blue_fury_state_visual(
         game, region_id, identity, tile_x, tile_y, state, true, state_now_ms,
     );
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     if let Some(kernel) = player_ai.boss_blue_fury_mut() {
         let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
     }

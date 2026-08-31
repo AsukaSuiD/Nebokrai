@@ -436,7 +436,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             properties_changed |= finish_curable_state(game, region_id, target.identity, state_id, 0);
         }
     }
-    if properties_changed && target.identity.object_type == PLAYER_TYPE { let _ = game.update_player_properties(target.identity.id, runtime); }
+    if properties_changed && target.identity.object_type == PLAYER_TYPE { let _ = game.update_player_properties(target.identity.id); }
     let installed = install_cure_state(
         game,
         region_id,

@@ -653,7 +653,7 @@ pub(crate) fn dispatch_game_goods_message<Runtime: GameGoodsMessageRuntime>(
                 .is_some_and(|player| player.get_goods_by_id(goods_guid).is_some());
             if goods_exists {
                 let _ = game
-                    .update_player_properties(player_id, runtime)
+                    .update_player_properties(player_id)
                     .expect("0x8FC2E player сохранён после four-container lookup");
             }
         }

@@ -24323,7 +24323,7 @@ impl CGame {
             cleared
         };
         let (combat_property_delivery, tao_zhuang_ran) = self
-            .update_player_properties(player_id, context)
+            .update_player_properties(player_id)
             .expect("игрок сохранён после OnEnterRegion");
         let (owned, mutation) = {
             let player = self
@@ -28122,11 +28122,10 @@ impl CGame {
     /// После удаления размер вектора меняется, но исходный индекс всё равно
     /// увеличивается, поэтому сдвинувшийся сосед обрабатывается лишь в следующий
     /// проход `UpdateAbnormality`.
-    fn update_player_script_move_states<Runtime: GameMainLoopRuntime>(
+    fn update_player_script_move_states(
         &mut self,
         player_id: i32,
         now_ms: u32,
-        runtime: &mut Runtime,
     ) -> usize {
         let mut ended = 0usize;
         let mut index = 0usize;
@@ -28148,7 +28147,7 @@ impl CGame {
                 break;
             };
             let _ = self.send_script_move_state_visual(player_id, removed, false);
-            let _ = self.update_player_properties(player_id, runtime);
+            let _ = self.update_player_properties(player_id);
             ended = ended.wrapping_add(1);
             index = index.wrapping_add(1);
         }
@@ -28176,7 +28175,7 @@ impl CGame {
         let team_recruitment_states_ended =
             self.update_player_team_recruitment_states(player_id, now_ms, runtime);
         let script_move_states_ended =
-            self.update_player_script_move_states(player_id, now_ms, runtime);
+            self.update_player_script_move_states(player_id, now_ms);
         let _ = expire_player_pillar_state(self, player_id, now_ms);
         let _ = expire_player_rush_state(self, player_id, now_ms);
         let _ = expire_player_rush_2_state(self, player_id, now_ms);
@@ -28204,7 +28203,7 @@ impl CGame {
             send_rage_break_state_visual(
                 self, region_id, identity, tile_x, tile_y, state, false, now_ms,
             );
-            let _ = self.update_player_properties(player_id, runtime);
+            let _ = self.update_player_properties(player_id);
         }
         let _ = expire_player_fury_states(self, player_id, now_ms, runtime);
         let weak_ended = finish_player_weak_outside(self, player_id, runtime);
@@ -34140,12 +34139,9 @@ impl CGame {
     /// меняет canonical combat snapshot, `OnChangeProperties` публикует
     /// `0xBF721`, затем активный `bTaoZhuangModify` запускает reached
     /// set-completion owner. Один owner обслуживает callers из battle-fairy
-    /// goods message и обоих FourNation exploit paths.
-    pub(crate) fn update_player_properties<Context: GameContainerMessageRuntime>(
-        &mut self,
-        player_id: i32,
-        _context: &mut Context,
-    ) -> Option<(i32, bool)> {
+    /// goods message, FourNation и skill/state pipeline без фиктивного
+    /// container/runtime параметра.
+    pub(crate) fn update_player_properties(&mut self, player_id: i32) -> Option<(i32, bool)> {
         let properties = self
             .find_player(player_id)
             .map(|player| self.recompute_player_properties(player))?;
@@ -44421,10 +44417,10 @@ impl CGame {
         }
         if let SummonedSkillShape::Weak(weak) = &phalanx {
             if tick.is_some() {
-                let applied = self.apply_weak_phalanx(region_id, weak, runtime);
+                let applied = self.apply_weak_phalanx(region_id, weak);
                 tracing::trace!(region_id, phalanx_id, applied, "обновлена область ослабления");
             } else {
-                let ended = self.finish_weak_phalanx_targets(region_id, weak, runtime);
+                let ended = self.finish_weak_phalanx_targets(region_id, weak);
                 tracing::trace!(region_id, phalanx_id, ended, "завершена область ослабления");
                 if let Some(region) = self.find_region(region_id).map(ServerRegionOwner::base) {
                     let _ = self.send_shape_exit_around(region, phalanx.shape());

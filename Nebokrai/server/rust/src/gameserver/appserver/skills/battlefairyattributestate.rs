@@ -177,7 +177,7 @@ pub(crate) fn expire_player_battle_fairy_attribute_states<Runtime: GameMainLoopR
     game: &mut CGame,
     player_id: i32,
     now_ms: u32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> usize {
     let states = game
         .find_player_mut(player_id)
@@ -206,7 +206,7 @@ pub(crate) fn expire_player_battle_fairy_attribute_states<Runtime: GameMainLoopR
             game, region_id, target, tile_x, tile_y, state, false,
         );
     }
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     ended
 }
 

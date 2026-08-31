@@ -79,7 +79,7 @@ pub(crate) fn execute_player_auto_start_immediate_state<Runtime: GameMainLoopRun
         }
     }
     let _ = game.publish_player_states(player_id);
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     true
 }
 

@@ -250,7 +250,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             kind.deduct(player, current, cost);
         }
-        let _ = game.update_player_properties(player_id, runtime);
+        let _ = game.update_player_properties(player_id);
         send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 1);
         if let Some(state) = player_ai.battle_fairy_transfer_mut() {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);

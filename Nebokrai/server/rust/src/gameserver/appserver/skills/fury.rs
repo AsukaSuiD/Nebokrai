@@ -451,7 +451,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         send_rage_break_state_visual(
             game, region_id, identity, tile_x, tile_y, rage_break, false, now_ms,
         );
-        let _ = game.update_player_properties(player_id, runtime);
+        let _ = game.update_player_properties(player_id);
         if let Some(execution) = player_ai.fury_mut() {
             let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
         }
@@ -483,7 +483,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         super::curestate::send_cure_state_visual(game, player_id, previous, false);
     }
     super::curestate::send_cure_state_visual(game, player_id, cure, true);
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     let _ = game.publish_player_states(player_id);
 
     if let Some(execution) = player_ai.fury_mut() {

@@ -35,7 +35,7 @@ pub(crate) fn execute_player_auto_start_swordship<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     if !is_swordship_skill(skill_id) {
         return false;
@@ -55,7 +55,7 @@ pub(crate) fn execute_player_auto_start_swordship<Runtime: GameMainLoopRuntime>(
         let _ = player.replace_swordship_state(state);
     }
     let _ = game.publish_player_states(player_id);
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     true
 }
 

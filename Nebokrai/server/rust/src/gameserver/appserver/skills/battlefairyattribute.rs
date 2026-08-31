@@ -244,7 +244,7 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         game, region_id, target, tile_x, tile_y, state, true,
     );
     if target.object_type == PLAYER_TYPE {
-        let _ = game.update_player_properties(target.id, runtime);
+        let _ = game.update_player_properties(target.id);
     }
     if let Some(execution) = player_ai.battle_fairy_attribute_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);

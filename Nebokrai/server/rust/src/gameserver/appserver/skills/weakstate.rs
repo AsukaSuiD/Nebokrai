@@ -74,7 +74,7 @@ pub(crate) fn send_weak_state_visual(game: &mut CGame, region_id: i32, identity:
 pub(crate) fn finish_player_weak_outside<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let ended = game.find_player_mut(player_id).and_then(|player| {
         let region_id = player.server_region_id()?;
@@ -99,7 +99,7 @@ pub(crate) fn finish_player_weak_outside<Runtime: GameMainLoopRuntime>(
         state,
         false,
     );
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     true
 }
 

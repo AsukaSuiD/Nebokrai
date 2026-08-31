@@ -61,7 +61,7 @@ pub(crate) fn finish_player_god_bless<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     now_ms: u32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let ended = game.find_player_mut(player_id).and_then(|player| {
         let region = player.server_region_id()?;
@@ -87,7 +87,7 @@ pub(crate) fn finish_player_god_bless<Runtime: GameMainLoopRuntime>(
         false,
         now_ms,
     );
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     true
 }
 

@@ -58,7 +58,7 @@ impl CGame {
             || runtime.now_milliseconds(),
         );
         if target.object_type == PLAYER_TYPE {
-            let _ = self.update_player_properties(target.id, runtime);
+            let _ = self.update_player_properties(target.id);
         }
         true
     }

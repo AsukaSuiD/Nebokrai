@@ -142,7 +142,7 @@ pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     now_ms: u32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> usize {
     let context = game.find_player(player_id).and_then(|player| {
         Some((
@@ -165,7 +165,7 @@ pub(crate) fn expire_player_fury_states<Runtime: GameMainLoopRuntime>(
         }
     }
     if count != 0 {
-        let _ = game.update_player_properties(player_id, runtime);
+        let _ = game.update_player_properties(player_id);
     }
     count
 }

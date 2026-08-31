@@ -28,7 +28,7 @@ pub(crate) fn finish_summon_skill<Runtime, MarkUsed>(
     Runtime: GameMainLoopRuntime,
     MarkUsed: FnOnce(&mut CPlayerAI, u32),
 {
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

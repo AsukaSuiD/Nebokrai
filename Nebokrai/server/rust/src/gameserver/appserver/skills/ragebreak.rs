@@ -150,7 +150,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
     let previous_cure = game.find_player_mut(player_id).and_then(|player| player.replace_cure_state(cure));
     if let Some(previous) = previous_cure { send_cure_state_visual(game, player_id, previous, false); }
     send_cure_state_visual(game, player_id, cure, true);
-    let _ = game.update_player_properties(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
 
     if let Some(state) = ai.rage_break_mut() { let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_rage_break(game, player_id, ai, runtime);

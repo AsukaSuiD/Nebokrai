@@ -346,7 +346,7 @@ pub(crate) fn expire_player_boss_blue_fury_state<Runtime: crate::gameserver::gam
     game: &mut CGame,
     player_id: i32,
     now_ms: u32,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some((region_id, identity, tile_x, tile_y, state, tick)) = game
         .find_player_mut(player_id)
@@ -369,7 +369,7 @@ pub(crate) fn expire_player_boss_blue_fury_state<Runtime: crate::gameserver::gam
         send_boss_blue_fury_state_visual(
             game, region_id, identity, tile_x, tile_y, state, false, now_ms,
         );
-        let _ = game.update_player_properties(player_id, runtime);
+        let _ = game.update_player_properties(player_id);
     }
     true
 }

@@ -707,7 +707,7 @@ pub(crate) fn dispatch_game_organizing_message<Runtime: ScriptRegionChangeContex
 
     if matches!(opcode, 0x7fe46..=0x7fe4a) {
         return Some(
-            dispatch_organizing_control_message(opcode, message, game, runtime)
+            dispatch_organizing_control_message(opcode, message, game)
                 .map_err(GameOrganizingMessageError::Control),
         );
     }
@@ -1410,11 +1410,10 @@ fn dispatch_four_nation_phase_message<Runtime: GameOrganizingWarRuntime>(
     Ok(())
 }
 
-fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
+fn dispatch_organizing_control_message(
     opcode: u32,
     message: &mut CMessage,
     game: &mut CGame,
-    runtime: &mut Runtime,
 ) -> Result<(), OrganizingControlDispatchError> {
     match opcode {
         0x7fe46 => {
@@ -1445,7 +1444,7 @@ fn dispatch_organizing_control_message<Runtime: GameOrganizingWarRuntime>(
                 player.set_exploit(advertised_exploit, maximum)
             };
             let (combat_property_delivery, tao_zhuang_ran) = game
-                .update_player_properties(player_id, runtime)
+                .update_player_properties(player_id)
                 .expect("player сохранён после exact exploit mutation");
 
             let notice_text = Some(format_four_nation_exploit_notice(
@@ -2395,7 +2394,7 @@ impl<Runtime: GameOrganizingWarRuntime> FourNationPhaseContext
                 }
                 let _property_update = self
                     .game
-                    .update_player_properties(award.player_id, self.runtime)
+                    .update_player_properties(award.player_id)
                     .expect("online award player сохранён после exploit mutation");
 
                 let notice = format_legacy_integer_fields(
