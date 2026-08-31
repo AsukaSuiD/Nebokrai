@@ -2,8 +2,8 @@
 //!
 //! Источник жизненного цикла — `gameserver.exe` и `GameServer.pdb`, исходный
 //! owner `gameserver/gameserver.cpp`. Этот модуль хранит только действительно
-//! процессное состояние: runtime-каталог, сигнал завершения и общий поток
-//! legacy RNG. Игровые реестры, игроки, регионы и фабрики остаются у `CGame`;
+//! процессное состояние: runtime-каталог, сигнал завершения и сеть. Игровые
+//! реестры, игроки, регионы, фабрики и legacy RNG остаются у `CGame`;
 //! их нельзя дублировать здесь ради формального `GameThreadRuntime`.
 
 use std::error::Error;
@@ -18,7 +18,6 @@ use std::task::Poll;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::gameserver::appserver::player::CPlayer;
-use crate::gameserver::appserver::region::RegionRandomContext;
 use crate::gameserver::appserver::script::function::{
     ScriptAwardAuthenticationContext, ScriptAwardAuthenticationSubmission,
 };
@@ -29,8 +28,8 @@ use crate::nets::servers::{
 };
 
 use super::game::{
-    CGame, GameExitRuntime, GameMainLoopRuntime, GameNetworkRuntime, GameReleaseRuntime,
-    GameRuntimePathOwner, GameRuntimePaths, GameThreadRuntime, game_tick_milliseconds,
+    CGame, GameExitRuntime, GameNetworkRuntime, GameReleaseRuntime, GameRuntimePathOwner,
+    GameRuntimePaths, GameThreadRuntime, game_tick_milliseconds,
 };
 
 #[derive(Clone)]
@@ -48,7 +47,6 @@ pub(crate) struct GameProcessRuntime {
     runtime: tokio::runtime::Handle,
     runtime_directory: PathBuf,
     exit_requested: Arc<AtomicBool>,
-    random_state: u32,
     network: GameProcessNetworkRuntime,
 }
 
@@ -56,7 +54,6 @@ impl GameProcessRuntime {
     pub(crate) fn new(
         runtime: tokio::runtime::Handle,
         runtime_directory: PathBuf,
-        random_state: u32,
     ) -> (Self, GameProcessControl) {
         let exit_requested = Arc::new(AtomicBool::new(false));
         let control = GameProcessControl {
@@ -67,7 +64,6 @@ impl GameProcessRuntime {
                 runtime,
                 runtime_directory,
                 exit_requested,
-                random_state,
                 network: GameProcessNetworkRuntime::new(),
             },
             control,
@@ -276,19 +272,6 @@ async fn poll_once<Output>(future: impl Future<Output = Output>) -> Option<Outpu
     .await
 }
 
-impl RegionRandomContext for GameProcessRuntime {
-    fn random_below(&mut self, bound: i32) -> i32 {
-        if bound <= 0 {
-            return 0;
-        }
-        self.random_state = self
-            .random_state
-            .wrapping_mul(214_013)
-            .wrapping_add(2_531_011);
-        (((self.random_state >> 16) & 0x7fff) as i32) % bound
-    }
-}
-
 impl ScriptAwardAuthenticationContext for GameProcessRuntime {
     fn submit_script_award_authentication(
         &mut self,
@@ -358,7 +341,5 @@ impl GameNetworkRuntime for GameProcessRuntime {
         }
     }
 }
-
-impl GameMainLoopRuntime for GameProcessRuntime {}
 
 impl GameThreadRuntime for GameProcessRuntime {}

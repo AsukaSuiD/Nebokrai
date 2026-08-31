@@ -198,7 +198,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
         return Some(Ok(()));
     }
     if opcode == 0x9050b {
-        dispatch_country_war_entry_message(message, game, runtime);
+        dispatch_country_war_entry_message(message, game);
         return Some(Ok(()));
     }
     if matches!(opcode, 0x90502..=0x9050a) {
@@ -697,11 +697,7 @@ fn dispatch_player_country_change_message(
     );
 }
 
-fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
-    message: &mut CMessage,
-    game: &mut CGame,
-    runtime: &mut Runtime,
-) {
+fn dispatch_country_war_entry_message(message: &mut CMessage, game: &mut CGame) {
     let decoded_player_id = message.base_mut().get_long();
     let player_id = decoded_player_id.unwrap_or(0);
     let Some(player) = game.find_player(player_id) else {
@@ -726,7 +722,9 @@ fn dispatch_country_war_entry_message<Runtime: GameCountryWarRuntime>(
         tracing::error!(player_id, country, camp, war_region_id, "вход в войну стран отклонён: неверный вид региона");
         return;
     };
-    let position = region.country_war_entry_position(camp, runtime);
+    let position = game.with_legacy_random_stream(|_, random| {
+        region.country_war_entry_position(camp, random)
+    });
     game.restore_region_owner(owner);
     let position = match position {
         Ok(Some(position)) => position,

@@ -763,7 +763,9 @@ use crate::gameserver::appserver::region::{
     RegionSecurity,
 };
 use crate::gameserver::appserver::ridestate::{RIDE_STATE_ID, RideState};
-use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
+use crate::gameserver::appserver::script::function::{
+    ScriptAwardAuthenticationContext, ScriptAwardAuthenticationSubmission, ScriptFunctionRuntime,
+};
 use crate::gameserver::appserver::script::script::{
     ActiveScript, CScriptFunctionRegistry, ScriptExecutionContext, ScriptStepDisposition,
 };
@@ -788,7 +790,7 @@ use crate::gameserver::appserver::servernationregion::{
 use crate::gameserver::appserver::serverregion::{
     AreaTransitionPlan, CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin,
     RegionTaxSessionEndpoint, RegionTaxSessionKind, ServerRegionClearPlayerTick,
-    ServerRegionDecodeError, ServerRegionMembershipContext, ServerRegionMonsterContext,
+    ServerRegionDecodeError, ServerRegionMonsterContext,
     ServerRegionMonsterEffectsContext, ServerRegionMonsterRectBlock,
     ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext, ServerRegionNpcSetup,
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSpawnOutcome,
@@ -2323,28 +2325,25 @@ struct PlayerTradeAuditParty {
 /// регион используют одних владельцев и не расходятся по двум реализациям.
 pub(crate) trait MonsterDeathContext:
     GameClockContext
-    + ServerRegionMembershipContext
     + NationCombatContext
+    + RegionRandomContext
 {
 }
 
 impl<T> MonsterDeathContext for T where
     T: GameClockContext
-        + ServerRegionMembershipContext
         + NationCombatContext
+        + RegionRandomContext
 {
 }
 
 /// Внешняя поверхность caller-ов смены региона. Пространственный RNG теперь
 /// всегда извлекает и возвращает сам `CGame`; runtime нужен соседним container
 /// publication и wrapping clock, но не выбирает позицию перехода.
-pub(crate) trait PlayerRegionChangeContext:
-    RegionRandomContext + GameContainerMessageRuntime + GameClockContext
-{
-}
+pub(crate) trait PlayerRegionChangeContext: GameContainerMessageRuntime + GameClockContext {}
 
 impl<T> PlayerRegionChangeContext for T where
-    T: RegionRandomContext + GameContainerMessageRuntime + GameClockContext
+    T: GameContainerMessageRuntime + GameClockContext
 {
 }
 
@@ -2475,13 +2474,9 @@ pub(crate) enum CiQingOtherPersonTarget {
 /// прямо у canonical owner-а; базовый property recompute остаётся обязательным
 /// runtime fact. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
-pub(crate) trait GameContainerMessageRuntime:
-    GameClockContext + ServerRegionMembershipContext
-{}
+pub(crate) trait GameContainerMessageRuntime: GameClockContext {}
 
-impl<T> GameContainerMessageRuntime for T where
-    T: GameClockContext + ServerRegionMembershipContext + ?Sized
-{}
+impl<T> GameContainerMessageRuntime for T where T: GameClockContext + ?Sized {}
 
 /// Runtime facts equipment-container-а выводятся только из canonical player,
 /// live goods и `GlobeSetup`; process runtime не владеет их теневой копией.
@@ -3141,15 +3136,10 @@ impl<T> GodsBattleNpcContendContext for T where
 {
 }
 
-pub(crate) trait PlayerReliveContext:
-    RegionRandomContext
-    + GameContainerMessageRuntime
-    + ScriptRegionChangeContext
-{
-}
+pub(crate) trait PlayerReliveContext: GameContainerMessageRuntime + ScriptRegionChangeContext {}
 
 impl<T> PlayerReliveContext for T where
-    T: RegionRandomContext + GameContainerMessageRuntime + ScriptRegionChangeContext
+    T: GameContainerMessageRuntime + ScriptRegionChangeContext
 {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4297,7 +4287,59 @@ pub(crate) trait GameMainLoopRuntime:
     + NationContendContext
     + GodsBattleNpcContendContext
     + GameExitRuntime
+    + RegionRandomContext
 {}
+
+/// Mutable-проекция одного игрового хода: process runtime сохраняет только
+/// технические границы, а весь gameplay RNG заимствуется у единственного
+/// `CGame`. Так вложенные AI/script/message owner-ы видят прежний общий поток,
+/// не создавая второе состояние на уровне процесса.
+struct GameMainLoopContext<'a, Runtime> {
+    runtime: &'a mut Runtime,
+    random_state: *mut u32,
+}
+
+impl<Runtime> RegionRandomContext for GameMainLoopContext<'_, Runtime> {
+    fn random_below(&mut self, bound: i32) -> i32 {
+        // SAFETY: указатель создаётся только на время синхронного
+        // `main_loop_with_context`, не покидает стек хода и всегда указывает на
+        // `CGame::random_state`. Вложенные CGame-маршруты могут последовательно
+        // менять то же поле, но не удерживают ссылку между вызовами runtime.
+        game_legacy_random(unsafe { &mut *self.random_state }, bound)
+    }
+}
+
+impl<Runtime: ScriptAwardAuthenticationContext> ScriptAwardAuthenticationContext
+    for GameMainLoopContext<'_, Runtime>
+{
+    fn submit_script_award_authentication(
+        &mut self,
+        player: &CPlayer,
+        patch_id: i32,
+        information_type: i32,
+        color: u32,
+        background: u32,
+    ) -> ScriptAwardAuthenticationSubmission {
+        self.runtime.submit_script_award_authentication(
+            player,
+            patch_id,
+            information_type,
+            color,
+            background,
+        )
+    }
+}
+
+impl<Runtime: GameExitRuntime> GameExitRuntime for GameMainLoopContext<'_, Runtime> {
+    fn exit_requested(&self) -> bool {
+        self.runtime.exit_requested()
+    }
+}
+
+impl<Runtime> GameMainLoopRuntime for GameMainLoopContext<'_, Runtime> where
+    Runtime: ScriptAwardAuthenticationContext + GameExitRuntime
+{
+}
 
 struct GameAreaAiContext<'a, Runtime> {
     runtime: &'a mut Runtime,
@@ -4333,7 +4375,11 @@ pub(crate) trait GameNetworkRuntime {
 }
 
 pub(crate) trait GameThreadRuntime:
-    GameMainLoopRuntime + GameReleaseRuntime + GameNetworkRuntime + GameRuntimePathOwner
+    ScriptAwardAuthenticationContext
+    + GameExitRuntime
+    + GameReleaseRuntime
+    + GameNetworkRuntime
+    + GameRuntimePathOwner
 {}
 
 impl ServerRegionOwner {
@@ -5917,7 +5963,9 @@ impl CGame {
     /// Exact same-region carriage prefix `CPlayer::ChangeRegion`: только
     /// близкая повозка в исходном регионе переносится в случайную свободную
     /// клетку `7×7` вокруг ещё не нормализованных координат назначения.
-    fn move_same_region_player_carriage<Context: PlayerRegionChangeContext>(
+    fn move_same_region_player_carriage<
+        Context: PlayerRegionChangeContext + RegionRandomContext,
+    >(
         &mut self,
         source_owner: &mut ServerRegionOwner,
         player: &mut CPlayer,
@@ -11262,16 +11310,18 @@ impl CGame {
         if burden_exceeded {
             let now_ms = context.now_milliseconds();
             let (area_width, area_height) = self.area_dimensions();
-            let rollback = owner.base_mut().add_owned_ground_goods(
-                detached,
-                ground_x,
-                ground_y,
-                particular_attribute,
-                now_ms,
-                area_width,
-                area_height,
-                context,
-            );
+            let rollback = self.with_legacy_random_stream(|_, random| {
+                owner.base_mut().add_owned_ground_goods(
+                    detached,
+                    ground_x,
+                    ground_y,
+                    particular_attribute,
+                    now_ms,
+                    area_width,
+                    area_height,
+                    random,
+                )
+            });
             self.restore_region_owner(owner);
             if let Err((error, goods)) = rollback {
                 return Err(GroundGoodsMoveBlock::RollbackFailed {
@@ -11393,16 +11443,18 @@ impl CGame {
                 .expect("rejected container add сохраняет ground goods owner");
             let now_ms = context.now_milliseconds();
             let (area_width, area_height) = self.area_dimensions();
-            let rollback = owner.base_mut().add_owned_ground_goods(
-                detached,
-                ground_x,
-                ground_y,
-                particular_attribute,
-                now_ms,
-                area_width,
-                area_height,
-                context,
-            );
+            let rollback = self.with_legacy_random_stream(|_, random| {
+                owner.base_mut().add_owned_ground_goods(
+                    detached,
+                    ground_x,
+                    ground_y,
+                    particular_attribute,
+                    now_ms,
+                    area_width,
+                    area_height,
+                    random,
+                )
+            });
             self.players.insert(player_id, player);
             self.restore_region_owner(owner);
             if let Some(addition) = destination_mutation.as_mut() {
@@ -17292,7 +17344,9 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn change_player_region_with_context<Context: PlayerRegionChangeContext>(
+    fn change_player_region_with_context<
+        Context: PlayerRegionChangeContext + RegionRandomContext,
+    >(
         &mut self,
         player_id: i32,
         target_region_id: i32,
@@ -46713,7 +46767,18 @@ impl CGame {
     /// сравнения интервалов, чтения профиля и срок следующего хода сохраняют
     /// наблюдаемый порядок Win32. Само ожидание возвращается асинхронному
     /// `game_thread_func`, а завершение арифметики срока выполняется после него.
-    pub(crate) fn main_loop<Runtime: GameMainLoopRuntime>(
+    pub(crate) fn main_loop<Runtime: ScriptAwardAuthenticationContext + GameExitRuntime>(
+        &mut self,
+        runtime: &mut Runtime,
+    ) -> GameMainLoopOutcome {
+        let random_state = std::ptr::addr_of_mut!(self.random_state);
+        self.main_loop_with_context(&mut GameMainLoopContext {
+            runtime,
+            random_state,
+        })
+    }
+
+    fn main_loop_with_context<Runtime: GameMainLoopRuntime>(
         &mut self,
         runtime: &mut Runtime,
     ) -> GameMainLoopOutcome {
@@ -46855,7 +46920,7 @@ impl CGame {
     }
 
     /// Завершает исходную арифметику тактового срока после ожидания между ходами.
-    fn finish_main_loop_pacing<Runtime: GameMainLoopRuntime>(
+    fn finish_main_loop_pacing<Runtime: GameClockContext>(
         &mut self,
         runtime: &mut Runtime,
         pacing: GameLoopPacing,

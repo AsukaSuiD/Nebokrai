@@ -9,7 +9,7 @@
 use std::error::Error;
 
 use crate::gameserver::gameserver::game::{
-    GameThreadReport, game_thread_func, game_wall_time_seconds,
+    GameThreadReport, game_thread_func,
 };
 use crate::gameserver::gameserver::runtime::GameProcessRuntime;
 
@@ -21,11 +21,9 @@ pub fn run_gameserver_process() -> std::process::ExitCode {
 
 async fn run_game_server(runtime_directory: std::path::PathBuf) -> Result<bool, Box<dyn Error>> {
     let shutdown = process_shutdown()?;
-    let random_state = game_wall_time_seconds() as u32;
     let (mut runtime, control) = GameProcessRuntime::new(
         tokio::runtime::Handle::current(),
         runtime_directory.clone(),
-        random_state,
     );
     eprintln!(
         "GameServer: запуск; runtime-каталог {}",
