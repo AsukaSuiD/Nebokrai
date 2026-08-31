@@ -1,12 +1,14 @@
-//! Runtime-spawn owner World response `0x7F80A` и локальных script-команд.
+//! Runtime-spawn owner World response `0x7F80A`, локальных script-команд и
+//! world-login recreate форм.
 //!
 //! Источник: `gameserver.exe`/`GameServer.pdb`, `OnServerMessage` RVA
 //! `0x0009D300`, monster branch `0x0009ECDD`, base `AddMonster`
 //! `0x0007EC50`. Wire decode остаётся у message owner-а; этот модуль владеет
 //! общей RNG-последовательностью `CGame`, concrete region mutation, city-only
 //! одноаргументной guard-регистрацией и spatial entry publication. Локальные
-//! `CreateNpc/CreateMonster` используют тот же owner без теневого process
-//! context; удалённый регион по-прежнему маршрутизируется самим script wire.
+//! `CreateNpc/CreateMonster` и persisted carriage используют тот же owner без
+//! теневого process context; удалённый регион по-прежнему маршрутизируется
+//! самим script wire.
 
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::npc::CNpc;
@@ -133,6 +135,92 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 }
 
 impl CGame {
+    /// Пространственная половина world-login recreate повозки. Login owner
+    /// передаёт сохранённые direction/HP/script; этот owner отвечает за RNG,
+    /// region membership, guard hooks и fresh monster entry.
+    #[allow(clippy::too_many_arguments, reason = "login carriage сохраняет persisted shape fields")]
+    pub(crate) fn spawn_login_carriage_monster(
+        &mut self,
+        region_id: i32,
+        property: &crate::setup::monsterlist::MonsterProperties,
+        player_id: i32,
+        tile_x: i32,
+        tile_y: i32,
+        direction: i32,
+        health: u32,
+        script_file: &[u8],
+        now_ms: u32,
+    ) -> Option<(i32, CShape, u32)> {
+        self.with_legacy_random_stream(|game, random| {
+            let mut owner = game.take_region_owner(region_id)?;
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let (area_width, area_height) = game.area_dimensions();
+            let spawned = (|| {
+                let position = owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(tile_x, tile_y, 10, 10, &mut context)
+                    .ok()?;
+                let monster_id = owner
+                    .base_mut()
+                    .add_monster(
+                        property,
+                        position.x,
+                        position.y,
+                        -1,
+                        true,
+                        false,
+                        now_ms,
+                        area_width,
+                        area_height,
+                        game.skill_factory(),
+                        &mut context,
+                    )
+                    .ok()?;
+                let carriage = owner
+                    .base_mut()
+                    .find_monster_by_id_mut(monster_id)
+                    .expect("login carriage AddMonster публикует concrete owner");
+                carriage.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
+                    master_type: 400,
+                    master_id: player_id,
+                    ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
+                });
+                carriage.move_shape_mut().shape_mut().set_direction(direction);
+                carriage.set_hit_points(health);
+                carriage.set_script_file(script_file);
+                Some((
+                    monster_id,
+                    carriage.move_shape().shape().clone(),
+                    carriage.hit_points(),
+                ))
+            })();
+            if let ServerRegionOwner::City(region) = &mut owner {
+                for monster_id in context.guard_monsters.drain(..) {
+                    region.add_gurd_monster(monster_id);
+                }
+                for refresh_index in context.guard_indices.drain(..) {
+                    region.add_guard_index(refresh_index);
+                }
+            }
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            game.restore_region_owner(owner);
+            game.publish_runtime_spawn_effects(region_id, effects);
+            spawned
+        })
+    }
+
     /// Пространственная половина script `AddCarriage`: возвращает уже
     /// опубликованного canonical monster после fresh-entry и guard hooks.
     #[allow(clippy::too_many_arguments, reason = "literal AddCarriage сохраняет spawn inputs")]

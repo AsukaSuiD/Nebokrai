@@ -18913,7 +18913,7 @@ impl CGame {
             }
             self.prepare_changed_player_region_entry(player_id, region_id);
             self.restore_player_region_pets(player_id, region_id, context);
-            self.restore_player_region_carriage(player_id, region_id, context);
+            self.restore_player_region_carriage(player_id, region_id);
             self.finish_changed_player_region_entry(player_id, region_id);
             tracing::trace!(
                 player_id,
@@ -29537,11 +29537,10 @@ impl CGame {
         self.restore_region_owner(owner);
     }
 
-    fn restore_player_region_carriage<Context: ServerRegionMonsterContext>(
+    fn restore_player_region_carriage(
         &mut self,
         player_id: i32,
         region_id: i32,
-        context: &mut Context,
     ) -> Option<()> {
         let (record, recreate, player_name, player_x, player_y, player_direction) =
             self.find_player(player_id).and_then(|player| {
@@ -29560,15 +29559,16 @@ impl CGame {
                 .finish_empty_login_carriage_recreation();
             return None;
         }
-        let mut owner = self.take_region_owner(region_id)?;
-
         let existing = if !recreate {
-            owner
+            self.find_region(region_id)?
                 .base()
                 .area_monster_ids()
                 .into_iter()
                 .find_map(|monster_id| {
-                    let monster = owner.base().find_monster_by_id(monster_id)?;
+                    let monster = self
+                        .find_region(region_id)?
+                        .base()
+                        .find_monster_by_id(monster_id)?;
                     let property =
                         self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
                     (monster.is_carriage(property)
@@ -29594,7 +29594,6 @@ impl CGame {
                 .find_monster_property_by_origin_name(&record.original_name)
                 .cloned()
             else {
-                self.restore_region_owner(owner);
                 tracing::warn!(
                     player_id,
                     original_name_bytes = record.original_name.len(),
@@ -29603,7 +29602,6 @@ impl CGame {
                 return Some(());
             };
             if !(property.tamable == 1 && property.maximum_tame_attempt_count == 0) {
-                self.restore_region_owner(owner);
                 tracing::warn!(
                     player_id,
                     original_name_bytes = record.original_name.len(),
@@ -29611,62 +29609,27 @@ impl CGame {
                 );
                 return Some(());
             }
-            let Some(position) = owner
-                .base()
-                .region
-                .get_random_pos_in_range(player_x, player_y, 10, 10, context)
-                .ok()
+            let Some((monster_id, shape, health)) = self.spawn_login_carriage_monster(
+                region_id,
+                &property,
+                player_id,
+                player_x,
+                player_y,
+                player_direction,
+                record.health,
+                &record.script,
+                game_tick_milliseconds(),
+            )
             else {
-                self.restore_region_owner(owner);
-                tracing::warn!(
-                    player_id,
-                    region_id,
-                    "повозка при входе не восстановлена: позиция недоступна"
-                );
-                return Some(());
-            };
-            let Some(monster_id) = owner
-                .base_mut()
-                .add_monster(
-                    &property,
-                    position.x,
-                    position.y,
-                    -1,
-                    true,
-                    false,
-                    context.now_milliseconds(),
-                    self.area_width,
-                    self.area_height,
-                    &self.skill_factory,
-                    context,
-                )
-                .ok()
-            else {
-                self.restore_region_owner(owner);
                 tracing::warn!(player_id, region_id, "повозка при входе не создана");
                 return Some(());
             };
-            let monster = owner
-                .base_mut()
-                .find_monster_by_id_mut(monster_id)
-                .expect("carriage AddMonster публикует concrete owner");
-            monster.set_master_info(crate::gameserver::appserver::masterinfo::MasterInfo {
-                master_type: PLAYER_TYPE,
-                master_id: player_id,
-                ..crate::gameserver::appserver::masterinfo::MasterInfo::default()
-            });
-            monster
-                .move_shape_mut()
-                .shape_mut()
-                .set_direction(player_direction);
-            monster.set_hit_points(record.health);
-            monster.set_script_file(&record.script);
             Some((
                 monster_id,
-                monster.move_shape().shape().clone(),
-                monster.hit_points(),
+                shape,
+                health,
                 property.maximum_hp,
-                monster.original_name().to_vec(),
+                property.original_name.clone(),
                 property.index,
             ))
         } else {
@@ -29675,7 +29638,6 @@ impl CGame {
 
         let Some((monster_id, shape, health, maximum_hp, original_name, carriage_index)) = carriage
         else {
-            self.restore_region_owner(owner);
             return None;
         };
         if let Some(player) = self.find_player_mut(player_id) {
@@ -29693,9 +29655,10 @@ impl CGame {
         add_legacy_c_string(entered.base_mut(), &player_name);
         entered.add_ulong(health);
         entered.add_ulong(maximum_hp);
-        let around_delivery = self
-            .send_game_shape_around(owner.base(), &shape, None, &entered)
-            .ok();
+        let around_delivery = self.find_region(region_id).and_then(|owner| {
+            self.send_game_shape_around(owner.base(), &shape, None, &entered)
+                .ok()
+        });
         if recreate {
             let _ = self.send_carriage_log_snapshot(
                 player_id,
@@ -29706,7 +29669,6 @@ impl CGame {
                 7,
             );
         }
-        self.restore_region_owner(owner);
         tracing::trace!(
             player_id,
             monster_id,
@@ -30339,7 +30301,7 @@ impl CGame {
             }
         }
         self.restore_player_region_pets(expected_player_id, region_id, context);
-        self.restore_player_region_carriage(expected_player_id, region_id, context);
+        self.restore_player_region_carriage(expected_player_id, region_id);
 
         let first_login = self
             .players
