@@ -5299,7 +5299,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 name,
                 script,
             };
-            let Some(mut owner) = game.take_region_owner(region_id) else {
+            if game.find_region(region_id).is_none() {
                 let mut request = CMessage::new(0x0005_fa0b);
                 request.add_byte(1);
                 request.add_long(region_id);
@@ -5321,19 +5321,11 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 request.add_long(setup.time);
                 let _ = request.send(game, false);
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
-            };
-            let spawn = game.add_region_npc_with_clock(
-                &mut owner,
-                &setup,
-                false,
-                true,
-                runtime,
-                |runtime| runtime.now_milliseconds(),
-            );
-            game.restore_region_owner(owner);
+            }
+            let spawn = game.spawn_script_npc(region_id, &setup, || runtime.now_milliseconds());
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: spawn
-                    .ok()
+                    .and_then(Result::ok)
                     .and_then(|spawn| spawn.first_created_id)
                     .unwrap_or_default(),
             })
@@ -5433,7 +5425,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             if region_id <= 0 {
                 return Some(ScriptFunctionDispatchOutcome::Invalid);
             }
-            let Some(mut owner) = game.take_region_owner(region_id) else {
+            if game.find_region(region_id).is_none() {
                 let mut request = CMessage::new(0x0005_fa0b);
                 request.add_byte(0);
                 request.add_long(region_id);
@@ -5452,54 +5444,26 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 }
                 let _ = request.send(game, false);
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
-            };
+            }
             let Some(property) = game
                 .find_monster_property_by_origin_name(original_name)
                 .cloned()
             else {
-                game.restore_region_owner(owner);
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
-
-            let (area_width, area_height) = game.area_dimensions();
-            let width = right.wrapping_sub(left);
-            let height = bottom.wrapping_sub(top);
-            let mut first_monster_id = 0;
-            for _ in 0..count {
-                let position = owner
-                    .base()
-                    .region
-                    .get_random_pos_in_range(left, top, width, height, runtime);
-                let Ok(position) = position else {
-                    continue;
-                };
-                let spawn = owner.base_mut().add_monster(
+            let first_monster_id = game
+                .spawn_script_monsters(
+                    region_id,
                     &property,
-                    position.x,
-                    position.y,
-                    -1,
-                    true,
-                    false,
-                    runtime.now_milliseconds(),
-                    area_width,
-                    area_height,
-                    game.skill_factory(),
-                    runtime,
-                );
-                let Ok(monster_id) = spawn else {
-                    continue;
-                };
-                if first_monster_id == 0 {
-                    first_monster_id = monster_id;
-                }
-                if !script_file.is_empty()
-                    && script_file != b"0"
-                    && let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id)
-                {
-                    monster.set_script_file(script_file);
-                }
-            }
-            game.restore_region_owner(owner);
+                    count,
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    script_file,
+                    || runtime.now_milliseconds(),
+                )
+                .unwrap_or_default();
             Some(ScriptFunctionDispatchOutcome::Handled {
                 legacy_return: first_monster_id,
             })

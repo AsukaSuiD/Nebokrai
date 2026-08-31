@@ -1,10 +1,12 @@
-//! Runtime-spawn owner World response `0x7F80A`.
+//! Runtime-spawn owner World response `0x7F80A` и локальных script-команд.
 //!
 //! Источник: `gameserver.exe`/`GameServer.pdb`, `OnServerMessage` RVA
 //! `0x0009D300`, monster branch `0x0009ECDD`, base `AddMonster`
 //! `0x0007EC50`. Wire decode остаётся у message owner-а; этот модуль владеет
 //! общей RNG-последовательностью `CGame`, concrete region mutation, city-only
-//! одноаргументной guard-регистрацией и spatial entry publication.
+//! одноаргументной guard-регистрацией и spatial entry publication. Локальные
+//! `CreateNpc/CreateMonster` используют тот же owner без теневого process
+//! context; удалённый регион по-прежнему маршрутизируется самим script wire.
 
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::npc::CNpc;
@@ -12,7 +14,7 @@ use crate::gameserver::appserver::region::RegionRandomContext;
 use crate::gameserver::appserver::serverregion::{
     CServerRegion, ServerRegionMonsterContext, ServerRegionMonsterEffectsContext,
     ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnEffectsContext,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSpawnOutcome,
 };
 use crate::gameserver::appserver::shape::CShape;
 use crate::nets::netserver::message::CMessage;
@@ -131,6 +133,125 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 }
 
 impl CGame {
+    /// Локальная ветвь script `CreateNpc`: script owner выбирает регион, а
+    /// `CGame` сохраняет единую RNG-последовательность и исполняет region
+    /// entry/log effects после возврата временно извлечённого owner-а.
+    pub(crate) fn spawn_script_npc(
+        &mut self,
+        region_id: i32,
+        setup: &ServerRegionNpcSetup,
+        mut now_ms: impl FnMut() -> u32,
+    ) -> Option<Result<ServerRegionNpcSpawnOutcome, ServerRegionNpcSpawnBlock>> {
+        self.with_legacy_random_stream(|game, random| {
+            let mut owner = game.take_region_owner(region_id)?;
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let spawn = game.add_region_npc_with_clock(
+                &mut owner,
+                setup,
+                false,
+                true,
+                &mut context,
+                |_| now_ms(),
+            );
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            game.restore_region_owner(owner);
+            game.publish_runtime_spawn_effects(region_id, effects);
+            Some(spawn)
+        })
+    }
+
+    /// Локальная ветвь script `CreateMonster`: placement, monster init,
+    /// city guard hooks и fresh-entry wire принадлежат одному `CGame` owner-у.
+    #[allow(clippy::too_many_arguments, reason = "script wire передаёт literal spawn rectangle")]
+    pub(crate) fn spawn_script_monsters(
+        &mut self,
+        region_id: i32,
+        property: &crate::setup::monsterlist::MonsterProperties,
+        count: i32,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        script_file: &[u8],
+        mut now_ms: impl FnMut() -> u32,
+    ) -> Option<i32> {
+        self.with_legacy_random_stream(|game, random| {
+            let mut owner = game.take_region_owner(region_id)?;
+            let (area_width, area_height) = game.area_dimensions();
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let width = right.wrapping_sub(left);
+            let height = bottom.wrapping_sub(top);
+            let mut first_monster_id = 0;
+            for _ in 0..count {
+                let Ok(position) = owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(left, top, width, height, &mut context)
+                else {
+                    continue;
+                };
+                let Ok(monster_id) = owner.base_mut().add_monster(
+                    property,
+                    position.x,
+                    position.y,
+                    -1,
+                    true,
+                    false,
+                    now_ms(),
+                    area_width,
+                    area_height,
+                    game.skill_factory(),
+                    &mut context,
+                ) else {
+                    continue;
+                };
+                if first_monster_id == 0 {
+                    first_monster_id = monster_id;
+                }
+                if !script_file.is_empty()
+                    && script_file != b"0"
+                    && let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id)
+                {
+                    monster.set_script_file(script_file);
+                }
+            }
+            if let ServerRegionOwner::City(region) = &mut owner {
+                for monster_id in context.guard_monsters.drain(..) {
+                    region.add_gurd_monster(monster_id);
+                }
+                for refresh_index in context.guard_indices.drain(..) {
+                    region.add_guard_index(refresh_index);
+                }
+            }
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            game.restore_region_owner(owner);
+            game.publish_runtime_spawn_effects(region_id, effects);
+            Some(first_monster_id)
+        })
+    }
+
     /// Материализует monster-ветвь `0x7F80A`: discarded pre-roll, exact
     /// count-loop, script assignment после `AddMonster` и ordered entry effects.
     pub(crate) fn spawn_runtime_monsters(
