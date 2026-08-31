@@ -61,14 +61,19 @@ use super::build::{BuildBlockUpdate, BuildClientUpdate, BuildRuntimeContext};
 use super::citygate::{CCityGate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
+use super::monster::CMonster;
+use super::npc::CNpc;
 use super::organizingsystem::attackcitysys::{AttackCityMembershipBlock, CAttackCitySys};
 use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
 };
 use super::serverregion::{
-    CServerRegion, ServerRegionDecodeError, ServerReturnPlayer, ServerReturnSetupBlock,
+    CServerRegion, ServerRegionDecodeContext, ServerRegionDecodeError,
+    ServerRegionMembershipContext, ServerRegionMonsterContext, ServerRegionNpcContext,
+    ServerReturnPlayer, ServerReturnSetupBlock,
 };
+use super::shape::ShapeIdentity;
 use super::skills::skillfactory::CSkillFactory;
 use crate::setup::monsterlist::MonsterRegistry;
 use super::serverwarregion::{
@@ -127,6 +132,73 @@ pub(crate) enum CityRegionDecodeError<BaseError> {
 pub(crate) trait CityRegionDecodeContext: WarRegionDecodeContext {}
 
 impl<Context: WarRegionDecodeContext + ?Sized> CityRegionDecodeContext for Context {}
+
+struct CityGuardDecodeContext<'a, Context> {
+    context: &'a mut Context,
+    guard_monsters: &'a mut BTreeSet<i32>,
+    guard_indices: &'a mut Vec<i32>,
+}
+
+impl<Context: RegionRandomContext> RegionRandomContext for CityGuardDecodeContext<'_, Context> {
+    fn random_below(&mut self, bound: i32) -> i32 {
+        self.context.random_below(bound)
+    }
+}
+
+impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn move_shape_entered_area(&mut self, identity: ShapeIdentity) {
+        self.context.move_shape_entered_area(identity);
+    }
+}
+
+impl<Context: ServerRegionNpcContext> ServerRegionNpcContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
+        self.context.log_npc_position_failure(npc_name);
+    }
+
+    fn send_npc_entered_around(&mut self, npc: &CNpc) {
+        self.context.send_npc_entered_around(npc);
+    }
+}
+
+impl<Context: ServerRegionMonsterContext> ServerRegionMonsterContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn register_guard_monster(&mut self, monster_id: i32) {
+        self.guard_monsters.insert(monster_id);
+    }
+
+    fn send_monster_entered_around(&mut self, monster: &CMonster) {
+        self.context.send_monster_entered_around(monster);
+    }
+
+    fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
+        self.context
+            .log_monster_variant_failure(region_id, refresh_index);
+    }
+
+    fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
+        self.context.log_monster_position_failure(origin_name);
+    }
+
+    fn register_guard_index(&mut self, refresh_index: i32) {
+        if !self.guard_indices.contains(&refresh_index) {
+            self.guard_indices.push(refresh_index);
+        }
+    }
+}
+
+impl<Context: ServerRegionDecodeContext> ServerRegionDecodeContext
+    for CityGuardDecodeContext<'_, Context>
+{
+    fn now_millis(&mut self) -> u32 {
+        self.context.now_millis()
+    }
+}
 
 pub(crate) trait CityGateRuntimeContext: BuildRuntimeContext {}
 
@@ -277,6 +349,11 @@ impl CServerCityRegion {
         skill_factory: &CSkillFactory,
         context: &mut Context,
     ) -> Result<bool, CityRegionDecodeError<ServerRegionDecodeError>> {
+        let mut guard_context = CityGuardDecodeContext {
+            context,
+            guard_monsters: &mut self.guard_monsters,
+            guard_indices: &mut self.guard_indices,
+        };
         let _ = self
             .war
             .decord_from_byte_array(
@@ -287,7 +364,7 @@ impl CServerCityRegion {
                 area_height,
                 monster_registry,
                 skill_factory,
-                context,
+                &mut guard_context,
             )
             .map_err(CityRegionDecodeError::War)?;
 
