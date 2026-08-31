@@ -4,6 +4,10 @@
 //! вызов `random(10000)`, проходит список навыков в исходном порядке и выбирает
 //! первый ID, для которого бросок не больше накопленной суммы `odds`. Если
 //! сумма не покрыла бросок, назначается стандартная атака владельца.
+//! `OnChangeSkill` сохраняет выбранный concrete skill только после точной
+//! проверки `CSkill::IsRestored`, иначе вызывает
+//! `SetCurrentSkill(GetDefaultAttackSkillID())`; AI5/AI23 вместо отката ждут
+//! полный restore delay в собственном FIFO.
 //! Выбранный ID хранится каноническим `CMoveShape::current_skill_id`; конкретный
 //! владелец навыка разрешает уровень и исполняет стадии. Общий достигнутый шаг
 //! преследования сохраняет slip-порядок, задержку движения и ограничения
@@ -375,10 +379,9 @@ pub(crate) fn approach_attack_range(
 
 // ============================================================================
 // FUNCTION: CMonsterAI::OnChangeSkill
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: достигнутые владельцы навыков монстра выполняют отдельный
-// FIFO-такт взвешенного выбора; проверка недостигнутых вариантов навыков
-// остаётся RAW.
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// MATERIALIZED: weighted selector, `CSkill::IsRestored`, default-skill
+// fallback и производная задержка AI5/AI23 выполняются достигнутым FIFO caller-ом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:167

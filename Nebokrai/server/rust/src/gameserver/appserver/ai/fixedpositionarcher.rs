@@ -27,6 +27,7 @@ use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::baseattack::{
     SKILL_USAGE_REUSE_DELAY_TIME, real_distance,
 };
+use crate::gameserver::appserver::skills::kernel::skill_is_restored;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -63,9 +64,11 @@ pub(crate) fn queue_stationary_guard_idle<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Дополняет `OnChangeSkill` AI5 и наследующего его AI23: отдельный вызов
-/// часов повторяет `CSkill::IsRestored`, а событие с полным `GetRestoreTime`
-/// добавляется в хвост FIFO только для ещё не восстановленного навыка.
+/// Выполняет производный хвост `OnChangeSkill` AI5 и наследующего его AI23.
+/// `false` означает, что выбранный concrete skill не разрешился и общий owner
+/// обязан назначить default skill. Разрешённый выбор сохраняется; для ещё не
+/// восстановленного навыка полный `GetRestoreTime` дописывается в FIFO.
+/// Отдельный вызов часов повторяет точный `CSkill::IsRestored`.
 pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
     game: &CGame,
     region: &mut CServerRegion,
@@ -73,9 +76,9 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
     property: &MonsterProperties,
     selected_skill_id: u16,
     runtime: &mut Runtime,
-) {
+) -> bool {
     if !matches!(property.ai, 5 | 23) {
-        return;
+        return false;
     }
     let Some(skill) = property
         .skills
@@ -83,12 +86,12 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
         .filter(|skill| skill.id == selected_skill_id)
         .max_by_key(|skill| skill.level)
     else {
-        return;
+        return false;
     };
     let Some(skill_properties) =
         game.skill_base_properties(u32::from(skill.id), i32::from(skill.level))
     else {
-        return;
+        return false;
     };
     let delay_ms = skill_properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let last_used_ms = region
@@ -96,12 +99,13 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
         .map(|monster| monster.skill_last_used_ms(u32::from(skill.id)))
         .unwrap_or_default();
     let restored_at_ms = runtime.now_milliseconds();
-    if last_used_ms == 0 || restored_at_ms.wrapping_sub(last_used_ms) >= delay_ms {
-        return;
+    if skill_is_restored(last_used_ms, delay_ms, restored_at_ms) {
+        return true;
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.begin_active_ai_stand(delay_ms, runtime.now_milliseconds());
     }
+    true
 }
 
 /// Повторяет необычное правило `OnSearchEnemy`: выбирается ближайшая цель не

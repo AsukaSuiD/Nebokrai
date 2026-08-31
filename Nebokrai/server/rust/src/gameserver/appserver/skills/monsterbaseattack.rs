@@ -78,6 +78,7 @@ use super::corpseptomaine::{CORPSE_PTOMAINE_SKILL_ID, execute_owned_corpse_ptoma
 use super::energybolt::{ENERGY_BOLT_SKILL_ID, execute_owned_energy_bolt};
 use super::fury::{FURY_SKILL_ID, execute_owned_fury};
 use super::immediatestate::execute_monster_immediate_state;
+use super::kernel::skill_is_restored;
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
 use super::lordfastattack::LORD_FAST_ATTACK_SKILL_ID;
 use super::lordwiderangingattack::{
@@ -399,9 +400,12 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     Some(selected)
 }
 
-/// Выполняет достигнутый `CMonsterAI::OnChangeSkill` отдельным FIFO-тактом.
-/// RNG и boss-specific пороги остаются в тех же владельцах, что и первичный
-/// выбор навыка из `OnSchedule`.
+/// Выполняет точный `CMonsterAI::OnChangeSkill` отдельным FIFO-тактом. После
+/// единственного weighted RNG выбранный concrete skill проверяется через
+/// `CSkill::IsRestored`; отсутствующий или ещё не восстановленный навык общего
+/// monster AI заменяется `GetDefaultAttackSkillID`. Производные AI5/AI23
+/// сохраняют существующий навык на cooldown и ставят полный restore delay в
+/// хвост FIFO. Boss-specific пороги остаются в своих selector-owner-ах.
 pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -431,17 +435,47 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
         monster_health,
         runtime,
     );
-    if let Some(selected_skill_id) = selected {
-        queue_fixed_archer_skill_delay(
+    let Some(selected_skill_id) = selected else {
+        return false;
+    };
+    if matches!(property.ai, 5 | 23) {
+        if queue_fixed_archer_skill_delay(
             game,
             region,
             monster_id,
             &property,
             selected_skill_id,
             runtime,
-        );
+        )
+        {
+            return true;
+        }
+    } else if installed_monster_skill(&property.skills, selected_skill_id)
+        .and_then(|skill| {
+            let properties = game.skill_base_properties(
+                u32::from(selected_skill_id),
+                i32::from(skill.level),
+            )?;
+            let last_used_ms = region
+                .find_monster_by_id(monster_id)?
+                .skill_last_used_ms(u32::from(selected_skill_id));
+            Some(skill_is_restored(
+                last_used_ms,
+                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+                runtime.now_milliseconds(),
+            ))
+        })
+        .unwrap_or(false)
+    {
+        return true;
     }
-    selected.is_some()
+    let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster
+            .move_shape_mut()
+            .set_current_skill_id(Some(u32::from(default_skill_id)));
+    }
+    true
 }
 
 /// Выполняет только подтверждённый `OnSearchEnemy` обычного агрессивного
