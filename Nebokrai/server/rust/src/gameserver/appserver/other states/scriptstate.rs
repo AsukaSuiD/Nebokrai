@@ -10,6 +10,8 @@
 //! Vtable-аудит exact EXE подтверждает `CBlindState::GetRemainedTime`
 //! (`0x005F2CD0`) у AutoProtect и пяти `UseGoodsEnlarge*`, а `ImproveExp`
 //! направляет тот же двухчтенийный контракт на `0x005D5F30`.
+//! AutoProtect использует общий 8-байтный DB-кодек `CBlindState`, остальные
+//! шесть concrete vtable — 12-байтный кодек `ID + остаток + DWORD`.
 
 use super::autoprotectstate::{AutoProtectState, AUTO_PROTECT_STATE_ID};
 use super::improveexpstate::{ImproveExpState, IMPROVE_EXP_STATE_ID};
@@ -30,11 +32,14 @@ use super::usegoodsenlargemaxhpstate::{
 use super::usegoodsenlargemaxmpstate::{
     UseGoodsEnlargeMaxMpState, USE_GOODS_ENLARGE_MAX_MP_STATE_ID,
 };
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::nets::netserver::message::CMessage;
 
 const SCRIPT_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const SCRIPT_STATE_END_MESSAGE: i32 = 0x000b_fe04;
+pub(crate) const SCRIPT_STATE_TIMED_BYTES: usize = 12;
+pub(crate) const AUTO_PROTECT_STATE_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScriptStateKind {
@@ -52,6 +57,7 @@ pub(crate) struct ScriptMoveState {
     kind: ScriptStateKind,
     started_at_ms: u32,
     time_to_keep_ms: u32,
+    serialized_value: Option<u32>,
     visual_pending: bool,
 }
 
@@ -95,9 +101,69 @@ impl ScriptMoveState {
         Some(Self {
             started_at_ms,
             time_to_keep_ms: keep_time,
+            serialized_value: (!matches!(kind, ScriptStateKind::AutoProtect(_)))
+                .then_some(coefficient),
             visual_pending: !matches!(kind, ScriptStateKind::AutoProtect(_)),
             kind,
         })
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let state_id = reader.read_i32()?;
+        let keep_time = reader.read_u32()?;
+        let value = if state_id == AUTO_PROTECT_STATE_ID {
+            0
+        } else {
+            reader.read_u32()?
+        };
+        Self::from_factory(state_id, keep_time as i32, value as i32, false, 0).ok_or(
+            LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            },
+        )
+    }
+
+    pub(crate) const fn serialized_size(state_id: i32) -> Option<usize> {
+        match state_id {
+            AUTO_PROTECT_STATE_ID => Some(AUTO_PROTECT_STATE_BYTES),
+            USE_GOODS_ENLARGE_MAX_HP_STATE_ID
+            | USE_GOODS_ENLARGE_MAX_MP_STATE_ID
+            | IMPROVE_EXP_STATE_ID
+            | USE_GOODS_ENLARGE_DEF_STATE_ID
+            | USE_GOODS_ENLARGE_ELM_DEF_STATE_ID
+            | USE_GOODS_ENLARGE_FULL_MISS_STATE_ID => Some(SCRIPT_STATE_TIMED_BYTES),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
+        self.visual_pending = false;
+    }
+
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(Self::serialized_size(self.state_id()).unwrap_or(0));
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_i32(self.state_id());
+        writer.write_u32(self.client_state_time(now_milliseconds) as u32);
+        if let Some(value) = self.serialized_value {
+            writer.write_u32(value);
+        }
+        bytes
+    }
+
+    pub(crate) fn encoded_for_install(self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(Self::serialized_size(self.state_id()).unwrap_or(0));
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_i32(self.state_id());
+        writer.write_u32(self.time_to_keep_ms);
+        if let Some(value) = self.serialized_value {
+            writer.write_u32(value);
+        }
+        bytes
     }
 
     pub(crate) const fn state_id(self) -> i32 {

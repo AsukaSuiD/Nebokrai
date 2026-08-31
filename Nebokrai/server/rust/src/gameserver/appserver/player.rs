@@ -5830,6 +5830,15 @@ impl CPlayer {
         self.move_shape.state_count_by_state_id(state_id)
     }
 
+    pub(crate) fn activate_loaded_script_move_states(
+        &mut self,
+        now_ms: u32,
+    ) -> Vec<super::scriptstate::ScriptMoveState> {
+        let states = self.move_shape.activate_loaded_script_states(now_ms);
+        self.auto_protected = states.iter().any(|state| state.is_auto_protect());
+        states
+    }
+
     pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::scriptstate::ScriptMoveState> {
         let removed = self
             .move_shape

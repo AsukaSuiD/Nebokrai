@@ -30133,6 +30133,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_extended_states(login_tick_ms);
+        let loaded_script_move_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_script_move_states(login_tick_ms);
         let loaded_appellation_states = self
             .players
             .get_mut(&expected_player_id)
@@ -30306,6 +30311,9 @@ impl CGame {
         }
         for state in &loaded_extended_states {
             self.send_extended_state_visual(expected_player_id, state, true, login_tick_ms);
+        }
+        for state in loaded_script_move_states {
+            let _ = self.send_script_move_state_visual(expected_player_id, state, true);
         }
         for state in &loaded_change_body_states {
             self.send_change_body_visual(expected_player_id, state, true);

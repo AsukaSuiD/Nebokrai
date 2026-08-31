@@ -16,8 +16,8 @@
 //! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
 //! паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
-//! Загруженный `CStrikeState` хранится типизированно поверх неизменяемой
-//! 20-байтной legacy-записи и непосредственно участвует в запрете предметов.
+//! `CStrikeState` хранится типизированно в общей 8-байтной DB-записи,
+//! участвует в запретах движения и боя и удаляется при строгом истечении.
 //! Рыцарский удар хранит здесь единственную каноническую блокировку движения
 //! и боя; замена, истечение и снятие очищением меняют те же счётчики.
 //! Подготовка яростного удара также имеет здесь единственный типизированный
@@ -886,6 +886,22 @@ impl CMoveShape {
         for state in &self.undead_states {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
+        let mut script_occurrences = BTreeMap::<i32, usize>::new();
+        for state in &self.script_states {
+            let state_id = state.state_id();
+            let occurrence = script_occurrences.entry(state_id).or_default();
+            let offset = known_state_record_offsets(&payload)
+                .into_iter()
+                .filter(|offset| read_u32(&payload, *offset) == Some(state_id as u32))
+                .nth(*occurrence);
+            *occurrence += 1;
+            let record = state.encoded(&mut timed_state_now_milliseconds);
+            if let Some(offset) = offset
+                && let Some(destination) = payload.get_mut(offset..offset + record.len())
+            {
+                destination.copy_from_slice(&record);
+            }
+        }
         if let Some(state) = self.leaf_cut_state {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
@@ -1107,6 +1123,11 @@ impl CMoveShape {
                 .serialized_span()
                 .is_some_and(|(offset, _)| known_offsets.contains(&offset))
         });
+        self.script_states = known_offsets
+            .iter()
+            .copied()
+            .filter_map(|offset| ScriptMoveState::decode(&states, offset).ok())
+            .collect();
         self.periodic_attack_order.shift_remove(&LEAF_CUT_STATE_ID);
         self.leaf_cut_state = known_offsets
             .iter()
@@ -1708,6 +1729,7 @@ impl CMoveShape {
             sufferer_is_gm,
             started_at_ms,
         )?;
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.script_states.push(state);
         Some(state)
     }
@@ -3743,7 +3765,7 @@ impl CMoveShape {
             .script_states
             .iter()
             .position(|state| state.state_id() == state_id)?;
-        Some(self.script_states.remove(index))
+        self.remove_script_state_at(index)
     }
 
     pub(crate) fn script_states(&self) -> &[ScriptMoveState] {
@@ -3755,7 +3777,29 @@ impl CMoveShape {
     }
 
     pub(crate) fn remove_script_state_at(&mut self, index: usize) -> Option<ScriptMoveState> {
-        (index < self.script_states.len()).then(|| self.script_states.remove(index))
+        let state = self.script_states.get(index).copied()?;
+        let occurrence = self.script_states[..index]
+            .iter()
+            .filter(|candidate| candidate.state_id() == state.state_id())
+            .count();
+        let offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(state.state_id() as u32))
+            .nth(occurrence);
+        let removed = self.script_states.remove(index);
+        if let Some(offset) = offset
+            && let Some(size) = ScriptMoveState::serialized_size(state.state_id())
+        {
+            self.remove_serialized_state_record_at(offset, size);
+        }
+        Some(removed)
+    }
+
+    pub(crate) fn activate_loaded_script_states(&mut self, now_ms: u32) -> Vec<ScriptMoveState> {
+        for state in &mut self.script_states {
+            state.activate_loaded(now_ms);
+        }
+        self.script_states.clone()
     }
 
     pub(crate) fn take_pending_script_state_visuals(&mut self) -> Vec<ScriptMoveState> {
@@ -4837,6 +4881,10 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             TIAN_SHEN_XIA_FAN_STATE_ID => TIAN_SHEN_XIA_FAN_STATE_BYTES,
             WANGSHENG_STATE_ID => WANGSHENG_STATE_BYTES,
             super::skills::poisonarrow::POISON_ARROW_SKILL_ID => POISON_ARROW_STATE_BYTES,
+            state_id if ScriptMoveState::serialized_size(state_id as i32).is_some() => {
+                ScriptMoveState::serialized_size(state_id as i32)
+                    .expect("проверенный script-state ID")
+            }
             RIDE_STATE_ID => {
                 let name_start = cursor.saturating_add(16);
                 let Some(name) = payload.get(name_start..) else {
