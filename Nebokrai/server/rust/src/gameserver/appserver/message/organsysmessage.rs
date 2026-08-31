@@ -21,6 +21,9 @@
 //! region spawn owners без прежних monster/spawn callbacks runtime-а.
 //! `0x7FE24` аналогично передаёт полный city player/gate проход `CGame`, не
 //! оставляя возврат игроков внешнему callback-у.
+//! Обновление списков городских и деревенских contender-ов также читает
+//! faction, публикует `0xBFF29` и меняет `0xBFF28` через canonical `CGame`,
+//! не делегируя эти четыре операции process runtime-у.
 //! Village timeout сохраняет `0x60136 → GS0240`: первый эффект отправляет
 //! `CGame`, второй остаётся у достигнутого war-log sink.
 //! Village end передаёт `goods × players` snapshot владельцу `CGame` и
@@ -1623,22 +1626,21 @@ enum ContendSchedule<'a> {
     Village(&'a CVillageWarSys),
 }
 
-enum ContendProjectionError<RuntimeError> {
+enum ContendProjectionError {
     Schedule(AttackCityMembershipBlock),
-    Runtime(RuntimeError),
 }
 
-struct ContendProjectionContext<'a, Runtime> {
-    runtime: &'a mut Runtime,
+struct ContendProjectionContext<'a> {
+    game: &'a mut CGame,
     schedule: ContendSchedule<'a>,
     war_number: i32,
 }
 
-impl<Runtime: WarRegionContext> WarRegionContext for ContendProjectionContext<'_, Runtime> {
-    type MembershipError = ContendProjectionError<Runtime::MembershipError>;
+impl WarRegionContext for ContendProjectionContext<'_> {
+    type MembershipError = ContendProjectionError;
 
     fn player_faction_id(&mut self, player_id: i32) -> Option<i32> {
-        self.runtime.player_faction_id(player_id)
+        self.game.find_player(player_id).map(|player| player.faction_id())
     }
 
     fn is_apply_war_faction(&mut self, faction_id: i32) -> Result<bool, Self::MembershipError> {
@@ -1653,17 +1655,34 @@ impl<Runtime: WarRegionContext> WarRegionContext for ContendProjectionContext<'_
     }
 
     fn send_contend_time(&mut self, player_id: i32, time: i32) {
-        self.runtime.send_contend_time(player_id, time);
+        let mut message = CMessage::new(0x000b_ff29);
+        message.base_mut().add_long(time);
+        let delivery = message.send_to_player(self.game.net_server(), player_id);
+        tracing::trace!(player_id, time, delivery, "отправлено время war contender-а");
     }
 
     fn set_global_player_contend_state(&mut self, player_id: i32, state: bool) {
-        self.runtime
-            .set_global_player_contend_state(player_id, state);
+        let region = self
+            .game
+            .find_player(player_id)
+            .and_then(|player| player.server_region_id())
+            .and_then(|region_id| self.game.find_region(region_id))
+            .map(|owner| owner.base().clone());
+        if let Some(region) = region {
+            let _ = self
+                .game
+                .publish_war_player_contend_state(&region, player_id, state);
+        }
     }
 
     fn set_region_player_contend_state(&mut self, region_id: i32, player_id: i32, state: bool) {
-        self.runtime
-            .set_region_player_contend_state(region_id, player_id, state);
+        if self
+            .game
+            .find_player(player_id)
+            .is_some_and(|player| player.server_region_id() == Some(region_id))
+        {
+            self.set_global_player_contend_state(player_id, state);
+        }
     }
 }
 
@@ -1685,22 +1704,26 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
     }
 
     fn update_contenders(&mut self, region_id: i32, schedule: ContendSchedule<'_>) {
-        let Some(region) = self.game.find_region_mut(region_id) else {
+        let Some(mut owner) = self.game.take_region_owner(region_id) else {
             return;
         };
-        let war = match region {
+        let war = match &mut owner {
             ServerRegionOwner::Village(region) => &mut region.war,
             ServerRegionOwner::City(region) => &mut region.war,
             ServerRegionOwner::Nation(region) => &mut region.war,
             ServerRegionOwner::GodsBattle(region) => &mut region.war,
-            ServerRegionOwner::Base(_) | ServerRegionOwner::Country(_) => return,
+            ServerRegionOwner::Base(_) | ServerRegionOwner::Country(_) => {
+                self.game.restore_region_owner(owner);
+                return;
+            }
         };
         let mut context = ContendProjectionContext {
-            runtime: self.runtime,
+            game: self.game,
             schedule,
             war_number: war.base.get_war_number(),
         };
         let _ = war.update_contend_player(&mut context);
+        self.game.restore_region_owner(owner);
     }
 
     fn kick_out_four_nation_players(
