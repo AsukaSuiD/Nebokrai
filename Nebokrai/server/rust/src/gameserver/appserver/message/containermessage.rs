@@ -22,6 +22,9 @@ use crate::gameserver::appserver::container::cgoodsshadowcontainer::{
     ShadowPresenceReport, ShadowRemovedReport,
 };
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::VolumeGoodsAddOutcome;
+use crate::gameserver::appserver::cs2ccontainerobjectmove::{
+    CS2CContainerObjectMove, ContainerObjectMoveOperation,
+};
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::player::{
@@ -2086,23 +2089,24 @@ fn send_enhancement_transfer_moved(
     request: ContainerObjectMoveRequest,
     transfer: &EnhancementTransferReport,
 ) -> i32 {
-    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
-    message.add_byte(1);
-    message.add_long(transfer.source.container_type);
-    message.add_long(transfer.source.container_id);
-    message.add_long(transfer.source.container_extend_id);
-    message.add_ulong(transfer.source.goods_position);
-    message.add_long(request.destination_container_type);
-    message.add_long(request.destination_container_id);
-    message.add_long(request.destination_container_extend_id);
-    message.add_ulong(request.destination_position);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(transfer.goods.ex_id);
-    message.add_ulong(request.amount);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(transfer.goods.ex_id);
-    message.add_ulong(request.amount);
-    message.send_to_player(game.net_server(), player_id)
+    let mut message = CS2CContainerObjectMove::default();
+    message.set_operation(ContainerObjectMoveOperation::MoveObject);
+    message.set_source_container(
+        transfer.source.container_type,
+        transfer.source.container_id,
+        transfer.source.goods_position,
+    );
+    message.set_source_container_extend_id(transfer.source.container_extend_id);
+    message.set_destination_container(
+        request.destination_container_type,
+        request.destination_container_id,
+        request.destination_position,
+    );
+    message.set_destination_container_extend_id(request.destination_container_extend_id);
+    message.set_source_object(GOODS_OBJECT_TYPE, transfer.goods.ex_id, request.amount);
+    message.set_destination_object(GOODS_OBJECT_TYPE, transfer.goods.ex_id);
+    message.set_destination_object_amount(request.amount);
+    message.send_to_player(game, player_id)
 }
 
 fn send_auction_listing_move_moved(
@@ -2111,23 +2115,24 @@ fn send_auction_listing_move_moved(
     request: ContainerObjectMoveRequest,
     transfer: &AuctionListingTransferReport,
 ) -> i32 {
-    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
-    message.add_byte(1);
-    message.add_long(request.source_container_type);
-    message.add_long(request.source_container_id);
-    message.add_long(request.source_container_extend_id);
-    message.add_ulong(request.source_position);
-    message.add_long(request.destination_container_type);
-    message.add_long(request.destination_container_id);
-    message.add_long(request.destination_container_extend_id);
-    message.add_ulong(request.destination_position);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(transfer.goods.ex_id);
-    message.add_ulong(request.amount);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(transfer.goods.ex_id);
-    message.add_ulong(request.amount);
-    message.send_to_player(game.net_server(), player_id)
+    let mut message = CS2CContainerObjectMove::default();
+    message.set_operation(ContainerObjectMoveOperation::MoveObject);
+    message.set_source_container(
+        request.source_container_type,
+        request.source_container_id,
+        request.source_position,
+    );
+    message.set_source_container_extend_id(request.source_container_extend_id);
+    message.set_destination_container(
+        request.destination_container_type,
+        request.destination_container_id,
+        request.destination_position,
+    );
+    message.set_destination_container_extend_id(request.destination_container_extend_id);
+    message.set_source_object(GOODS_OBJECT_TYPE, transfer.goods.ex_id, request.amount);
+    message.set_destination_object(GOODS_OBJECT_TYPE, transfer.goods.ex_id);
+    message.set_destination_object_amount(request.amount);
+    message.send_to_player(game, player_id)
 }
 
 fn send_auction_listing_withdrawal_moved(
@@ -2145,23 +2150,24 @@ fn send_auction_listing_withdrawal_moved(
     else {
         unreachable!("withdrawal move packet требует успешный destination add")
     };
-    let mut message = CMessage::new(CLIENT_CONTAINER_OBJECT_MOVE);
-    message.add_byte(1);
-    message.add_long(request.source_container_type);
-    message.add_long(request.source_container_id);
-    message.add_long(request.source_container_extend_id);
-    message.add_ulong(request.source_position);
-    message.add_long(request.destination_container_type);
-    message.add_long(request.destination_container_id);
-    message.add_long(request.destination_container_extend_id);
-    message.add_ulong(*destination_position);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(withdrawal.goods.ex_id);
-    message.add_ulong(request.amount);
-    message.add_long(GOODS_OBJECT_TYPE);
-    message.base_mut().add_guid(destination_goods.ex_id);
-    message.add_ulong(*amount);
-    message.send_to_player(game.net_server(), player_id)
+    let mut message = CS2CContainerObjectMove::default();
+    message.set_operation(ContainerObjectMoveOperation::MoveObject);
+    message.set_source_container(
+        request.source_container_type,
+        request.source_container_id,
+        request.source_position,
+    );
+    message.set_source_container_extend_id(request.source_container_extend_id);
+    message.set_destination_container(
+        request.destination_container_type,
+        request.destination_container_id,
+        *destination_position,
+    );
+    message.set_destination_container_extend_id(request.destination_container_extend_id);
+    message.set_source_object(GOODS_OBJECT_TYPE, withdrawal.goods.ex_id, request.amount);
+    message.set_destination_object(GOODS_OBJECT_TYPE, destination_goods.ex_id);
+    message.set_destination_object_amount(*amount);
+    message.send_to_player(game, player_id)
 }
 
 pub(crate) fn send_enhancement_goods_collected(
