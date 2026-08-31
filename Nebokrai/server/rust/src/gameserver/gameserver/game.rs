@@ -610,6 +610,7 @@ use crate::gameserver::appserver::container::cfairycontainer::{
     FairySyncretizeReport,
 };
 use crate::gameserver::appserver::container::cgoodscontainer::GoodsStackMergeOutcome;
+use crate::gameserver::appserver::container::cgoodsshadowcontainer::ShadowSourceChangeOutcome;
 use crate::gameserver::appserver::container::cvolumelimitgoodscontainer::{
     VolumeGoodsAddOutcome, VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome, VolumeGoodsSwapRemoval,
 };
@@ -20155,6 +20156,50 @@ impl CGame {
         message.send_to_player(self, player_id)
     }
 
+    fn send_shadow_source_change_to_session(
+        &self,
+        goods: ShapeIdentity,
+        change: &ShadowSourceChangeOutcome,
+    ) -> Vec<i32> {
+        let presence = match change {
+            ShadowSourceChangeOutcome::AmountChanged(presence) => presence,
+            ShadowSourceChangeOutcome::Removed(removed) => &removed.presence,
+            ShadowSourceChangeOutcome::Missing | ShadowSourceChangeOutcome::Unchanged => {
+                return Vec::new();
+            }
+        };
+        let player_ids = self
+            .session_factory
+            .session_player_ids(presence.owner_id)
+            .unwrap_or_default();
+        match change {
+            ShadowSourceChangeOutcome::AmountChanged(presence) => {
+                let mut message = CS2CContainerObjectAmountChange::default();
+                message.set_source_container(
+                    presence.owner_type,
+                    presence.owner_id,
+                    presence.position,
+                );
+                message.set_source_container_extend_id(presence.container_extend_id);
+                message.set_object(goods.object_type, goods.ex_id);
+                message.set_object_amount(presence.record.goods_amount);
+                player_ids
+                    .into_iter()
+                    .map(|player_id| message.send_to_player(self, player_id))
+                    .collect()
+            }
+            ShadowSourceChangeOutcome::Removed(removed) => player_ids
+                .into_iter()
+                .map(|player_id| {
+                    send_enhancement_shadow_deleted(self, player_id, goods, removed)
+                })
+                .collect(),
+            ShadowSourceChangeOutcome::Missing | ShadowSourceChangeOutcome::Unchanged => {
+                unreachable!("terminal shadow outcomes отфильтрованы выше")
+            }
+        }
+    }
+
     fn publish_equipment_upgrade_update(
         &self,
         player: &CPlayer,
@@ -20253,7 +20298,16 @@ impl CGame {
             false
         };
         if source_removed {
-            let _ = plug.upgrade_container_mut().on_source_removed(goods_id, 1);
+            let shadow = plug.upgrade_container_mut().on_source_removed(goods_id, 1);
+            let session_deliveries =
+                self.send_shadow_source_change_to_session(identity, &shadow.shadow);
+            tracing::trace!(
+                player_id = player.player_id(),
+                ?cell,
+                ?identity,
+                ?session_deliveries,
+                "изменение shadow-расходника улучшения отправлено в сессию"
+            );
         }
         tracing::trace!(
             player_id = player.player_id(),
@@ -22801,14 +22855,17 @@ impl CGame {
                 });
             if let Some(consumption) = player.remove_packet_goods_by_id(goods_id, 1) {
                 let external_deliveries = self.send_player_packet_consumption(&consumption);
-                let _ = plug
+                let shadow = plug
                     .upgrade_container_mut()
                     .on_source_removed(Some(goods_id), 1);
+                let session_deliveries =
+                    self.send_shadow_source_change_to_session(identity, &shadow.shadow);
                 tracing::trace!(
                     player_id = player.player_id(),
                     ?cell,
                     ?identity,
                     ?external_deliveries,
+                    ?session_deliveries,
                     "израсходован shadow-камень DaKong"
                 );
             } else {

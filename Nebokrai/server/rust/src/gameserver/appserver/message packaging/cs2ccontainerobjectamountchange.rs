@@ -3,8 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/message packaging/cs2ccontainerobjectamountchange.cpp`.
 //! Сохраняется полный wire: source container type/id/extend/position, object
-//! type/GUID и итоговое amount. Текущий достигнутый caller отправляет packet
-//! одному player; `SendToSession` остаётся за session fan-out owner-ом.
+//! type/GUID и итоговое amount. Прямая доставка идёт одному player, а
+//! shadow-callback-и выполняют `SendToSession` через ordered plug registry
+//! `CSessionFactory`.
 
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;

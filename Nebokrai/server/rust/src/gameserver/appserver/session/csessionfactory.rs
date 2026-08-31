@@ -1241,6 +1241,21 @@ impl CSessionFactory {
             })
     }
 
+    /// Получатели legacy `SendToSession` в исходном порядке plug-ов. Не-player
+    /// владельцы не имеют клиентского соединения и в рассылку не входят.
+    pub(crate) fn session_player_ids(&self, session_id: i32) -> Option<Vec<i32>> {
+        Some(
+            self.sessions
+                .get(&session_id)?
+                .plug_ids_storage()
+                .iter()
+                .filter_map(|plug_id| self.plugs.get(plug_id))
+                .filter(|plug| plug.has_owner(400, plug.owner_id()))
+                .map(CPlug::owner_id)
+                .collect(),
+        )
+    }
+
     /// Exact registry half of `query_session_by_owner`: legacy traversal is
     /// pointer-based, while IDs here remain deterministic owner relations.
     pub(crate) fn query_session_id_by_owner(&self, owner_type: i32, owner_id: i32) -> Option<i32> {
