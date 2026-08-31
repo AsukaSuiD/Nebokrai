@@ -17889,7 +17889,7 @@ impl CGame {
     }
 
     pub(crate) fn set_player_pet_mode(&mut self, player_id: i32, mode: i32) -> Option<usize> {
-        let region_id = {
+        let (region_id, pets) = {
             let player = self.players.get_mut(&player_id)?;
             if player.in_changing_server() || player.in_changing_region() {
                 return None;
@@ -17897,22 +17897,24 @@ impl CGame {
             if !player.set_current_pets_mode(mode) {
                 return Some(0);
             }
-            player.server_region_id()?
+            (player.server_region_id()?, player.active_pets().to_vec())
         };
         let mut owner = self.take_region_owner(region_id)?;
-        let changed = owner.base_mut().set_owned_pets_mode(player_id, mode);
+        let changed = owner.base_mut().set_listed_pets_mode(&pets, mode);
         self.restore_region_owner(owner);
         Some(changed)
     }
 
     pub(crate) fn set_player_pets_action(&mut self, player_id: i32, action: i32) -> Option<usize> {
-        let player = self.players.get(&player_id)?;
-        if player.in_changing_server() || player.in_changing_region() {
-            return None;
-        }
-        let region_id = player.server_region_id()?;
+        let (region_id, pets) = {
+            let player = self.players.get(&player_id)?;
+            if player.in_changing_server() || player.in_changing_region() {
+                return None;
+            }
+            (player.server_region_id()?, player.active_pets().to_vec())
+        };
         let mut owner = self.take_region_owner(region_id)?;
-        let changed = owner.base_mut().set_owned_pets_action(player_id, action);
+        let changed = owner.base_mut().set_listed_pets_action(&pets, action);
         self.restore_region_owner(owner);
         Some(changed)
     }

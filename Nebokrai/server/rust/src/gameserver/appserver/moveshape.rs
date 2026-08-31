@@ -5552,34 +5552,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::SetCurrentPetAction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2891
-// RVA: 0x000CE6B0
-// ADDRESS: 004ce6b0
-// PROTOTYPE: void __thiscall SetCurrentPetAction(PET_ACTION param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMoveShape::SetCurrentPetsMode
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2952
-// RVA: 0x000CE8C0
-// ADDRESS: 004ce8c0
-// PROTOTYPE: void __thiscall SetCurrentPetsMode(PET_SEARCH_ENEMY_MODE param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CMoveShape::DelExState
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

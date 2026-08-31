@@ -125,6 +125,10 @@ impl MonsterAiBinding {
         self.carriage
     }
 
+    pub(crate) const fn has_pet(self) -> bool {
+        self.pet
+    }
+
     /// Эквивалент `CMonster::GetAI`: до назначения валидного хозяина-игрока
     /// используется первичный AI, после — carriage либо pet. Отсутствующий
     /// вспомогательный владелец сохраняется как `None`, как нулевой C++ pointer.

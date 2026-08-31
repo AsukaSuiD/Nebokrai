@@ -556,6 +556,10 @@ impl CMonster {
         }
     }
 
+    pub(crate) fn has_pet_ai(&self) -> bool {
+        self.ai_binding.is_some_and(MonsterAiBinding::has_pet)
+    }
+
     /// Exact `CMonster::InitSkills`: базовая защита добавляется первой,
     /// затем исходный бессодержательный `random(skill_count)` расходует RNG,
     /// после чего property skills проходят в wire-порядке. `odds` на этой

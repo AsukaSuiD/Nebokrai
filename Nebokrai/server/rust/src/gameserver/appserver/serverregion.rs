@@ -2135,25 +2135,47 @@ impl CServerRegion {
             .collect()
     }
 
-    pub(crate) fn set_owned_pets_mode(&mut self, player_id: i32, mode: i32) -> usize {
+    pub(crate) fn set_listed_pets_mode(
+        &mut self,
+        pets: &[super::moveshape::MoveShapePet],
+        mode: i32,
+    ) -> usize {
         let mut changed = 0usize;
-        self.owned_monsters.for_each_mut(|_, monster| {
-            if monster.is_owned_pet(player_id) {
-                monster.set_pet_mode(mode);
-                changed = changed.wrapping_add(1);
+        for pet in pets {
+            if pet.object_type != MONSTER_TYPE {
+                continue;
             }
-        });
+            let Some(monster) = self.owned_monsters.get_mut(&pet.id) else {
+                continue;
+            };
+            if !monster.has_pet_ai() {
+                continue;
+            }
+            monster.set_pet_mode(mode);
+            changed = changed.wrapping_add(1);
+        }
         changed
     }
 
-    pub(crate) fn set_owned_pets_action(&mut self, player_id: i32, action: i32) -> usize {
+    pub(crate) fn set_listed_pets_action(
+        &mut self,
+        pets: &[super::moveshape::MoveShapePet],
+        action: i32,
+    ) -> usize {
         let mut changed = 0usize;
-        self.owned_monsters.for_each_mut(|_, monster| {
-            if monster.is_owned_pet(player_id) {
-                monster.set_pet_action(action);
-                changed = changed.wrapping_add(1);
+        for pet in pets {
+            if pet.object_type != MONSTER_TYPE {
+                continue;
             }
-        });
+            let Some(monster) = self.owned_monsters.get_mut(&pet.id) else {
+                continue;
+            };
+            if !monster.has_pet_ai() {
+                continue;
+            }
+            monster.set_pet_action(action);
+            changed = changed.wrapping_add(1);
+        }
         changed
     }
 
@@ -2179,7 +2201,7 @@ impl CServerRegion {
             let Some(monster) = self.owned_monsters.get_mut(&pet.id) else {
                 continue;
             };
-            if monster.active_ai().is_none() {
+            if !monster.has_pet_ai() {
                 continue;
             }
             monster.set_pet_target(target);
