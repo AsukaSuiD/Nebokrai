@@ -26,7 +26,8 @@
 //! не делегируя эти четыре операции process runtime-у.
 //! FourNation declare и refresh также принадлежат concrete Nation owner-у:
 //! первый сбрасывает подтверждённое боевое состояние, второй восстанавливает
-//! четыре исходных magic-stone NPC только при отсутствии каждого имени.
+//! четыре исходных magic-stone NPC только при отсутствии каждого имени;
+//! concrete clock/log/spatial spawn-effects выполняет canonical `CGame`.
 //! Village timeout сохраняет `0x60136 → GS0240`: первый эффект отправляет
 //! `CGame`, второй остаётся у достигнутого war-log sink.
 //! Village end передаёт `goods × players` snapshot владельцу `CGame` и
@@ -1778,46 +1779,8 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
             name: self.game.get_string_by_id(name_id).to_vec(),
             script: Vec::new(),
         });
-        let (area_width, area_height) = self.game.area_dimensions();
-        let Some(owner) = self.game.take_region_owner(region_id) else {
-            return;
-        };
-        let ServerRegionOwner::Nation(mut region) = owner else {
-            self.game.restore_region_owner(owner);
-            return;
-        };
-        for setup in setups {
-            match region.war.base.find_npc_by_name(&setup.name) {
-                Ok(Some(_)) => continue,
-                Err(block) => {
-                    tracing::warn!(
-                        region_id,
-                        matches = block.matches,
-                        name = %String::from_utf8_lossy(&setup.name),
-                        "имя magic-stone NPC неоднозначно при refresh"
-                    );
-                    continue;
-                }
-                Ok(None) => {}
-            }
-            let spawn = region.war.base.add_npc(
-                &setup,
-                true,
-                true,
-                self.runtime.now_milliseconds(),
-                area_width,
-                area_height,
-                self.runtime,
-            );
-            tracing::trace!(
-                region_id,
-                name = %String::from_utf8_lossy(&setup.name),
-                ?spawn,
-                "обработано восстановление magic-stone NPC"
-            );
-        }
         self.game
-            .restore_region_owner(ServerRegionOwner::Nation(region));
+            .refresh_nation_magic_stone_npcs(region_id, setups, self.runtime);
     }
 
     fn kick_out_four_nation_players(

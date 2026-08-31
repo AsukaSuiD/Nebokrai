@@ -41,6 +41,9 @@
 //! Nation slot вызывает отдельный `ServerNationRegion::AI`: base-region pass,
 //! magic-stone replacements и altar contender completion выполняются одним
 //! reached проходом с morale, player-state, network и NPC spawn effects.
+//! OrganSys refresh четырёх magic-stone NPC также замкнут в `CGame`: process
+//! runtime сохраняет только общий RNG, а clock, `GS0233`, canonical snapshot и
+//! spatial `0xBF502` исполняются владельцем региона и transport-а.
 //! Для всех concrete region owner-ов секундный monster refresh и следующий
 //! weather transition выполняются самим `CGame`. Затем row-major area scan
 //! вызывает concrete `CArea::AI`, разрешает active identities, классифицирует
@@ -701,6 +704,7 @@ use crate::gameserver::appserver::ai::pet::{
 use crate::gameserver::appserver::monster::{
     CMonster, MonsterExperienceFormula, MonsterKillingAttack,
 };
+use crate::gameserver::appserver::npc::CNpc;
 use crate::gameserver::appserver::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapeResolver, UndeadState,
 };
@@ -782,8 +786,8 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionDecodeError, ServerRegionMembershipContext, ServerRegionMonsterContext,
     ServerRegionMonsterEffectsContext, ServerRegionMonsterRectBlock,
     ServerRegionMonsterSpawnEffectsContext, ServerRegionNpcContext, ServerRegionNpcSetup,
-    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome, ServerRegionWeather,
-    ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
+    ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSpawnOutcome,
+    ServerRegionWeather, ServerRegionWeatherTick, ServerReturnPlayer, ServerReturnSetupBlock,
 };
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::{
@@ -3612,6 +3616,57 @@ impl<Runtime: RegionRandomContext> ServerRegionMonsterContext
         if !self.guard_indices.contains(&refresh_index) {
             self.guard_indices.push(refresh_index);
         }
+    }
+}
+
+enum GameNationNpcRefreshEffect {
+    Log(Vec<u8>),
+    NpcEntry(CShape, CMessage),
+}
+
+struct GameNationNpcRefreshContext<'a, Runtime> {
+    runtime: &'a mut Runtime,
+    position_failure_template: &'a [u8],
+    effects: Vec<GameNationNpcRefreshEffect>,
+}
+
+impl<Runtime: RegionRandomContext> RegionRandomContext
+    for GameNationNpcRefreshContext<'_, Runtime>
+{
+    fn random_below(&mut self, bound: i32) -> i32 {
+        self.runtime.random_below(bound)
+    }
+}
+
+impl<Runtime: RegionRandomContext> ServerRegionNpcSpawnEffectsContext
+    for GameNationNpcRefreshContext<'_, Runtime>
+{
+    fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
+        self.effects.push(GameNationNpcRefreshEffect::Log(
+            format_legacy_mixed(
+                self.position_failure_template,
+                &[LegacyFormatArgument::Bytes(npc_name)],
+                0xff,
+            ),
+        ));
+    }
+}
+
+impl<Runtime: RegionRandomContext> ServerRegionNpcContext
+    for GameNationNpcRefreshContext<'_, Runtime>
+{
+    fn send_npc_entered_around(&mut self, npc: &CNpc) {
+        let identity = npc.move_shape().shape().identity();
+        let Some(payload) = npc.encode_client_snapshot(true) else {
+            return;
+        };
+        let Some(message) = CGame::shape_enter_message(identity, &payload) else {
+            return;
+        };
+        self.effects.push(GameNationNpcRefreshEffect::NpcEntry(
+            npc.move_shape().shape().clone(),
+            message,
+        ));
     }
 }
 
@@ -46245,6 +46300,89 @@ impl CGame {
                     }
                 }
             }
+        }
+    }
+
+    /// Замыкает exact `ServerNationRegion::OnRefreshRegion` tail: каждый из
+    /// четырёх magic-stone setup-ов проверяется и при отсутствии создаётся с
+    /// `remember=true, sendAround=true`. Process runtime даёт только общий RNG;
+    /// clock, localized log и spatial `0xBF502` принадлежат `CGame`.
+    pub(crate) fn refresh_nation_magic_stone_npcs<Runtime: RegionRandomContext>(
+        &mut self,
+        region_id: i32,
+        setups: [ServerRegionNpcSetup; 4],
+        runtime: &mut Runtime,
+    ) {
+        let (area_width, area_height) = self.area_dimensions();
+        let position_failure_template = self.get_string_by_id(b"GS0233").to_vec();
+        for setup in setups {
+            let Some(owner) = self.take_region_owner(region_id) else {
+                return;
+            };
+            let ServerRegionOwner::Nation(mut region) = owner else {
+                self.restore_region_owner(owner);
+                return;
+            };
+            match region.war.base.find_npc_by_name(&setup.name) {
+                Ok(Some(_)) => {
+                    self.restore_region_owner(ServerRegionOwner::Nation(region));
+                    continue;
+                }
+                Err(block) => {
+                    tracing::warn!(
+                        region_id,
+                        matches = block.matches,
+                        name = %String::from_utf8_lossy(&setup.name),
+                        "имя magic-stone NPC неоднозначно при refresh"
+                    );
+                    self.restore_region_owner(ServerRegionOwner::Nation(region));
+                    continue;
+                }
+                Ok(None) => {}
+            }
+            let mut context = GameNationNpcRefreshContext {
+                runtime,
+                position_failure_template: &position_failure_template,
+                effects: Vec::new(),
+            };
+            let spawn = region.war.base.add_npc(
+                &setup,
+                true,
+                true,
+                game_tick_milliseconds(),
+                area_width,
+                area_height,
+                &mut context,
+            );
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            self.restore_region_owner(ServerRegionOwner::Nation(region));
+
+            for effect in effects {
+                match effect {
+                    GameNationNpcRefreshEffect::Log(text) => add_game_log_text(&text),
+                    GameNationNpcRefreshEffect::NpcEntry(origin, message) => {
+                        let Some(owner) = self.find_region(region_id) else {
+                            return;
+                        };
+                        if let Err(error) =
+                            self.send_game_shape_around(owner.base(), &origin, None, &message)
+                        {
+                            tracing::warn!(
+                                region_id,
+                                ?error,
+                                "не опубликован вход magic-stone NPC"
+                            );
+                        }
+                    }
+                }
+            }
+            tracing::trace!(
+                region_id,
+                name = %String::from_utf8_lossy(&setup.name),
+                ?spawn,
+                "обработано восстановление magic-stone NPC"
+            );
         }
     }
 
