@@ -5105,6 +5105,7 @@ impl CPlayer {
         mut properties: PlayerCombatProperties,
         coefficients: GlobePlayerPropertyCoefficients,
         goods_factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
     ) -> PlayerStatePropertyPass {
         if let Some(state) = self.move_shape.persistent_agility_family_state() {
             properties = state.apply_to_player(properties);
@@ -5144,6 +5145,9 @@ impl CPlayer {
         }
         for state in self.move_shape.battle_fairy_attribute_states() {
             properties = state.apply_to_player(properties);
+        }
+        if let Some(state) = self.move_shape.tian_shen_xia_fan_state() {
+            properties = state.apply_to_player(properties, skill_factory);
         }
         let (mut properties, script_visuals) = self.apply_script_move_state_properties(properties);
         for state in self.move_shape.reached_property_states() {
@@ -5837,6 +5841,20 @@ impl CPlayer {
         let states = self.move_shape.activate_loaded_script_states(now_ms);
         self.auto_protected = states.iter().any(|state| state.is_auto_protect());
         states
+    }
+
+    pub(crate) fn activate_loaded_tian_shen_xia_fan_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::tianshenxiafanstate::TianShenXiaFanState> {
+        self.move_shape.activate_loaded_tian_shen_xia_fan_state(now_ms)
+    }
+
+    pub(crate) fn take_expired_tian_shen_xia_fan_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::tianshenxiafanstate::TianShenXiaFanState> {
+        self.move_shape.take_expired_tian_shen_xia_fan_state(now_ms)
     }
 
     pub(crate) fn end_auto_protect_state(&mut self) -> Option<super::scriptstate::ScriptMoveState> {

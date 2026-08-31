@@ -180,7 +180,7 @@ use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiState};
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
-    TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID,
+    TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID, TianShenXiaFanState,
 };
 use crate::gameserver::appserver::skills::weakstate::{
     WEAK_STATE_BYTES, WEAK_STATE_ID, WeakState,
@@ -643,6 +643,7 @@ pub(crate) struct CanonicalStateStorage {
     particular_states: Vec<ParticularState>,
     team_recruitment_states: Vec<CTeamState>,
     battle_fairy_attribute_states: Vec<BattleFairyAttributeState>,
+    tian_shen_xia_fan_state: Option<TianShenXiaFanState>,
     periodic_attack_order: IndexSet<u32>,
     defense_shields: Vec<DefenseShieldState>,
     ex_states: LegacyStateCodec,
@@ -1094,6 +1095,13 @@ impl CMoveShape {
         for state in &self.battle_fairy_attribute_states {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
+        if let Some(state) = self.tian_shen_xia_fan_state {
+            update_known_state_record(
+                &mut payload,
+                state.state_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         payload
     }
 
@@ -1417,6 +1425,11 @@ impl CMoveShape {
             .copied()
             .filter_map(|offset| BattleFairyAttributeState::decode(&states, offset).ok())
             .collect();
+        self.tian_shen_xia_fan_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(TIAN_SHEN_XIA_FAN_STATE_ID))
+            .and_then(|offset| TianShenXiaFanState::decode(&states, offset).ok());
         self.ex_states.replace(states);
     }
 
@@ -1479,6 +1492,7 @@ impl CMoveShape {
         self.team_recruitment_states.clear();
         self.consumable_restore_states = ConsumableRestoreStateStorage::default();
         self.battle_fairy_attribute_states.clear();
+        self.tian_shen_xia_fan_state = None;
         self.periodic_attack_order.clear();
         self.defense_shields.clear();
         self.change_body_states.clear();
@@ -1554,6 +1568,7 @@ impl CMoveShape {
             || self.state_storage.roar_state.is_some()
             || self.state_storage.pillar_state.is_some()
             || self.state_storage.knight_cut_state.is_some()
+            || self.state_storage.tian_shen_xia_fan_state.is_some()
             || self.state_storage.blood_loss_state.is_some()
             || self.state_storage.kerosene_state.is_some()
             || self.state_storage.leaf_cut_state.is_some()
@@ -3810,6 +3825,29 @@ impl CMoveShape {
             }
         }
         pending
+    }
+
+    pub(crate) const fn tian_shen_xia_fan_state(&self) -> Option<TianShenXiaFanState> {
+        self.state_storage.tian_shen_xia_fan_state
+    }
+
+    pub(crate) fn activate_loaded_tian_shen_xia_fan_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<TianShenXiaFanState> {
+        let state = self.tian_shen_xia_fan_state?.activate_loaded(now_ms);
+        self.tian_shen_xia_fan_state = Some(state);
+        Some(state)
+    }
+
+    pub(crate) fn take_expired_tian_shen_xia_fan_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<TianShenXiaFanState> {
+        let state = self.tian_shen_xia_fan_state.filter(|state| state.expired(now_ms))?;
+        self.tian_shen_xia_fan_state = None;
+        self.remove_serialized_state_record(state.state_id(), TIAN_SHEN_XIA_FAN_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn begin_ride_state(&mut self, mut state: RideState) -> Option<RideState> {

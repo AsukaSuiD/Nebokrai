@@ -848,6 +848,7 @@ use crate::gameserver::appserver::skills::agility::{
 use crate::gameserver::appserver::skills::agilitystate2::expire_player_agility_state_2;
 use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
 use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
+use crate::gameserver::appserver::skills::tianshenxiafanstate::send_tian_shen_xia_fan_state_visual;
 use crate::gameserver::appserver::skills::wangsheng::{
     execute_battle_fairy_wangsheng, WANGSHENG_SKILL_ID,
 };
@@ -5861,6 +5862,7 @@ impl CGame {
     ) -> bool {
         let coefficients = self.globe_setup.player_property_coefficients();
         let goods_factory = self.goods_factory.clone();
+        let skill_factory = self.skill_factory.clone();
         let Some(pass) = self
             .find_player_mut(player_id)
             .map(|player| {
@@ -5869,6 +5871,7 @@ impl CGame {
                     properties,
                     coefficients,
                     &goods_factory,
+                    &skill_factory,
                 )
             })
         else {
@@ -28403,6 +28406,13 @@ impl CGame {
         let _ = expire_player_boss_blue_fury_state(self, player_id, now_ms, runtime);
         let _ = expire_player_knight_cut_state(self, player_id, now_ms);
         let _ = expire_player_daub_poison_state(self, player_id, now_ms);
+        let expired_tian_shen_xia_fan = self
+            .find_player_mut(player_id)
+            .and_then(|player| player.take_expired_tian_shen_xia_fan_state(now_ms));
+        if let Some(state) = expired_tian_shen_xia_fan {
+            send_tian_shen_xia_fan_state_visual(self, player_id, state, false, || now_ms);
+            let _ = self.update_player_properties(player_id);
+        }
         let _ = expire_player_poison_fog_state(self, player_id, now_ms, runtime);
         let rage_break_context = self.find_player(player_id).and_then(|player| {
             Some((
@@ -30138,6 +30148,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_script_move_states(login_tick_ms);
+        let loaded_tian_shen_xia_fan_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_tian_shen_xia_fan_state(login_tick_ms);
         let loaded_appellation_states = self
             .players
             .get_mut(&expected_player_id)
@@ -30314,6 +30329,15 @@ impl CGame {
         }
         for state in loaded_script_move_states {
             let _ = self.send_script_move_state_visual(expected_player_id, state, true);
+        }
+        if let Some(state) = loaded_tian_shen_xia_fan_state {
+            send_tian_shen_xia_fan_state_visual(
+                self,
+                expected_player_id,
+                state,
+                true,
+                || login_tick_ms,
+            );
         }
         for state in &loaded_change_body_states {
             self.send_change_body_visual(expected_player_id, state, true);

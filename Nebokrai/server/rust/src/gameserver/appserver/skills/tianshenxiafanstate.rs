@@ -1,15 +1,146 @@
-//! Wire-граница сохранённого `CTianShenXiaFanState` (`0x335`).
+//! Сохранённое состояние `CTianShenXiaFanState` (`0x335`).
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/skills/tianshenxiafanstate.cpp`. `Serialize` пишет три `DWORD`:
 //! ID, оставшееся время и уровень, поэтому запись занимает 12 байт. Нативный
 //! `Unserialize` асимметричен: он читает время как `WORD`, а level с `+6`;
-//! этот legacy defect потребуется сохранить при материализации DB-owner-а.
-//! Пока доказанный размер подключён к общему codec, чтобы такая запись не
-//! останавливала разбор следующих известных состояний.
+//! этот legacy defect сохранён при загрузке: остаток сужается до `WORD`, а
+//! level читается с `+6`. Типизированный owner участвует в login, пересчёте
+//! свойств, строгом `CBlindState::AI`, визуалах и обратном DB-кодеке.
+
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
+use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
+
+use super::skillfactory::CSkillFactory;
 
 pub(crate) const TIAN_SHEN_XIA_FAN_STATE_ID: u32 = 0x335;
 pub(crate) const TIAN_SHEN_XIA_FAN_STATE_BYTES: usize = 12;
+
+const TARGET_DEFENSE_GAIN: u32 = 109;
+const TARGET_ELEMENT_RESISTANCE_GAIN: u32 = 112;
+const TARGET_ELEMENT_MODIFY_GAIN: u32 = 115;
+const TARGET_MINIMUM_ATTACK_GAIN: u32 = 116;
+const TARGET_MAXIMUM_ATTACK_GAIN: u32 = 117;
+const PHYSICAL_AVOID_GAIN: u32 = 130;
+const MAGIC_AVOID_GAIN: u32 = 131;
+const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+const STATE_END_MESSAGE: i32 = 0x000b_fe04;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TianShenXiaFanState {
+    started_at_ms: u32,
+    keep_time_ms: u32,
+    level: i32,
+}
+
+impl TianShenXiaFanState {
+    pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, level: i32) -> Self {
+        Self { started_at_ms, keep_time_ms, level }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != TIAN_SHEN_XIA_FAN_STATE_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        // Exact `Unserialize`: WORD времени, затем DWORD level с offset + 6.
+        let keep_time_ms = u32::from(reader.read_u16()?);
+        let level = reader.read_i32()?;
+        Ok(Self::new(0, keep_time_ms, level))
+    }
+
+    pub(crate) const fn state_id(self) -> u32 { TIAN_SHEN_XIA_FAN_STATE_ID }
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
+        self.started_at_ms = now_ms;
+        self
+    }
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
+    }
+    pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 {
+        timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds)
+    }
+
+    pub(crate) fn encoded(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> [u8; TIAN_SHEN_XIA_FAN_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(TIAN_SHEN_XIA_FAN_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(self.state_id());
+        writer.write_u32(self.client_time(now_milliseconds));
+        writer.write_i32(self.level);
+        bytes.try_into().expect("размер состояния сошествия фиксирован")
+    }
+
+    pub(crate) fn apply_to_player(
+        self,
+        mut properties: PlayerCombatProperties,
+        skill_factory: &CSkillFactory,
+    ) -> PlayerCombatProperties {
+        let Some(skill) = skill_factory.query_skill_base_properties(self.state_id(), self.level)
+        else {
+            return properties;
+        };
+        properties.element_modify = properties.element_modify
+            .wrapping_add(skill.query_property(TARGET_ELEMENT_MODIFY_GAIN) as i32);
+        properties.minimum_attack = capped_gain(
+            properties.minimum_attack,
+            skill.query_property(TARGET_MINIMUM_ATTACK_GAIN),
+        );
+        properties.maximum_attack = capped_gain(
+            properties.maximum_attack,
+            skill.query_property(TARGET_MAXIMUM_ATTACK_GAIN),
+        );
+        properties.defense = capped_gain(
+            properties.defense,
+            skill.query_property(TARGET_DEFENSE_GAIN),
+        );
+        properties.element_resistance = capped_gain(
+            properties.element_resistance,
+            skill.query_property(TARGET_ELEMENT_RESISTANCE_GAIN),
+        );
+        properties.attack_avoid = properties.attack_avoid
+            .wrapping_add(skill.query_property(PHYSICAL_AVOID_GAIN) as u16);
+        properties.element_avoid = properties.element_avoid
+            .wrapping_add(skill.query_property(MAGIC_AVOID_GAIN) as u16);
+        properties
+    }
+}
+
+const fn capped_gain(value: u32, gain: u32) -> u32 {
+    let result = value.wrapping_add(gain);
+    if result > i32::MAX as u32 { i32::MAX as u32 } else { result }
+}
+
+pub(crate) fn send_tian_shen_xia_fan_state_visual(
+    game: &mut CGame,
+    player_id: i32,
+    state: TianShenXiaFanState,
+    begin: bool,
+    now_milliseconds: impl FnMut() -> u32,
+) {
+    let Some(player) = game.find_player(player_id) else {
+        return;
+    };
+    let identity = player.shape().identity();
+    let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state.state_id() as i32);
+    if begin {
+        message.add_long(state.client_time(now_milliseconds) as i32);
+        message.add_long(0);
+    }
+    let _ = game.send_player_shape_around(player_id, None, &message);
+}
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
