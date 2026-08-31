@@ -277,6 +277,53 @@ impl Default for GlobeSetupSnapshot {
 }
 
 impl GlobeSetupSnapshot {
+    /// Точная setup-часть успешного Game login `0xBF401` до полного player
+    /// payload. `OnLogMessage` берёт поля непосредственно из `tagSetup`, но
+    /// публикует их не сплошным ABI-блоком: prefix `0x84`, отдельные scalars,
+    /// две C-строки, combat levels соседнего owner-а и area dimensions.
+    pub(crate) fn append_initial_game_client_configuration(
+        &self,
+        destination: &mut Vec<u8>,
+        contribute_combat_levels: (i32, i32),
+    ) {
+        destination.extend_from_slice(&self.bytes[..0x84]);
+        destination.extend_from_slice(&self.bytes[0x424..0x428]);
+        destination.extend_from_slice(&self.bytes[0x3f0..0x3f2]);
+        destination.extend_from_slice(&self.bytes[0x3f2..0x3f4]);
+        destination.extend_from_slice(&self.bytes[0x4f4..0x4f6]);
+        destination.extend_from_slice(&self.bytes[0x2ec..0x2f8]);
+        append_fixed_c_string(destination, &self.bytes[0x7b0..0x7f0]);
+        destination.extend_from_slice(&self.bytes[0x7f0..0x7f8]);
+        append_fixed_c_string(destination, &self.bytes[0x768..0x7a8]);
+        destination.extend_from_slice(&self.bytes[0x7a8..0x7b0]);
+        destination.push(contribute_combat_levels.0 as u8);
+        destination.push(contribute_combat_levels.1 as u8);
+        destination.push(self.bytes[0x905]);
+        destination.push(self.bytes[0xcd1]);
+        destination.extend_from_slice(
+            &self.bytes[AREA_WIDTH_OFFSET..AREA_WIDTH_OFFSET + 4],
+        );
+        destination.extend_from_slice(
+            &self.bytes[AREA_HEIGHT_OFFSET..AREA_HEIGHT_OFFSET + 4],
+        );
+    }
+
+    /// Финальный `CBaseMessage::AddEx(..., 0x400)` того же login envelope.
+    pub(crate) fn append_initial_game_client_extension(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&self.bytes[0xd08..0x1108]);
+    }
+
+    /// `dwLoanTimeLimit`, прочитанный полным player login codec-ом.
+    pub(crate) fn loan_time_limit(&self) -> u32 {
+        u32::from_le_bytes(self.bytes[0x808..0x80c].try_into().expect("fixed setup field"))
+    }
+
+    /// `lQuestId`, чей completion-state завершает полный login snapshot и
+    /// одновременно открывает CiQing-функцию игрока.
+    pub(crate) fn ci_qing_quest_id(&self) -> u32 {
+        u32::from_le_bytes(self.bytes[0xd04..0xd08].try_into().expect("fixed setup field"))
+    }
+
     pub(crate) fn player_hit_limits(&self, occupation: u8) -> (i32, i32) {
         let index = usize::from(occupation.min(2));
         (
@@ -1180,6 +1227,12 @@ impl GlobeSetupSnapshot {
         destination.extend_from_slice(&self.bytes);
         router.add_to_byte_array(destination)
     }
+}
+
+fn append_fixed_c_string(destination: &mut Vec<u8>, source: &[u8]) {
+    let length = source.iter().position(|byte| *byte == 0).unwrap_or(source.len());
+    destination.extend_from_slice(&source[..length]);
+    destination.push(0);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

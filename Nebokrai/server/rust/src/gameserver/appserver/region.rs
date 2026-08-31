@@ -289,6 +289,14 @@ impl CRegion {
         self.resource_id
     }
 
+    pub(crate) const fn width(&self) -> i32 {
+        self.width
+    }
+
+    pub(crate) const fn height(&self) -> i32 {
+        self.height
+    }
+
     pub(crate) const fn exp_scale_bits(&self) -> u32 {
         self.exp_scale_bits
     }

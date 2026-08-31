@@ -224,6 +224,10 @@
 //! выставляется только после exact energy/count threshold. Script `2650/2651`
 //! работает с тем же списком: успешное увеличение добавляет `point * delta`
 //! к энергии, применяет суточный порог `60` и публикуется единым snapshot.
+//! Полный `AddToByteArray_ForClient(true)` теперь отделён от GameSave: он
+//! сохраняет category-order навыков, old-client goods projection, четыре
+//! currency GUID, organization/quest tails и CiQing completion side effect;
+//! `CGame::OnLogMessage` вкладывает результат непосредственно в `0xBF401`.
 //! Goods-session `0x8FC25` использует полный typed `eProgress` owner и
 //! сбрасывает его в `None`, одновременно снимая один nesting moveable-запрет;
 //! полиморфные session End/plug Exit принадлежат caller runtime-у.
@@ -325,7 +329,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
     GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
     GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION, GAP_WAKAN_CORRECTION,
-    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE,
+    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::legacycodec::{LegacyReader, LegacyWriter};
@@ -351,6 +355,7 @@ use crate::public::guid::CGuid;
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
 use crate::setup::hitlevelsetup::HitLevelEntry;
+use crate::setup::questsystem::CQuestSystem;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bitflags::bitflags;
@@ -3300,6 +3305,182 @@ impl CPlayer {
         writer.write_u32(self.war_soul_state);
         writer.write_i32(self.base_properties.gods_battle_faction);
         Some(payload)
+    }
+
+    /// Точный полный вариант `CPlayer::AddToByteArray_ForClient(true)`,
+    /// который `OnLogMessage` вкладывает в успешный `0xBF401`. Persisted
+    /// GameSave здесь неприменим: client wire иначе упорядочивает навыки,
+    /// контейнеры, валюты, задания и завершающие country/CiQing поля.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_initial_client_snapshot(
+        &mut self,
+        goods_factory: &CGoodsFactory,
+        skill_factory: &CSkillFactory,
+        quest_system: &CQuestSystem,
+        level_experience: u32,
+        country_identity: u8,
+        loan_time_limit: u32,
+        ci_qing_quest_id: u32,
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        const SKILL_USAGE_MP_COST: u32 = 2;
+        const SKILL_USAGE_MIN_DISTANCE: u32 = 5_002;
+        const SKILL_USAGE_MAX_DISTANCE: u32 = 5_003;
+        const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
+
+        self.battle_fairy_summoned = self.war_soul_state != 0;
+        let mut payload = self.move_shape.encode_client_snapshot(
+            true,
+            self.is_dead(),
+            now_ms,
+            timed_state_now_milliseconds,
+        )?;
+        payload.extend_from_slice(&self.synchronized_base_property_wire());
+        {
+            let mut writer = LegacyWriter::new(&mut payload);
+            writer.write_c_string(&self.account);
+            writer.write_c_string(&self.title);
+            writer.write_bytes(&self.combat_property_wire);
+            writer.write_u32(level_experience);
+
+            let skills: Vec<_> = (0..=3)
+                .flat_map(|skill_type| {
+                    self.move_shape.skills().values().filter(move |skill| {
+                        skill.skill_type() == skill_type
+                            && !(skill_type == 1 && skill.id() == 10)
+                    })
+                })
+                .collect();
+            writer.write_i32(i32::try_from(skills.len()).ok()?);
+            for skill in skills {
+                let properties = skill_factory
+                    .query_skill_base_properties(skill.id(), skill.level())?;
+                writer.write_u32(
+                    (skill.id() & 0xffff) | ((skill.level() as u32 & 0xffff) << 16),
+                );
+                writer.write_u32(properties.query_property(SKILL_USAGE_DELAY_TIME));
+                let maximum = properties.query_property(SKILL_USAGE_MAX_DISTANCE);
+                writer.write_u16(if maximum == 0 { 1 } else { maximum } as u16);
+                writer.write_u16(properties.query_property(SKILL_USAGE_MP_COST) as u16);
+                writer.write_u16(properties.query_property(SKILL_USAGE_MIN_DISTANCE) as u16);
+            }
+
+            writer.write_i32(i32::try_from(self.friends.len()).ok()?);
+            for friend in &self.friends {
+                writer.write_c_string(&friend.name);
+                writer.write_u8(u8::from(friend.online));
+            }
+        }
+        payload.extend_from_slice(&self.encode_lei_ting());
+
+        if let Some(goods) = self.hand.get_goods(0)
+            && let Some(base) = goods_factory.query_goods_base_properties(goods.base_properties_index())
+        {
+            let mut writer = LegacyWriter::new(&mut payload);
+            writer.write_u8(1);
+            writer.write_u8(u8::from(base.goods_type() == GOODS_TYPE_EQUIPMENT));
+            writer.write_u16(goods.amount() as u16);
+            writer.write_u8(0);
+            goods.serialize_for_old_client(&mut payload, goods_factory, true).then_some(())?;
+        } else {
+            payload.push(0);
+        }
+
+        let equipment = self.equipment.traversing_goods();
+        LegacyWriter::new(&mut payload).write_i32(i32::try_from(equipment.len()).ok()?);
+        for (column, goods) in equipment {
+            goods.serialize_for_old_client(&mut payload, goods_factory, true).then_some(())?;
+            LegacyWriter::new(&mut payload).write_u32(column.position());
+        }
+        append_old_client_volume(&mut payload, &self.auction_goods, goods_factory)?;
+        append_old_client_volume(&mut payload, &self.packet, goods_factory)?;
+        append_old_client_volume(&mut payload, &self.auction_listing, goods_factory)?;
+        append_old_client_volume(&mut payload, self.fairy_container.base(), goods_factory)?;
+
+        for (amount, goods) in [
+            (self.wallet.currency_amount(), self.wallet.goods()),
+            (self.auction_wallet.currency_amount(), self.auction_wallet.goods()),
+            (self.yuan_bao.currency_amount(), self.yuan_bao.goods()),
+            (self.ji_fen.currency_amount(), self.ji_fen.goods()),
+        ] {
+            let mut writer = LegacyWriter::new(&mut payload);
+            writer.write_u32(amount);
+            let guid = goods.map_or(CGuid::GUID_INVALID, |goods| goods.identity().ex_id);
+            if guid.is_invalid() {
+                writer.write_u8(0);
+            } else {
+                writer.write_u8(16);
+                writer.write_bytes(guid.as_legacy_bytes());
+            }
+        }
+
+        payload.extend_from_slice(&self.encode_organizing_snapshot()?);
+        {
+            let mut writer = LegacyWriter::new(&mut payload);
+            writer.write_u8(u8::from(self.contend_state));
+            writer.write_i32(i32::from(self.city_war_died_state));
+        }
+        self.append_client_quest_snapshot(&mut payload, quest_system)?;
+        {
+            let mut writer = LegacyWriter::new(&mut payload);
+            writer.write_u8(self.country);
+            writer.write_i32(self.contribution);
+            writer.write_u8(country_identity);
+            writer.write_u32(loan_time_limit);
+        }
+        append_old_client_volume(
+            &mut payload,
+            self.battle_fairy_container.base(),
+            goods_factory,
+        )?;
+        append_old_client_volume(&mut payload, &self.ci_qing_compose, goods_factory)?;
+        append_old_client_volume(&mut payload, &self.ci_qing, goods_factory)?;
+        {
+            let quest_state = self.quest_states.get(&(ci_qing_quest_id as u16)).copied();
+            if quest_state == Some(1) {
+                self.ci_qing_open = true;
+            }
+            let mut writer = LegacyWriter::new(&mut payload);
+            writer.write_u32(self.war_soul_state);
+            writer.write_u32(quest_state.map_or(2, u32::from));
+        }
+        Some(payload)
+    }
+
+    fn append_client_quest_snapshot(
+        &self,
+        destination: &mut Vec<u8>,
+        quest_system: &CQuestSystem,
+    ) -> Option<()> {
+        let active: Vec<_> = self
+            .quest_states
+            .iter()
+            .filter(|(_, state)| **state != 1)
+            .filter_map(|(quest_id, _)| {
+                quest_system.quest_data_by_id(*quest_id).map(|quest| (*quest_id, quest))
+            })
+            .collect();
+        let mut writer = LegacyWriter::new(destination);
+        writer.write_i32(quest_system.max_quest_count);
+        writer.write_i32(i32::try_from(active.len()).ok()?);
+        for (quest_id, quest) in active {
+            writer.write_u16(quest_id);
+            writer.write_u32(quest.old);
+            writer.write_u32(quest.quest_type);
+            writer.write_u32(quest.level);
+            writer.write_u32(quest.difficulty);
+            writer.write_u32(quest.track);
+            writer.write_c_string(&quest.short_description);
+            writer.write_c_string(&quest.name);
+            writer.write_c_string(&quest.description);
+            writer.write_u8(u8::from(quest.display));
+            writer.write_i32(quest.region_id);
+            writer.write_i32(quest.tile_x);
+            writer.write_i32(quest.tile_y);
+            writer.write_i32(quest.effect_id);
+        }
+        Some(())
     }
 
     pub(crate) const fn player_ai(&self) -> &CPlayerAI {
@@ -13877,6 +14058,23 @@ fn append_player_game_save_count(
         .map_err(|_| PlayerGameSaveCodecError::CollectionTooLarge { field, length })?;
     LegacyWriter::new(destination).write_i32(count);
     Ok(())
+}
+
+fn append_old_client_volume(
+    destination: &mut Vec<u8>,
+    container: &CVolumeLimitGoodsContainer,
+    goods_factory: &CGoodsFactory,
+) -> Option<()> {
+    let goods: Vec<_> = (0..container.size())
+        .filter_map(|position| container.get_goods(position))
+        .collect();
+    LegacyWriter::new(destination).write_i32(i32::try_from(goods.len()).ok()?);
+    for goods in goods {
+        goods
+            .serialize_for_old_client(destination, goods_factory, true)
+            .then_some(())?;
+    }
+    Some(())
 }
 
 fn append_player_game_save_string(

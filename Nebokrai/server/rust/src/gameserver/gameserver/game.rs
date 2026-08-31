@@ -94,8 +94,10 @@
 //! World login `0x7F901` проходит из общего message FIFO через полный player
 //! GameSave decoder, transport-route validation, canonical player map и
 //! spatial region membership. Затем тот же main-loop runtime выполняет login
-//! property recompute и ещё не материализованный полный client snapshot;
-//! сам `CGame` ставит login/honor scripts в живой scheduler, публикует Billing
+//! property recompute и сам собирает точный `0xBF401`: разреженный setup-
+//! prefix, полный `CPlayer::AddToByteArray_ForClient(true)`, region metadata,
+//! first-login DupliRegion tail и фиксированный `AddEx(0x400)`. `CGame` ставит
+//! login/honor scripts в живой scheduler, публикует Billing
 //! `0xEF201`, обходит все подтверждённые goods containers и выполняет
 //! equipment-state `2→3` с `0xBF928`. Save/faction/region/release callers
 //! используют один обратный codec с live companion snapshot.
@@ -2345,28 +2347,13 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext + ServerRegionMonst
     );
 }
 
-/// Внешняя половина initial-login owner-а: player codec, map, spatial
-/// membership, login/honor scripts и Billing account entry исполняет `CGame`.
-/// Ещё не материализованные полный client snapshot и virtual property
-/// recompute получают тот же live runtime в исходном порядке. GoodsAI tree
-/// принадлежит canonical player и заполняется после успешной регистрации.
-pub(crate) trait GamePlayerLoginContext:
-    NationCombatContext
-{
-    fn publish_initial_player_client_snapshot(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        first_login: bool,
-    );
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerLoginBlock {
     PlayerIdMismatch { expected: i32, decoded: i32 },
     AlreadyRegistered { player_id: i32 },
     MissingRegion { region_id: i32 },
     Membership(RegionMembershipBlock),
+    ClientSnapshot { player_id: i32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4151,7 +4138,6 @@ pub(crate) trait GameExitRuntime {
 pub(crate) trait GameMainLoopRuntime:
     InitialRegionStartupContext
     + GameRegionEnterContext
-    + GamePlayerLoginContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
     + GameContainerMessageRuntime
@@ -29614,9 +29600,7 @@ impl CGame {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn complete_world_player_login<
-        Context: GamePlayerLoginContext + ScriptFunctionRuntime,
-    >(
+    pub(crate) fn complete_world_player_login<Context: NationCombatContext + ScriptFunctionRuntime>(
         &mut self,
         expected_player_id: i32,
         mut player: CPlayer,
@@ -30061,13 +30045,82 @@ impl CGame {
                 .expect("login script не удаляет player owner"),
         );
         let _ = self.commit_recomputed_player_properties(expected_player_id, recomputed, false);
-        context.publish_initial_player_client_snapshot(self, expected_player_id, first_login);
+        let country_identity = self.player_country_identity(expected_player_id);
+        let level_experience = self.player_list.level_experience(
+            self.players
+                .get(&expected_player_id)
+                .expect("property commit сохраняет player owner")
+                .level(),
+        );
+        let player_payload = {
+            let (players, goods_factory, skill_factory, quest_system) = (
+                &mut self.players,
+                &self.goods_factory,
+                &self.skill_factory,
+                &self.quest_system,
+            );
+            players
+                .get_mut(&expected_player_id)
+                .expect("property commit сохраняет player owner")
+                .encode_initial_client_snapshot(
+                    goods_factory,
+                    skill_factory,
+                    quest_system,
+                    level_experience,
+                    country_identity,
+                    self.globe_setup.loan_time_limit(),
+                    self.globe_setup.ci_qing_quest_id(),
+                    login_tick_ms,
+                    || context.now_milliseconds(),
+                )
+                .ok_or(GamePlayerLoginBlock::ClientSnapshot {
+                    player_id: expected_player_id,
+                })?
+        };
+        let region = self
+            .find_region(region_id)
+            .expect("spatial login уже проверил region owner")
+            .base();
+        let region_snapshot = (
+            region.name.as_bytes().to_vec(),
+            region.region.region_type(),
+            region.war_region_type,
+            region.region.width(),
+            region.region.height(),
+        );
+        let mut initial = CMessage::new(0x000b_f401);
+        initial.add_long(expected_player_id);
+        let mut initial_configuration = Vec::new();
+        self.globe_setup.append_initial_game_client_configuration(
+            &mut initial_configuration,
+            self.contribute_setup.combat_levels(),
+        );
+        initial.base_mut().add(&initial_configuration);
+        initial.base_mut().add(&player_payload);
+        initial.base_mut().update();
+        add_legacy_c_string(initial.base_mut(), &region_snapshot.0);
+        initial.add_long(region_snapshot.1);
+        initial.add_long(region_snapshot.2);
+        initial.add_long(region_snapshot.3);
+        initial.add_long(region_snapshot.4);
+        initial.add_byte(u8::from(first_login));
+        if first_login && let Some(setup) = &self.dupli_region_setup {
+            let mut duplicate_regions = Vec::new();
+            let _ = setup.add_to_byte_array(&mut duplicate_regions);
+            initial.base_mut().add(&duplicate_regions);
+            initial.base_mut().update();
+        }
+        let mut extension = Vec::new();
+        self.globe_setup
+            .append_initial_game_client_extension(&mut extension);
+        initial.base_mut().add_ex(&extension);
+        let initial_delivery = initial.send_to_player(self.net_server(), expected_player_id);
         let mut billing = CMessage::new(0x000e_f201);
         add_legacy_c_string(
             billing.base_mut(),
             self.players
                 .get(&expected_player_id)
-                .expect("client snapshot сохраняет player owner")
+                .expect("initial client publication сохраняет player owner")
                 .account(),
         );
         billing.add_long(expected_player_id);
@@ -30172,6 +30225,7 @@ impl CGame {
             first_login,
             ?relocation,
             ?login_script_id,
+            ?initial_delivery,
             billing_delivery,
             ?honor_script_id,
             goods_ai_registrations,
