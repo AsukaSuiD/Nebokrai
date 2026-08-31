@@ -170,6 +170,13 @@ impl PartialEq for RegionRouterLoadError {
 impl Eq for RegionRouterLoadError {}
 
 impl RegionRouter {
+    /// Exact `CRegionRouter::GetRegionInfo`: клиенту выдаются выходная точка
+    /// региона и её допустимый диапазон, а не входная точка маршрута.
+    pub(crate) fn region_info(&self, region_id: i32) -> Option<(RegionRoutePoint, i32)> {
+        let node = self.nodes.get(&region_id)?;
+        Some((node.exit, node.exit_range))
+    }
+
     pub(crate) fn insert_node(
         &mut self,
         map_region_id: i32,

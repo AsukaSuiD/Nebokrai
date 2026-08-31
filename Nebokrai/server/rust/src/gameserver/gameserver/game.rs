@@ -376,9 +376,10 @@
 //! pet/carriage snapshots и ставит прежних monster-owner-ов в `CS_DELETE`;
 //! PDB slots `+0x16C/+0x90` подтверждены как `OnExitRegion/SetBlock` и напрямую
 //! выполняют сброс особых предметов с очисткой исходного footprint;
-//! `8F801` entry восстанавливает их между подтверждёнными частями
-//! `CPlayer::OnEnterRegion`. Только прочие player virtual callbacks остаются
-//! runtime-границей.
+//! `8F801` entry восстанавливает их внутри точного `CServerRegion::OnMessage`:
+//! anti-repeat gate, `BF502/BF501`, погода и соседние формы предшествуют
+//! `CPlayer::OnEnterRegion`, а states/router, спутники и team/WarSoul tail
+//! исполняются прямыми владельцами без process callback-а.
 //! Один `MainLoop` turn сохраняет static DWORD clocks как owned process state,
 //! exact Script→AI→Message→Session→NetSession→Auction order, optional profile
 //! reads, refresh/watch gates и wrapping pacing. Ещё не материализованные
@@ -2323,30 +2324,6 @@ pub(crate) trait ScriptRegionChangeContext:
 
 impl<T> ScriptRegionChangeContext for T where T: NationCombatContext + GameContainerMessageRuntime {}
 
-pub(crate) trait GameRegionEnterContext: NationCombatContext + ServerRegionMonsterContext {
-    /// Первая часть `CPlayer::OnEnterRegion`: base move-shape, router,
-    /// automatic restore и equipment states предшествуют companion spawn.
-    fn prepare_changed_player_region_entry(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        region_id: i32,
-        entry_token: i32,
-        socket_id: i32,
-    );
-
-    /// Оставшийся `8F801` tail после pet/carriage spawn: team, WarSoul,
-    /// weather/state serialization и связанные client publications.
-    fn finish_changed_player_region_entry(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-        region_id: i32,
-        entry_token: i32,
-        socket_id: i32,
-    );
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GamePlayerLoginBlock {
     PlayerIdMismatch { expected: i32, decoded: i32 },
@@ -4137,7 +4114,6 @@ pub(crate) trait GameExitRuntime {
 
 pub(crate) trait GameMainLoopRuntime:
     InitialRegionStartupContext
-    + GameRegionEnterContext
     + GameOrganizingWarRuntime
     + GameCountryWarRuntime
     + GameContainerMessageRuntime
@@ -18450,11 +18426,132 @@ impl CGame {
         );
     }
 
-    /// Подтверждение клиента `8F801` завершает отложенную локальную смену.
-    /// Игрок добавляется в реестр назначения до `OnChangeRegion` навыков,
-    /// снимков, погоды и обратных вызовов состояний, как в
-    /// `CServerRegion::OnMessage`.
-    pub(crate) fn enter_changed_player_region<Context: GameRegionEnterContext>(
+    fn serialize_region_entry_shape_snapshot(
+        &mut self,
+        region_id: i32,
+        shape: ShapeView,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<(ShapeIdentity, Vec<u8>)> {
+        if shape.identity.object_type == PLAYER_TYPE {
+            return self.serialize_player_shape_snapshot(region_id, shape, now_milliseconds);
+        }
+        if shape.identity.object_type == GOODS_TYPE {
+            let goods = self
+                .find_region(region_id)?
+                .base()
+                .find_ground_goods(shape.identity.ex_id)?;
+            let identity = goods.identity();
+            (identity == shape.identity).then_some((
+                identity,
+                OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key())
+                    .encode(goods),
+            ))
+        } else {
+            self.serialize_owned_shape_snapshot(region_id, shape.identity, now_milliseconds)
+        }
+    }
+
+    fn prepare_changed_player_region_entry(&mut self, player_id: i32, region_id: i32) {
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.begin_region_entry_states();
+        }
+        let auto_started_skills = self.begin_player_back_stage_skills(player_id);
+        let skill_interrupted = self.on_player_skill_change_region(player_id);
+        let router_delivery = self
+            .region_router
+            .region_info(region_id)
+            .map(|(exit, range)| {
+                let mut message = CMessage::new(0x000b_ff37);
+                message.add_long(exit.x);
+                message.add_long(exit.y);
+                message.add_long(range);
+                message.send_to_player(self.net_server(), player_id)
+            });
+        let restored_hp_mp = self.restore_player_hp_mp_states(player_id).is_some();
+        let particular_states = {
+            let (players, goods_factory) = (&mut self.players, &self.goods_factory);
+            players
+                .get_mut(&player_id)
+                .map(|player| player.restore_equipment_particular_states(goods_factory))
+                .unwrap_or_default()
+        };
+        if let Some(player) = self.find_player(player_id) {
+            for state in &particular_states {
+                let _ = self.send_particular_state_visual_for_player(player, *state, true);
+            }
+        }
+        tracing::trace!(
+            player_id,
+            region_id,
+            auto_started_skills,
+            skill_interrupted,
+            ?router_delivery,
+            restored_hp_mp,
+            particular_states = particular_states.len(),
+            "подготовлена первая половина OnEnterRegion игрока"
+        );
+    }
+
+    fn finish_changed_player_region_entry(&mut self, player_id: i32, region_id: i32) {
+        let team_snapshot_queued = self
+            .find_player(player_id)
+            .map(CPlayer::team_id)
+            .filter(|team_id| *team_id != 0)
+            .filter(|team_id| self.get_team_session_id(*team_id as u32) == 0)
+            .map(|team_id| {
+                self.team_snapshot_queries
+                    .entry(team_id as u32)
+                    .or_default();
+                team_id
+            });
+        let war_soul = self
+            .find_player_mut(player_id)
+            .and_then(CPlayer::prepare_war_soul_region_entry);
+        let war_soul_delivery = if let Some((action, x_bits, y_bits)) = war_soul {
+            let spatial_applied = self
+                .find_region_mut(region_id)
+                .and_then(|owner| match action {
+                    BattleFairyWarSoulAction::SetPosition { previous, target } => Some(
+                        owner
+                            .base_mut()
+                            .set_war_soul_position(player_id as u32, previous, target),
+                    ),
+                    BattleFairyWarSoulAction::Delete { .. } => None,
+                })
+                .unwrap_or(false);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.apply_war_soul_action(action, spatial_applied);
+            }
+            let mut movement = CMessage::new(0x000b_f605);
+            movement.add_long(player_id);
+            movement.add_long(700);
+            movement.add_ulong(x_bits);
+            movement.add_ulong(y_bits);
+            self.send_player_shape_around(player_id, None, &movement)
+        } else {
+            let mut status = CMessage::new(0x000b_f930);
+            status.add_long(PLAYER_TYPE);
+            status.add_long(player_id);
+            self.send_player_shape_around(player_id, None, &status)
+        };
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.mark_entered_region();
+        }
+        tracing::trace!(
+            player_id,
+            region_id,
+            ?team_snapshot_queued,
+            ?war_soul_delivery,
+            "завершён хвост OnEnterRegion игрока"
+        );
+    }
+
+    /// Подтверждение клиента `8F801` завершает отложенную локальную смену в
+    /// точном порядке `CServerRegion::OnMessage`: spatial add, `BF502/BF501`,
+    /// погода, девять соседних area и лишь затем `CPlayer::OnEnterRegion`.
+    pub(crate) fn enter_changed_player_region<
+        Context: NationCombatContext + ServerRegionMonsterContext,
+    >(
         &mut self,
         player_id: i32,
         region_id: i32,
@@ -18467,7 +18564,10 @@ impl CGame {
             return false;
         };
         let previous_changing_region = player.in_changing_region();
-        if !previous_changing_region || player.server_region_id() != Some(region_id) {
+        let entry_tick_ms = context.now_milliseconds();
+        if !player.accept_region_entry_ack(entry_tick_ms, self.setup.enter_time)
+            || player.server_region_id() != Some(region_id)
+        {
             self.players.insert(player_id, player);
             return false;
         }
@@ -18533,31 +18633,78 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         if membership.is_ok() {
-            let auto_started_skills = self.begin_player_back_stage_skills(player_id);
-            let skill_interrupted = self.on_player_skill_change_region(player_id);
             let _ = self.enter_gods_battle_player(region_id, player_id);
-            context.prepare_changed_player_region_entry(
-                self,
-                player_id,
-                region_id,
-                entry_token,
-                socket_id,
-            );
+            let player_entry_delivery = self
+                .find_player(player_id)
+                .and_then(|player| player.shape_view())
+                .and_then(|shape| {
+                    let player = self.players.remove(&player_id)?;
+                    let payload = self
+                        .encode_player_shape_snapshot(&player, || context.now_milliseconds());
+                    self.players.insert(player_id, player);
+                    let payload = payload?;
+                    let mut message = CMessage::new(0x000b_f502);
+                    message.add_long(shape.identity.object_type);
+                    message.add_long(shape.identity.id);
+                    message.base_mut().add_guid(shape.identity.ex_id);
+                    message.add_long(i32::try_from(payload.len()).ok()?);
+                    message.base_mut().add(&payload);
+                    message.add_byte(entry_token as u8);
+                    Some(self.send_player_shape_around(player_id, Some(player_id), &message))
+                });
+            let mut entered = CMessage::new(0x000b_f501);
+            entered.add_long(1);
+            entered.add_long(region_id);
+            entered.add_long(entry_token);
+            let entered_delivery = entered.send_to_socket(self.net_server(), socket_id);
+            let weather_delivery = self.find_region(region_id).map(|owner| {
+                let mut weather = CMessage::new(0x000b_f507);
+                weather.add_ulong(owner.base().current_weather().len() as u32);
+                for item in owner.base().current_weather() {
+                    weather.add_long(item.weather_index);
+                    weather.add_ulong(item.fog_color);
+                }
+                weather.send_to_socket(self.net_server(), socket_id)
+            });
+            let nearby_shapes = self
+                .find_player(player_id)
+                .and_then(|player| player.shape().area_index())
+                .and_then(|area_index| {
+                    self.find_region(region_id)
+                        .map(|owner| owner.base().shapes_around_area(area_index, self))
+                })
+                .unwrap_or_default();
+            let mut nearby_deliveries = 0usize;
+            for shape in nearby_shapes {
+                if shape.identity.object_type == PLAYER_TYPE && shape.identity.id == player_id {
+                    continue;
+                }
+                let snapshot = self.serialize_region_entry_shape_snapshot(
+                    region_id,
+                    shape,
+                    || context.now_milliseconds(),
+                );
+                let Some((identity, payload)) = snapshot else {
+                    continue;
+                };
+                let Some(message) = Self::shape_enter_message(identity, &payload) else {
+                    continue;
+                };
+                let _ = message.send_to_socket(self.net_server(), socket_id);
+                nearby_deliveries += 1;
+            }
+            self.prepare_changed_player_region_entry(player_id, region_id);
             self.restore_player_region_pets(player_id, region_id, context);
             self.restore_player_region_carriage(player_id, region_id, context);
-            context.finish_changed_player_region_entry(
-                self,
-                player_id,
-                region_id,
-                entry_token,
-                socket_id,
-            );
+            self.finish_changed_player_region_entry(player_id, region_id);
             tracing::trace!(
                 player_id,
                 region_id,
-                auto_started_skills,
-                skill_interrupted,
-                "навыки игрока получили вход в другой регион"
+                ?player_entry_delivery,
+                entered_delivery,
+                ?weather_delivery,
+                nearby_deliveries,
+                "игрок и соседние формы опубликованы при входе в регион"
             );
         }
         tracing::debug!(

@@ -1814,6 +1814,8 @@ pub(crate) struct CPlayer {
     server_region_id: Option<i32>,
     in_changing_server: bool,
     in_changing_region: bool,
+    last_enter_region_tick_ms: u32,
+    entered_region: bool,
     state_before_server_region_change: u16,
     current_progress: PlayerProgress,
     personal_shop_session_id: i32,
@@ -2169,6 +2171,8 @@ impl CPlayer {
             server_region_id,
             in_changing_server: false,
             in_changing_region: false,
+            last_enter_region_tick_ms: 0,
+            entered_region: false,
             state_before_server_region_change: 0,
             current_progress: PlayerProgress::None,
             personal_shop_session_id: 0,
@@ -3829,6 +3833,24 @@ impl CPlayer {
         self.in_changing_region
     }
 
+    /// Exact anti-repeat prefix `8F801`: timestamp записывается после
+    /// успешного EnterTime gate, но ещё до проверки `m_bInChangingRegion`.
+    pub(crate) fn accept_region_entry_ack(&mut self, now_ms: u32, enter_time_ms: u32) -> bool {
+        if now_ms.wrapping_sub(self.last_enter_region_tick_ms) < enter_time_ms {
+            return false;
+        }
+        self.last_enter_region_tick_ms = now_ms;
+        self.in_changing_region
+    }
+
+    pub(crate) const fn begin_region_entry_states(&mut self) {
+        self.move_shape.reset_region_entry_control();
+    }
+
+    pub(crate) const fn mark_entered_region(&mut self) {
+        self.entered_region = true;
+    }
+
     pub(crate) const fn set_changing_state_snapshot(
         &mut self,
         in_changing_server: bool,
@@ -3849,6 +3871,7 @@ impl CPlayer {
     ) {
         self.in_changing_server = false;
         self.in_changing_region = true;
+        self.entered_region = false;
         self.movement_shape_mut()
             .stage_region_change(region_id, tile_x, tile_y, direction);
     }
@@ -3881,6 +3904,7 @@ impl CPlayer {
         self.movement_shape_mut().set_state(0);
         self.in_changing_server = true;
         self.in_changing_region = true;
+        self.entered_region = false;
         self.recreate_carriage = false;
     }
 
@@ -10424,6 +10448,30 @@ impl CPlayer {
         }
     }
 
+    /// Active WarSoul tail `CPlayer::OnEnterRegion`: обе visual float
+    /// координаты и spatial point синхронно возвращаются к клетке хозяина.
+    pub(crate) fn prepare_war_soul_region_entry(
+        &mut self,
+    ) -> Option<(BattleFairyWarSoulAction, u32, u32)> {
+        if self.war_soul_state != 1 {
+            return None;
+        }
+        let target = WarSoulPoint {
+            x: self.shape().get_tile_x().ok()?,
+            y: self.shape().get_tile_y().ok()?,
+        };
+        self.war_soul_visual_x_bits = (target.x as f32).to_bits();
+        self.war_soul_visual_y_bits = (target.y as f32).to_bits();
+        Some((
+            BattleFairyWarSoulAction::SetPosition {
+                previous: self.war_soul_point,
+                target,
+            },
+            self.war_soul_visual_x_bits,
+            self.war_soul_visual_y_bits,
+        ))
+    }
+
     /// Один проход живой ветви `ComputeWarSoulXY`. `Some(false)` означает
     /// найденный текущий навык боевой феи с `IsRestored()==0`; `None` точно
     /// соответствует отсутствующему навыку и не блокирует следование.
@@ -13194,6 +13242,28 @@ impl CPlayer {
         let additional_data =
             goods.addon_property_value(factory, GAP_EXCEPTION_STATE, 1) as u32;
         ParticularState::new(additional_data)
+    }
+
+    /// Вторая goods-listener половина `CPlayer::OnEnterRegion`: packet
+    /// listener оригинала только собирает значения, а состояния создаются из
+    /// equipment в его traversal order с подавлением duplicate additional ID.
+    pub(crate) fn restore_equipment_particular_states(
+        &mut self,
+        factory: &CGoodsFactory,
+    ) -> Vec<ParticularState> {
+        let states = self
+            .equipment
+            .traversing_goods()
+            .into_iter()
+            .filter_map(|(_, goods)| Self::particular_state_from_goods(goods, factory))
+            .collect::<Vec<_>>();
+        let mut begun = Vec::new();
+        for state in states {
+            if let Some(state) = self.move_shape.add_particular_state(state) {
+                begun.push(state);
+            }
+        }
+        begun
     }
 
     pub(crate) const fn automatic_restore_state_count(&self) -> usize {

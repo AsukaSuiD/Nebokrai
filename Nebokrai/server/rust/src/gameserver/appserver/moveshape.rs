@@ -1179,6 +1179,31 @@ impl CMoveShape {
         self.state_storage.ride_state.as_mut()
     }
 
+    /// Начальный scalar-prefix `CMoveShape::OnEnterRegion` и итог повторного
+    /// `StartAllStates(false)`. Safe owner уже хранит применённые состояния,
+    /// поэтому их aggregate lock-count переносится через native reset без
+    /// повторного добавления тех же typed state объектов.
+    pub(crate) const fn reset_region_entry_control(&mut self) {
+        let moveable_locks = if self.moveable_count > 0 {
+            self.moveable_count
+        } else {
+            0
+        };
+        let can_fight_locks = if self.can_fight_count > 0 {
+            self.can_fight_count
+        } else {
+            0
+        };
+        self.moveable = true;
+        self.can_fight = true;
+        self.moveable_count = 0;
+        self.can_fight_count = 0;
+        self.moveable_count = moveable_locks;
+        self.can_fight_count = can_fight_locks;
+        self.moveable = self.moveable_count < 1;
+        self.can_fight = self.can_fight_count < 1;
+    }
+
     pub(crate) const fn has_ride_state(&self) -> bool {
         self.state_storage.ride_state.is_some()
     }

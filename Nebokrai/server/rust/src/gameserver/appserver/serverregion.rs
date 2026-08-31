@@ -2249,6 +2249,31 @@ impl CServerRegion {
         player_ids
     }
 
+    /// Exact девяти-area `GetAllShapes` обход входа игрока. Area и категории
+    /// сохраняют native order; caller сериализует snapshot каждого результата.
+    pub(crate) fn shapes_around_area<Resolver: ShapeResolver>(
+        &self,
+        area_index: usize,
+        resolver: &Resolver,
+    ) -> Vec<ShapeView> {
+        let Some(center) = self.areas.get(area_index) else {
+            return Vec::new();
+        };
+        let center = ShapeAreaCoordinates {
+            x: center.x(),
+            y: center.y(),
+        };
+        let registered = RegisteredShapeResolver {
+            registry: &self.registry,
+            resolver,
+        };
+        let mut shapes = Vec::new();
+        for index in self.neighbor_area_indices(center) {
+            self.areas[index].get_all_shapes(&registered, &mut shapes);
+        }
+        shapes
+    }
+
     pub(crate) fn pet_ids_around_area(&self, area_index: usize) -> Vec<i32> {
         let Some(center) = self.areas.get(area_index) else {
             return Vec::new();

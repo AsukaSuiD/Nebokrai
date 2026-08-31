@@ -4,8 +4,9 @@
 //! `appserver/message/regionmessage.cpp`. Достигнутый `0x8F801` завершает
 //! локальный `CPlayer::ChangeRegion`: проверяет действующий контекст игрока и
 //! региона, снимает `m_bInChangingRegion`, переносит IP клиента, добавляет
-//! игрока в пространственный реестр назначения и лишь затем передаёт хвост
-//! сериализации, погоды и состояния владельцу исполнения. `0x8F805` проверяет
+//! игрока в пространственный реестр назначения, публикует снимки и погоду,
+//! затем завершает состояния, спутников и WarSoul прямым владельцем.
+//! `0x8F805` проверяет
 //! прямое ребро канонического `RegionRouter`, диапазон перехода и
 //! `CS_CHANGEREGION`, после чего входит в тот же полный владелец
 //! `CPlayer::ChangeRegion` с игровыми, пространственными и локальными/World
@@ -14,7 +15,8 @@
 
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::shape::SHAPE_CHANGE_REGION;
-use crate::gameserver::gameserver::game::{CGame, GameRegionEnterContext};
+use crate::gameserver::appserver::serverregion::ServerRegionMonsterContext;
+use crate::gameserver::gameserver::game::{CGame, NationCombatContext};
 use crate::nets::netserver::message::CMessage;
 use crate::setup::regionrouter::RegionRoutePoint;
 use tracing::{debug, trace};
@@ -28,13 +30,14 @@ pub(crate) enum GameRegionMessageError {
     MissingArgument,
 }
 
-pub(crate) fn dispatch_game_region_message<
-    Context: GameRegionEnterContext + ScriptFunctionRuntime,
->(
+pub(crate) fn dispatch_game_region_message<Context>(
     message: &mut CMessage,
     game: &mut CGame,
     context: &mut Context,
-) -> Option<Result<(), GameRegionMessageError>> {
+) -> Option<Result<(), GameRegionMessageError>>
+where
+    Context: NationCombatContext + ServerRegionMonsterContext + ScriptFunctionRuntime,
+{
     let message_type = message.message_type() as u32;
     if !matches!(message_type, ENTER_CHANGED_REGION | CHANGE_CONNECTED_REGION) {
         return None;
