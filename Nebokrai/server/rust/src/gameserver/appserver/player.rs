@@ -4830,6 +4830,13 @@ impl CPlayer {
         self.move_shape.replace_boss_blue_quake_state(state)
     }
 
+    pub(crate) fn activate_loaded_boss_blue_quake_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::bossbluequakestate::BossBlueQuakeState> {
+        self.move_shape.activate_loaded_boss_blue_quake_state(now_ms)
+    }
+
     pub(crate) fn take_expired_boss_blue_quake_state(
         &mut self,
         now_ms: u32,

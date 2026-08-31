@@ -150,7 +150,9 @@ use crate::gameserver::appserver::skills::bossbluefurystate::{
     BossBlueFuryState, BossBlueFuryTick, BOSS_BLUE_FURY_STATE_BYTES,
     BOSS_BLUE_FURY_STATE_ID,
 };
-use crate::gameserver::appserver::skills::bossbluequakestate::BossBlueQuakeState;
+use crate::gameserver::appserver::skills::bossbluequakestate::{
+    BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID,
+};
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::TaiJiState;
@@ -921,6 +923,13 @@ impl CMoveShape {
         }
         if let Some(state) = self.spider_poison_state { update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds)); }
         if let Some(state) = self.daub_poison_state { update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds)); }
+        if let Some(state) = self.boss_blue_quake_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1105,6 +1114,15 @@ impl CMoveShape {
         self.spider_poison_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID)).and_then(|offset| SpiderPoisonState::decode(&states, offset, 0).ok());
         if let Some(state) = self.spider_poison_state { self.periodic_attack_order.insert(state.skill_id()); self.curable_state_order.insert(state.skill_id()); }
         self.daub_poison_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(DAUB_POISON_STATE_ID)).and_then(|offset| DaubPoisonState::decode(&states, offset).ok());
+        self.curable_state_order.shift_remove(&BOSS_BLUE_QUAKE_STATE_ID);
+        self.boss_blue_quake_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(BOSS_BLUE_QUAKE_STATE_ID))
+            .and_then(|offset| BossBlueQuakeState::decode(&states, offset).ok());
+        if self.boss_blue_quake_state.is_some() {
+            self.curable_state_order.insert(BOSS_BLUE_QUAKE_STATE_ID);
+        }
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2212,8 +2230,21 @@ impl CMoveShape {
         &mut self,
         state: BossBlueQuakeState,
     ) -> Option<BossBlueQuakeState> {
+        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.curable_state_order.insert(state.skill_id());
         self.boss_blue_quake_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_boss_blue_quake_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<BossBlueQuakeState> {
+        let state = self.boss_blue_quake_state?.activate_loaded(now_ms);
+        self.boss_blue_quake_state = Some(state);
+        self.set_moveable(false);
+        self.set_fightable(false);
+        Some(state)
     }
 
     pub(crate) fn take_expired_boss_blue_quake_state(
@@ -2223,12 +2254,14 @@ impl CMoveShape {
         self.boss_blue_quake_state.filter(|state| state.expired(now_ms))?;
         let state = self.boss_blue_quake_state.take()?;
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
         Some(state)
     }
 
     pub(crate) fn take_boss_blue_quake_state(&mut self) -> Option<BossBlueQuakeState> {
         let state = self.boss_blue_quake_state.take()?;
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), BOSS_BLUE_QUAKE_STATE_BYTES);
         Some(state)
     }
 
@@ -4424,6 +4457,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::spriteburn::SPRITE_BURN_SKILL_ID => SPRITE_BURN_STATE_BYTES,
             super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => SPIDER_POISON_STATE_BYTES,
             DAUB_POISON_STATE_ID => DAUB_POISON_STATE_BYTES,
+            BOSS_BLUE_QUAKE_STATE_ID => BOSS_BLUE_QUAKE_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

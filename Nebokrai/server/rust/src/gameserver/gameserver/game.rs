@@ -1219,6 +1219,7 @@ use crate::gameserver::appserver::skills::bossbluefurystate::{
 };
 use crate::gameserver::appserver::skills::bossbluequakestate::{
     expire_monster_boss_blue_quake_state, expire_player_boss_blue_quake_state,
+    send_boss_blue_quake_state_visual,
 };
 use crate::gameserver::appserver::skills::knightcutstate::{
     expire_monster_knight_cut_state, expire_player_knight_cut_state,
@@ -30176,6 +30177,11 @@ impl CGame {
             .activate_loaded_sprite_burn_state(login_tick_ms);
         let loaded_spider_poison_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_spider_poison_state(login_tick_ms);
         let loaded_daub_poison_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_daub_poison_state(login_tick_ms);
+        let loaded_boss_blue_quake_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_boss_blue_quake_state(login_tick_ms);
         let loaded_cure_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30378,6 +30384,21 @@ impl CGame {
         }
         if let Some(state) = loaded_spider_poison_state && let Some(player) = self.find_player(expected_player_id) && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { send_spider_poison_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms); }
         if let Some(state) = loaded_daub_poison_state { send_daub_poison_state_visual(self, expected_player_id, state, true, || login_tick_ms); }
+        if let Some(state) = loaded_boss_blue_quake_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_boss_blue_quake_state_visual(
+                self,
+                region_id,
+                player.shape().identity(),
+                x,
+                y,
+                state,
+                true,
+                || login_tick_ms,
+            );
+        }
         if let Some(state) = loaded_cure_state {
             send_cure_state_visual(self, expected_player_id, state, true);
         }
