@@ -67,7 +67,8 @@ use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GameNetworkInitializationError, ServerRegionOwner,
-    colored_player_notice_message, format_legacy_text_fields,
+    LegacyFormatArgument, colored_player_notice_message, format_legacy_mixed,
+    format_legacy_text_fields,
     game_tick_milliseconds,
 };
 use crate::gameserver::gameserver::honorranks::HonorRanksDecodeError;
@@ -2492,21 +2493,26 @@ fn read_start_long(
     Ok(value)
 }
 
-pub(crate) trait InitialRegionStartupContext:
-    ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterSpawnEffectsContext
+pub(crate) trait InitialRegionStartupContext: ServerRegionMembershipContext {}
+
+impl<Context> InitialRegionStartupContext for Context where
+    Context: ServerRegionMembershipContext + ?Sized
 {
 }
 
-impl<Context> InitialRegionStartupContext for Context where
-    Context: ServerRegionNpcSpawnEffectsContext + ServerRegionMonsterSpawnEffectsContext + ?Sized
-{
+enum InitialRegionEffect {
+    Log(Vec<u8>),
+    MonsterEntry(CShape, CMessage),
 }
 
 struct InitialRegionClockContext<'a, Context> {
     context: &'a mut Context,
     monster_registry: MonsterRegistry,
     default_master_name: Vec<u8>,
-    monster_entries: Vec<(CShape, CMessage)>,
+    npc_position_failure_template: Vec<u8>,
+    monster_variant_failure_template: Vec<u8>,
+    monster_position_failure_template: Vec<u8>,
+    effects: Vec<InitialRegionEffect>,
 }
 
 impl<Context: RegionRandomContext> RegionRandomContext for InitialRegionClockContext<'_, Context> {
@@ -2523,28 +2529,42 @@ impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
     }
 }
 
-impl<Context: ServerRegionNpcSpawnEffectsContext> ServerRegionNpcSpawnEffectsContext
+impl<Context: ServerRegionMembershipContext> ServerRegionNpcSpawnEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
     fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
-        self.context.log_npc_position_failure(npc_name);
+        self.effects.push(InitialRegionEffect::Log(format_legacy_mixed(
+            &self.npc_position_failure_template,
+            &[LegacyFormatArgument::Bytes(npc_name)],
+            0xff,
+        )));
     }
 }
 
-impl<Context: ServerRegionMonsterSpawnEffectsContext> ServerRegionMonsterSpawnEffectsContext
+impl<Context: ServerRegionMembershipContext> ServerRegionMonsterSpawnEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
-        self.context
-            .log_monster_variant_failure(region_id, refresh_index);
+        self.effects.push(InitialRegionEffect::Log(format_legacy_mixed(
+            &self.monster_variant_failure_template,
+            &[
+                LegacyFormatArgument::Signed(region_id),
+                LegacyFormatArgument::Signed(refresh_index),
+            ],
+            0xff,
+        )));
     }
 
     fn log_monster_position_failure(&mut self, origin_name: &[u8]) {
-        self.context.log_monster_position_failure(origin_name);
+        self.effects.push(InitialRegionEffect::Log(format_legacy_mixed(
+            &self.monster_position_failure_template,
+            &[LegacyFormatArgument::Bytes(origin_name)],
+            0xff,
+        )));
     }
 }
 
-impl<Context: ServerRegionMonsterSpawnEffectsContext> ServerRegionMonsterEffectsContext
+impl<Context: ServerRegionMembershipContext> ServerRegionMonsterEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
     fn send_monster_entered_around(&mut self, _region: &CServerRegion, monster: &CMonster) {
@@ -2559,8 +2579,10 @@ impl<Context: ServerRegionMonsterSpawnEffectsContext> ServerRegionMonsterEffects
         else {
             return;
         };
-        self.monster_entries
-            .push((monster.move_shape().shape().clone(), message));
+        self.effects.push(InitialRegionEffect::MonsterEntry(
+            monster.move_shape().shape().clone(),
+            message,
+        ));
     }
 }
 
@@ -2690,7 +2712,10 @@ where
         context,
         monster_registry: game.monster_registry().clone(),
         default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
-        monster_entries: Vec::new(),
+        npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+        monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+        monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+        effects: Vec::new(),
     };
     let owner = match subtype {
         0 => {
@@ -2807,18 +2832,25 @@ where
     };
 
     // Техническая замена из-за Rust borrow-границы GodsBattle callback:
-    // original AddMonster посылает каждый кадр сразу, здесь startup без
-    // player sessions сохраняет тот же порядок кадров и выпускает их до
-    // публикации owner в CGame. Игровые мутации и RNG не откладываются.
-    let monster_entries = std::mem::take(&mut startup_context.monster_entries);
+    // original callbacks исполняют log/send сразу, здесь startup без player
+    // sessions сохраняет общий порядок эффектов и выпускает их до публикации
+    // owner в CGame. Игровые мутации и RNG не откладываются.
+    let effects = std::mem::take(&mut startup_context.effects);
     drop(startup_context);
-    for (origin, message) in monster_entries {
-        if let Err(error) = game.send_game_shape_around(owner.base(), &origin, None, &message) {
-            tracing::warn!(
-                region_id = owner.region_id(),
-                ?error,
-                "fresh monster региона запуска не опубликован вокруг"
-            );
+    for effect in effects {
+        match effect {
+            InitialRegionEffect::Log(text) => add_log_text(&text),
+            InitialRegionEffect::MonsterEntry(origin, message) => {
+                if let Err(error) =
+                    game.send_game_shape_around(owner.base(), &origin, None, &message)
+                {
+                    tracing::warn!(
+                        region_id = owner.region_id(),
+                        ?error,
+                        "fresh monster региона запуска не опубликован вокруг"
+                    );
+                }
+            }
         }
     }
 

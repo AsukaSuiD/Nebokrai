@@ -46873,7 +46873,7 @@ pub(crate) fn format_legacy_text_fields(
     output
 }
 
-enum LegacyFormatArgument<'a> {
+pub(crate) enum LegacyFormatArgument<'a> {
     Bytes(&'a [u8]),
     Signed(i32),
     Unsigned(u32),
@@ -46882,7 +46882,7 @@ enum LegacyFormatArgument<'a> {
 /// Ограниченная замена достигнутых SZLGS-шаблонов `%s/%d/%u`. Сохраняет
 /// `%%`, а несовпавшую конверсию оставляет буквально, не читая отсутствующий
 /// vararg за границей подтверждённого контракта вызова.
-fn format_legacy_mixed(
+pub(crate) fn format_legacy_mixed(
     template: &[u8],
     arguments: &[LegacyFormatArgument<'_>],
     maximum_bytes: usize,
