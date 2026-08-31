@@ -6,12 +6,13 @@
 //! дистанции навыка; этот наследник добавляет фильтр страны монстра и статус
 //! преступника. Поиск игроков выполняется раньше поиска питомцев, а игрок
 //! побеждает при равном итоговом расстоянии. Унаследованные `OnIdle` и
-//! `OnSearchEnemy` используют общий FIFO мечника и этот национальный selector.
+//! `OnSearchEnemy` используют общий FIFO мечника и этот национальный selector;
+//! повозки проходят унаследованный country-фильтр окружной охраны.
 
-use super::guardtarget::GuardDistanceTarget;
+use super::guardtarget::{GuardDistanceTarget, select_guard_target_groups};
 use super::vilcouguardwithsword::{
     consider_country_guard_target, consider_village_country_guard_pet,
-    select_country_guard_target,
+    select_country_guard_target, select_village_country_guard_carriage,
 };
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -120,5 +121,16 @@ pub(crate) fn select_nation_country_guard_enemy(
             live_master_country,
         );
     }
-    select_country_guard_target(selected_player, selected_pet)
+    let selected_carriage = select_village_country_guard_carriage(
+        game,
+        region,
+        owner,
+        area_index,
+        guard_range,
+        minimum_skill_distance,
+    );
+    select_guard_target_groups(
+        select_country_guard_target(selected_player, selected_pet),
+        selected_carriage,
+    )
 }

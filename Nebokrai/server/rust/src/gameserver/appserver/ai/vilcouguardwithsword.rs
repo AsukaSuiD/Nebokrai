@@ -5,8 +5,8 @@
 //! отдельный упорядоченный поиск игроков и питомцев и необычное предпочтение
 //! целей не ближе минимальной дистанции навыка. Унаследованные `OnIdle` и
 //! `OnSearchEnemy` проходят через общий FIFO городского мечника, но вызывают
-//! окружной selector. Поиск повозок сохранён как RAW: его реальный вызов из
-//! достигнутого `OnSearch` пока не подтверждён.
+//! окружной selector. Третий проход выбирает повозки, исключая живого хозяина
+//! страны региона; сохранённое RAW-тело фиксирует его порядок и фильтры.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -101,6 +101,53 @@ pub(crate) fn select_country_guard_target(
     select_guard_target_groups(player, pet)
 }
 
+pub(crate) fn select_village_country_guard_carriage(
+    game: &CGame,
+    region: &CServerRegion,
+    owner: ShapeView,
+    area_index: usize,
+    guard_range: i32,
+    minimum_skill_distance: i32,
+) -> Option<GuardDistanceTarget> {
+    let mut selected = None;
+    for carriage_id in region.carriage_ids_around_area(area_index) {
+        let Some((candidate, master)) = region
+            .find_monster_by_id(carriage_id)
+            .filter(|carriage| !CMoveShape::is_died(carriage.hit_points()))
+            .and_then(|carriage| {
+                let property =
+                    game.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+                if !carriage.is_carriage(property) {
+                    return None;
+                }
+                Some((carriage.shape_view(property)?, carriage.master_info()))
+            })
+        else {
+            continue;
+        };
+        let live_master_country = (master.master_type == PLAYER_TYPE)
+            .then(|| game.find_player(master.master_id).map(|player| player.country()))
+            .flatten();
+        selected = consider_village_country_guard_pet(
+            selected,
+            GuardDistanceTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            minimum_skill_distance,
+            region.country,
+            live_master_country,
+        );
+    }
+    selected
+}
+
 pub(crate) fn select_village_country_guard_enemy(
     game: &CGame,
     region: &CServerRegion,
@@ -170,5 +217,16 @@ pub(crate) fn select_village_country_guard_enemy(
             live_master_country,
         );
     }
-    select_country_guard_target(selected_player, selected_pet)
+    let selected_carriage = select_village_country_guard_carriage(
+        game,
+        region,
+        owner,
+        area_index,
+        guard_range,
+        minimum_skill_distance,
+    );
+    select_guard_target_groups(
+        select_country_guard_target(selected_player, selected_pet),
+        selected_carriage,
+    )
 }

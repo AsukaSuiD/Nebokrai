@@ -4,8 +4,8 @@
 //! appserver/ai/vilcouguardwithbow.cpp подтверждают общий со стражем с мечом
 //! поиск игроков и питомцев, преимущество игрока при равной дистанции и новый
 //! поиск после урона только вне боя. `OnIdle` ставит строгую очередь
-//! `ChangeSkill → Stand → SearchEnemy`; не достигнутый из `OnSearch` поиск
-//! повозок сохранён как RAW.
+//! `ChangeSkill → Stand → SearchEnemy`; общий окружной selector теперь также
+//! исполняет сохранённый ниже проход вражеских повозок.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
