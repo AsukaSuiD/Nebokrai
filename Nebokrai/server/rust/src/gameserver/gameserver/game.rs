@@ -3309,12 +3309,9 @@ pub(crate) trait NationCombatContext: GameClockContext {}
 
 impl<T> NationCombatContext for T where T: GameClockContext {}
 
-pub(crate) trait NationContendContext:
-    NationCombatContext + ServerRegionMonsterContext
-{
-}
+pub(crate) trait NationContendContext: NationCombatContext {}
 
-impl<T> NationContendContext for T where T: NationCombatContext + ServerRegionMonsterContext {}
+impl<T> NationContendContext for T where T: NationCombatContext {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NationMonsterDamageOutcome {
@@ -4288,6 +4285,7 @@ pub(crate) trait GameMainLoopRuntime:
     + GamePlayerMessageRuntime
     + NationContendContext
     + GodsBattleNpcContendContext
+    + ServerRegionMonsterContext
     + GameExitRuntime
 {}
 
@@ -12863,7 +12861,11 @@ impl CGame {
         }
         let mut magic_stone_transitions = 0usize;
         for country in region.take_due_magic_stone_transitions() {
-            self.replace_nation_magic_stone(&mut region, country, runtime);
+            self.replace_nation_magic_stone(
+                &mut region,
+                country,
+                runtime.now_milliseconds(),
+            );
             magic_stone_transitions = magic_stone_transitions.wrapping_add(1);
         }
         let advance = match region.advance_contenders(runtime.now_milliseconds()) {
@@ -13062,11 +13064,11 @@ impl CGame {
         Some(())
     }
 
-    fn replace_nation_magic_stone<Context: NationContendContext>(
-        &self,
+    fn replace_nation_magic_stone(
+        &mut self,
         region: &mut ServerNationRegion,
         country: u8,
-        context: &mut Context,
+        now_ms: u32,
     ) {
         let (npc_name_id, monster_name_id, tile_x, tile_y) = match country {
             1 => (b"GS1084".as_slice(), b"GS1142".as_slice(), 0xfb, 0x35),
@@ -13173,19 +13175,12 @@ impl CGame {
             );
             return;
         };
-        let (area_width, area_height) = self.area_dimensions();
-        match region.war.base.add_monster(
+        match self.add_nation_monster_owned(
+            region,
             &property,
             tile_x,
             tile_y,
-            -1,
-            true,
-            false,
-            context.now_milliseconds(),
-            area_width,
-            area_height,
-            &self.skill_factory,
-            context,
+            now_ms,
         ) {
             Ok(monster_id) => tracing::debug!(
                 country,
@@ -13204,6 +13199,62 @@ impl CGame {
                 "создание монстра магического камня заблокировано"
             ),
         }
+    }
+
+    fn add_nation_monster_owned(
+        &mut self,
+        region: &mut ServerNationRegion,
+        property: &MonsterProperties,
+        tile_x: i32,
+        tile_y: i32,
+        now_ms: u32,
+    ) -> Result<i32, RegionMembershipBlock> {
+        let (area_width, area_height) = self.area_dimensions();
+        let default_master_name = self.get_string_by_id(b"GS0119").to_vec();
+        let variant_failure_template = self.get_string_by_id(b"GS0231").to_vec();
+        let position_failure_template = self.get_string_by_id(b"GS0232").to_vec();
+        let mut context = GameWarGuardRefreshContext {
+            random_state: &mut self.random_state,
+            monster_registry: &self.monster_registry,
+            default_master_name: &default_master_name,
+            variant_failure_template: &variant_failure_template,
+            position_failure_template: &position_failure_template,
+            guard_monsters: Vec::new(),
+            guard_indices: Vec::new(),
+            effects: Vec::new(),
+        };
+        let spawn = region.war.base.add_monster(
+            property,
+            tile_x,
+            tile_y,
+            -1,
+            true,
+            false,
+            now_ms,
+            area_width,
+            area_height,
+            &self.skill_factory,
+            &mut context,
+        );
+        let effects = std::mem::take(&mut context.effects);
+        drop(context);
+        for effect in effects {
+            match effect {
+                GameWarGuardRefreshEffect::Log(text) => add_game_log_text(&text),
+                GameWarGuardRefreshEffect::MonsterEntry(origin, message) => {
+                    if let Err(error) =
+                        self.send_game_shape_around(&region.war.base, &origin, None, &message)
+                    {
+                        tracing::warn!(
+                            region_id = region.war.base.id,
+                            ?error,
+                            "не опубликован вход монстра войны наций"
+                        );
+                    }
+                }
+            }
+        }
+        spawn
     }
 
     fn add_nation_npc_owned(
