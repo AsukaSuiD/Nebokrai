@@ -36087,85 +36087,34 @@ impl CGame {
                     player_id,
                     dispatch,
                 } => {
-                    let (changes_command, current_skill_id, interrupted_delayed_skill) = {
-                        let player = self
-                            .players
-                            .get(&player_id)
-                            .expect("skill dispatch сохраняет canonical player");
-                        let changes_command = player.player_ai().next_player_skill() != Some(dispatch);
-                        let interrupted_delayed_skill = (player.player_ai().base_magic().is_some()
-                            || player.player_ai().archery().is_some()
-                            || player.player_ai().heartless_arrow().is_some()
-                            || player.player_ai().heartless_arrow_area().is_some()
-                            || player.player_ai().lighting_arrow().is_some()
-                            || player.player_ai().lighting_arrow_2().is_some()
-                            || player.player_ai().meteor_arrow_mass().is_some()
-                            || player.player_ai().meteor_arrow().is_some()
-                            || player.player_ai().rain_arrow().is_some()
-                            || player.player_ai().poison_moth().is_some()
-                            || player.player_ai().kerosene().is_some()
-                            || player.player_ai().ignition().is_some()
-                            || player.player_ai().blind().is_some()
-                            || player.player_ai().blood_rose().is_some()
-                            || player.player_ai().scorpion().is_some()
-                            || player.player_ai().boa_lock().is_some()
-                            || player.player_ai().falling_star().is_some()
-                            || player.player_ai().explosive_arrow().is_some()
-                            || player.player_ai().strike().is_some()
-                            || player.player_ai().agility_family().is_some()
-                            || player.player_ai().callosity().is_some()
-                            || player.player_ai().ju_cut().is_some()
-                            || player.player_ai().lightning_sword().is_some()
-                            || player.player_ai().little_flash().is_some()
-                            || player.player_ai().little_star().is_some()
-                            || player.player_ai().path_projectile().is_some()
-                            || player.player_ai().direct_projectile().is_some()
-                            || player.player_ai().yunsheng_lightning().is_some()
-                            || player.player_ai().corpse_ptomaine().is_some()
-                            || player.player_ai().monster_thorn().is_some()
-                            || player.player_ai().spider_mist().is_some()
-                            || player.player_ai().spider_web().is_some()
-                            || player.player_ai().spider_poison().is_some()
-                            || player.player_ai().summon_creature().is_some()
-                            || player.player_ai().boss_blue_fury().is_some()
-                            || player.player_ai().boss_blue_quake().is_some()
-                            || player.player_ai().boss_fiend_penetrate().is_some()
-                            || player.player_ai().sprite_burn().is_some()
-                            || player.player_ai().wide_arc_attack().is_some()
-                            || player.player_ai().lord_fast_attack().is_some()
-                            || player.player_ai().thunder_slash().is_some()
-                            || player.player_ai().pillar().is_some()
-                            || player.player_ai().rush().is_some()
-                            || player.player_ai().rush_2().is_some()
-                            || player.player_ai().knock_out().is_some())
-                            && changes_command;
-                        (
-                            changes_command,
-                            player.current_skill_id(),
-                            interrupted_delayed_skill,
-                        )
-                    };
-                    let materialized_ended = changes_command
-                        && current_skill_id.is_some_and(|skill_id| {
-                            self.end_materialized_player_skill(
-                                player_id,
-                                skill_id,
-                                MaterializedSkillEndCause::Interruption,
-                                runtime,
-                            )
-                                .is_some()
-                        });
-                    let rejected = {
-                        let player = self
-                            .players
-                            .get_mut(&player_id)
-                            .expect("skill dispatch сохраняет canonical player");
-                        if interrupted_delayed_skill && !materialized_ended {
-                            player.set_skill_moveable(true);
-                            player.set_current_skill_id(None);
-                        }
-                        player.player_ai_mut().queue_player_skill(dispatch)
-                    };
+                    let current_skill_id = self
+                        .players
+                        .get(&player_id)
+                        .expect("skill dispatch сохраняет canonical player")
+                        .current_skill_id();
+                    if current_skill_id == Some(dispatch.skill_id()) {
+                        let ended = self.end_materialized_player_skill(
+                            player_id,
+                            dispatch.skill_id(),
+                            MaterializedSkillEndCause::Interruption,
+                            runtime,
+                        );
+                        let delivery = self.send_base_attack_failure(player_id, 2);
+                        trace!(
+                            player_id,
+                            ?dispatch,
+                            ?ended,
+                            delivery,
+                            "Повторный запрос активного навыка завершён и отклонён"
+                        );
+                        continue;
+                    }
+                    let rejected = self
+                        .players
+                        .get_mut(&player_id)
+                        .expect("skill dispatch сохраняет canonical player")
+                        .player_ai_mut()
+                        .queue_player_skill(dispatch, current_skill_id);
                     for _ in 0..rejected {
                         let mut message = CMessage::new(0x000b_fe01);
                         message.add_byte(0);

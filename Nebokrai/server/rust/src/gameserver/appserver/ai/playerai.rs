@@ -469,7 +469,24 @@ impl CPlayerAI {
         self.base_ai.cancel_active_move();
     }
 
-    pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) -> usize {
+    /// Сохраняет различие native `m_qTarget` и уже выбранной AI-цели. Rust
+    /// держит dispatch материализованного навыка в начале той же очереди,
+    /// поэтому новый другой навык заменяет только ожидающий хвост, не active
+    /// concrete owner. Без активного навыка очередь заменяется целиком.
+    pub(crate) fn queue_player_skill(
+        &mut self,
+        dispatch: PlayerSkillDispatch,
+        active_skill_id: Option<u32>,
+    ) -> usize {
+        if active_skill_id.is_some() {
+            if self.player_skills.get(1).copied() == Some(dispatch) {
+                return 0;
+            }
+            let rejected = self.player_skills.len().saturating_sub(1);
+            self.player_skills.truncate(1);
+            self.player_skills.push_back(dispatch);
+            return rejected;
+        }
         if self.player_skills.front().copied() == Some(dispatch) {
             return 0;
         }
