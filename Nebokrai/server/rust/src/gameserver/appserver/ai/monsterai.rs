@@ -13,8 +13,10 @@
 //! преследования сохраняет slip-порядок, задержку движения и ограничения
 //! питомца без дополнительного RNG. Реакция `WhenBeenHurted` назначает новую
 //! цель только свободному ИИ: игрок принимается всегда, а монстр — только после
-//! подтверждения приручения. Timestamp попытки атаки принадлежит расписанию
-//! ИИ и не подменяет отдельные reuse-таймеры установленных навыков. Остальные
+//! подтверждения приручения. `HasTarget` считает целью только пару с ненулевыми
+//! типом объекта и ID, включая отрицательные унаследованные значения. Timestamp
+//! попытки атаки принадлежит расписанию ИИ и не подменяет отдельные reuse-таймеры
+//! установленных навыков. Остальные
 //! AI-ветви ниже остаются RAW.
 //! Внешний virtual `Attack(skill, target)` не запускает навык: он только
 //! передаёт identity в `SetTarget`; client-команда и `CPetsControl` проводят
@@ -391,48 +393,6 @@ pub(crate) fn approach_attack_range(
 // RVA: 0x001DCBC0
 // ADDRESS: 005dcbc0
 // PROTOTYPE: int __thiscall OnChangeSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterAI::HasTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:262
-// RVA: 0x001DCC20
-// ADDRESS: 005dcc20
-// PROTOTYPE: int __thiscall HasTarget(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterAI::OnLoseTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:267
-// RVA: 0x001DCC30
-// ADDRESS: 005dcc30
-// PROTOTYPE: int __thiscall OnLoseTarget(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonsterAI::SetTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:272
-// RVA: 0x001DCC40
-// ADDRESS: 005dcc40
-// PROTOTYPE: void __thiscall SetTarget(long param_1, long param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -676,7 +676,7 @@ impl CMonster {
         if !self.tamed {
             return PetLifecycleOutcome::default();
         }
-        let outcome = self.pet_behavior.tick(facts, self.ai_target.is_some());
+        let outcome = self.pet_behavior.tick(facts, self.ai_target().is_some());
         if outcome.clear_target {
             self.clear_ai_target();
         }
@@ -693,7 +693,7 @@ impl CMonster {
     pub(crate) fn retarget_passive_pet(&mut self, target: ShapeIdentity) -> bool {
         if !self
             .pet_behavior
-            .retarget_passive(self.tamed, self.ai_target.is_some())
+            .retarget_passive(self.tamed, self.ai_target().is_some())
         {
             return false;
         }
@@ -1107,7 +1107,7 @@ impl CMonster {
         now_ms: u32,
     ) {
         self.when_been_hurted(now_ms);
-        if accepts_hurt_target(self.ai_target, attacker, attacker_is_tamed) {
+        if accepts_hurt_target(self.ai_target(), attacker, attacker_is_tamed) {
             self.ai_target = Some(attacker);
         }
     }
@@ -1125,7 +1125,7 @@ impl CMonster {
         attacker_is_owned_creature: bool,
     ) {
         self.when_been_hurted(now_ms);
-        let already_fighting = self.ai_target.is_some();
+        let already_fighting = self.ai_target().is_some();
         let selected = self.passive_gladiator_ai.as_mut().and_then(|state| {
             state.on_hurt(attacker, already_fighting, attacker_is_owned_creature)
         });
@@ -1136,7 +1136,7 @@ impl CMonster {
 
     pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
         self.base_ai.when_been_hurted(now_ms);
-        if self.pet_behavior.on_hurt(self.ai_target, attacker) {
+        if self.pet_behavior.on_hurt(self.ai_target(), attacker) {
             self.ai_target = Some(attacker);
         }
     }
@@ -1231,7 +1231,10 @@ impl CMonster {
     }
 
     pub(crate) const fn ai_target(&self) -> Option<ShapeIdentity> {
-        self.ai_target
+        match self.ai_target {
+            Some(target) if target.object_type != 0 && target.id != 0 => Some(target),
+            _ => None,
+        }
     }
 
     pub(crate) fn set_ai_target(&mut self, target: ShapeIdentity) {
