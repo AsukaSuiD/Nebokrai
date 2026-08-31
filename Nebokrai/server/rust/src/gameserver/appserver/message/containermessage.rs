@@ -679,11 +679,17 @@ pub(crate) fn dispatch_game_container_message<Context: GameContainerMessageRunti
         return Some(Ok(()));
     }
     if player.current_progress() == PlayerProgress::Synthesis {
-        let text = game.get_string_by_id(b"GS1013").to_vec();
+        let string_id = if route == EnhancementMessageRoute::GroundPickup {
+            b"GS1012".as_slice()
+        } else {
+            b"GS1013".as_slice()
+        };
+        let text = game.get_string_by_id(string_id).to_vec();
         let delivery = send_notify(game, player_id, &text, 0xffff_0000, 0);
         tracing::trace!(
             message_type,
             player_id,
+            string_id = %String::from_utf8_lossy(string_id),
             delivery,
             "перемещение запрещено во время синтеза"
         );
