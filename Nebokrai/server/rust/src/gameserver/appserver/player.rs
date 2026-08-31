@@ -4622,6 +4622,10 @@ impl CPlayer {
         self.move_shape.begin_callosity_state(state);
     }
 
+    pub(crate) fn activate_loaded_callosity_state(&mut self, now_ms: u32) {
+        self.move_shape.activate_loaded_callosity_state(now_ms);
+    }
+
     pub(crate) fn replace_swordship_state(
         &mut self,
         state: super::skills::swordshipstate::SwordshipState,

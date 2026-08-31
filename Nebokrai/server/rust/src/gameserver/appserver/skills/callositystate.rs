@@ -8,18 +8,24 @@
 //! странность сохранена: `time_to_keep` не обслуживается отдельным `AI`.
 //! Exact vtable обеих закалок направляет `GetRemainedTime` на `0x005D5F30`;
 //! additional-data остаётся базовым нулём.
+//! Общая exact-пара `Serialize/Unserialize` `0x005F1050/0x005F48E0` сохраняет
+//! `ID + remaining time + WORD blast factor`; этот формат разделяется с
+//! `CAgilityState2` и восстанавливается на player-login до пересчёта свойств.
 //! Коэффициент `CCH` применяется только при общем `UpdateProperty`; каждый
 //! такой проход повторно публикует начальный визуальный эффект, как
 //! `OnUpdateProperties`.
 
 use super::callosity::CALLOSITY_SKILL_ID;
+use super::callosity2::CALLOSITY_2_SKILL_ID;
 use super::callositystate2::CallosityState2;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::states::state::{default_additional_data, timed_client_state_time};
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const CALLOSITY_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
+pub(crate) const CALLOSITY_STATE_BYTES: usize = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CallosityState {
@@ -47,6 +53,11 @@ impl CallosityState {
 
     pub(crate) const fn time_to_keep(self) -> i32 {
         self.time_to_keep
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
+        self.started_at_ms = now_ms;
+        self
     }
 
     pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {
@@ -77,6 +88,30 @@ pub(crate) enum CallosityFamilyState {
 }
 
 impl CallosityFamilyState {
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let skill_id = reader.read_u32()?;
+        let keep_time_ms = reader.read_i32()?;
+        let blast_factor = reader.read_u16()?;
+        match skill_id {
+            CALLOSITY_SKILL_ID => Ok(Self::Callosity(CallosityState::new(
+                blast_factor,
+                0,
+                keep_time_ms,
+            ))),
+            CALLOSITY_2_SKILL_ID => Ok(Self::Callosity2(CallosityState2::new(
+                blast_factor,
+                0,
+                keep_time_ms,
+            ))),
+            _ => Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            }),
+        }
+    }
+
     pub(crate) const fn skill_id(self) -> u32 {
         match self {
             Self::Callosity(state) => state.skill_id(),
@@ -96,6 +131,33 @@ impl CallosityFamilyState {
             Self::Callosity(state) => state.additional_data(),
             Self::Callosity2(state) => state.additional_data(),
         }
+    }
+
+    pub(crate) const fn activate_loaded(self, now_ms: u32) -> Self {
+        match self {
+            Self::Callosity(state) => Self::Callosity(state.activate_loaded(now_ms)),
+            Self::Callosity2(state) => Self::Callosity2(state.activate_loaded(now_ms)),
+        }
+    }
+
+    pub(crate) fn encoded(self, now_ms: u32) -> [u8; CALLOSITY_STATE_BYTES] {
+        let mut bytes = [0; CALLOSITY_STATE_BYTES];
+        bytes[..4].copy_from_slice(&self.skill_id().to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.client_state_time(|| now_ms).to_le_bytes());
+        let blast_factor = match self {
+            Self::Callosity(state) => state.blast_factor(),
+            Self::Callosity2(state) => state.blast_factor(),
+        };
+        bytes[8..].copy_from_slice(&blast_factor.to_le_bytes());
+        bytes
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; CALLOSITY_STATE_BYTES] {
+        let started_at_ms = match self {
+            Self::Callosity(state) => state.started_at_ms,
+            Self::Callosity2(state) => state.started_at_ms(),
+        };
+        self.encoded(started_at_ms)
     }
 
     pub(crate) const fn apply_to_player(

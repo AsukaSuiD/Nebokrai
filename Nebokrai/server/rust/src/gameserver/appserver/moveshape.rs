@@ -76,7 +76,12 @@ use crate::gameserver::appserver::skills::wuxingmetal::WUXING_METAL_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwater::WUXING_WATER_SKILL_ID;
 use crate::gameserver::appserver::skills::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY_STATE_2_BYTES};
-use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
+use crate::gameserver::appserver::skills::callosity::{
+    CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::callositystate::{
+    CALLOSITY_STATE_BYTES, CallosityFamilyState,
+};
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
 use crate::gameserver::appserver::skills::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState};
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
@@ -1026,6 +1031,9 @@ impl CMoveShape {
         if let Some(state) = self.energy_holding_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded());
         }
+        if let Some(state) = self.callosity_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+        }
         if let Some(state) = self.boss_blue_fury_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
         }
@@ -1317,6 +1325,14 @@ impl CMoveShape {
                     .query_property(super::skills::energyholding::PARAMETER_PERCENT);
                 EnergyHoldingState::decode(&states, offset, parameter_percent).ok()
             });
+        self.callosity_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| {
+                read_u32(&states, *offset)
+                    .is_some_and(|id| matches!(id, CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID))
+            })
+            .and_then(|offset| CallosityFamilyState::decode(&states, offset).ok());
         self.boss_blue_fury_state = known_offsets
             .iter()
             .copied()
@@ -2082,14 +2098,20 @@ impl CMoveShape {
     }
 
     pub(crate) fn take_callosity_state(&mut self, skill_id: u32) -> Option<CallosityFamilyState> {
-        self.callosity_state
-            .filter(|state| state.skill_id() == skill_id)?;
-        self.callosity_state.take()
+        let state = self.callosity_state.filter(|state| state.skill_id() == skill_id)?;
+        self.callosity_state = None;
+        self.remove_serialized_state_record(skill_id, CALLOSITY_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn begin_callosity_state(&mut self, state: CallosityFamilyState) {
         debug_assert!(self.callosity_state.is_none());
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.callosity_state = Some(state);
+    }
+
+    pub(crate) fn activate_loaded_callosity_state(&mut self, now_ms: u32) {
+        self.callosity_state = self.callosity_state.map(|state| state.activate_loaded(now_ms));
     }
 
     pub(crate) fn swordship_states(&self) -> &[SwordshipState] {
@@ -4726,6 +4748,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             | super::skills::natural::NATURAL_SKILL_ID
             | super::skills::rapture::RAPTURE_SKILL_ID => PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
             super::skills::agility2::AGILITY_2_SKILL_ID => AGILITY_STATE_2_BYTES,
+            CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => CALLOSITY_STATE_BYTES,
             super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
             ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
             BOSS_BLUE_FURY_STATE_ID => BOSS_BLUE_FURY_STATE_BYTES,

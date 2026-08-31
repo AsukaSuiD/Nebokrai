@@ -30255,6 +30255,10 @@ impl CGame {
             .get(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .energy_holding_state();
+        self.players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_callosity_state(login_tick_ms);
         let loaded_boss_blue_fury_state = self
             .players
             .get_mut(&expected_player_id)
