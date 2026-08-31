@@ -36521,12 +36521,22 @@ impl CGame {
                         .expect("skill dispatch сохраняет canonical player")
                         .current_skill_id();
                     if current_skill_id == Some(dispatch.skill_id()) {
+                        let default_attack_skill_id = self
+                            .players
+                            .get(&player_id)
+                            .expect("активный навык сохраняет canonical player")
+                            .default_attack_skill_id(self.goods_factory());
                         let ended = self.end_materialized_player_skill(
                             player_id,
                             dispatch.skill_id(),
                             MaterializedSkillEndCause::Interruption,
                             runtime,
                         );
+                        if let Some(player) = self.players.get_mut(&player_id) {
+                            player.restore_default_attack_skill_after_target_loss(
+                                default_attack_skill_id,
+                            );
+                        }
                         let delivery = self.send_base_attack_failure(player_id, 2);
                         trace!(
                             player_id,
