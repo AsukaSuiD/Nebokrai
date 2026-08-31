@@ -5001,9 +5001,19 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
                 Some(SCRIPT_INT_PARAMETER_ERROR) | Some(0) | None => player_region_id,
                 Some(region_id) => region_id,
             };
-            let Some(position) = game
+            let region = game
                 .find_region(region_id)
-                .and_then(|owner| owner.base().region.get_random_pos(runtime).ok())
+                .map(|owner| owner.base().clone());
+            let Some(position) = region.and_then(|region| {
+                game.random_region_position_owned(
+                    &region,
+                    0,
+                    0,
+                    region.region.width,
+                    region.region.height,
+                )
+                .ok()
+            })
             else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };

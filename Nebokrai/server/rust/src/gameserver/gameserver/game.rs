@@ -18535,7 +18535,7 @@ impl CGame {
         around.add_ulong(pos_y_bits);
         let around_delivery = self.send_player_shape_around(player_id, Some(player_id), &around);
 
-        let return_point = self.apply_player_exit_return_point(player_id, runtime);
+        let return_point = self.apply_player_exit_return_point(player_id);
 
         let mut player_snapshot_size = None;
         let mut world_delivery = None;
@@ -18565,11 +18565,7 @@ impl CGame {
         );
     }
 
-    fn apply_player_exit_return_point<Runtime: GameContainerMessageRuntime>(
-        &mut self,
-        player_id: i32,
-        runtime: &mut Runtime,
-    ) -> GamePlayerExitReturnPoint {
+    fn apply_player_exit_return_point(&mut self, player_id: i32) -> GamePlayerExitReturnPoint {
         let Some((source_region_id, died)) = self
             .find_player(player_id)
             .and_then(|player| Some((player.server_region_id()?, player.is_dead())))
@@ -18605,13 +18601,17 @@ impl CGame {
         let mut random_block = None;
         if width > 0
             && height > 0
-            && let Some(destination) = self.find_region(point.region_id)
+            && let Some(destination) = self
+                .find_region(point.region_id)
+                .map(|owner| owner.base().clone())
         {
-            match destination
-                .base()
-                .region
-                .get_random_pos_in_range(point.left, point.top, width, height, runtime)
-            {
+            match self.random_region_position_owned(
+                &destination,
+                point.left,
+                point.top,
+                width,
+                height,
+            ) {
                 Ok(position) => {
                     x = position.x;
                     y = position.y;
@@ -43385,12 +43385,10 @@ impl CGame {
         Some(report)
     }
 
-    fn run_region_weather_tick<Context: RegionRandomContext>(
-        &self,
-        region: &mut CServerRegion,
-        context: &mut Context,
-    ) {
-        let tick = region.advance_weather_tick(|bound| context.random_below(bound));
+    fn run_region_weather_tick(&mut self, region: &mut CServerRegion) {
+        let tick = self.with_legacy_random_stream(|_, random| {
+            region.advance_weather_tick(|bound| random.random_below(bound))
+        });
         let delivery = match &tick {
             ServerRegionWeatherTick::Changed { weather, .. } => {
                 let mut message = CMessage::new(0x000b_f507);
@@ -44966,7 +44964,7 @@ impl CGame {
             refresh?;
         }
         if periodic_due {
-            self.run_region_weather_tick(region, runtime);
+            self.run_region_weather_tick(region);
         }
         let removed_npcs = self.run_region_shape_scan(region, runtime);
         tracing::trace!(

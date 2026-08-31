@@ -107,7 +107,7 @@ pub(super) fn cell_views(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<cr
     views
 }
 
-fn build_attack_path<Runtime: GameMainLoopRuntime>(
+fn build_attack_path(
     game: &mut CGame,
     region_id: i32,
     source_x: i32,
@@ -115,7 +115,6 @@ fn build_attack_path<Runtime: GameMainLoopRuntime>(
     target_x: i32,
     target_y: i32,
     maximum: u32,
-    runtime: &mut Runtime,
 ) -> Vec<(i32, i32, u8)> {
     let mut path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None);
     if path.first().is_some_and(|cell| cell.0 == source_x && cell.1 == source_y) { path.remove(0); }
@@ -153,7 +152,7 @@ fn build_attack_path<Runtime: GameMainLoopRuntime>(
             if open { path.push((candidate.x, candidate.y, 0)); return path; }
         }
         if let Some(owner) = game.take_region_owner(region_id) {
-            if let Ok(candidate) = owner.base().region.get_random_pos_in_range(occupied.0.wrapping_sub(2), occupied.1.wrapping_sub(2), 5, 5, runtime) {
+            if let Ok(candidate) = game.random_region_position_owned(owner.base(), occupied.0.wrapping_sub(2), occupied.1.wrapping_sub(2), 5, 5) {
                 path.push((candidate.x, candidate.y, 0));
             }
             game.restore_region_owner(owner);
@@ -223,7 +222,7 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
         let Some(player) = game.find_player(player_id) else { finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some((target_x, target_y)) = target_position(game, region_id, player_id, dispatch) else { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 10); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
-        let path = build_attack_path(game, region_id, source_x, source_y, target_x, target_y, maximum, runtime);
+        let path = build_attack_path(game, region_id, source_x, source_y, target_x, target_y, maximum);
         if path.is_empty() { failure(game, player_id, 2, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(rage_state) = game.find_player_mut(player_id).and_then(CPlayer::take_rage_break_state) else { failure(game, player_id, 4, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
         send_rage_break_state_visual(game, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: Default::default() }, source_x, source_y, rage_state, false, runtime.now_milliseconds());
