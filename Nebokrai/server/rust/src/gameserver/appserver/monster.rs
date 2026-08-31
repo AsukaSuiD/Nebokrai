@@ -613,12 +613,19 @@ impl CMonster {
         experience: u32,
         property: &MonsterProperties,
         experience_factor: f32,
+        current_factors: Option<[f32; 10]>,
         next_factors: Option<[f32; 10]>,
     ) -> Option<PetExperienceUpdate> {
         self.pet_experience = self.pet_experience.wrapping_add(experience);
         if self.pet_level < 10 {
             let threshold = self.pet_maximum_hp(property) as f32 * experience_factor;
-            if self.pet_experience as f32 > threshold && self.pet_level + 1 < 10 {
+            if self.pet_experience as f32 <= threshold {
+                if self.pet_level == 0 && self.pet_experience == 0 {
+                    if let Some(factors) = current_factors {
+                        self.adjust_pet_factors(factors);
+                    }
+                }
+            } else if self.pet_level + 1 < 10 {
                 self.pet_level += 1;
                 self.pet_experience = 0;
                 if let Some(factors) = next_factors {
@@ -2057,48 +2064,6 @@ impl CMonster {
 // RVA: 0x000E6EF0
 // ADDRESS: 004e6ef0
 // PROTOTYPE: void __thiscall OnBeenHurted(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::AdjustPetProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:959
-// RVA: 0x000E6FF0
-// ADDRESS: 004e6ff0
-// PROTOTYPE: void __thiscall AdjustPetProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::UpgradePetLevel
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:977
-// RVA: 0x000E7090
-// ADDRESS: 004e7090
-// PROTOTYPE: void __thiscall UpgradePetLevel(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::IncreasePetExperience
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1010
-// RVA: 0x000E7150
-// ADDRESS: 004e7150
-// PROTOTYPE: void __thiscall IncreasePetExperience(ulong param_1)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

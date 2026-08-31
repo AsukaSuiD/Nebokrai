@@ -5538,20 +5538,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 
 // ============================================================================
-// FUNCTION: CMoveShape::IncreaseExperienceForAllFallowers
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2854
-// RVA: 0x000CE5A0
-// ADDRESS: 004ce5a0
-// PROTOTYPE: void __thiscall IncreaseExperienceForAllFallowers(ulong param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CMoveShape::DelExState
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer

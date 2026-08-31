@@ -37680,46 +37680,54 @@ impl CGame {
         if pets.is_empty() {
             return;
         }
-        let configurations: Vec<_> = pets
-            .iter()
-            .filter(|pet| pet.object_type == MONSTER_TYPE)
-            .filter_map(|pet| {
-                let monster = self
-                    .find_region(region_id)?
-                    .base()
-                    .find_monster_by_id(pet.id)?;
-                let property = self
-                    .find_monster_property_by_origin_name(monster.base_property_key()?)?
-                    .clone();
-                let (experience_factor, _) =
-                    self.globe_setup.pet_progression(monster.pet_progress().0)?;
-                let next_factors = self
-                    .globe_setup
-                    .pet_progression(monster.pet_progress().0.wrapping_add(1))
-                    .map(|(_, factors)| factors);
-                Some((pet.id, property, experience_factor, next_factors))
-            })
-            .collect();
-        if configurations.is_empty() {
-            return;
-        }
-        let share = experience / configurations.len() as u32;
+        // `CMoveShape::IncreaseExperienceForAllFallowers` вычисляет делитель
+        // один раз по полному `m_vPet`: устаревшие записи и записи другого типа
+        // уменьшают долю, даже если затем не разрешаются в `CMonster`.
+        let share = experience / pets.len() as u32;
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
         };
-        for (pet_id, property, experience_factor, next_factors) in configurations {
-            let Some(pet) = owner.base_mut().find_monster_by_id_mut(pet_id) else {
+        for listed_pet in pets {
+            if listed_pet.object_type != MONSTER_TYPE {
+                continue;
+            }
+            let Some(pet) = owner.base().find_monster_by_id(listed_pet.id) else {
                 continue;
             };
-            let Some(update) =
-                pet.increase_pet_experience(share, &property, experience_factor, next_factors)
+            let Some(property_key) = pet.base_property_key().map(|key| key.to_vec()) else {
+                continue;
+            };
+            let level = pet.pet_progress().0;
+            let Some(property) = self
+                .find_monster_property_by_origin_name(&property_key)
+                .cloned()
+            else {
+                continue;
+            };
+            let progression = self.globe_setup.pet_progression(level);
+            let experience_factor = progression.map_or(0.0, |(factor, _)| factor);
+            let current_factors = progression.map(|(_, factors)| factors);
+            let next_factors = self
+                .globe_setup
+                .pet_progression(level.wrapping_add(1))
+                .map(|(_, factors)| factors);
+            let Some(pet) = owner.base_mut().find_monster_by_id_mut(listed_pet.id) else {
+                continue;
+            };
+            let Some(update) = pet.increase_pet_experience(
+                share,
+                &property,
+                experience_factor,
+                current_factors,
+                next_factors,
+            )
             else {
                 continue;
             };
             let shape = pet.move_shape().shape().clone();
             let mut message = CMessage::new(0x000c_0203);
             message.add_long(MONSTER_TYPE);
-            message.add_long(pet_id);
+            message.add_long(listed_pet.id);
             message.add_ulong(update.level);
             message.add_ulong(update.experience);
             message.add_ulong(update.maximum_hp);
