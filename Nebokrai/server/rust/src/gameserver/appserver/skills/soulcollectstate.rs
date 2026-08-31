@@ -6,13 +6,16 @@
 //! публикует окончание прежнего снимка до нового снимка. Удаление публикует
 //! только окончание. Три исходные перегрузки `Begin` имели одинаковые
 //! последствия привязки и визуального обновления и сведены к созданию
-//! канонического состояния.
+//! канонического состояния. Exact persisted-запись содержит ID, skill level
+//! и число душ, но теряет `variable_percent`; после загрузки он нулевой.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const SOUL_COLLECT_STATE_ID: u32 = 0x13b;
+pub(crate) const SOUL_COLLECT_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SoulCollectState {
@@ -24,6 +27,22 @@ pub(crate) struct SoulCollectState {
 impl SoulCollectState {
     pub(crate) const fn new(skill_level: i32, variable_percent: u32) -> Self {
         Self { skill_level, variable_percent, souls: 0 }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != SOUL_COLLECT_STATE_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self { skill_level: reader.read_i32()?, variable_percent: 0, souls: reader.read_i32()? })
+    }
+
+    pub(crate) fn encoded(self) -> [u8; SOUL_COLLECT_STATE_BYTES] {
+        let mut bytes = [0; SOUL_COLLECT_STATE_BYTES];
+        for (index, value) in [SOUL_COLLECT_STATE_ID as i32, self.skill_level, self.souls].into_iter().enumerate() {
+            bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
     }
 
     pub(crate) const fn skill_id(self) -> u32 { SOUL_COLLECT_STATE_ID }

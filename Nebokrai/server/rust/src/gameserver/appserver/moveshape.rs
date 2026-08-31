@@ -166,7 +166,9 @@ use crate::gameserver::appserver::skills::godblessstate::{
     GOD_BLESS_STATE_BYTES, GOD_BLESS_STATE_ID, GodBlessState,
 };
 use crate::gameserver::appserver::skills::godblessstate2::GOD_BLESS_STATE_2_ID;
-use crate::gameserver::appserver::skills::soulcollectstate::SoulCollectState;
+use crate::gameserver::appserver::skills::soulcollectstate::{
+    SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
+};
 use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
@@ -909,6 +911,9 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        if let Some(state) = self.soul_collect_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded());
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1078,6 +1083,11 @@ impl CMoveShape {
             self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
             self.weak_state_order = Some(self.reached_property_state_order);
         }
+        self.soul_collect_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(SOUL_COLLECT_STATE_ID))
+            .and_then(|offset| SoulCollectState::decode(&states, offset).ok());
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2729,15 +2739,21 @@ impl CMoveShape {
 
     pub(crate) fn begin_soul_collect_state(&mut self, state: SoulCollectState) {
         debug_assert!(self.soul_collect_state.is_none());
+        self.remove_serialized_state_record(state.skill_id(), SOUL_COLLECT_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
         self.soul_collect_state = Some(state);
     }
+
+    pub(crate) fn activate_loaded_soul_collect_state(&self) -> Option<SoulCollectState> { self.soul_collect_state }
 
     pub(crate) fn soul_collect_state_mut(&mut self) -> Option<&mut SoulCollectState> {
         self.soul_collect_state.as_mut()
     }
 
     pub(crate) fn take_soul_collect_state(&mut self) -> Option<SoulCollectState> {
-        self.soul_collect_state.take()
+        let state = self.soul_collect_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), SOUL_COLLECT_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn take_expired_spider_web_state(
@@ -4360,6 +4376,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             SEAL_STATE_ID => SEAL_STATE_BYTES,
             GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => GOD_BLESS_STATE_BYTES,
             WEAK_STATE_ID => WEAK_STATE_BYTES,
+            SOUL_COLLECT_STATE_ID => SOUL_COLLECT_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID
