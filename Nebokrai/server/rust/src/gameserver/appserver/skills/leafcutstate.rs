@@ -82,11 +82,13 @@ impl LeafCutState {
         let Some(destination) = payload.get_mut(offset..offset.saturating_add(LEAF_CUT_STATE_BYTES)) else { return false }; destination.copy_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); true
     }
 
-    fn encoded(self, now_ms: u32) -> Vec<u8> {
+    pub(crate) fn encoded(self, now_ms: u32) -> Vec<u8> {
         let mut record = Vec::with_capacity(LEAF_CUT_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(self.state_id);
         for value in [self.master.master_type, self.master.master_id, self.master.master_guild_id, self.master.master_team_id, self.master.master_union_id, self.master.master_country_id, self.master.permitted_to_kill_player, self.master.permitted_to_kill_teammate, self.master.permitted_to_kill_guild_member, self.master.permitted_to_kill_criminal] { writer.write_i32(value); }
         writer.write_u32(self.remaining_time(now_ms)); writer.write_u32(self.frequency_ms); writer.write_u32(self.damage_factor_bits); writer.write_u32(self.damage_modifier_bits); writer.write_u16(self.minimum_attack); writer.write_u16(self.maximum_attack); writer.write_u16(self.element_attack); writer.write_u16(self.soul_attack); record
     }
+
+    pub(crate) fn encoded_for_install(self) -> Vec<u8> { self.encoded(self.started_at_ms) }
 
     pub(crate) fn update_serialized_runtime(self, payload: &mut [u8], now_ms: u32) { if let Some(offset) = self.serialized_offset { let _ = LegacyWriter::write_u32_at(payload, offset + 44, self.remaining_time(now_ms)); } }
     fn remaining_time(self, now_ms: u32) -> u32 { let elapsed = now_ms.wrapping_sub(self.started_at_ms); if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) } }

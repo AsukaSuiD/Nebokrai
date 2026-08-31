@@ -5676,6 +5676,13 @@ impl CPlayer {
         self.move_shape.finish_leaf_cut_2_state();
     }
 
+    pub(crate) fn activate_loaded_leaf_cut_2_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::leafcutstate2::LeafCutState2> {
+        self.move_shape.activate_loaded_leaf_cut_2_state(now_ms)
+    }
+
     pub(crate) fn replace_leaf_cut_3_state(
         &mut self,
         state: super::skills::leafcutstate3::LeafCutState3,

@@ -1407,7 +1407,7 @@ use crate::gameserver::appserver::skills::leafcutstate::{
     update_player_leaf_cut_state,
 };
 use crate::gameserver::appserver::skills::leafcutstate2::{
-    LeafCutState2, LEAF_CUT_2_STATE_ID,
+    LeafCutState2, LEAF_CUT_2_STATE_ID, send_leaf_cut_2_state_visual,
     update_monster_leaf_cut_2_state, update_player_leaf_cut_2_state,
 };
 use crate::gameserver::appserver::skills::leafcutstate3::{
@@ -30139,6 +30139,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_leaf_cut_state(login_tick_ms);
+        let loaded_leaf_cut_2_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_leaf_cut_2_state(login_tick_ms);
         let loaded_leaf_cut_3_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30291,6 +30296,21 @@ impl CGame {
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
         {
             send_leaf_cut_state_visual(
+                self,
+                region_id,
+                ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },
+                x,
+                y,
+                state,
+                true,
+                login_tick_ms,
+            );
+        }
+        if let Some(state) = loaded_leaf_cut_2_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_leaf_cut_2_state_visual(
                 self,
                 region_id,
                 ShapeIdentity { object_type: PLAYER_TYPE, id: expected_player_id, ex_id: CGuid::GUID_INVALID },

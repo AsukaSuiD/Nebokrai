@@ -3,20 +3,22 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/leafcutstate2.cpp`. Формула, два чтения часов и два
 //! вызова MSVCRT RNG совпадают с подтверждённой основой `CLeafCutState`, но
-//! состояние имеет отдельную идентичность и lifecycle. В этом классе не
-//! подтверждён собственный DB-кодек, поэтому runtime-состояние не выдумывает
-//! сериализацию и хранится отдельным каноническим slot-ом. Извлечение,
+//! состояние имеет отдельную идентичность и lifecycle. Exact vtable направляет
+//! `Serialize/Unserialize` на общую пару `0x005F0820/0x005EBF20`, поэтому
+//! состояние использует тот же 68-байтный DB-кодек с собственным ID. Извлечение,
 //! возврат перед ударом и завершение также принадлежат этому owner-у.
 //! Унаследованный клиентский срок сохраняет два чтения exact-owner-а
 //! `CBloodLossState::GetRemainedTime` по `0x00606320`.
 
 use super::leafcutstate::{LeafCutState, LeafCutStateTick};
+use crate::gameserver::appserver::legacycodec::LegacyReadBlock;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const LEAF_CUT_2_STATE_ID: u32 = 0x80;
+pub(crate) const LEAF_CUT_2_STATE_BYTES: usize = 68;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
@@ -54,6 +56,10 @@ impl LeafCutState2 {
 
     pub(crate) const fn skill_id(self) -> u32 { LEAF_CUT_2_STATE_ID }
     pub(crate) const fn master(self) -> MasterInfo { self.0.master() }
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> { LeafCutState::decode_with_id(payload, offset, now_ms, LEAF_CUT_2_STATE_ID).map(Self) }
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.0.activate_loaded(now_ms); }
+    pub(crate) fn encoded(self, now_ms: u32) -> Vec<u8> { self.0.encoded(now_ms) }
+    pub(crate) fn encoded_for_install(self) -> Vec<u8> { self.0.encoded_for_install() }
     pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { self.0.client_state_time(now_milliseconds) }
     pub(crate) fn tick(
         &mut self,

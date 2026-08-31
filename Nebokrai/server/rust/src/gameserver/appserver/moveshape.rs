@@ -166,7 +166,7 @@ use crate::gameserver::appserver::skills::bloodlossstate::{
     BloodLossState, BLOOD_LOSS_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::leafcutstate::{LeafCutState, LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
-use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_ID};
+use crate::gameserver::appserver::skills::leafcutstate2::{LeafCutState2, LEAF_CUT_2_STATE_BYTES, LEAF_CUT_2_STATE_ID};
 use crate::gameserver::appserver::skills::leafcutstate3::{LeafCutState3, LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
 use crate::gameserver::appserver::skills::battlefairyattributestate::BattleFairyAttributeState;
 use crate::gameserver::appserver::skills::bossbluefurystate::{
@@ -889,6 +889,9 @@ impl CMoveShape {
         if let Some(state) = self.leaf_cut_state {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
+        if let Some(state) = self.leaf_cut_2_state {
+            update_known_state_record(&mut payload, state.skill_id(), &state.encoded(now_ms));
+        }
         if let Some(state) = self.leaf_cut_3_state {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
@@ -1110,6 +1113,13 @@ impl CMoveShape {
         if let Some(state) = self.leaf_cut_state {
             self.periodic_attack_order.insert(state.skill_id());
         }
+        self.periodic_attack_order.shift_remove(&LEAF_CUT_2_STATE_ID);
+        self.leaf_cut_2_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(LEAF_CUT_2_STATE_ID))
+            .and_then(|offset| LeafCutState2::decode(&states, offset, 0).ok());
+        if self.leaf_cut_2_state.is_some() { self.periodic_attack_order.insert(LEAF_CUT_2_STATE_ID); }
         self.periodic_attack_order.shift_remove(&LEAF_CUT_3_STATE_ID);
         self.leaf_cut_3_state = known_offsets
             .iter()
@@ -3429,6 +3439,14 @@ impl CMoveShape {
         &mut self,
         state: LeafCutState2,
     ) -> Option<LeafCutState2> {
+        let serialized_exists = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .any(|offset| read_u32(&self.ex_states, offset) == Some(LEAF_CUT_2_STATE_ID));
+        if serialized_exists {
+            update_known_state_record(&mut self.ex_states, LEAF_CUT_2_STATE_ID, &state.encoded_for_install());
+        } else {
+            self.append_serialized_state_record(&state.encoded_for_install());
+        }
         self.periodic_attack_order.insert(LEAF_CUT_2_STATE_ID);
         self.leaf_cut_2_state.replace(state)
     }
@@ -3446,6 +3464,15 @@ impl CMoveShape {
         self.leaf_cut_2_state = None;
         self.periodic_attack_order.shift_remove(&LEAF_CUT_2_STATE_ID);
         self.curable_state_order.shift_remove(&LEAF_CUT_2_STATE_ID);
+        self.remove_serialized_state_record(LEAF_CUT_2_STATE_ID, LEAF_CUT_2_STATE_BYTES);
+    }
+
+    pub(crate) fn activate_loaded_leaf_cut_2_state(&mut self, now_ms: u32) -> Option<LeafCutState2> {
+        let mut state = self.leaf_cut_2_state?;
+        state.activate_loaded(now_ms);
+        update_known_state_record(&mut self.ex_states, LEAF_CUT_2_STATE_ID, &state.encoded(now_ms));
+        self.leaf_cut_2_state = Some(state);
+        Some(state)
     }
 
     pub(crate) fn replace_leaf_cut_3_state(
@@ -4716,6 +4743,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             EX_STATE_NEW_ID => 56,
             UNDEAD_STATE_ID => 76,
             LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
+            LEAF_CUT_2_STATE_ID => LEAF_CUT_2_STATE_BYTES,
             LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
             KEROSENE_STATE_ID => KEROSENE_STATE_BYTES,
             SWORDSHIP_SKILL_ID
