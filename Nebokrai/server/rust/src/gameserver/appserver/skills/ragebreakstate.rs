@@ -8,13 +8,18 @@
 //! суммой `0xFFFF`; начало и завершение публикуются как `0xBFE03/04`.
 //! Клиентский `GetRemainedTime` подтверждён ссылкой vtable на общее тело
 //! `CFuryState` по `0x00605E10` и сохраняет два чтения wrapping clock.
+//! Общий serializer `0x005E7330` и exact `Unserialize` `0x005FD660`
+//! задают 12 байт: `ID + remaining time + attack gain`; spatial login
+//! восстанавливает срок до общего пересчёта свойств.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const RAGE_BREAK_STATE_ID: u32 = 0x6e;
+pub(crate) const RAGE_BREAK_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RageBreakState {
@@ -26,6 +31,25 @@ pub(crate) struct RageBreakState {
 impl RageBreakState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, attack_gain_percent: i32) -> Self {
         Self { started_at_ms, keep_time_ms, attack_gain_percent }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != RAGE_BREAK_STATE_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        Ok(Self::new(0, reader.read_u32()?, reader.read_i32()?))
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+    pub(crate) fn encoded_for_install(self) -> [u8; RAGE_BREAK_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; RAGE_BREAK_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; RAGE_BREAK_STATE_BYTES] {
+        let mut bytes = [0; RAGE_BREAK_STATE_BYTES];
+        bytes[..4].copy_from_slice(&RAGE_BREAK_STATE_ID.to_le_bytes());
+        bytes[4..8].copy_from_slice(&remaining.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.attack_gain_percent.to_le_bytes());
+        bytes
     }
 
     pub(crate) const fn skill_id(self) -> u32 { RAGE_BREAK_STATE_ID }

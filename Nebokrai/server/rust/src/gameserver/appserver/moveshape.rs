@@ -90,7 +90,9 @@ use crate::gameserver::appserver::skills::healstate::{
     HEAL_STATE_BYTES, HealState,
 };
 use crate::gameserver::appserver::skills::furystate::FuryState;
-use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
+use crate::gameserver::appserver::skills::ragebreakstate::{
+    RAGE_BREAK_STATE_BYTES, RAGE_BREAK_STATE_ID, RageBreakState,
+};
 use crate::gameserver::appserver::skills::rushstate::{
     RUSH_STATE_BYTES, RUSH_STATE_ID, RushState,
 };
@@ -980,6 +982,13 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        if let Some(state) = self.rage_break_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1212,6 +1221,11 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(PILLAR_STATE_ID))
             .and_then(|offset| PillarState::decode(&states, offset).ok());
+        self.rage_break_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(RAGE_BREAK_STATE_ID))
+            .and_then(|offset| RageBreakState::decode(&states, offset).ok());
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2263,16 +2277,28 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_rage_break_state(&mut self, state: RageBreakState) -> Option<RageBreakState> {
+        self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.rage_break_state.replace(state)
     }
 
+    pub(crate) fn activate_loaded_rage_break_state(&mut self, now_ms: u32) -> Option<RageBreakState> {
+        let state = self.rage_break_state?.activate_loaded(now_ms);
+        self.rage_break_state = Some(state);
+        Some(state)
+    }
+
     pub(crate) fn take_rage_break_state(&mut self) -> Option<RageBreakState> {
-        self.rage_break_state.take()
+        let state = self.rage_break_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn take_expired_rage_break_state(&mut self, now_ms: u32) -> Option<RageBreakState> {
         self.rage_break_state.filter(|state| state.expired(now_ms))?;
-        self.rage_break_state.take()
+        let state = self.rage_break_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), RAGE_BREAK_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn take_boss_blue_fury_state(&mut self) -> Option<BossBlueFuryState> {
@@ -4629,6 +4655,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             RUSH_2_STATE_ID => RUSH_2_STATE_BYTES,
             ROAR_STATE_ID => ROAR_STATE_BYTES,
             PILLAR_STATE_ID => PILLAR_STATE_BYTES,
+            RAGE_BREAK_STATE_ID => RAGE_BREAK_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID
