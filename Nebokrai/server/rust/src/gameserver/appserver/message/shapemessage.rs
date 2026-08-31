@@ -42,9 +42,6 @@ const QUEST_MOVE_STEP: u32 = 0x0008_f903;
 const QUERY_SHAPE_SNAPSHOT: u32 = 0x0008_f904;
 const PERFORM_EMOTION: u32 = 0x0008_f905;
 const PLAYER_TYPE: i32 = 400;
-const NPC_TYPE: i32 = 500;
-const GOODS_TYPE: i32 = 700;
-const SUMMON_SHAPE_TYPE: i32 = 1000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShapeSnapshot {
@@ -53,7 +50,10 @@ pub(crate) struct ShapeSnapshot {
 }
 
 pub(crate) trait GameShapeMessageRuntime: GameClockContext {
-    fn serialize_shape_snapshot(
+    /// Единственный ещё внешний serializer — полный `CPlayer` snapshot.
+    /// Остальные зарегистрированные shape разрешаются canonical owner-ами
+    /// `CGame` и не могут быть подменены process runtime.
+    fn serialize_player_shape_snapshot(
         &mut self,
         game: &CGame,
         region_id: i32,
@@ -310,26 +310,25 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
                 Err(error) => return Some(Err(error)),
             };
             let snapshot = match game.find_shape_in_region(region_id, identity) {
-                Some(shape) => {
-                    if matches!(identity.object_type, NPC_TYPE | GOODS_TYPE | SUMMON_SHAPE_TYPE) {
-                        let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
-                            region_id,
-                            identity,
-                            || runtime.now_milliseconds(),
-                        ) else {
-                            trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок формы не сериализован владельцем");
-                            return Some(Ok(()));
-                        };
-                        ShapeSnapshot { identity, payload }
-                    } else {
-                        let Some(snapshot) =
-                            runtime.serialize_shape_snapshot(game, region_id, shape)
-                        else {
-                            trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок shape не сериализован");
-                            return Some(Ok(()));
-                        };
-                        snapshot
-                    }
+                Some(shape) if identity.object_type == PLAYER_TYPE => {
+                    let Some(snapshot) = runtime
+                        .serialize_player_shape_snapshot(game, region_id, shape)
+                    else {
+                        trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок игрока не сериализован");
+                        return Some(Ok(()));
+                    };
+                    snapshot
+                }
+                Some(_) => {
+                    let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
+                        region_id,
+                        identity,
+                        || runtime.now_milliseconds(),
+                    ) else {
+                        trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок формы не сериализован владельцем");
+                        return Some(Ok(()));
+                    };
+                    ShapeSnapshot { identity, payload }
                 }
                 None => {
                     trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "цель снимка shape не найдена");

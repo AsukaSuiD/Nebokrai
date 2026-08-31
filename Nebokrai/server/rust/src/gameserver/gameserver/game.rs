@@ -41761,8 +41761,8 @@ impl CGame {
 
     /// Разрешает подтверждённый виртуальный клиентский сериализатор формы у
     /// канонического владельца региона. Достигнуты ground `CGoods`, `CNpc`,
-    /// `CMonster` и семейство `SummonedSkillShape`; остальные категории не
-    /// имитируются.
+    /// `CMonster`, `CBuild`, `CCityGate` и семейство `SummonedSkillShape`;
+    /// полный `CPlayer` snapshot остаётся отдельным незавершённым owner-ом.
     pub(crate) fn serialize_owned_shape_snapshot(
         &self,
         region_id: i32,
