@@ -6,9 +6,9 @@
 //! `0x0007EC50`. Wire decode остаётся у message owner-а; этот модуль владеет
 //! общей RNG-последовательностью `CGame`, concrete region mutation, city-only
 //! одноаргументной guard-регистрацией и spatial entry publication. Локальные
-//! `CreateNpc/CreateMonster` и persisted carriage используют тот же owner без
-//! теневого process context; удалённый регион по-прежнему маршрутизируется
-//! самим script wire.
+//! `CreateNpc/CreateMonster`, persisted companions и GodsBattle faction spawn
+//! используют тот же owner без теневого process context; удалённый регион
+//! по-прежнему маршрутизируется самим script wire.
 
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::npc::CNpc;
@@ -24,8 +24,8 @@ use crate::public::tools::add_game_log_text;
 use crate::setup::monsterlist::MonsterRegistry;
 
 use super::game::{
-    CGame, GameLegacyRandomStream, LegacyFormatArgument, ServerRegionOwner,
-    format_legacy_mixed, game_tick_milliseconds,
+    CGame, GameLegacyRandomStream, GodsBattleNpcLog, LegacyFormatArgument, ServerRegionOwner,
+    format_legacy_mixed, game_tick_milliseconds, legacy_atoi_i32, record_gods_battle_log,
 };
 
 enum GameRuntimeSpawnEffect {
@@ -135,6 +135,114 @@ impl ServerRegionMonsterContext for GameRuntimeSpawnContext<'_> {
 }
 
 impl CGame {
+    /// Reached GodsBattle `ChangeNpcFaction` spawn tail. Concrete region,
+    /// monster registry mutation, RNG, entry wire и GodsBattle log остаются у
+    /// `CGame`; contend runtime больше не изображает region effect owner.
+    pub(crate) fn spawn_gods_battle_configured_monsters(
+        &mut self,
+        region_id: i32,
+        configuration: &crate::setup::godsbattleconf::GodsBattleFactionNpcName,
+        faction: i32,
+    ) -> Option<(usize, usize)> {
+        self.with_legacy_random_stream(|game, random| {
+            let owner = game.take_region_owner(region_id)?;
+            let ServerRegionOwner::GodsBattle(mut region) = owner else {
+                game.restore_region_owner(owner);
+                return None;
+            };
+            let mut context = GameRuntimeSpawnContext {
+                random,
+                monster_registry: game.monster_registry().clone(),
+                default_master_name: game.get_string_by_id(b"GS0119").to_vec(),
+                npc_position_failure_template: game.get_string_by_id(b"GS0233").to_vec(),
+                monster_variant_failure_template: game.get_string_by_id(b"GS0231").to_vec(),
+                monster_position_failure_template: game.get_string_by_id(b"GS0232").to_vec(),
+                guard_monsters: Vec::new(),
+                guard_indices: Vec::new(),
+                effects: Vec::new(),
+            };
+            let (area_width, area_height) = game.area_dimensions();
+            let mut spawned_monsters = 0usize;
+            let mut blocked_spawns = 0usize;
+            for token in configuration
+                .monsters
+                .split(|byte| *byte == b',')
+                .filter(|token| !token.is_empty())
+            {
+                let fields = token
+                    .split(|byte| *byte == b'|')
+                    .filter(|field| !field.is_empty())
+                    .collect::<Vec<_>>();
+                if fields.len() != 3 {
+                    record_gods_battle_log(GodsBattleNpcLog::InvalidMonsterToken {
+                        token: token.to_vec(),
+                    });
+                    blocked_spawns = blocked_spawns.wrapping_add(1);
+                    tracing::warn!(
+                        fields = fields.len(),
+                        token_bytes = token.len(),
+                        "некорректное описание монстра NPC битвы богов"
+                    );
+                    break;
+                }
+                let original_name = fields[0];
+                let Some(property) = game
+                    .find_monster_property_by_origin_name(original_name)
+                    .cloned()
+                else {
+                    record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
+                        npc_name: configuration.name.clone(),
+                        monster: original_name.to_vec(),
+                    });
+                    blocked_spawns = blocked_spawns.wrapping_add(1);
+                    tracing::warn!(
+                        original_name_bytes = original_name.len(),
+                        "свойства монстра NPC битвы богов отсутствуют"
+                    );
+                    continue;
+                };
+                let spawn = region.war.base.add_monster(
+                    &property,
+                    legacy_atoi_i32(fields[1]),
+                    legacy_atoi_i32(fields[2]),
+                    -1,
+                    true,
+                    false,
+                    game_tick_milliseconds(),
+                    area_width,
+                    area_height,
+                    game.skill_factory(),
+                    &mut context,
+                );
+                if let Err(block) = spawn {
+                    record_gods_battle_log(GodsBattleNpcLog::MonsterSpawnFailed {
+                        npc_name: configuration.name.clone(),
+                        monster: original_name.to_vec(),
+                    });
+                    blocked_spawns = blocked_spawns.wrapping_add(1);
+                    tracing::warn!(?block, "создание монстра NPC битвы богов заблокировано");
+                    continue;
+                }
+                if let Some(property) =
+                    game.find_monster_property_by_origin_name_mut(original_name)
+                {
+                    property.race = faction as u32;
+                }
+                record_gods_battle_log(GodsBattleNpcLog::MonsterSpawned {
+                    npc_name: configuration.name.clone(),
+                    monster: original_name.to_vec(),
+                    faction,
+                });
+                spawned_monsters = spawned_monsters.wrapping_add(1);
+            }
+            let effects = std::mem::take(&mut context.effects);
+            drop(context);
+            game.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+            game.publish_runtime_spawn_effects(region_id, effects);
+            Some((spawned_monsters, blocked_spawns))
+        })
+    }
+
     /// Пространственная половина world-login pet restore. Taming limit и
     /// progression factors вычисляет gameplay owner; здесь сохраняются
     /// placement fallback, persisted pet state и fresh monster entry.

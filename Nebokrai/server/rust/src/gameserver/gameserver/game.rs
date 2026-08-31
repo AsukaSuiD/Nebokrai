@@ -3132,12 +3132,12 @@ impl<T> GodsBattleNpcSpawnContext for T where
 }
 
 pub(crate) trait GodsBattleNpcContendContext:
-    GodsBattleNpcSpawnContext + ScriptFunctionRuntime
+    ScriptFunctionRuntime
 {
 }
 
 impl<T> GodsBattleNpcContendContext for T where
-    T: GodsBattleNpcSpawnContext + ScriptFunctionRuntime
+    T: ScriptFunctionRuntime
 {
 }
 
@@ -3208,7 +3208,7 @@ pub(crate) enum GodsBattleNpcLog {
     },
 }
 
-fn record_gods_battle_log(event: GodsBattleNpcLog) {
+pub(crate) fn record_gods_battle_log(event: GodsBattleNpcLog) {
     let mut text = Vec::new();
     match event {
         GodsBattleNpcLog::InvalidMonsterToken { token } => {
@@ -24257,12 +24257,11 @@ impl CGame {
         (spawned_monsters, blocked_spawns)
     }
 
-    pub(crate) fn change_gods_battle_npc_faction<Context: GodsBattleNpcSpawnContext>(
+    pub(crate) fn change_gods_battle_npc_faction(
         &mut self,
         region_id: i32,
         npc_id: i32,
         faction: i32,
-        context: &mut Context,
     ) -> bool {
         let Some(owner) = self.take_region_owner(region_id) else {
             return false;
@@ -24287,13 +24286,10 @@ impl CGame {
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
             return false;
         }
-        let (spawned_monsters, blocked_spawns) =
-            self.spawn_gods_battle_npc_monsters(
-                &mut region.war.base,
-                &configuration,
-                faction,
-                context,
-            );
+        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
+        let (spawned_monsters, blocked_spawns) = self
+            .spawn_gods_battle_configured_monsters(region_id, &configuration, faction)
+            .unwrap_or_default();
         self.gods_battle_mgr
             .reset_npc_killed_monster_count(&npc_name);
         let world_delivery = self
@@ -24310,7 +24306,6 @@ impl CGame {
                 });
                 message.send(self, false)
             });
-        self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
         tracing::debug!(
             region_id,
             npc_id,
@@ -25155,8 +25150,11 @@ impl CGame {
             );
             return;
         };
-        let changed =
-            self.change_gods_battle_npc_faction(region_id, contender.symbol_id, faction, context);
+        let changed = self.change_gods_battle_npc_faction(
+            region_id,
+            contender.symbol_id,
+            faction,
+        );
         let mut deliveries = self.cancel_gods_battle_contend_symbol(region_id, contender.symbol_id);
         if !changed {
             tracing::warn!(
@@ -47624,7 +47622,7 @@ fn contribution_percent(base: i32, modifier: i32) -> i32 {
     (f64::from(base) * f64::from(modifier) * 0.01).round() as i32
 }
 
-fn legacy_atoi_i32(value: &[u8]) -> i32 {
+pub(crate) fn legacy_atoi_i32(value: &[u8]) -> i32 {
     let mut value = legacy_c_string_prefix(value);
     while value.first().is_some_and(u8::is_ascii_whitespace) {
         value = &value[1..];
