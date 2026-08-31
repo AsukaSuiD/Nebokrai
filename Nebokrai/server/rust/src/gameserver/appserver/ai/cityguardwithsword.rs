@@ -4,12 +4,15 @@
 //! appserver/ai/cityguardwithsword.cpp подтверждают точку поста, фильтры игроков
 //! и питомцев по `faction_id`/`union_id`, правило минимальной дистанции и особую
 //! ветвь `Tracing`: шаг назад, `ForceMove` около далёкой цели и сброс за
-//! `chase_range`. Городской AI10 и производные окружные AI15/AI19 наследуют
+//! `chase_range`. Городской поиск также включает вражеские повозки `603`,
+//! исключая повозки членов faction/union владельца города. AI10 и производные
+//! окружные AI15/AI19 наследуют
 //! `OnMoving` с отдельным `ASA_SEARCH_ENEMY` и эту ветвь преследования, меняя
 //! только selector. `OnIdle` один раз фиксирует пост и продолжает через общий
 //! idle FIFO. `OnLoseTarget` возвращает владельца к посту, выбирая случайную
 //! соседнюю клетку для заблокированной точки, и лишь затем ставит поиск.
-//! Отдельный поиск повозок пока сохранён как RAW.
+//! Сохранённое RAW-тело поиска повозок остаётся локальным доказательством
+//! порядка и фильтров достигнутого selector-а.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -58,9 +61,10 @@ fn belongs_to_city_owner(
         || (union_id != 0 && union_id == owner_union_id)
 }
 
-/// Выбирает цель AI10/AI11 в исходном порядке игроков и питомцев. Совпадение
-/// ненулевой фракции либо союза с владельцем города исключает живого игрока и
-/// его питомца; питомец без разрешимого владельца остаётся допустимой целью.
+/// Выбирает цель AI10/AI11 отдельными исходными проходами игроков, питомцев и
+/// повозок. Совпадение ненулевой фракции либо союза с владельцем города
+/// исключает живого игрока и принадлежащих ему существ; owner без разрешимого
+/// локального игрока остаётся допустимой целью.
 pub(crate) fn select_city_guard_enemy(
     game: &CGame,
     region: &CServerRegion,
@@ -148,7 +152,55 @@ pub(crate) fn select_city_guard_enemy(
             minimum_skill_distance,
         );
     }
-    select_guard_target_groups(selected_player, selected_pet)
+    let mut selected_carriage = None;
+    for carriage_id in region.carriage_ids_around_area(area_index) {
+        let Some((candidate, master)) = region
+            .find_monster_by_id(carriage_id)
+            .filter(|carriage| !CMoveShape::is_died(carriage.hit_points()))
+            .and_then(|carriage| {
+                let property =
+                    game.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+                if !carriage.is_carriage(property) {
+                    return None;
+                }
+                Some((carriage.shape_view(property)?, carriage.master_info()))
+            })
+        else {
+            continue;
+        };
+        let protected_by_owner = (master.master_type == PLAYER_TYPE)
+            .then(|| game.find_player(master.master_id))
+            .flatten()
+            .is_some_and(|player| {
+                belongs_to_city_owner(
+                    player.faction_id(),
+                    player.union_id(),
+                    owner_faction_id,
+                    owner_union_id,
+                )
+            });
+        if protected_by_owner {
+            continue;
+        }
+        selected_carriage = consider_guard_distance_target(
+            selected_carriage,
+            GuardDistanceTarget {
+                identity: candidate.identity,
+                distance: real_distance(
+                    owner.tile_x,
+                    owner.tile_y,
+                    candidate.tile_x,
+                    candidate.tile_y,
+                ),
+            },
+            guard_range,
+            minimum_skill_distance,
+        );
+    }
+    select_guard_target_groups(
+        select_guard_target_groups(selected_player, selected_pet),
+        selected_carriage,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

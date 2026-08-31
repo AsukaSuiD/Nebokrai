@@ -112,6 +112,7 @@ use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, lose_guard_sword_target, select_city_guard_enemy,
     trace_city_sword_target,
 };
+use crate::gameserver::appserver::ai::cityguardwithbow::city_bow_target_ready;
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
     queue_fixed_archer_skill_delay, queue_stationary_guard_idle,
@@ -1395,6 +1396,24 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
             return true;
         }
+    }
+
+    if property.ai == 11
+        && cast.is_none()
+        && !city_bow_target_ready(
+            region,
+            monster_view,
+            target_x,
+            target_y,
+            skill_properties.query_property(5_004) as i32,
+            maximum_distance as i32,
+        )
+    {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.clear_ai_target();
+            monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
+        }
+        return true;
     }
 
     if matches!(property.ai, 10 | 15 | 19)

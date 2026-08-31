@@ -5,8 +5,10 @@
 //! и питомцев по владельцу фракции и союза, преимущество игрока при равной
 //! дистанции и повторный поиск после урона только вне боя. `OnIdle` ставит
 //! строгую очередь `ChangeSkill → Stand → SearchEnemy`, а завершённая атака
-//! сохраняет навык и снова ставит поиск. Точный `OnSchedule` и не достигнутый
-//! из `OnSearch` поиск повозок сохранены как RAW.
+//! сохраняет навык и снова ставит поиск. `OnSchedule` не преследует цель:
+//! только диапазон текущего навыка допускает атаку, а miss сбрасывает цель и
+//! повторяет поиск. `OnSearch` завершён проходом вражеских повозок `603` с
+//! теми же faction/union-фильтрами владельца города.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -47,8 +49,36 @@
 
 use super::cityguardwithsword::select_city_guard_enemy;
 use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::ShapeView;
+use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
+
+/// Exact `OnSchedule` AI11: городской лучник не двигается к цели. Нижняя и
+/// верхняя границы включительны; заблокированная прямая сохраняет отказ
+/// `CheckCast`, после которого caller ставит новый `SearchEnemy`.
+pub(crate) fn city_bow_target_ready(
+    region: &CServerRegion,
+    owner: ShapeView,
+    target_x: i32,
+    target_y: i32,
+    minimum_distance: i32,
+    maximum_distance: i32,
+) -> bool {
+    let distance = real_distance(owner.tile_x, owner.tile_y, target_x, target_y);
+    minimum_distance <= distance
+        && distance <= maximum_distance
+        && !region
+            .straight_skill_path(
+                owner.tile_x,
+                owner.tile_y,
+                target_x,
+                target_y,
+                None,
+            )
+            .iter()
+            .any(|cell| cell.2 == 2)
+}
 
 /// `WhenBeenHurted` AI11 не принимает атакующего напрямую: вне боя он заново
 /// выполняет общий городской поиск игроков и питомцев текущим навыком.
