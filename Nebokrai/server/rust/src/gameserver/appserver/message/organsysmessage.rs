@@ -1780,7 +1780,7 @@ impl<Runtime: GameOrganizingWarRuntime> GameOrganizingWarContext<'_, Runtime> {
             script: Vec::new(),
         });
         self.game
-            .refresh_nation_magic_stone_npcs(region_id, setups, self.runtime);
+            .refresh_nation_magic_stone_npcs(region_id, setups);
     }
 
     fn kick_out_four_nation_players(
@@ -2510,7 +2510,7 @@ impl<Runtime: GameOrganizingWarRuntime> AttackCityPhaseContext
         let targets = region.on_refresh_region(war_number);
         self.game.restore_region_owner(owner);
         self.game
-            .refresh_city_region_guards(region_id, targets, self.runtime);
+            .refresh_city_region_guards(region_id, targets);
     }
 }
 

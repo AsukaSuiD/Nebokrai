@@ -36,14 +36,15 @@
 //! City slot проводит тот же inherited AI через weekly AttackCity membership,
 //! defender/owner mutation, `0x60138` victory и общий capture-message/log tail.
 //! Организационный refresh городских стражей также замкнут здесь: process
-//! runtime отдаёт только общий RNG, а guard registry, `GS0231/GS0232`, fresh
-//! monster entry и spatial send исполняются через canonical region/CGame.
+//! runtime больше не участвует; общий `CGame` RNG, guard registry,
+//! `GS0231/GS0232`, fresh monster entry и spatial send исполняются через
+//! canonical region/CGame.
 //! Nation slot вызывает отдельный `ServerNationRegion::AI`: base-region pass,
 //! magic-stone replacements и altar contender completion выполняются одним
 //! reached проходом с morale, player-state, network и NPC spawn effects.
 //! OrganSys refresh четырёх magic-stone NPC также замкнут в `CGame`: process
-//! runtime сохраняет только общий RNG, а clock, `GS0233`, canonical snapshot и
-//! spatial `0xBF502` исполняются владельцем региона и transport-а.
+//! runtime больше не участвует, а общий RNG, clock, `GS0233`, canonical
+//! snapshot и spatial `0xBF502` исполняются владельцем региона и transport-а.
 //! Для всех concrete region owner-ов секундный monster refresh и следующий
 //! weather transition выполняются самим `CGame`. Затем row-major area scan
 //! вызывает concrete `CArea::AI`, разрешает active identities, классифицирует
@@ -3533,12 +3534,12 @@ enum GameCityGuardRefreshEffect {
     MonsterEntry(CShape, CMessage),
 }
 
-/// Узкий adapter `CServerCityRegion::RefreshGuard`: процесс предоставляет
-/// только исходный MSVCRT RNG, а строки, monster registry и клиентские кадры
-/// остаются у владеющего ими `CGame`. Регистрация новых guard ID/index
-/// накапливается до возврата временно извлечённого region owner-а.
-struct GameCityGuardRefreshContext<'a, Runtime> {
-    runtime: &'a mut Runtime,
+/// Узкий adapter `CServerCityRegion::RefreshGuard`: исходный MSVCRT RNG,
+/// строки, monster registry и клиентские кадры остаются у владеющего ими
+/// `CGame`. Регистрация новых guard ID/index накапливается до возврата временно
+/// извлечённого region owner-а.
+struct GameCityGuardRefreshContext<'a> {
+    random_state: &'a mut u32,
     monster_registry: &'a MonsterRegistry,
     default_master_name: &'a [u8],
     variant_failure_template: &'a [u8],
@@ -3548,17 +3549,13 @@ struct GameCityGuardRefreshContext<'a, Runtime> {
     effects: Vec<GameCityGuardRefreshEffect>,
 }
 
-impl<Runtime: RegionRandomContext> RegionRandomContext
-    for GameCityGuardRefreshContext<'_, Runtime>
-{
+impl RegionRandomContext for GameCityGuardRefreshContext<'_> {
     fn random_below(&mut self, bound: i32) -> i32 {
-        self.runtime.random_below(bound)
+        game_legacy_random(self.random_state, bound)
     }
 }
 
-impl<Runtime: RegionRandomContext> ServerRegionMonsterSpawnEffectsContext
-    for GameCityGuardRefreshContext<'_, Runtime>
-{
+impl ServerRegionMonsterSpawnEffectsContext for GameCityGuardRefreshContext<'_> {
     fn log_monster_variant_failure(&mut self, region_id: i32, refresh_index: i32) {
         self.effects.push(GameCityGuardRefreshEffect::Log(
             format_legacy_mixed(
@@ -3583,9 +3580,7 @@ impl<Runtime: RegionRandomContext> ServerRegionMonsterSpawnEffectsContext
     }
 }
 
-impl<Runtime: RegionRandomContext> ServerRegionMonsterEffectsContext
-    for GameCityGuardRefreshContext<'_, Runtime>
-{
+impl ServerRegionMonsterEffectsContext for GameCityGuardRefreshContext<'_> {
     fn send_monster_entered_around(&mut self, _region: &CServerRegion, monster: &CMonster) {
         let Some(property) = monster
             .base_property_key()
@@ -3605,9 +3600,7 @@ impl<Runtime: RegionRandomContext> ServerRegionMonsterEffectsContext
     }
 }
 
-impl<Runtime: RegionRandomContext> ServerRegionMonsterContext
-    for GameCityGuardRefreshContext<'_, Runtime>
-{
+impl ServerRegionMonsterContext for GameCityGuardRefreshContext<'_> {
     fn register_guard_monster(&mut self, monster_id: i32) {
         self.guard_monsters.push(monster_id);
     }
@@ -3624,23 +3617,19 @@ enum GameNationNpcRefreshEffect {
     NpcEntry(CShape, CMessage),
 }
 
-struct GameNationNpcRefreshContext<'a, Runtime> {
-    runtime: &'a mut Runtime,
+struct GameNationNpcRefreshContext<'a> {
+    random_state: &'a mut u32,
     position_failure_template: &'a [u8],
     effects: Vec<GameNationNpcRefreshEffect>,
 }
 
-impl<Runtime: RegionRandomContext> RegionRandomContext
-    for GameNationNpcRefreshContext<'_, Runtime>
-{
+impl RegionRandomContext for GameNationNpcRefreshContext<'_> {
     fn random_below(&mut self, bound: i32) -> i32 {
-        self.runtime.random_below(bound)
+        game_legacy_random(self.random_state, bound)
     }
 }
 
-impl<Runtime: RegionRandomContext> ServerRegionNpcSpawnEffectsContext
-    for GameNationNpcRefreshContext<'_, Runtime>
-{
+impl ServerRegionNpcSpawnEffectsContext for GameNationNpcRefreshContext<'_> {
     fn log_npc_position_failure(&mut self, npc_name: &[u8]) {
         self.effects.push(GameNationNpcRefreshEffect::Log(
             format_legacy_mixed(
@@ -3652,9 +3641,7 @@ impl<Runtime: RegionRandomContext> ServerRegionNpcSpawnEffectsContext
     }
 }
 
-impl<Runtime: RegionRandomContext> ServerRegionNpcContext
-    for GameNationNpcRefreshContext<'_, Runtime>
-{
+impl ServerRegionNpcContext for GameNationNpcRefreshContext<'_> {
     fn send_npc_entered_around(&mut self, npc: &CNpc) {
         let identity = npc.move_shape().shape().identity();
         let Some(payload) = npc.encode_client_snapshot(true) else {
@@ -46219,14 +46206,11 @@ impl CGame {
         }
     }
 
-    pub(crate) fn refresh_city_region_guards<Runtime>(
+    pub(crate) fn refresh_city_region_guards(
         &mut self,
         region_id: i32,
         targets: CityGuardRefreshTargets,
-        runtime: &mut Runtime,
-    ) where
-        Runtime: RegionRandomContext,
-    {
+    ) {
         let area_width = self.globe_setup.area_width();
         let area_height = self.globe_setup.area_height();
         let default_master_name = self.get_string_by_id(b"GS0119").to_vec();
@@ -46244,7 +46228,7 @@ impl CGame {
                 return;
             };
             let mut context = GameCityGuardRefreshContext {
-                runtime,
+                random_state: &mut self.random_state,
                 monster_registry: &self.monster_registry,
                 default_master_name: &default_master_name,
                 variant_failure_template: &variant_failure_template,
@@ -46305,13 +46289,12 @@ impl CGame {
 
     /// Замыкает exact `ServerNationRegion::OnRefreshRegion` tail: каждый из
     /// четырёх magic-stone setup-ов проверяется и при отсутствии создаётся с
-    /// `remember=true, sendAround=true`. Process runtime даёт только общий RNG;
-    /// clock, localized log и spatial `0xBF502` принадлежат `CGame`.
-    pub(crate) fn refresh_nation_magic_stone_npcs<Runtime: RegionRandomContext>(
+    /// `remember=true, sendAround=true`. RNG, clock, localized log и spatial
+    /// `0xBF502` принадлежат единому `CGame` owner-у.
+    pub(crate) fn refresh_nation_magic_stone_npcs(
         &mut self,
         region_id: i32,
         setups: [ServerRegionNpcSetup; 4],
-        runtime: &mut Runtime,
     ) {
         let (area_width, area_height) = self.area_dimensions();
         let position_failure_template = self.get_string_by_id(b"GS0233").to_vec();
@@ -46341,7 +46324,7 @@ impl CGame {
                 Ok(None) => {}
             }
             let mut context = GameNationNpcRefreshContext {
-                runtime,
+                random_state: &mut self.random_state,
                 position_failure_template: &position_failure_template,
                 effects: Vec::new(),
             };
