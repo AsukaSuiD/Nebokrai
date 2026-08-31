@@ -1386,7 +1386,7 @@ use crate::gameserver::appserver::skills::spiderpoison::{
     is_player_spider_poison_dispatch,
 };
 use crate::gameserver::appserver::skills::spiderpoisonstate::{
-    update_monster_spider_poison_state, update_player_spider_poison_state,
+    send_spider_poison_state_visual, update_monster_spider_poison_state, update_player_spider_poison_state,
 };
 use crate::gameserver::appserver::skills::spriteburnstate::{
     send_sprite_burn_state_visual, update_monster_sprite_burn_state, update_player_sprite_burn_state,
@@ -30174,6 +30174,7 @@ impl CGame {
         let loaded_sprite_burn_state = self.players.get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_sprite_burn_state(login_tick_ms);
+        let loaded_spider_poison_state = self.players.get_mut(&expected_player_id).expect("spatial login сохраняет player map owner").activate_loaded_spider_poison_state(login_tick_ms);
         let loaded_cure_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30374,6 +30375,7 @@ impl CGame {
         {
             send_sprite_burn_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms);
         }
+        if let Some(state) = loaded_spider_poison_state && let Some(player) = self.find_player(expected_player_id) && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y()) { send_spider_poison_state_visual(self, region_id, player.shape().identity(), x, y, state, true, login_tick_ms); }
         if let Some(state) = loaded_cure_state {
             send_cure_state_visual(self, expected_player_id, state, true);
         }

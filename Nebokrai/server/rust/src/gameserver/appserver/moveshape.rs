@@ -125,7 +125,7 @@ use crate::gameserver::appserver::skills::poisonarrowstate::{
 };
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
 use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
-use crate::gameserver::appserver::skills::spiderpoisonstate::SpiderPoisonState;
+use crate::gameserver::appserver::skills::spiderpoisonstate::{SPIDER_POISON_STATE_BYTES, SpiderPoisonState};
 use crate::gameserver::appserver::skills::spriteburnstate::{
     SPRITE_BURN_STATE_BYTES, SpriteBurnState,
 };
@@ -919,6 +919,7 @@ impl CMoveShape {
         if let Some(state) = self.sprite_burn_state {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds));
         }
+        if let Some(state) = self.spider_poison_state { update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds)); }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1099,6 +1100,9 @@ impl CMoveShape {
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::spriteburn::SPRITE_BURN_SKILL_ID))
             .and_then(|offset| SpriteBurnState::decode(&states, offset, 0).ok());
         if let Some(state) = self.sprite_burn_state { self.periodic_attack_order.insert(state.skill_id()); self.curable_state_order.insert(state.skill_id()); }
+        self.periodic_attack_order.shift_remove(&super::skills::spiderpoison::SPIDER_POISON_SKILL_ID); self.curable_state_order.shift_remove(&super::skills::spiderpoison::SPIDER_POISON_SKILL_ID);
+        self.spider_poison_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID)).and_then(|offset| SpiderPoisonState::decode(&states, offset, 0).ok());
+        if let Some(state) = self.spider_poison_state { self.periodic_attack_order.insert(state.skill_id()); self.curable_state_order.insert(state.skill_id()); }
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2589,19 +2593,25 @@ impl CMoveShape {
         &mut self,
         state: SpiderPoisonState,
     ) -> Option<SpiderPoisonState> {
+        let exists = known_state_record_offsets(&self.ex_states).into_iter().any(|offset| read_u32(&self.ex_states, offset) == Some(state.skill_id()));
+        if exists { update_known_state_record(&mut self.ex_states, state.skill_id(), &state.encoded_for_install()); } else { self.append_serialized_state_record(&state.encoded_for_install()); }
         self.periodic_attack_order.insert(state.skill_id());
         self.curable_state_order.insert(state.skill_id());
         self.spider_poison_state.replace(state)
     }
+    pub(crate) fn activate_loaded_spider_poison_state(&mut self, now_ms: u32) -> Option<SpiderPoisonState> { let mut state = self.spider_poison_state?; state.activate_loaded(now_ms); self.spider_poison_state = Some(state); Some(state) }
 
     pub(crate) fn take_spider_poison_state_for_ai(&mut self) -> Option<SpiderPoisonState> {
         self.spider_poison_state.take()
     }
+    pub(crate) fn restore_spider_poison_state_after_ai(&mut self, state: SpiderPoisonState) { debug_assert!(self.spider_poison_state.is_none()); self.spider_poison_state = Some(state); }
+    pub(crate) fn finish_spider_poison_state_after_ai(&mut self) { self.remove_serialized_state_record(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID, SPIDER_POISON_STATE_BYTES); self.finish_periodic_attack_state(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID); }
 
     pub(crate) fn take_spider_poison_state(&mut self) -> Option<SpiderPoisonState> {
         let state = self.spider_poison_state.take()?;
         self.periodic_attack_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), SPIDER_POISON_STATE_BYTES);
         Some(state)
     }
 
@@ -4405,6 +4415,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             WEAK_STATE_ID => WEAK_STATE_BYTES,
             SOUL_COLLECT_STATE_ID => SOUL_COLLECT_STATE_BYTES,
             super::skills::spriteburn::SPRITE_BURN_SKILL_ID => SPRITE_BURN_STATE_BYTES,
+            super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => SPIDER_POISON_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

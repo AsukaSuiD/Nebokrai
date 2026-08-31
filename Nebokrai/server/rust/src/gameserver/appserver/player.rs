@@ -5281,6 +5281,9 @@ impl CPlayer {
     ) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> {
         self.move_shape.take_spider_poison_state_for_ai()
     }
+    pub(crate) fn restore_spider_poison_state_after_ai(&mut self, state: super::skills::spiderpoisonstate::SpiderPoisonState) { self.move_shape.restore_spider_poison_state_after_ai(state); }
+    pub(crate) fn finish_spider_poison_state_after_ai(&mut self) { self.move_shape.finish_spider_poison_state_after_ai(); }
+    pub(crate) fn activate_loaded_spider_poison_state(&mut self, now_ms: u32) -> Option<super::skills::spiderpoisonstate::SpiderPoisonState> { self.move_shape.activate_loaded_spider_poison_state(now_ms) }
 
     pub(crate) fn take_spider_poison_state(
         &mut self,

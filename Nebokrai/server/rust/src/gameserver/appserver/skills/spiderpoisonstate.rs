@@ -9,10 +9,12 @@
 //! Координатные перегрузки `Begin` остаются RAW ниже.
 //! Клиентский срок использует общий exact-owner `0x00606320`: проверка
 //! deadline и положительный остаток читают wrapping clock независимо.
+//! Persisted-запись длиной 56 байт сохраняет `MasterInfo`, remaining time,
+//! частоту и урон, но не внутренний номер следующего тика.
 
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -25,6 +27,7 @@ const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
 const MONSTER_TYPE: i32 = 600;
+pub(crate) const SPIDER_POISON_STATE_BYTES: usize = 56;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpiderPoisonStateTick {
@@ -53,6 +56,21 @@ impl SpiderPoisonState {
     ) -> Self {
         Self { master, started_at_ms, keep_time_ms, frequency_ms, hp_loss, attack_count: 0 }
     }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != SPIDER_POISON_SKILL_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); }
+        let master = MasterInfo { master_type: reader.read_i32()?, master_id: reader.read_i32()?, master_guild_id: reader.read_i32()?, master_team_id: reader.read_i32()?, master_union_id: reader.read_i32()?, master_country_id: reader.read_i32()?, permitted_to_kill_player: reader.read_i32()?, permitted_to_kill_teammate: reader.read_i32()?, permitted_to_kill_guild_member: reader.read_i32()?, permitted_to_kill_criminal: reader.read_i32()? };
+        Ok(Self::new(master, now_ms, reader.read_u32()?, reader.read_u32()?, reader.read_u32()?))
+    }
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; SPIDER_POISON_STATE_BYTES] { self.encoded_with_remaining(self.client_state_time(now_milliseconds)) }
+    pub(crate) fn encoded_for_install(self) -> [u8; SPIDER_POISON_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; SPIDER_POISON_STATE_BYTES] {
+        let mut record = Vec::with_capacity(SPIDER_POISON_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(SPIDER_POISON_SKILL_ID);
+        for value in [self.master.master_type, self.master.master_id, self.master.master_guild_id, self.master.master_team_id, self.master.master_union_id, self.master.master_country_id, self.master.permitted_to_kill_player, self.master.permitted_to_kill_teammate, self.master.permitted_to_kill_guild_member, self.master.permitted_to_kill_criminal] { writer.write_i32(value); }
+        writer.write_u32(remaining); writer.write_u32(self.frequency_ms); writer.write_u32(self.hp_loss); record.try_into().expect("размер состояния паучьего яда фиксирован")
+    }
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
 
     pub(crate) const fn skill_id(self) -> u32 { SPIDER_POISON_SKILL_ID }
     pub(crate) const fn master(self) -> MasterInfo { self.master }
@@ -146,20 +164,9 @@ pub(crate) fn update_player_spider_poison_state<Runtime: GameMainLoopRuntime>(
     player_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(mut state) = game
-        .find_player_mut(player_id)
-        .and_then(CPlayer::take_spider_poison_state_for_ai)
-    else {
-        return false;
-    };
-    let Some((identity, x, y, region_id, dead)) = game.find_player(player_id).and_then(|player| {
-        Some((
-            player.shape().identity(),
-            player.shape().get_tile_x().ok()?,
-            player.shape().get_tile_y().ok()?,
-            player.server_region_id()?,
-            player.is_dead(),
-        ))
+    let Some((mut state, identity, x, y, region_id, dead)) = game.find_player_mut(player_id).and_then(|player| {
+        let identity = player.shape().identity(); let x = player.shape().get_tile_x().ok()?; let y = player.shape().get_tile_y().ok()?; let region_id = player.server_region_id()?; let dead = player.is_dead(); let state = player.take_spider_poison_state_for_ai()?;
+        Some((state, identity, x, y, region_id, dead))
     }) else {
         return false;
     };
@@ -168,13 +175,13 @@ pub(crate) fn update_player_spider_poison_state<Runtime: GameMainLoopRuntime>(
     match state.tick(lifetime_now_ms, frequency_now_ms, dead) {
         SpiderPoisonStateTick::Pending => {
             if let Some(player) = game.find_player_mut(player_id) {
-                let _ = player.replace_spider_poison_state(state);
+                player.restore_spider_poison_state_after_ai(state);
             }
         }
         SpiderPoisonStateTick::Attack(attack) => {
             let master = state.master();
             if let Some(player) = game.find_player_mut(player_id) {
-                let _ = player.replace_spider_poison_state(state);
+                player.restore_spider_poison_state_after_ai(state);
             }
             if master.master_type == MONSTER_TYPE {
                 game.apply_monster_periodic_state_attack(
@@ -196,7 +203,7 @@ pub(crate) fn update_player_spider_poison_state<Runtime: GameMainLoopRuntime>(
         }
         SpiderPoisonStateTick::Ended => {
             if let Some(player) = game.find_player_mut(player_id) {
-                player.finish_periodic_attack_state(state.skill_id());
+                player.finish_spider_poison_state_after_ai();
             }
             send_spider_poison_state_visual(
                 game,
@@ -227,15 +234,9 @@ pub(crate) fn update_monster_spider_poison_state<Runtime: GameMainLoopRuntime>(
         .base_mut()
         .find_monster_by_id_mut(monster_id)
         .and_then(|monster| {
-            let state = monster.move_shape_mut().take_spider_poison_state_for_ai()?;
             let shape = monster.move_shape().shape();
-            Some((
-                state,
-                shape.identity(),
-                shape.get_tile_x().ok()?,
-                shape.get_tile_y().ok()?,
-                monster.hit_points() == 0,
-            ))
+            let identity = shape.identity(); let x = shape.get_tile_x().ok()?; let y = shape.get_tile_y().ok()?; let dead = monster.hit_points() == 0; let state = monster.move_shape_mut().take_spider_poison_state_for_ai()?;
+            Some((state, identity, x, y, dead))
         });
     game.restore_region_owner(owner);
     let Some((mut state, identity, x, y, dead)) = state_and_target else {
@@ -247,7 +248,7 @@ pub(crate) fn update_monster_spider_poison_state<Runtime: GameMainLoopRuntime>(
         SpiderPoisonStateTick::Pending => {
             if let Some(mut owner) = game.take_region_owner(region_id) {
                 if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    let _ = monster.move_shape_mut().replace_spider_poison_state(state);
+                    monster.move_shape_mut().restore_spider_poison_state_after_ai(state);
                 }
                 game.restore_region_owner(owner);
             }
@@ -256,7 +257,7 @@ pub(crate) fn update_monster_spider_poison_state<Runtime: GameMainLoopRuntime>(
             let master = state.master();
             if let Some(mut owner) = game.take_region_owner(region_id) {
                 if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    let _ = monster.move_shape_mut().replace_spider_poison_state(state);
+                    monster.move_shape_mut().restore_spider_poison_state_after_ai(state);
                 }
                 game.restore_region_owner(owner);
             }
@@ -281,9 +282,7 @@ pub(crate) fn update_monster_spider_poison_state<Runtime: GameMainLoopRuntime>(
         SpiderPoisonStateTick::Ended => {
             if let Some(mut owner) = game.take_region_owner(region_id) {
                 if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
-                    monster
-                        .move_shape_mut()
-                        .finish_periodic_attack_state(state.skill_id());
+                    monster.move_shape_mut().finish_spider_poison_state_after_ai();
                 }
                 game.restore_region_owner(owner);
             }
