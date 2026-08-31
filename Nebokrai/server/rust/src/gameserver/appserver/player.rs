@@ -185,9 +185,9 @@
 //! равные по размеру упорядоченные снимки и насыщает отрицательную разницу
 //! нулём; объединение для клиента сохраняет беззнаковое сложение с
 //! переполнением. Снимок другого игрока читает это состояние и те же
-//! восемь принадлежащих `CiQing` ячеек без копий. Универсальные формулы
-//! экипировки и дополнительных свойств остаются обязательной границей среды
-//! выполнения до материализации всех боевых величин.
+//! восемь принадлежащих `CiQing` ячеек без копий. `MountAllEquip` вычисляет
+//! два снимка одной формулой оборудования — до и после CiQing — затем
+//! `CGame` сохраняет насыщенную разницу и запускает тот же `DoneTaoZhuang`.
 //! TaoZhuang теперь сохраняет constructor flags, unique original-name set,
 //! ordered set counts/threshold-prefix, max-level skills и раздельные обычные/
 //! CiQing property maps. `CGame` исполняет полный `DoneTaoZhuang`, поэтому эти
@@ -4837,6 +4837,42 @@ impl CPlayer {
         critical_rate: f32,
         goods_factory: &CGoodsFactory,
     ) -> PlayerCombatProperties {
+        self.recompute_base_and_mounted_properties(
+            coefficients,
+            base_combat_scales,
+            critical_rate,
+            goods_factory,
+            true,
+        )
+    }
+
+    /// Первый снимок `MountAllEquip`: обычная экипировка уже применена, а
+    /// восемь CiQing-ячеек ещё нет. Он нужен для exact насыщенной разницы
+    /// `UpdateCiQingProperty` и не создаёт теневого player state.
+    pub(crate) fn recompute_without_ci_qing_properties(
+        &self,
+        coefficients: GlobePlayerPropertyCoefficients,
+        base_combat_scales: [f32; 5],
+        critical_rate: f32,
+        goods_factory: &CGoodsFactory,
+    ) -> PlayerCombatProperties {
+        self.recompute_base_and_mounted_properties(
+            coefficients,
+            base_combat_scales,
+            critical_rate,
+            goods_factory,
+            false,
+        )
+    }
+
+    fn recompute_base_and_mounted_properties(
+        &self,
+        coefficients: GlobePlayerPropertyCoefficients,
+        base_combat_scales: [f32; 5],
+        critical_rate: f32,
+        goods_factory: &CGoodsFactory,
+        include_ci_qing: bool,
+    ) -> PlayerCombatProperties {
         let occupation = usize::from(self.base_properties.occupation).min(2);
         let base_u16 = |offset| read_player_wire_u16(&self.base_property_wire, offset);
         let base_u32 = |offset| read_player_wire_u32(&self.base_property_wire, offset);
@@ -4930,22 +4966,25 @@ impl CPlayer {
                 occupation,
             );
         }
-        for position in 0..self.ci_qing.size() {
-            let Some(goods) = self.ci_qing.get_goods(position) else {
-                continue;
-            };
-            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
-                && goods.addon_property_value(goods_factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
-            {
-                continue;
+        if include_ci_qing {
+            for position in 0..self.ci_qing.size() {
+                let Some(goods) = self.ci_qing.get_goods(position) else {
+                    continue;
+                };
+                if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
+                    && goods.addon_property_value(goods_factory, GAP_GOODS_MAXIMUM_DURABILITY, 2)
+                        < 1
+                {
+                    continue;
+                }
+                apply_equipment_goods_properties(
+                    &mut properties,
+                    goods,
+                    goods_factory,
+                    coefficients,
+                    occupation,
+                );
             }
-            apply_equipment_goods_properties(
-                &mut properties,
-                goods,
-                goods_factory,
-                coefficients,
-                occupation,
-            );
         }
         properties
     }
@@ -7398,6 +7437,10 @@ impl CPlayer {
         self.equipment_changed
     }
 
+    pub(crate) const fn mark_tao_zhuang_pending(&mut self) {
+        self.equipment_changed = true;
+    }
+
     pub(crate) const fn tao_zhuang_setup_is_pending(&self) -> bool {
         self.tao_zhuang_setup_pending
     }
@@ -7534,31 +7577,37 @@ impl CPlayer {
     }
 
     pub(crate) fn combat_type_values(&self) -> BTreeMap<u32, u32> {
+        Self::combat_type_values_from(self.combat_properties)
+    }
+
+    pub(crate) fn combat_type_values_from(
+        properties: PlayerCombatProperties,
+    ) -> BTreeMap<u32, u32> {
         BTreeMap::from([
-            (0x0e, self.combat_properties.minimum_attack),
-            (0x0f, self.combat_properties.maximum_attack),
-            (0x10, self.combat_properties.element_modify as u32),
-            (0x11, self.combat_properties.defense),
-            (0x12, u32::from(self.combat_properties.attack_speed)),
-            (0x13, u32::from(self.combat_properties.hit)),
-            (0x14, u32::from(self.combat_properties.cch)),
-            (0x15, u32::from(self.combat_properties.dodge)),
-            (0x17, self.combat_properties.element_resistance),
-            (0x19, u32::from(self.combat_properties.hp_recovery)),
-            (0x1a, u32::from(self.combat_properties.mp_recovery)),
-            (0x1b, self.combat_properties.strength),
-            (0x1c, self.combat_properties.dexterity),
-            (0x1d, self.combat_properties.constitution),
-            (0x1e, self.combat_properties.intelligence),
-            (0x1f, self.combat_properties.maximum_hp),
-            (0x20, self.combat_properties.maximum_mp),
-            (0x33, u32::from(self.combat_properties.reank)),
-            (0x34, u32::from(self.combat_properties.burden)),
-            (0x5b, u32::from(self.combat_properties.attack_avoid)),
-            (0x5c, u32::from(self.combat_properties.element_avoid)),
-            (0x5d, u32::from(self.combat_properties.full_miss)),
-            (0x5f, u32::from(self.combat_properties.blast_attack)),
-            (0x60, u32::from(self.combat_properties.blast_element_attack)),
+            (0x0e, properties.minimum_attack),
+            (0x0f, properties.maximum_attack),
+            (0x10, properties.element_modify as u32),
+            (0x11, properties.defense),
+            (0x12, u32::from(properties.attack_speed)),
+            (0x13, u32::from(properties.hit)),
+            (0x14, u32::from(properties.cch)),
+            (0x15, u32::from(properties.dodge)),
+            (0x17, properties.element_resistance),
+            (0x19, u32::from(properties.hp_recovery)),
+            (0x1a, u32::from(properties.mp_recovery)),
+            (0x1b, properties.strength),
+            (0x1c, properties.dexterity),
+            (0x1d, properties.constitution),
+            (0x1e, properties.intelligence),
+            (0x1f, properties.maximum_hp),
+            (0x20, properties.maximum_mp),
+            (0x33, u32::from(properties.reank)),
+            (0x34, u32::from(properties.burden)),
+            (0x5b, u32::from(properties.attack_avoid)),
+            (0x5c, u32::from(properties.element_avoid)),
+            (0x5d, u32::from(properties.full_miss)),
+            (0x5f, u32::from(properties.blast_attack)),
+            (0x60, u32::from(properties.blast_element_attack)),
         ])
     }
 

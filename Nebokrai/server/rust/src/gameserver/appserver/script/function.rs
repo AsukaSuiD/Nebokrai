@@ -447,7 +447,7 @@ use crate::gameserver::appserver::session::cequipmentdakong::{
 use crate::gameserver::appserver::session::csessionfactory::EquipmentSessionPlugKind;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
-    BattleFairyScriptAction, CGame, CiQingComposeContext, GameClockContext,
+    BattleFairyScriptAction, CGame, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, MonsterDeathContext, NationCombatContext,
     PlayerReliveContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
     ScriptRegionChangeContext, ScriptTimedGoodsParameters, ServerRegionOwner,
@@ -840,7 +840,6 @@ pub(crate) trait ScriptAwardAuthenticationContext {
 pub(crate) trait ScriptFunctionRuntime:
     GameClockContext
     + NationCombatContext
-    + CiQingComposeContext
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
     + ScriptAwardAuthenticationContext
@@ -853,7 +852,6 @@ pub(crate) trait ScriptFunctionRuntime:
 impl<T> ScriptFunctionRuntime for T where
     T: GameClockContext
         + NationCombatContext
-        + CiQingComposeContext
         + GameContainerMessageRuntime
         + ScriptRegionChangeContext
         + ScriptAwardAuthenticationContext
@@ -6997,7 +6995,7 @@ fn run_core_player_script_function<Runtime: ScriptFunctionRuntime>(
             else {
                 return Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 });
             };
-            let _ = game.delete_goods_from_ci_qing(player_id, position, runtime);
+            let _ = game.delete_goods_from_ci_qing(player_id, position);
             Some(ScriptFunctionDispatchOutcome::Handled { legacy_return: 0 })
         }
         SCRIPT_FUNCTION_OPEN_CI_QING_PAGE => {

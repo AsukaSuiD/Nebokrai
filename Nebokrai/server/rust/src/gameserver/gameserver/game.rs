@@ -2104,14 +2104,6 @@ pub(crate) struct GameWarStartupOwners {
     pub(crate) four_nation: CFourNationWarSys,
 }
 
-pub(crate) trait CiQingComposeContext {
-    fn mount_ci_qing_equipment(
-        &mut self,
-        game: &mut CGame,
-        player_id: i32,
-    ) -> CiQingPropertyRuntimeSnapshot;
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FairyImplantationLog {
     pub(crate) player_id: i32,
@@ -23532,11 +23524,10 @@ impl CGame {
         Some(())
     }
 
-    pub(crate) fn delete_goods_from_ci_qing<Context: CiQingComposeContext>(
+    pub(crate) fn delete_goods_from_ci_qing(
         &mut self,
         player_id: i32,
         position: u32,
-        context: &mut Context,
     ) -> Option<()> {
         let reset_index = self
             .goods_factory
@@ -23602,16 +23593,15 @@ impl CGame {
                 "удаление узла CiQing отправлено"
             );
         }
-        self.refresh_ci_qing_player_property(player_id, context);
+        self.refresh_ci_qing_player_property(player_id);
         tracing::debug!(player_id, position, "узел CiQing удалён");
         Some(())
     }
 
-    pub(crate) fn mount_ci_qing_from_hand<Context: CiQingComposeContext>(
+    pub(crate) fn mount_ci_qing_from_hand(
         &mut self,
         player_id: i32,
         amount: u32,
-        context: &mut Context,
     ) -> Option<()> {
         let player = self.find_player(player_id)?;
         let Some((position, improve_level, base_chance)) =
@@ -23742,7 +23732,7 @@ impl CGame {
                     "установленный CiQing добавлен"
                 );
             }
-            self.refresh_ci_qing_player_property(player_id, context);
+            self.refresh_ci_qing_player_property(player_id);
             tracing::trace!(
                 player_id,
                 position,
@@ -23837,12 +23827,39 @@ impl CGame {
         );
     }
 
-    fn refresh_ci_qing_player_property<Context: CiQingComposeContext>(
-        &mut self,
-        player_id: i32,
-        context: &mut Context,
-    ) {
-        let snapshot = context.mount_ci_qing_equipment(self, player_id);
+    fn refresh_ci_qing_player_property(&mut self, player_id: i32) {
+        let coefficients = self.globe_setup.player_property_coefficients();
+        let base_combat_scales = self.globe_setup.base_combat_scales();
+        let critical_rate = self.globe_setup.critical_rate();
+        let (snapshot, current_properties) = {
+            let player = self
+                .find_player(player_id)
+                .expect("CiQing refresh получает canonical player");
+            let previous = player.recompute_without_ci_qing_properties(
+                coefficients,
+                base_combat_scales,
+                critical_rate,
+                &self.goods_factory,
+            );
+            let current = player.recompute_base_and_equipment_properties(
+                coefficients,
+                base_combat_scales,
+                critical_rate,
+                &self.goods_factory,
+            );
+            let (_, tao_zhuang_add_values, tao_zhuang_id) =
+                player.ci_qing_property_snapshot();
+            (
+                CiQingPropertyRuntimeSnapshot {
+                    previous_type_values: CPlayer::combat_type_values_from(previous),
+                    current_type_values: CPlayer::combat_type_values_from(current),
+                    tao_zhuang_add_values: tao_zhuang_add_values.clone(),
+                    tao_zhuang_id,
+                },
+                current,
+            )
+        };
+        let _ = self.commit_recomputed_player_properties(player_id, current_properties, false);
         let add_values = CPlayer::update_ci_qing_property_difference(
             &snapshot.previous_type_values,
             &snapshot.current_type_values,
@@ -23879,6 +23896,11 @@ impl CGame {
                 "изменение свойств CiQing отправлено игроку"
             );
         }
+        self.players
+            .get_mut(&player_id)
+            .expect("CiQing result сохраняет canonical player")
+            .mark_tao_zhuang_pending();
+        let _ = self.done_player_tao_zhuang(player_id);
     }
 
     pub(crate) const fn ling_bao_setup(&self) -> &CLingBaoSetup {
