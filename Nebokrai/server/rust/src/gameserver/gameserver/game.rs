@@ -1223,6 +1223,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
 };
 use crate::gameserver::appserver::skills::knightcutstate::{
     expire_monster_knight_cut_state, expire_player_knight_cut_state,
+    send_knight_cut_state_visual,
 };
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
 use crate::gameserver::appserver::ai::baseai::PassiveDeathAction;
@@ -30182,6 +30183,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_boss_blue_quake_state(login_tick_ms);
+        let loaded_knight_cut_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_knight_cut_state(login_tick_ms);
         let loaded_cure_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30389,6 +30395,21 @@ impl CGame {
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
         {
             send_boss_blue_quake_state_visual(
+                self,
+                region_id,
+                player.shape().identity(),
+                x,
+                y,
+                state,
+                true,
+                || login_tick_ms,
+            );
+        }
+        if let Some(state) = loaded_knight_cut_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_knight_cut_state_visual(
                 self,
                 region_id,
                 player.shape().identity(),

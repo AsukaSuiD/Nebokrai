@@ -5545,6 +5545,13 @@ impl CPlayer {
         self.move_shape.replace_knight_cut_state(state)
     }
 
+    pub(crate) fn activate_loaded_knight_cut_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::knightcutstate::KnightCutState> {
+        self.move_shape.activate_loaded_knight_cut_state(now_ms)
+    }
+
     pub(crate) fn take_expired_knight_cut_state(
         &mut self,
         now_ms: u32,

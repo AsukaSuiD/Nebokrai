@@ -116,7 +116,9 @@ use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
 use crate::gameserver::appserver::skills::blindstate::{
     BLIND_STATE_BYTES, BLIND_STATE_ID, BlindState,
 };
-use crate::gameserver::appserver::skills::knightcutstate::KnightCutState;
+use crate::gameserver::appserver::skills::knightcutstate::{
+    KNIGHT_CUT_STATE_BYTES, KNIGHT_CUT_STATE_ID, KnightCutState,
+};
 use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES, KEROSENE_STATE_ID};
 use crate::gameserver::appserver::skills::originstate::OriginState;
 use crate::gameserver::appserver::skills::pillarstate::PillarState;
@@ -930,6 +932,13 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        if let Some(state) = self.knight_cut_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1122,6 +1131,15 @@ impl CMoveShape {
             .and_then(|offset| BossBlueQuakeState::decode(&states, offset).ok());
         if self.boss_blue_quake_state.is_some() {
             self.curable_state_order.insert(BOSS_BLUE_QUAKE_STATE_ID);
+        }
+        self.curable_state_order.shift_remove(&KNIGHT_CUT_STATE_ID);
+        self.knight_cut_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(KNIGHT_CUT_STATE_ID))
+            .and_then(|offset| KnightCutState::decode(&states, offset).ok());
+        if self.knight_cut_state.is_some() {
+            self.curable_state_order.insert(KNIGHT_CUT_STATE_ID);
         }
         self.strike_states = known_offsets
             .iter()
@@ -2984,20 +3002,32 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_knight_cut_state(&mut self, state: KnightCutState) -> Option<KnightCutState> {
+        self.remove_serialized_state_record(state.skill_id(), KNIGHT_CUT_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.curable_state_order.insert(state.skill_id());
         self.knight_cut_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_knight_cut_state(&mut self, now_ms: u32) -> Option<KnightCutState> {
+        let state = self.knight_cut_state?.activate_loaded(now_ms);
+        self.knight_cut_state = Some(state);
+        self.set_moveable(false);
+        self.set_fightable(false);
+        Some(state)
     }
 
     pub(crate) fn take_expired_knight_cut_state(&mut self, now_ms: u32) -> Option<KnightCutState> {
         let state = self.knight_cut_state.filter(|state| state.expired(now_ms))?;
         self.knight_cut_state = None;
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), KNIGHT_CUT_STATE_BYTES);
         Some(state)
     }
 
     pub(crate) fn take_knight_cut_state(&mut self) -> Option<KnightCutState> {
         let state = self.knight_cut_state.take()?;
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), KNIGHT_CUT_STATE_BYTES);
         Some(state)
     }
 
@@ -4458,6 +4488,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => SPIDER_POISON_STATE_BYTES,
             DAUB_POISON_STATE_ID => DAUB_POISON_STATE_BYTES,
             BOSS_BLUE_QUAKE_STATE_ID => BOSS_BLUE_QUAKE_STATE_BYTES,
+            KNIGHT_CUT_STATE_ID => KNIGHT_CUT_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID
