@@ -1589,6 +1589,7 @@ impl CMoveShape {
             || self.state_storage.leaf_cut_state.is_some()
             || self.state_storage.leaf_cut_2_state.is_some()
             || self.state_storage.leaf_cut_3_state.is_some()
+            || !self.state_storage.strike_states.is_empty()
             || !self.state_storage.battle_fairy_attribute_states.is_empty()
             || !self.state_storage.particular_states.is_empty()
             || !self.state_storage.consumable_restore_states.is_empty()
