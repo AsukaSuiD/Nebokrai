@@ -78,7 +78,7 @@ use crate::gameserver::appserver::skills::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY_STATE_2_BYTES};
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
-use crate::gameserver::appserver::skills::daubpoisonstate::DaubPoisonState;
+use crate::gameserver::appserver::skills::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState};
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
 use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
 use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
@@ -920,6 +920,7 @@ impl CMoveShape {
             update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds));
         }
         if let Some(state) = self.spider_poison_state { update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds)); }
+        if let Some(state) = self.daub_poison_state { update_known_state_record(&mut payload, state.skill_id(), &state.encoded(&mut timed_state_now_milliseconds)); }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1103,6 +1104,7 @@ impl CMoveShape {
         self.periodic_attack_order.shift_remove(&super::skills::spiderpoison::SPIDER_POISON_SKILL_ID); self.curable_state_order.shift_remove(&super::skills::spiderpoison::SPIDER_POISON_SKILL_ID);
         self.spider_poison_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(super::skills::spiderpoison::SPIDER_POISON_SKILL_ID)).and_then(|offset| SpiderPoisonState::decode(&states, offset, 0).ok());
         if let Some(state) = self.spider_poison_state { self.periodic_attack_order.insert(state.skill_id()); self.curable_state_order.insert(state.skill_id()); }
+        self.daub_poison_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(DAUB_POISON_STATE_ID)).and_then(|offset| DaubPoisonState::decode(&states, offset).ok());
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2524,8 +2526,11 @@ impl CMoveShape {
         &mut self,
         state: DaubPoisonState,
     ) -> Option<DaubPoisonState> {
+        self.remove_serialized_state_record(state.skill_id(), DAUB_POISON_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.daub_poison_state.replace(state)
     }
+    pub(crate) fn activate_loaded_daub_poison_state(&mut self, now_ms: u32) -> Option<DaubPoisonState> { let state = self.daub_poison_state?.activate_loaded(now_ms); self.daub_poison_state = Some(state); Some(state) }
 
     pub(crate) fn take_expired_daub_poison_state(
         &mut self,
@@ -2533,7 +2538,9 @@ impl CMoveShape {
     ) -> Option<DaubPoisonState> {
         self.daub_poison_state
             .filter(|state| state.expired(now_ms))?;
-        self.daub_poison_state.take()
+        let state = self.daub_poison_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), DAUB_POISON_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {
@@ -4416,6 +4423,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             SOUL_COLLECT_STATE_ID => SOUL_COLLECT_STATE_BYTES,
             super::skills::spriteburn::SPRITE_BURN_SKILL_ID => SPRITE_BURN_STATE_BYTES,
             super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => SPIDER_POISON_STATE_BYTES,
+            DAUB_POISON_STATE_ID => DAUB_POISON_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

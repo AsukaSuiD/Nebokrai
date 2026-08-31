@@ -4,16 +4,18 @@
 //! `appserver/skills/daubpoisonstate.cpp`. Состояние принадлежит только
 //! игроку, хранит строгий wrapping-срок и публикует исходные пакеты начала и
 //! завершения. Проверки стрел читают этот единственный типизированный
-//! экземпляр через `GetStateBySkillID`. Общая загрузка списка `CState` пока не
-//! достигнута и остаётся границей будущего владельца фабрики состояний. Vtable
-//! exact EXE подтверждает общий с `CBlindState` `GetRemainedTime` по адресу
+//! экземпляр через `GetStateBySkillID`. Persisted-запись `ID + remaining time`
+//! занимает 8 байт и активируется при spatial login. Vtable exact EXE
+//! подтверждает общий с `CBlindState` `GetRemainedTime` по адресу
 //! `0x005F2CD0`, включая отдельное чтение часов для положительного остатка.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const DAUB_POISON_STATE_ID: u32 = 0xdf;
+pub(crate) const DAUB_POISON_STATE_BYTES: usize = 8;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
 
@@ -27,6 +29,16 @@ impl DaubPoisonState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
         Self { started_at_ms, keep_time_ms }
     }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != DAUB_POISON_STATE_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); }
+        Ok(Self::new(0, reader.read_u32()?))
+    }
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+    pub(crate) fn encoded_for_install(self) -> [u8; DAUB_POISON_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; DAUB_POISON_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; DAUB_POISON_STATE_BYTES] { let mut bytes = [0; DAUB_POISON_STATE_BYTES]; bytes[..4].copy_from_slice(&DAUB_POISON_STATE_ID.to_le_bytes()); bytes[4..].copy_from_slice(&remaining.to_le_bytes()); bytes }
 
     pub(crate) const fn skill_id(self) -> u32 { DAUB_POISON_STATE_ID }
 
