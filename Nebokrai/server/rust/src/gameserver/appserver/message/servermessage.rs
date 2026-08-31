@@ -5,6 +5,8 @@
 //! чтение селекторов и полей, порядок применения ресурсов, число и порядок
 //! вызовов генератора случайных чисел, жизненный цикл соединений и игроков, а
 //! также последовательность client, World и Billing-отправок.
+//! Region selector `0x0E` берёт тот же legacy RNG у `CGame`, который был
+//! посеян `Init`; process runtime не хранит отдельную startup-последовательность.
 //!
 //! Синхронно выполненные мутации и отправки диагностируются через `tracing` в
 //! месте возникновения. Диспетчер возвращает только успех либо типизированную
@@ -1363,14 +1365,16 @@ where
                 .base_mut()
                 .get_long()
                 .expect("region selector проверен без изменения cursor");
-            let decoded = match dispatch_initial_region_startup(
-                consumed_selector,
-                message,
-                game,
-                script_context,
-                |name, region_id| tracing::trace!(name = %String::from_utf8_lossy(name), region_id, "регион добавлен в список запуска"),
-                |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
-            )
+            let decoded = match game.with_legacy_random_stream(|game, random| {
+                dispatch_initial_region_startup(
+                    consumed_selector,
+                    message,
+                    game,
+                    random,
+                    |name, region_id| tracing::trace!(name = %String::from_utf8_lossy(name), region_id, "регион добавлен в список запуска"),
+                    |text| tracing::info!(text = %String::from_utf8_lossy(text), "сообщение загрузки GameServer"),
+                )
+            })
             .expect("region selector проверен outer dispatcher-ом")
             .map_err(GameServerMessageError::InitialRegionStartup)
             {
@@ -2493,13 +2497,6 @@ fn read_start_long(
     Ok(value)
 }
 
-pub(crate) trait InitialRegionStartupContext: ServerRegionMembershipContext {}
-
-impl<Context> InitialRegionStartupContext for Context where
-    Context: ServerRegionMembershipContext + ?Sized
-{
-}
-
 enum InitialRegionEffect {
     Log(Vec<u8>),
     MonsterEntry(CShape, CMessage),
@@ -2578,7 +2575,7 @@ impl<Context: ServerRegionMembershipContext> ServerRegionMonsterEffectsContext
     }
 }
 
-impl<Context: InitialRegionStartupContext> ServerRegionDecodeEffectsContext
+impl<Context: RegionRandomContext> ServerRegionDecodeEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
     fn now_millis(&mut self) -> u32 {
@@ -2678,7 +2675,7 @@ pub(crate) fn dispatch_initial_region_startup<Context, AddRegionList, AddLogText
     mut add_log_text: AddLogText,
 ) -> Option<Result<(), InitialRegionStartupError>>
 where
-    Context: InitialRegionStartupContext,
+    Context: RegionRandomContext,
     AddRegionList: FnMut(&[u8], i32),
     AddLogText: FnMut(&[u8]),
 {

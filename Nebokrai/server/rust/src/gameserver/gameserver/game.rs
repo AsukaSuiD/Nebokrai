@@ -482,6 +482,8 @@
 //! `s_mapRegion` хранит concrete enum всех шести subtype-ов; ID/name lookup,
 //! replace assignment, startup monster/NPC totals и GodsBattle registration
 //! связаны с selector-ом `0x0E`, не стирая subtype state через base slicing.
+//! Все region/NPC/monster RNG-вызовы этого selector-а продолжают единый поток,
+//! посеянный `CGame::Init`, а не process-side копию состояния.
 //! `with_send_state/register_*/attach_*` являются явной assembly-границей
 //! baseline и не снимают их псевдокод. Network setup передаётся отдельной
 //! post-`LoadSetup*` проекцией. Windows thread handles заменены owned Tokio
@@ -687,7 +689,7 @@ use crate::gameserver::appserver::message::sequencestring::{
 };
 use crate::gameserver::appserver::message::servermessage::on_billing_client_reconnected;
 use crate::gameserver::appserver::message::servermessage::{
-    InitialRegionStartupContext, WarScheduleSetupContext, dispatch_server_message,
+    WarScheduleSetupContext, dispatch_server_message,
 };
 use crate::gameserver::appserver::message::shapemessage::dispatch_game_shape_message;
 use crate::gameserver::appserver::message::shopmessage::dispatch_shop_message;
@@ -2127,6 +2129,20 @@ pub(crate) trait GameClockContext {
 }
 
 impl<T> GameClockContext for T {}
+
+/// Временная mutable-проекция единственного legacy RNG `CGame` для owner-ов,
+/// которым decoder передаёт `RegionRandomContext`. Состояние извлекается и
+/// обязательно возвращается тем же synchronous caller-ом; отдельного process
+/// RNG для startup/gameplay эта граница не создаёт.
+pub(crate) struct GameLegacyRandomStream {
+    state: u32,
+}
+
+impl RegionRandomContext for GameLegacyRandomStream {
+    fn random_below(&mut self, bound: i32) -> i32 {
+        game_legacy_random(&mut self.state, bound)
+    }
+}
 
 /// Linux-аналог wrapping `timeGetTime`: `CLOCK_BOOTTIME` включает suspend
 /// и оборачивается в DWORD так же, как owners остальных серверов.
@@ -4266,8 +4282,7 @@ pub(crate) trait GameExitRuntime {
 }
 
 pub(crate) trait GameMainLoopRuntime:
-    InitialRegionStartupContext
-    + GameOrganizingWarRuntime
+    GameOrganizingWarRuntime
     + GameCountryWarRuntime
     + GameContainerMessageRuntime
     + GameGoodsMessageRuntime
@@ -4695,6 +4710,18 @@ impl OldClientGoodsEncoder {
 }
 
 impl CGame {
+    pub(crate) fn with_legacy_random_stream<Output>(
+        &mut self,
+        operation: impl FnOnce(&mut Self, &mut GameLegacyRandomStream) -> Output,
+    ) -> Output {
+        let mut stream = GameLegacyRandomStream {
+            state: self.random_state,
+        };
+        let output = operation(self, &mut stream);
+        self.random_state = stream.state;
+        output
+    }
+
     /// Linux operator-projection reached `RefeashInfoText`. Публикуются только
     /// live owners; неперенесённые GUI throughput/peak counters не подменяются
     /// нулями. Исходный periodic caller остаётся в MainLoop.
