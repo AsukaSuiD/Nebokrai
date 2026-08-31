@@ -19,6 +19,13 @@ use crate::public::guid::CGuid;
 
 pub(crate) const CITY_GATE_OBJECT_TYPE: u32 = 0x4B0;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CityGateHurtOwnerUpdate {
+    pub(crate) region_id: i32,
+    pub(crate) attacker_type: i32,
+    pub(crate) attacker_id: i32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CityGateInit {
     pub(crate) id: i32,
@@ -163,6 +170,20 @@ impl CCityGate {
             },
         }
     }
+
+    /// Exact `CCityGate::OnBeenHurted`: сами ворота не меняют HP/action и
+    /// только возвращают два DWORD для owning `CServerCityRegion`.
+    pub(crate) const fn on_been_hurted(
+        &self,
+        attacker_type: i32,
+        attacker_id: i32,
+    ) -> CityGateHurtOwnerUpdate {
+        CityGateHurtOwnerUpdate {
+            region_id: self.region_id,
+            attacker_type,
+            attacker_id,
+        }
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -248,7 +269,7 @@ impl CCityGate {
 
 // ============================================================================
 // FUNCTION: CCityGate::OnBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\citygate.cpp:177
@@ -256,6 +277,8 @@ impl CCityGate {
 // ADDRESS: 005ddd80
 // PROTOTYPE: void __thiscall OnBeenHurted(long param_1, long param_2)
 //
+// Реализовано выше как typed owner-update: non-null region pointer в safe
+// модели выражен совпадающим region ID, два DWORD сохраняет CServerCityRegion.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

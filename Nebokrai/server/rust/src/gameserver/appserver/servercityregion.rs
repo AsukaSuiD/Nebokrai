@@ -13,7 +13,8 @@
 //! `servercityregion.h/.cpp`, точная пара GameServer. PDB подтверждает
 //! наследование `CServerWarRegion`, ordered
 //! `m_CityGates +0x274`, guard set/list `+0x2A0/+0x2AC` и defender faction
-//! `+0x2C0`.
+//! `+0x2C0`; city-gate hurt callback записывает last attacker type/ID в
+//! `+0x2B8/+0x2BC`.
 //!
 //! `BTreeMap/BTreeSet/Vec` сохраняют STL order. Decoder принимает byte-exact
 //! World snapshot: `0x20` defence, signed count, `0x2C` gate scalars и две
@@ -58,7 +59,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::build::{BuildBlockUpdate, BuildClientUpdate, BuildRuntimeContext};
-use super::citygate::{CCityGate, CityGateInit};
+use super::citygate::{CCityGate, CityGateHurtOwnerUpdate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
 use super::monster::CMonster;
@@ -274,6 +275,8 @@ pub(crate) struct CServerCityRegion {
     pub(crate) defence_side_return: Option<CityDefenceReturnState>,
     pub(crate) guard_monsters: BTreeSet<i32>,
     pub(crate) guard_indices: Vec<i32>,
+    pub(crate) last_gate_attacker_type: i32,
+    pub(crate) last_gate_attacker_id: i32,
     pub(crate) defence_side_faction_id: i32,
 }
 
@@ -717,6 +720,18 @@ impl CServerCityRegion {
         if !self.guard_indices.contains(&refresh_index) {
             self.guard_indices.push(refresh_index);
         }
+    }
+
+    pub(crate) fn apply_gate_hurt_owner_update(
+        &mut self,
+        update: CityGateHurtOwnerUpdate,
+    ) -> bool {
+        if self.war.base.id != update.region_id {
+            return false;
+        }
+        self.last_gate_attacker_type = update.attacker_type;
+        self.last_gate_attacker_id = update.attacker_id;
+        true
     }
 
     pub(crate) fn guard_refresh_targets(&self) -> CityGuardRefreshTargets {
