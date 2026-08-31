@@ -4,13 +4,18 @@
 //! `appserver/skills/pillarstate.cpp`. Состояние хранит коэффициент поздней
 //! защиты и строгий срок, публикует `0xBFE03/0xBFE04` и остаётся единственным
 //! типизированным источником для проверки запрета рывков и `PostDefense`.
+//! Общая с `CBossBlueFuryState` serializer-пара `0x005E7330/0x005D6190`
+//! сохраняет 12 байт: `ID + remaining time + IEEE-754 factor bits`;
+//! spatial login восстанавливает срок и вложенный запрет движения.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const PILLAR_STATE_ID: u32 = 0x74;
+pub(crate) const PILLAR_STATE_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PillarState { started_at_ms: u32, keep_time_ms: u32, damage_factor_bits: u32 }
@@ -18,6 +23,24 @@ pub(crate) struct PillarState { started_at_ms: u32, keep_time_ms: u32, damage_fa
 impl PillarState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32, damage_factor: f32) -> Self {
         Self { started_at_ms, keep_time_ms, damage_factor_bits: damage_factor.to_bits() }
+    }
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != PILLAR_STATE_ID {
+            return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) });
+        }
+        let remaining = reader.read_u32()?;
+        Ok(Self { started_at_ms: 0, keep_time_ms: remaining, damage_factor_bits: reader.read_u32()? })
+    }
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self { self.started_at_ms = now_ms; self }
+    pub(crate) fn encoded_for_install(self) -> [u8; PILLAR_STATE_BYTES] { self.encoded_with_remaining(self.keep_time_ms) }
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; PILLAR_STATE_BYTES] { self.encoded_with_remaining(self.client_time(now_milliseconds) as u32) }
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; PILLAR_STATE_BYTES] {
+        let mut bytes = [0; PILLAR_STATE_BYTES];
+        bytes[..4].copy_from_slice(&PILLAR_STATE_ID.to_le_bytes());
+        bytes[4..8].copy_from_slice(&remaining.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.damage_factor_bits.to_le_bytes());
+        bytes
     }
     pub(crate) const fn skill_id(self) -> u32 { PILLAR_STATE_ID }
     pub(crate) const fn damage_factor(self) -> f32 { f32::from_bits(self.damage_factor_bits) }

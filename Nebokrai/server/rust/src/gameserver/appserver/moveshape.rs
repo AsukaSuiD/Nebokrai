@@ -129,7 +129,9 @@ use crate::gameserver::appserver::skills::knightcutstate::{
 };
 use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES, KEROSENE_STATE_ID};
 use crate::gameserver::appserver::skills::originstate::OriginState;
-use crate::gameserver::appserver::skills::pillarstate::PillarState;
+use crate::gameserver::appserver::skills::pillarstate::{
+    PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState,
+};
 use crate::gameserver::appserver::skills::poisonarrowstate::{
     PoisonArrowState, POISON_ARROW_STATE_BYTES,
 };
@@ -971,6 +973,13 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        if let Some(state) = self.pillar_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1198,6 +1207,11 @@ impl CMoveShape {
             self.reached_property_state_order = self.reached_property_state_order.wrapping_add(1);
             self.roar_state_order = Some(self.reached_property_state_order);
         }
+        self.pillar_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(PILLAR_STATE_ID))
+            .and_then(|offset| PillarState::decode(&states, offset).ok());
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -3082,13 +3096,28 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_pillar_state(&mut self, state: PillarState) -> Option<PillarState> {
+        self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.pillar_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_pillar_state(&mut self, now_ms: u32) -> Option<PillarState> {
+        let state = self.pillar_state?.activate_loaded(now_ms);
+        self.pillar_state = Some(state);
+        self.set_moveable(false);
+        Some(state)
     }
     pub(crate) fn take_expired_pillar_state(&mut self, now_ms: u32) -> Option<PillarState> {
         self.pillar_state.filter(|state| state.expired(now_ms))?;
-        self.pillar_state.take()
+        let state = self.pillar_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
+        Some(state)
     }
-    pub(crate) fn take_pillar_state(&mut self) -> Option<PillarState> { self.pillar_state.take() }
+    pub(crate) fn take_pillar_state(&mut self) -> Option<PillarState> {
+        let state = self.pillar_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), PILLAR_STATE_BYTES);
+        Some(state)
+    }
 
     pub(crate) fn take_expired_knock_out_state(&mut self, now_ms: u32) -> Option<KnockOutState> {
         let state = self.knock_out_state.filter(|state| state.expired(now_ms))?;
@@ -4599,6 +4628,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             RUSH_STATE_ID => RUSH_STATE_BYTES,
             RUSH_2_STATE_ID => RUSH_2_STATE_BYTES,
             ROAR_STATE_ID => ROAR_STATE_BYTES,
+            PILLAR_STATE_ID => PILLAR_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID

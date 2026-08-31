@@ -5531,6 +5531,13 @@ impl CPlayer {
         self.move_shape.replace_pillar_state(state)
     }
 
+    pub(crate) fn activate_loaded_pillar_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::pillarstate::PillarState> {
+        self.move_shape.activate_loaded_pillar_state(now_ms)
+    }
+
     pub(crate) fn take_expired_pillar_state(
         &mut self, now_ms: u32,
     ) -> Option<super::skills::pillarstate::PillarState> {

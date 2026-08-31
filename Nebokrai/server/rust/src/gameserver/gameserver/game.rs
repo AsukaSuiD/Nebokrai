@@ -979,7 +979,9 @@ use crate::gameserver::appserver::skills::thunderslashphalanx::{
 use crate::gameserver::appserver::skills::pillar::{
     cancel_player_pillar, execute_player_pillar, is_pillar_dispatch, PILLAR_SKILL_ID,
 };
-use crate::gameserver::appserver::skills::pillarstate::expire_player_pillar_state;
+use crate::gameserver::appserver::skills::pillarstate::{
+    expire_player_pillar_state, send_pillar_state_visual,
+};
 use crate::gameserver::appserver::skills::rush::{
     cancel_player_rush, execute_player_rush, is_rush_dispatch, RUSH_SKILL_ID,
 };
@@ -30164,6 +30166,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_rush_2_state(login_tick_ms);
+        let loaded_pillar_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_pillar_state(login_tick_ms);
         let loaded_knock_out_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30357,6 +30364,21 @@ impl CGame {
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
         {
             send_rush_2_state_visual(
+                self,
+                region_id,
+                player.shape().identity(),
+                x,
+                y,
+                state,
+                true,
+                login_tick_ms,
+            );
+        }
+        if let Some(state) = loaded_pillar_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_pillar_state_visual(
                 self,
                 region_id,
                 player.shape().identity(),
