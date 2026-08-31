@@ -4,8 +4,8 @@
 //! только идентификатором навыка. `CBossFiendSummon` дополнительно выбирает
 //! одну из трёх разновидностей ровно одним исходным броском на всё применение.
 //! Модуль сохраняет объектный, точечный и self-входы игрока и общий объектный
-//! путь monster/pet, максимальную дистанцию цели, задержку повторного
-//! применения, задержку исполнения,
+//! путь monster/pet, максимальную дистанцию цели, поворот владельца к
+//! сохранённой точке эффекта, задержку повторного применения и исполнения,
 //! пакеты `0xBFE01` и последовательность вызовов создания.
 //! Поиск владельцев и around-доставка остаются у `CGame`; создаваемая сущность
 //! сразу публикуется через `CServerRegion::add_summoned_creature`.
@@ -29,6 +29,7 @@ use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillSt
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
+use crate::public::tools::get_line_direction;
 
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
@@ -175,6 +176,14 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     }
     let destination = player_ai.summon_creature().map(|state| state.destination).expect("выполнение призыва хранит координаты эффекта");
     if player_ai.summon_creature().is_some_and(|state| state.kernel().stage() == SkillStage::Begin) {
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.movement_shape_mut().set_direction(get_line_direction(
+                source_x,
+                source_y,
+                destination.0,
+                destination.1,
+            ));
+        }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_player_visual(game, player_id, skill_id, skill_level, 1, destination);
         if let Some(state) = player_ai.summon_creature_mut() { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
@@ -387,7 +396,14 @@ pub(crate) fn execute_owned_summon_creature(
         return true;
     }
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
+    let direction = get_line_direction(
+        source.get_tile_x().unwrap_or_default(),
+        source.get_tile_y().unwrap_or_default(),
+        destination_x,
+        destination_y,
+    );
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.move_shape_mut().shape_mut().set_direction(direction);
         monster.move_shape_mut().set_moveable(false);
         monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms);
         monster.set_summon_creature_progress(SummonCreatureProgress {
@@ -395,6 +411,10 @@ pub(crate) fn execute_owned_summon_creature(
             destination_y,
         });
     }
-    send_start(game, region, &source, monster_id, skill_id, skill_level);
+    let source = region
+        .find_monster_by_id(monster_id)
+        .map(|monster| monster.move_shape().shape())
+        .unwrap_or(&source);
+    send_start(game, region, source, monster_id, skill_id, skill_level);
     true
 }
