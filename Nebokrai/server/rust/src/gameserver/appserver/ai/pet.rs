@@ -375,6 +375,26 @@ pub(crate) fn lose_pet_target_and_search<Runtime: GameMainLoopRuntime>(
     }
 }
 
+/// Чистый virtual `CPet::OnLoseTarget` из `OnBeenKilled`: сохранённый Move
+/// остаётся в FIFO, атакующий питомец выполняет свой `OnIdle`, а внешний
+/// schedule-`SearchEnemy` сюда не добавляется.
+pub(crate) fn release_pet_target_for_death<Runtime: GameMainLoopRuntime>(
+    region: &mut CServerRegion,
+    monster_id: i32,
+    stop_frame: u32,
+    runtime: &mut Runtime,
+) {
+    let was_attacking = region
+        .find_monster_by_id(monster_id)
+        .is_some_and(|pet| pet.is_tamed() && pet.pet_action() == 0);
+    if let Some(pet) = region.find_monster_by_id_mut(monster_id) {
+        pet.release_ai_target_for_death();
+    }
+    if was_attacking {
+        let _ = queue_pet_idle(region, monster_id, stop_frame, runtime);
+    }
+}
+
 /// Исполняет достигнутое следование `CPet`: слот питомца задаёт позицию позади
 /// хозяина, близкая цель достигается обычным шагом, а далёкая — переносом в
 /// свободную клетку `7x7` с тем же порядком пространственной доставки.

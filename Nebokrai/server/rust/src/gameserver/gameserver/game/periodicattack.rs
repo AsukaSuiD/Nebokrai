@@ -473,7 +473,7 @@ impl CGame {
         else {
             return;
         };
-        let Some((target_properties, target_health, tamed, carriage, god, target_master, x, y, pos_x, pos_y)) =
+        let Some((target_properties, target_health, tamed, carriage, god, target_master, x, y)) =
             self.find_region(region_id).and_then(|owner| {
                 let monster = owner.base().find_monster_by_id(target_id)?;
                 let shape = monster.move_shape().shape();
@@ -486,8 +486,6 @@ impl CGame {
                     monster.master_info(),
                     shape.get_tile_x().ok()?,
                     shape.get_tile_y().ok()?,
-                    shape.get_pos_x() as u32,
-                    shape.get_pos_y() as u32,
                 ))
             })
         else {
@@ -751,46 +749,6 @@ impl CGame {
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_shape_position_around(region_id, x, y, &died);
-        if !carriage && !tamed {
-            return;
-        }
-        let _ = self.gods_battle_monster_died(
-            region_id,
-            target_id,
-            master.master_type,
-            master.master_id,
-        );
-        let _ = self.monster_on_died(region_id, target_id, master.master_id, runtime);
-        if carriage {
-            let _ = self.send_carriage_log_snapshot(
-                target_master.master_id,
-                property.index,
-                region_id,
-                x,
-                y,
-                3,
-            );
-            if target_master.master_type == PLAYER_TYPE
-                && let Some(owner) = self.find_player_mut(target_master.master_id)
-            {
-                owner.clear_active_carriage(target_id);
-            }
-        } else if target_master.master_type == PLAYER_TYPE
-            && let Some(owner) = self.find_player_mut(target_master.master_id)
-        {
-            owner.remove_active_pet(MONSTER_TYPE, target_id);
-        }
-        let mut exit = CMessage::new(0x000b_f504);
-        exit.add_long(MONSTER_TYPE);
-        exit.add_long(target_id);
-        exit.add_long(0);
-        exit.add_ulong(pos_x);
-        exit.add_ulong(pos_y);
-        let _ = self.send_shape_position_around(region_id, x, y, &exit);
-        if let Some(mut owner) = self.take_region_owner(region_id) {
-            owner.base_mut().finish_owned_monster_death(target_id);
-            self.restore_region_owner(owner);
-        }
     }
 
 }

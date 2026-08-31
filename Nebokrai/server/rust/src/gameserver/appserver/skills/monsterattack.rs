@@ -3,7 +3,7 @@
 //! Конкретный навык сохраняет формулу, RNG и выбор целей у своего владельца.
 //! Здесь остаются общие `CFightDefense::PreDefense`, изменение цели, точные
 //! пакеты ранения и смерти и семантические хвосты. Смерть игрока передаётся
-//! наружу после возврата владельца региона; смерть обычного монстра остаётся
+//! наружу после возврата владельца региона; смерть любого монстра остаётся
 //! в его `CBaseAI` как пассивный `Died` и завершается runtime-владельцем AI.
 
 use super::fightdefense::{
@@ -315,7 +315,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     target_shape: &CShape,
     target_health: u32,
     target_mana: u32,
-    target_master: Option<MasterInfo>,
+    _target_master: Option<MasterInfo>,
     target_monster_property: Option<MonsterProperties>,
     target_tamed: bool,
     target_carriage: bool,
@@ -362,16 +362,14 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             .set_action(if current_health == 0 { 6 } else { 5 });
         if current_health == 0 {
             monster.when_been_killed(now_ms);
-            if !target_tamed && !target_carriage {
-                monster.set_killed_by(MonsterKillingAttack {
-                    attacker_type: MONSTER_TYPE,
-                    attacker_id: monster_id,
-                    skill_id: attack.skill_id,
-                    skill_level: attack.skill_level,
-                    critical: attack.critical,
-                    blast_attack: attack.blast_attack,
-                });
-            }
+            monster.set_killed_by(MonsterKillingAttack {
+                attacker_type: MONSTER_TYPE,
+                attacker_id: monster_id,
+                skill_id: attack.skill_id,
+                skill_level: attack.skill_level,
+                critical: attack.critical,
+                blast_attack: attack.blast_attack,
+            });
         } else {
             let attacker = ShapeIdentity {
                 object_type: MONSTER_TYPE,
@@ -508,38 +506,6 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 attacker_id: monster_id,
                 attacker_faction_id: 0,
             }));
-        } else if target_tamed || target_carriage {
-            if let Some(master) = target_master
-                && master.master_type == PLAYER_TYPE
-                && game
-                    .find_player(master.master_id)
-                    .is_some_and(|player| player.server_region_id() == Some(region.id))
-                && let Some(player) = game.find_player_mut(master.master_id)
-            {
-                if target_carriage {
-                    player.clear_active_carriage(target.id);
-                } else {
-                    let _ = player.remove_active_pet(MONSTER_TYPE, target.id);
-                }
-            }
-            if let Some(monster) = region.find_monster_by_id_mut(target.id) {
-                if target_carriage {
-                    monster.stage_for_delete();
-                } else {
-                    monster.evanish_pet();
-                }
-            }
-            let mut vanished = CMessage::new(0x000b_f504);
-            vanished.add_long(MONSTER_TYPE);
-            vanished.add_long(target.id);
-            vanished.add_long(0);
-            vanished
-                .base_mut()
-                .add(&target_shape.get_pos_x().to_bits().to_le_bytes());
-            vanished
-                .base_mut()
-                .add(&target_shape.get_pos_y().to_bits().to_le_bytes());
-            let _ = game.send_game_shape_around(region, target_shape, None, &vanished);
         }
     } else {
         let mut hurt = CMessage::new(0x000b_f60a);

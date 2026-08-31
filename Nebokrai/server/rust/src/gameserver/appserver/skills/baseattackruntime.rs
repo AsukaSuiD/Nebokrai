@@ -810,56 +810,6 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 died.base_mut().add_char(1);
                 CGame::append_base_attack_tail(&mut died, &attack);
                 let _ = game.send_shape_position_around(region_id, target_x, target_y, &died);
-                if monster_carriage || monster_tamed {
-                    let _ = game.gods_battle_monster_died(
-                        region_id,
-                        target_id,
-                        PLAYER_TYPE,
-                        player_id,
-                    );
-                    let _ = game.monster_on_died(region_id, target_id, player_id, runtime);
-                    if monster_carriage {
-                        let _ = game.send_carriage_log_snapshot(
-                            monster_master.master_id,
-                            monster_property.index,
-                            region_id,
-                            target_x,
-                            target_y,
-                            3,
-                        );
-                        if monster_master.master_type == PLAYER_TYPE
-                            && let Some(master) = game.find_player_mut(monster_master.master_id)
-                        {
-                            master.clear_active_carriage(target_id);
-                        }
-                    } else if monster_master.master_type == PLAYER_TYPE {
-                        if let Some(master) = game.find_player_mut(monster_master.master_id) {
-                            master.remove_active_pet(MONSTER_TYPE, target_id);
-                        }
-                    }
-                    let monster_position = game.find_region(region_id).and_then(|owner| {
-                        let shape = owner
-                            .base()
-                            .find_monster_by_id(target_id)?
-                            .move_shape()
-                            .shape();
-                        Some((shape.get_pos_x().to_bits(), shape.get_pos_y().to_bits()))
-                    });
-                    if let Some((pos_x, pos_y)) = monster_position {
-                        let mut exit = CMessage::new(0x000b_f504);
-                        exit.add_long(MONSTER_TYPE);
-                        exit.add_long(target_id);
-                        exit.add_long(0);
-                        exit.add_ulong(pos_x);
-                        exit.add_ulong(pos_y);
-                        let _ =
-                            game.send_shape_position_around(region_id, target_x, target_y, &exit);
-                    }
-                    if let Some(mut owner) = game.take_region_owner(region_id) {
-                        owner.base_mut().finish_owned_monster_death(target_id);
-                        game.restore_region_owner(owner);
-                    }
-                }
             } else {
                 let mut hurt = CMessage::new(0x000b_f60a);
                 hurt.add_long(PLAYER_TYPE);
