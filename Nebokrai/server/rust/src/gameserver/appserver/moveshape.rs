@@ -63,6 +63,19 @@ use super::shape::{
 use crate::gameserver::appserver::skills::agilitystate::{
     AgilityState, PersistentAgilityFamilyState, PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
 };
+use crate::gameserver::appserver::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
+use crate::gameserver::appserver::skills::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
+use crate::gameserver::appserver::skills::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
+use crate::gameserver::appserver::skills::origin::ORIGIN_SKILL_ID;
+use crate::gameserver::appserver::skills::swordship::{
+    SWORDSHIP_2_SKILL_ID, SWORDSHIP_3_SKILL_ID, SWORDSHIP_4_SKILL_ID, SWORDSHIP_SKILL_ID,
+};
+use crate::gameserver::appserver::skills::taiji::TAIJI_SKILL_ID;
+use crate::gameserver::appserver::skills::wuxingearth::WUXING_EARTH_SKILL_ID;
+use crate::gameserver::appserver::skills::wuxingfire::WUXING_FIRE_SKILL_ID;
+use crate::gameserver::appserver::skills::wuxingmetal::WUXING_METAL_SKILL_ID;
+use crate::gameserver::appserver::skills::wuxingwater::WUXING_WATER_SKILL_ID;
+use crate::gameserver::appserver::skills::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::skills::agilitystate2::{AgilityState2, AGILITY_STATE_2_BYTES};
 use crate::gameserver::appserver::skills::callositystate::CallosityFamilyState;
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
@@ -156,6 +169,27 @@ const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const UNDEAD_STATE_ID: u32 = 0x38;
 const UNDEAD_STATE_PARAMETER_BYTES: usize = 72;
+
+const fn is_auto_start_state_skill(skill_id: u32) -> bool {
+    matches!(
+        skill_id,
+        ENLARGE_FULL_MISS_SKILL_ID
+            | ENLARGE_MAX_HP_SKILL_ID
+            | ENLARGE_MAX_MP_SKILL_ID
+            | ORIGIN_SKILL_ID
+            | SWORDSHIP_SKILL_ID
+            | SWORDSHIP_2_SKILL_ID
+            | SWORDSHIP_3_SKILL_ID
+            | SWORDSHIP_4_SKILL_ID
+            | TAIJI_SKILL_ID
+            | WUXING_METAL_SKILL_ID
+            | WUXING_WOOD_SKILL_ID
+            | WUXING_WATER_SKILL_ID
+            | WUXING_FIRE_SKILL_ID
+            | WUXING_EARTH_SKILL_ID
+    )
+}
+
 /// Достигнутая common-проекция `CSkill`: identity, level, category и name.
 /// Исполнение concrete attack/defense/state/summon owners остаётся у самих
 /// skill owners; здесь хранится точный результат `CMoveShape::AddSkill`.
@@ -473,6 +507,9 @@ pub(crate) trait MoveShapeResolver: ShapeResolver {
 pub(crate) struct CMoveShape {
     shape: CShape,
     skills: BTreeMap<u32, MoveShapeSkill>,
+    state_skill_order: IndexSet<u32>,
+    back_stage_skill_ids: Vec<u32>,
+    back_stage_begin_cursor: usize,
     current_skill_id: Option<u32>,
     item_skill_ids: Vec<u32>,
     state_storage: CanonicalStateStorage,
@@ -604,6 +641,9 @@ impl Default for CMoveShape {
         Self {
             shape: CShape::default(),
             skills: BTreeMap::new(),
+            state_skill_order: IndexSet::new(),
+            back_stage_skill_ids: Vec::new(),
+            back_stage_begin_cursor: 0,
             current_skill_id: None,
             item_skill_ids: Vec::new(),
             state_storage: CanonicalStateStorage::default(),
@@ -760,6 +800,32 @@ impl CMoveShape {
 
     pub(crate) const fn skills(&self) -> &BTreeMap<u32, MoveShapeSkill> {
         &self.skills
+    }
+
+    /// Exact `AutoStartPassiveSkill`: state-skill vector обходится в порядке
+    /// вставки, а каждый `IsAutoStart != 0` добавляется в background-очередь.
+    /// Self-target `Begin(this, this)` в Rust задаётся самим владельцем.
+    pub(crate) fn auto_start_passive_skills(&mut self) -> usize {
+        let started: Vec<u32> = self
+            .state_skill_order
+            .iter()
+            .copied()
+            .filter(|skill_id| is_auto_start_state_skill(*skill_id))
+            .collect();
+        let count = started.len();
+        self.back_stage_skill_ids.extend(started);
+        count
+    }
+
+    pub(crate) fn take_back_stage_skill_ids(&mut self) -> Vec<u32> {
+        self.back_stage_begin_cursor = 0;
+        std::mem::take(&mut self.back_stage_skill_ids)
+    }
+
+    pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
+        let pending = self.back_stage_skill_ids[self.back_stage_begin_cursor..].to_vec();
+        self.back_stage_begin_cursor = self.back_stage_skill_ids.len();
+        pending
     }
 
     pub(crate) fn undead_states(&self) -> &[UndeadState] {
@@ -3683,6 +3749,9 @@ impl CMoveShape {
     pub(crate) fn clear_skills(&mut self) {
         self.current_skill_id = None;
         self.skills.clear();
+        self.state_skill_order.clear();
+        self.back_stage_skill_ids.clear();
+        self.back_stage_begin_cursor = 0;
     }
 
     /// `CSkillFactory::QuerySkill(SKILL_BASE_DEFENSE, 1)` создавал
@@ -3765,6 +3834,7 @@ impl CMoveShape {
             }
         }
         self.skills.remove(&skill_id);
+        self.state_skill_order.shift_remove(&skill_id);
         let Some(properties) = factory.query_skill_base_properties(skill_id, level) else {
             return false;
         };
@@ -3785,6 +3855,9 @@ impl CMoveShape {
                 item_position: -1,
             },
         );
+        if skill_type == SKILL_TYPE_STATE {
+            self.state_skill_order.insert(skill_id);
+        }
         true
     }
 
@@ -3808,6 +3881,18 @@ impl CMoveShape {
         ) {
             return false;
         }
+        self.state_skill_order.shift_remove(&skill_id);
+        let mut old_index = 0usize;
+        let mut retained_begun = 0usize;
+        self.back_stage_skill_ids.retain(|queued| {
+            let keep = *queued != skill_id;
+            if keep && old_index < self.back_stage_begin_cursor {
+                retained_begun += 1;
+            }
+            old_index += 1;
+            keep
+        });
+        self.back_stage_begin_cursor = retained_begun;
         self.skills.remove(&skill_id);
         true
     }
@@ -4577,19 +4662,8 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CMoveShape::AutoStartPassiveSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:1687
-// RVA: 0x000CDBB0
-// ADDRESS: 004cdbb0
-// PROTOTYPE: void __thiscall AutoStartPassiveSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_DISASSEMBLY: `AutoStartPassiveSkill` RVA `0x000CDBB0`
+// материализован в owner-е выше и вызывается точным `AddObject` caller-ом.
 
 // ============================================================================
 // FUNCTION: CMoveShape::GetCurrentSkill

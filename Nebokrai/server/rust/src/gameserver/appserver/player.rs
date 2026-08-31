@@ -6017,6 +6017,18 @@ impl CPlayer {
         self.move_shape.shape_mut()
     }
 
+    pub(crate) const fn move_shape_mut(&mut self) -> &mut CMoveShape {
+        &mut self.move_shape
+    }
+
+    pub(crate) fn take_back_stage_skill_ids(&mut self) -> Vec<u32> {
+        self.move_shape.take_back_stage_skill_ids()
+    }
+
+    pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {
+        self.move_shape.begin_pending_back_stage_skill_ids()
+    }
+
     pub(crate) const fn can_process_ai_destination(&self) -> bool {
         !CMoveShape::is_died(self.base_properties.health)
     }

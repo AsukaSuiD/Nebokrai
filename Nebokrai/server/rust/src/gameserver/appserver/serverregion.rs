@@ -45,8 +45,9 @@
 //! остаются у runtime owner-а и разрешаются через `ShapeResolver`. Это
 //! сознательная смена формы API без копии shared/derived семантики. Player
 //! registry сохраняет vector и first-erase, остальные map assignment —
-//! уникальные ключи. `CArea::PlayerEnter` и обратный вызов `CMoveShape`
-//! остаются у внешнего владельца через `ServerRegionMembershipContext`.
+//! уникальные ключи. После `CArea::PlayerEnter` region вызывает точно
+//! подтверждённый virtual `CMoveShape::AutoStartPassiveSkill`; ordered
+//! background-очередь принадлежит самому `CMoveShape`.
 //! Завершающую часть GodsBattle для игрока выполняет `CGame` через конкретный
 //! подтип после успешного базового пространственного добавления либо удаления.
 //! `SetPosXY` только пишет `CS_CHANGEAREA`; ИИ региона не допускает повторных
@@ -158,8 +159,8 @@ use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::monster::CMonster;
 use super::monsterworld::MonsterWorld;
 use super::moveshape::{
-    MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionBlock, MoveShapePositionDispatch,
-    MoveShapePositionFacts, MoveShapeResolver,
+    CMoveShape, MoveShapeCommandBlock, MoveShapeCommandContext, MoveShapePositionBlock,
+    MoveShapePositionDispatch, MoveShapePositionFacts, MoveShapeResolver,
 };
 use super::npc::CNpc;
 use super::region::{
@@ -586,9 +587,23 @@ pub(crate) trait ServerRegionAreaTransitionContext {
     fn send_area_shape_to_player(&mut self, player_id: i32, shape: ShapeView, payload: &[u8]);
 }
 
-pub(crate) trait ServerRegionMembershipContext: RegionRandomContext {
-    /// Материализует достигнутый virtual `CMoveShape` area-enter callback.
-    fn move_shape_entered_area(&mut self, identity: ShapeIdentity);
+pub(crate) trait ServerRegionMembershipContext: RegionRandomContext {}
+
+impl<Context: RegionRandomContext + ?Sized> ServerRegionMembershipContext for Context {}
+
+pub(crate) trait RegionMembershipShape {
+    fn membership_shape_mut(&mut self) -> &mut CShape;
+    fn after_entered_area(&mut self);
+}
+
+impl RegionMembershipShape for CShape {
+    fn membership_shape_mut(&mut self) -> &mut CShape { self }
+    fn after_entered_area(&mut self) {}
+}
+
+impl RegionMembershipShape for CMoveShape {
+    fn membership_shape_mut(&mut self) -> &mut CShape { self.shape_mut() }
+    fn after_entered_area(&mut self) { self.auto_start_passive_skills(); }
 }
 
 pub(crate) trait ServerRegionNpcSpawnEffectsContext: ServerRegionMembershipContext {
@@ -1328,7 +1343,7 @@ impl CServerRegion {
             ..ShapeRuntimeFacts::default()
         };
         self.add_object(
-            monster.move_shape_mut().shape_mut(),
+            monster.move_shape_mut(),
             facts,
             area_width,
             area_height,
@@ -1412,7 +1427,7 @@ impl CServerRegion {
             ..ShapeRuntimeFacts::default()
         };
         self.add_object(
-            monster.move_shape_mut().shape_mut(),
+            monster.move_shape_mut(),
             facts,
             area_width,
             area_height,
@@ -2791,7 +2806,7 @@ impl CServerRegion {
                 ..ShapeRuntimeFacts::default()
             };
             self.add_object(
-                npc.move_shape_mut().shape_mut(),
+                npc.move_shape_mut(),
                 facts,
                 area_width,
                 area_height,
@@ -3555,9 +3570,9 @@ impl CServerRegion {
         self.registry.players.len() as u32
     }
 
-    pub(crate) fn add_object<Context: ServerRegionMembershipContext>(
+    pub(crate) fn add_object<Member: RegionMembershipShape, Context: ServerRegionMembershipContext>(
         &mut self,
-        shape: &mut CShape,
+        member: &mut Member,
         facts: ShapeRuntimeFacts,
         area_width: i32,
         area_height: i32,
@@ -3565,7 +3580,7 @@ impl CServerRegion {
         context: &mut Context,
     ) -> Result<(), RegionMembershipBlock> {
         self.add_object_with_area_entry(
-            shape,
+            member,
             facts,
             area_width,
             area_height,
@@ -3575,9 +3590,9 @@ impl CServerRegion {
         )
     }
 
-    pub(crate) fn add_object_with_area_entry<Context: ServerRegionMembershipContext>(
+    pub(crate) fn add_object_with_area_entry<Member: RegionMembershipShape, Context: ServerRegionMembershipContext>(
         &mut self,
-        shape: &mut CShape,
+        member: &mut Member,
         facts: ShapeRuntimeFacts,
         area_width: i32,
         area_height: i32,
@@ -3586,6 +3601,7 @@ impl CServerRegion {
         mut before_move_shape_entry: impl FnMut(&mut CServerRegion, usize, &mut Context),
     ) -> Result<(), RegionMembershipBlock> {
         validate_area_span(area_width, area_height)?;
+        let shape = member.membership_shape_mut();
         let mut tile_x = shape
             .get_tile_x()
             .map_err(RegionMembershipBlock::ShapeCoordinate)?;
@@ -3633,7 +3649,7 @@ impl CServerRegion {
 
             before_move_shape_entry(self, area_index, context);
             if facts.is_move_shape {
-                context.move_shape_entered_area(identity);
+                member.after_entered_area();
             }
         } else {
             self.remove_object(shape, facts)?;

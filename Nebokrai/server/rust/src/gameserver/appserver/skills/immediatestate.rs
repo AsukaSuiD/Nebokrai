@@ -43,6 +43,46 @@ pub(crate) const fn is_immediate_state_skill(skill_id: u32) -> bool {
     ) || is_wuxing_skill(skill_id)
 }
 
+pub(crate) fn execute_player_auto_start_immediate_state<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    runtime: &mut Runtime,
+) -> bool {
+    if is_wuxing_skill(skill_id) {
+        return super::wuxing::execute_player_auto_start_wuxing(
+            game, player_id, skill_id, runtime,
+        );
+    }
+    let skill_level = game
+        .find_player(player_id)
+        .map_or(0, |player| player.learned_skill_level(skill_id));
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        return false;
+    };
+    let (usage, state_kind) = match skill_id {
+        TAIJI_SKILL_ID => (SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN, ImmediateStateKind::TaiJi),
+        ENLARGE_FULL_MISS_SKILL_ID => (SKILL_USAGE_FULL_MISS_GAIN, ImmediateStateKind::EnlargeFullMiss),
+        ENLARGE_MAX_HP_SKILL_ID => (SKILL_USAGE_MAX_HP_GAIN, ImmediateStateKind::EnlargeMaxHp),
+        ENLARGE_MAX_MP_SKILL_ID => (SKILL_USAGE_MAX_MP_GAIN, ImmediateStateKind::EnlargeMaxMp),
+        ORIGIN_SKILL_ID => (SKILL_USAGE_ELEMENT_MODIFY_GAIN, ImmediateStateKind::Origin),
+        _ => return false,
+    };
+    let gain = properties.query_property(usage) as i32;
+    if let Some(player) = game.find_player_mut(player_id) {
+        match state_kind {
+            ImmediateStateKind::TaiJi => { let _ = player.replace_taiji_state(TaiJiState::new(gain)); }
+            ImmediateStateKind::EnlargeFullMiss => { let _ = player.replace_enlarge_full_miss_state(EnlargeFullMissState::new(gain)); }
+            ImmediateStateKind::EnlargeMaxHp => { let _ = player.replace_enlarge_max_hp_state(EnlargeMaxHpState::new(gain)); }
+            ImmediateStateKind::EnlargeMaxMp => { let _ = player.replace_enlarge_max_mp_state(EnlargeMaxMpState::new(gain)); }
+            ImmediateStateKind::Origin => { let _ = player.replace_origin_state(OriginState::new(gain)); }
+        }
+    }
+    let _ = game.publish_player_states(player_id);
+    let _ = game.update_player_properties(player_id, runtime);
+    true
+}
+
 pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,

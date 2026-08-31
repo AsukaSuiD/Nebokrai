@@ -1226,7 +1226,8 @@ use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::immediatestate::{
-    execute_player_immediate_state, is_immediate_state_skill,
+    execute_player_auto_start_immediate_state, execute_player_immediate_state,
+    is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::skills::knockoutruntime::{
@@ -1311,7 +1312,7 @@ use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
 use crate::gameserver::appserver::skills::swordship::{
-    execute_player_swordship, is_swordship_skill,
+    execute_player_auto_start_swordship, execute_player_swordship, is_swordship_skill,
 };
 use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
@@ -18524,7 +18525,7 @@ impl CGame {
             figure: player.figure(),
         };
         let membership = owner.base_mut().add_object_with_area_entry(
-            player.movement_shape_mut(),
+            player.move_shape_mut(),
             facts,
             self.globe_setup.area_width(),
             self.globe_setup.area_height(),
@@ -18539,6 +18540,7 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         if membership.is_ok() {
+            let auto_started_skills = self.begin_player_back_stage_skills(player_id);
             let skill_interrupted = self.on_player_skill_change_region(player_id);
             let _ = self.enter_gods_battle_player(region_id, player_id);
             context.prepare_changed_player_region_entry(
@@ -18560,6 +18562,7 @@ impl CGame {
             tracing::trace!(
                 player_id,
                 region_id,
+                auto_started_skills,
                 skill_interrupted,
                 "навыки игрока получили вход в другой регион"
             );
@@ -29696,7 +29699,7 @@ impl CGame {
             figure: player.figure(),
         };
         let membership = owner.base_mut().add_object_with_area_entry(
-            player.movement_shape_mut(),
+            player.move_shape_mut(),
             facts,
             self.globe_setup.area_width(),
             self.globe_setup.area_height(),
@@ -29711,6 +29714,7 @@ impl CGame {
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
         membership.map_err(GamePlayerLoginBlock::Membership)?;
+        let auto_started_skills = self.begin_player_back_stage_skills(expected_player_id);
         let _ = self.enter_gods_battle_player(region_id, expected_player_id);
         let team_snapshot_queued = team_id != 0 && !team_session_found;
         if team_snapshot_queued {
@@ -30173,6 +30177,7 @@ impl CGame {
             team_id,
             captain,
             region_id,
+            auto_started_skills,
             first_login,
             ?relocation,
             ?login_script_id,
@@ -36355,6 +36360,17 @@ impl CGame {
         }
     }
 
+    fn begin_player_back_stage_skills(&mut self, player_id: i32) -> usize {
+        let skill_ids = self
+            .find_player_mut(player_id)
+            .map(CPlayer::begin_pending_back_stage_skill_ids)
+            .unwrap_or_default();
+        for _skill_id in &skill_ids {
+            self.enter_player_combat_state(player_id);
+        }
+        skill_ids.len()
+    }
+
     fn send_base_attack_failure(&self, player_id: i32, action: u8) -> i32 {
         let mut message = CMessage::new(0x000b_fe01);
         message.add_byte(0);
@@ -39127,6 +39143,38 @@ impl CGame {
             }
             _ => None,
         }
+    }
+
+    /// Исполняет exact `OnExecuteBackStageSkills` для уже начатых при
+    /// `AddObject` self-target state skills. Завершённая либо отклонённая
+    /// запись исчезает из очереди, как `SKILL_UNKNOW` на следующем native tick.
+    fn execute_player_back_stage_skills<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let skill_ids = self
+            .find_player_mut(player_id)
+            .map(CPlayer::take_back_stage_skill_ids)
+            .unwrap_or_default();
+        for skill_id in &skill_ids {
+            let executed = if is_immediate_state_skill(*skill_id) {
+                execute_player_auto_start_immediate_state(
+                    self, player_id, *skill_id, runtime,
+                )
+            } else if is_swordship_skill(*skill_id) {
+                execute_player_auto_start_swordship(self, player_id, *skill_id, runtime)
+            } else {
+                false
+            };
+            tracing::trace!(
+                player_id,
+                skill_id,
+                executed,
+                "исполнен background-навык игрока"
+            );
+        }
+        skill_ids.len()
     }
 
     /// Исполняет независимые обычную и war-soul очереди одного игрока. Уже
@@ -44732,6 +44780,11 @@ impl CGame {
                             };
                             let active_action_handled =
                                 active_move_handled || active_stand_handled;
+                            let back_stage_skills = if ai_hibernated {
+                                0
+                            } else {
+                                self.execute_player_back_stage_skills(player_id, runtime)
+                            };
                             let (executed_skills, executed_player_skills) = if ai_hibernated {
                                 (0, 0)
                             } else {
@@ -44743,7 +44796,7 @@ impl CGame {
                                     runtime,
                                 )
                             };
-                            player_skill_executions += executed_skills;
+                            player_skill_executions += back_stage_skills + executed_skills;
                             let destination_handled = active_action_handled
                                 || (!ai_hibernated
                                     && executed_player_skills == 0

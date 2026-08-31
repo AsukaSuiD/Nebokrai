@@ -31,6 +31,34 @@ pub(crate) const fn is_swordship_skill(skill_id: u32) -> bool {
     )
 }
 
+pub(crate) fn execute_player_auto_start_swordship<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    runtime: &mut Runtime,
+) -> bool {
+    if !is_swordship_skill(skill_id) {
+        return false;
+    }
+    let skill_level = game
+        .find_player(player_id)
+        .map_or(0, |player| player.learned_skill_level(skill_id));
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        return false;
+    };
+    let state = SwordshipState::new(
+        skill_id,
+        properties.query_property(SKILL_USAGE_TARGET_MIN_ATK_GAIN) as i32,
+        properties.query_property(SKILL_USAGE_TARGET_MAX_ATK_GAIN) as i32,
+    );
+    if let Some(player) = game.find_player_mut(player_id) {
+        let _ = player.replace_swordship_state(state);
+    }
+    let _ = game.publish_player_states(player_id);
+    let _ = game.update_player_properties(player_id, runtime);
+    true
+}
+
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome {
         state,

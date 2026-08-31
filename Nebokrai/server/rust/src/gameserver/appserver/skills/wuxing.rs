@@ -14,6 +14,7 @@ use super::wuxingwater::WUXING_WATER_SKILL_ID;
 use super::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -59,50 +60,18 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
     QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
 }
 
-pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
-    game: &mut CGame,
-    player_id: i32,
-    dispatch: PlayerSkillDispatch,
-    player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
-) -> QueuedSkillExecutionOutcome {
-    let skill_id = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. }
-            if is_wuxing_skill(skill_id) => skill_id,
-        _ => return terminal(QueuedSkillExecutionState::Rejected),
-    };
-    let Some(kind) = kind_for_skill_id(skill_id) else {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
-    if game.find_player(player_id).is_none() {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    if player_ai.immediate_state().is_none() {
-        let started_at_ms = runtime.now_milliseconds();
-        game.enter_player_combat_state(player_id);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_current_skill_id(Some(skill_id));
-        }
-        player_ai.begin_immediate_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
-    } else if player_ai.immediate_state().is_none_or(|state| state.dispatch() != dispatch) {
-        return terminal(QueuedSkillExecutionState::Rejected);
-    }
-
-    let skill_level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(skill_id));
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        finish_player(game, player_id);
-        return terminal(QueuedSkillExecutionState::Rejected);
-    };
+fn state_from_properties(
+    skill_id: u32,
+    properties: &CSkillBaseProperties,
+) -> Option<WuXingState> {
+    let kind = kind_for_skill_id(skill_id)?;
     let query = |usage| properties.query_property(usage);
     let maximum_hp = if kind == WuXingKind::Water {
         query(MAX_HP_GAIN) as i32
     } else {
         (query(MAX_HP_GAIN) as i16) as i32
     };
-    let parameters = WuXingStateParameters {
+    Some(WuXingState::new(skill_id, kind, WuXingStateParameters {
         element_modify: query(TARGET_ELEMENT_MODIFY_GAIN) as i16,
         minimum_attack: query(TARGET_MIN_ATTACK_GAIN) as i16,
         maximum_attack: query(TARGET_MAX_ATTACK_GAIN) as i16,
@@ -128,10 +97,73 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         restored_mp_peace: query(RESTORED_MP_PEACE_FIX) as i32,
         restored_hp_fight: query(RESTORED_HP_FIGHT_FIX) as i32,
         restored_mp_fight: query(RESTORED_MP_FIGHT_FIX) as i32,
+    }))
+}
+
+pub(crate) fn execute_player_auto_start_wuxing<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    runtime: &mut Runtime,
+) -> bool {
+    let skill_level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(skill_id));
+    let state = game
+        .skill_base_properties(skill_id, skill_level)
+        .and_then(|properties| state_from_properties(skill_id, properties));
+    let Some(state) = state else {
+        return false;
     };
+    if let Some(player) = game.find_player_mut(player_id) {
+        let _ = player.replace_wuxing_state(state);
+    }
+    if game.update_player_properties(player_id, runtime).is_some() {
+        let _ = game.restore_player_hp_mp_states(player_id);
+    }
+    true
+}
+
+pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_ai: &mut CPlayerAI,
+    runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    let skill_id = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+        | PlayerSkillDispatch::Object { skill_id, .. }
+            if is_wuxing_skill(skill_id) => skill_id,
+        _ => return terminal(QueuedSkillExecutionState::Rejected),
+    };
+    let Some(_kind) = kind_for_skill_id(skill_id) else {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    if game.find_player(player_id).is_none() {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    if player_ai.immediate_state().is_none() {
+        let started_at_ms = runtime.now_milliseconds();
+        game.enter_player_combat_state(player_id);
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_current_skill_id(Some(skill_id));
+        }
+        player_ai.begin_immediate_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai.immediate_state().is_none_or(|state| state.dispatch() != dispatch) {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+
+    let skill_level = game.find_player(player_id).map_or(0, |player| player.learned_skill_level(skill_id));
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        finish_player(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let state = state_from_properties(skill_id, properties)
+        .expect("WuXing ID проверен до чтения свойств");
 
     if let Some(player) = game.find_player_mut(player_id) {
-        let _ = player.replace_wuxing_state(WuXingState::new(skill_id, kind, parameters));
+        let _ = player.replace_wuxing_state(state);
     }
     if game.update_player_properties(player_id, runtime).is_some() {
         let _ = game.restore_player_hp_mp_states(player_id);

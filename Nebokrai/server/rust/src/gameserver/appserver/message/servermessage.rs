@@ -61,7 +61,7 @@ use crate::gameserver::appserver::serverregion::{
     ServerRegionNpcContext,
     ServerRegionNpcSpawnEffectsContext, ServerRegionNpcSetup, ServerRegionSetupDecodeError,
 };
-use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::servervillageregion::CServerVillageRegion;
 use crate::gameserver::appserver::serverwarregion::WarRegionDecodeError;
 use crate::gameserver::appserver::skills::skillfactory::SkillFactoryDecodeError;
@@ -2521,14 +2521,6 @@ impl<Context: RegionRandomContext> RegionRandomContext for InitialRegionClockCon
     }
 }
 
-impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
-    for InitialRegionClockContext<'_, Context>
-{
-    fn move_shape_entered_area(&mut self, identity: ShapeIdentity) {
-        self.context.move_shape_entered_area(identity);
-    }
-}
-
 impl<Context: ServerRegionMembershipContext> ServerRegionNpcSpawnEffectsContext
     for InitialRegionClockContext<'_, Context>
 {
@@ -2604,14 +2596,6 @@ struct InheritedBaseGuardContext<'a, Context> {
 impl<Context: RegionRandomContext> RegionRandomContext for InheritedBaseGuardContext<'_, Context> {
     fn random_below(&mut self, bound: i32) -> i32 {
         self.context.random_below(bound)
-    }
-}
-
-impl<Context: ServerRegionMembershipContext> ServerRegionMembershipContext
-    for InheritedBaseGuardContext<'_, Context>
-{
-    fn move_shape_entered_area(&mut self, identity: ShapeIdentity) {
-        self.context.move_shape_entered_area(identity);
     }
 }
 
