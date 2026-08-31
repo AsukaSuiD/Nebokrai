@@ -85,8 +85,8 @@ use crate::gameserver::appserver::skills::callositystate::{
 use crate::gameserver::appserver::skills::curestate::{CureState, CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
 use crate::gameserver::appserver::skills::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID, DaubPoisonState};
 use crate::gameserver::appserver::skills::enlargefullmissstate::{EnlargeFullMissState, ENLARGE_FULL_MISS_STATE_BYTES};
-use crate::gameserver::appserver::skills::enlargemaxhpstate::EnlargeMaxHpState;
-use crate::gameserver::appserver::skills::enlargemaxmpstate::EnlargeMaxMpState;
+use crate::gameserver::appserver::skills::enlargemaxhpstate::{ENLARGE_MAX_HP_STATE_BYTES, EnlargeMaxHpState};
+use crate::gameserver::appserver::skills::enlargemaxmpstate::{ENLARGE_MAX_MP_STATE_BYTES, EnlargeMaxMpState};
 use crate::gameserver::appserver::skills::heartenstate::{
     HeartenState, HEARTEN_STATE_BYTES,
 };
@@ -137,7 +137,7 @@ use crate::gameserver::appserver::skills::knightcutstate::{
     KNIGHT_CUT_STATE_BYTES, KNIGHT_CUT_STATE_ID, KnightCutState,
 };
 use crate::gameserver::appserver::skills::kerosenestate::{KeroseneState, KEROSENE_STATE_BYTES, KEROSENE_STATE_ID};
-use crate::gameserver::appserver::skills::originstate::OriginState;
+use crate::gameserver::appserver::skills::originstate::{ORIGIN_STATE_BYTES, OriginState};
 use crate::gameserver::appserver::skills::pillarstate::{
     PILLAR_STATE_BYTES, PILLAR_STATE_ID, PillarState,
 };
@@ -178,7 +178,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
-use crate::gameserver::appserver::skills::taijistate::TaiJiState;
+use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiState};
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
     TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID,
 };
@@ -1289,6 +1289,10 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID))
             .and_then(|offset| EnlargeFullMissState::decode(&states, offset).ok());
+        self.taiji_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(TAIJI_SKILL_ID)).and_then(|offset| TaiJiState::decode(&states, offset).ok());
+        self.enlarge_max_hp_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(ENLARGE_MAX_HP_SKILL_ID)).and_then(|offset| EnlargeMaxHpState::decode(&states, offset).ok());
+        self.enlarge_max_mp_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(ENLARGE_MAX_MP_SKILL_ID)).and_then(|offset| EnlargeMaxMpState::decode(&states, offset).ok());
+        self.origin_state = known_offsets.iter().copied().find(|offset| read_u32(&states, *offset) == Some(ORIGIN_SKILL_ID)).and_then(|offset| OriginState::decode(&states, offset).ok());
         self.hearten_state = known_offsets
             .iter()
             .copied()
@@ -2180,6 +2184,8 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_taiji_state(&mut self, state: TaiJiState) -> Option<TaiJiState> {
+        self.remove_serialized_state_record(state.skill_id(), TAIJI_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
         self.taiji_state.replace(state)
     }
 
@@ -2187,6 +2193,8 @@ impl CMoveShape {
         &mut self,
         state: EnlargeMaxHpState,
     ) -> Option<EnlargeMaxHpState> {
+        self.remove_serialized_state_record(state.skill_id(), ENLARGE_MAX_HP_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
         self.enlarge_max_hp_state.replace(state)
     }
 
@@ -2222,6 +2230,8 @@ impl CMoveShape {
         &mut self,
         state: EnlargeMaxMpState,
     ) -> Option<EnlargeMaxMpState> {
+        self.remove_serialized_state_record(state.skill_id(), ENLARGE_MAX_MP_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
         self.enlarge_max_mp_state.replace(state)
     }
 
@@ -2234,6 +2244,8 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_origin_state(&mut self, state: OriginState) -> Option<OriginState> {
+        self.remove_serialized_state_record(state.skill_id(), ORIGIN_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded());
         self.origin_state.replace(state)
     }
 
@@ -4739,6 +4751,10 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             | super::skills::superheal2::SUPER_HEAL_2_SKILL_ID => HEAL_STATE_BYTES,
             CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
             super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
+            TAIJI_SKILL_ID => TAIJI_STATE_BYTES,
+            ENLARGE_MAX_HP_SKILL_ID => ENLARGE_MAX_HP_STATE_BYTES,
+            ENLARGE_MAX_MP_SKILL_ID => ENLARGE_MAX_MP_STATE_BYTES,
+            ORIGIN_SKILL_ID => ORIGIN_STATE_BYTES,
             super::skills::machineshield::MACHINE_SHIELD_SKILL_ID => MACHINE_SHIELD_STATE_BYTES,
             super::skills::manashield::MANA_SHIELD_SKILL_ID => MANA_SHIELD_STATE_BYTES,
             super::skills::lifeshield::LIFE_SHIELD_SKILL_ID => LIFE_SHIELD_STATE_BYTES,

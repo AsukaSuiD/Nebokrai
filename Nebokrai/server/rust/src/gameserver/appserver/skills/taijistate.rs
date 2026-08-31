@@ -6,9 +6,14 @@
 //! сопротивление стихиям до `i32::MAX`. Монстр передаёт полный signed gain в
 //! wrapping-additive `CMonster::SetElementResistant`; minimum/factor остаются
 //! у итогового monster property getter-а.
+//! Exact-пара `Serialize/Unserialize` `0x005E23D0/0x00601350` сохраняет
+//! восьмибайтную запись `ID + signed gain`.
 
 use super::taiji::TAIJI_SKILL_ID;
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+
+pub(crate) const TAIJI_STATE_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TaiJiState {
@@ -21,6 +26,14 @@ impl TaiJiState {
     }
 
     pub(crate) const fn skill_id(self) -> u32 { TAIJI_SKILL_ID }
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != TAIJI_SKILL_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); }
+        Ok(Self::new(reader.read_i32()?))
+    }
+    pub(crate) fn encoded(self) -> [u8; TAIJI_STATE_BYTES] {
+        let mut bytes = [0; TAIJI_STATE_BYTES]; bytes[..4].copy_from_slice(&TAIJI_SKILL_ID.to_le_bytes()); bytes[4..].copy_from_slice(&self.element_resistance_gain.to_le_bytes()); bytes
+    }
     pub(crate) const fn player_element_resistance_gain(self) -> u16 {
         self.element_resistance_gain as u16
     }
