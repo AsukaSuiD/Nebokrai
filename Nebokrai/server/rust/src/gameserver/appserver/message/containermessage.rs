@@ -2063,7 +2063,7 @@ pub(crate) fn send_enhancement_shadow_deleted(
     shadow_delete_message(goods, removed).send_to_player(game, player_id)
 }
 
-fn send_shadow_deleted_to_session(
+pub(crate) fn send_shadow_deleted_to_session(
     game: &CGame,
     goods: ShapeIdentity,
     removed: &ShadowRemovedReport,

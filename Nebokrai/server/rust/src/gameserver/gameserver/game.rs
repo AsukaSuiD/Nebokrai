@@ -658,7 +658,7 @@ use crate::gameserver::appserver::message::containermessage::{
     EnhancementTransferReport, EquipmentSessionClearBlock, EquipmentSessionSelectionBlock,
     EquipmentSessionSelectionReport, PersonalShopClearBlock, PersonalShopSelectionBlock,
     PersonalShopSelectionReport, dispatch_game_container_message, send_enhancement_goods_collected,
-    send_enhancement_shadow_deleted,
+    send_enhancement_shadow_deleted, send_shadow_deleted_to_session,
 };
 use crate::gameserver::appserver::message::countrymessage::{
     GameCountryWarRuntime, dispatch_game_country_war_message,
@@ -5190,10 +5190,17 @@ impl CGame {
             );
             return PersonalShopBillingCompletion::Processed;
         };
-        self.session_factory
+        let shadow_removed = self
+            .session_factory
             .personal_shop_seller_mut(seller_plug_id)
             .expect("seller plug проверен")
             .remove_goods(goods_id);
+        let shop_delete_deliveries = shadow_removed
+            .as_ref()
+            .map(|shadow| {
+                send_shadow_deleted_to_session(self, removed.identity(), shadow)
+            })
+            .unwrap_or_default();
         let seller_delete_delivery = self.send_container_object_delete(
             seller_id,
             &previous,
@@ -5204,8 +5211,9 @@ impl CGame {
             session_id,
             seller_id,
             ?goods_id,
+            ?shop_delete_deliveries,
             seller_delete_delivery,
-            "удаление товара отправлено продавцу"
+            "удаление товара отправлено участникам лавки и продавцу"
         );
 
         let original = removed.clone();

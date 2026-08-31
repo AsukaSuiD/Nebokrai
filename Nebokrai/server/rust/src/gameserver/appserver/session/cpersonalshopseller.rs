@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::gameserver::appserver::container::ccontainer::ContainerListenerHandle;
+use crate::gameserver::appserver::container::cgoodsshadowcontainer::ShadowRemovedReport;
 use crate::gameserver::appserver::container::cvolumelimitgoodsshadowcontainer::CVolumeLimitGoodsShadowContainer;
 use crate::public::guid::CGuid;
 
@@ -91,9 +92,9 @@ impl CPersonalShopSeller {
         self.prices.get(&goods_id).copied()
     }
 
-    pub(crate) fn remove_goods(&mut self, goods_id: CGuid) -> bool {
+    pub(crate) fn remove_goods(&mut self, goods_id: CGuid) -> Option<ShadowRemovedReport> {
         self.prices.remove(&goods_id);
-        self.goods.remove_shadow(goods_id).is_some()
+        self.goods.remove_shadow(goods_id)
     }
 
     pub(crate) fn remove_goods_price(&mut self, goods_id: CGuid) {
