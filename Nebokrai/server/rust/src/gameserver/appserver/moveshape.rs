@@ -667,6 +667,25 @@ impl CMoveShape {
         &mut self.shape
     }
 
+    /// Материализует точный fresh-object prefix
+    /// `CMoveShape::AddToByteArray_ForClient`: после `CShape` идут died-byte и
+    /// нулевой count состояний. Метод намеренно не изображает общий state
+    /// serializer и применяется до установки первого состояния.
+    pub(crate) fn encode_fresh_client_snapshot(
+        &self,
+        include_child: bool,
+        is_dead: bool,
+    ) -> Option<Vec<u8>> {
+        let mut payload = Vec::new();
+        self.shape
+            .add_to_byte_array(&mut payload, include_child)
+            .then_some(())?;
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u8(u8::from(is_dead));
+        writer.write_i32(0);
+        Some(payload)
+    }
+
     /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не
     /// сериализуется и проверяется ordinary `OnBeenAttacked` owner-ом.
     pub(crate) const fn set_god(&mut self, enabled: bool) {

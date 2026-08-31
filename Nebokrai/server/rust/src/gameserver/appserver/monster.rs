@@ -92,6 +92,7 @@ use super::ai::passivegladiator::PassiveGladiatorState;
 use super::ai::pet::{PetBehaviorState, PetLifecycleFacts, PetLifecycleOutcome};
 use super::ai::smartgladiator::SmartGladiatorState;
 use super::masterinfo::MasterInfo;
+use super::legacycodec::LegacyWriter;
 use super::summonedcreature::{SummonedCreatureLifecycle, SummonedCreatureTick};
 use super::moveshape::{CMoveShape, MoveShapePositionFacts};
 use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
@@ -375,6 +376,45 @@ impl CMonster {
 
     pub(crate) const fn set_master_info(&mut self, master_info: MasterInfo) {
         self.master_info = master_info;
+    }
+
+    /// Точный fresh-monster `AddToByteArray` tail поверх client-prefix
+    /// `CMoveShape`. `master_name` уже разрешён владельцем `CGame`: обычный
+    /// spawn передаёт локализованный `GS0119`, pet/carriage — имя игрока.
+    pub(crate) fn encode_fresh_client_snapshot(
+        &self,
+        property: &MonsterProperties,
+        master_name: &[u8],
+    ) -> Option<Vec<u8>> {
+        let mut payload = self
+            .move_shape
+            .encode_fresh_client_snapshot(true, self.hit_points == 0)?;
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u32(property.maximum_hp);
+        writer.write_u32(self.hit_points);
+        writer.write_u8(property.kind as u8);
+        writer.write_u8(property.figure as u8);
+        writer.write_u16(property.sound_id as u16);
+        writer.write_u8(property.picture_level as u8);
+        writer.write_u8(property.name_color as u8);
+        writer.write_u8(property.hp_bar_color as u8);
+
+        if self.tamed && self.master_info.master_type == 400 && self.master_info.master_id != 0 {
+            writer.write_u8(1);
+            writer.write_i32(self.master_info.master_type);
+            writer.write_i32(self.master_info.master_id);
+            writer.write_c_string(master_name);
+            writer.write_u32(self.pet_level);
+            writer.write_u32(self.pet_experience);
+        } else if property.tamable == 1 && property.maximum_tame_attempt_count == 0 {
+            writer.write_u8(2);
+            writer.write_i32(self.master_info.master_type);
+            writer.write_i32(self.master_info.master_id);
+            writer.write_c_string(master_name);
+        } else {
+            writer.write_u8(0);
+        }
+        Some(payload)
     }
 
     pub(crate) const fn set_summoned_creature_lifecycle(
