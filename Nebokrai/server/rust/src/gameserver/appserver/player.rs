@@ -1786,12 +1786,17 @@ pub(crate) struct CPlayer {
     player_ai: CPlayerAI,
     figure: ShapeFigure,
     faction_id: i32,
+    faction_logo_id: i32,
     faction_level: u16,
     faction_experience: i32,
+    faction_force: i32,
+    faction_contribute: u32,
     faction_master_id: i32,
     faction_name: Vec<u8>,
+    faction_title: Vec<u8>,
     enemy_factions: BTreeSet<i32>,
     city_war_enemy_factions: BTreeSet<i32>,
+    faction_owned_regions: Vec<[u8; 8]>,
     union_id: i32,
     union_master_id: i32,
     team_id: i32,
@@ -1842,7 +1847,6 @@ pub(crate) struct CPlayer {
     lost_time_stamp_ms: u32,
     continuous_kill_amount: u32,
     continuous_kill_timestamp_ms: u32,
-    organizing_wire: Vec<u8>,
     base_properties: PlayerBaseProperties,
     combat_properties: PlayerCombatProperties,
     combat_property_wire: [u8; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
@@ -2137,12 +2141,17 @@ impl CPlayer {
             player_ai: CPlayerAI::default(),
             figure,
             faction_id: 0,
+            faction_logo_id: 0,
             faction_level: 0,
             faction_experience: 0,
+            faction_force: 0,
+            faction_contribute: 0,
             faction_master_id: 0,
             faction_name: Vec::new(),
+            faction_title: Vec::new(),
             enemy_factions: BTreeSet::new(),
             city_war_enemy_factions: BTreeSet::new(),
+            faction_owned_regions: Vec::new(),
             union_id: 0,
             union_master_id: 0,
             team_id,
@@ -2194,7 +2203,6 @@ impl CPlayer {
             lost_time_stamp_ms: 0,
             continuous_kill_amount: 0,
             continuous_kill_timestamp_ms: 0,
-            organizing_wire: Vec::new(),
             base_properties: PlayerBaseProperties::default(),
             combat_properties: PlayerCombatProperties::default(),
             combat_property_wire: [0; PLAYER_COMBAT_PROPERTY_WIRE_SIZE],
@@ -3136,21 +3144,25 @@ impl CPlayer {
         source: &[u8],
         cursor: &mut usize,
     ) -> Result<(), PlayerGameSaveCodecError> {
-        let start = *cursor;
         self.faction_id = read_player_game_save_i32(source, cursor, "m_lFactionID")?;
         if self.faction_id > 0 {
-            let _logo = read_player_game_save_i32(source, cursor, "m_lFactionLogoID")?;
+            self.faction_logo_id =
+                read_player_game_save_i32(source, cursor, "m_lFactionLogoID")?;
             self.faction_level = read_player_game_save_u16(source, cursor, "m_wFactionLevel")?;
-            let _experience = read_player_game_save_i32(source, cursor, "m_lFactionExperience")?;
-            let _force = read_player_game_save_i32(source, cursor, "m_lForce")?;
-            let _contribute = read_player_game_save_u32(source, cursor, "m_bFactionContribute")?;
+            self.faction_experience =
+                read_player_game_save_i32(source, cursor, "m_lFactionExperience")?;
+            self.faction_force = read_player_game_save_i32(source, cursor, "m_lForce")?;
+            self.faction_contribute =
+                read_player_game_save_u32(source, cursor, "m_bFactionContribute")?;
             self.faction_name =
                 read_player_game_save_string(source, cursor, "m_strFactionName", 0x100)?;
-            let _title = read_player_game_save_string(source, cursor, "m_strFactionTitle", 0x100)?;
+            self.faction_title =
+                read_player_game_save_string(source, cursor, "m_strFactionTitle", 0x100)?;
             self.faction_master_id =
                 read_player_game_save_i32(source, cursor, "m_lFactionMasterID")?;
             self.union_id = read_player_game_save_i32(source, cursor, "m_lUnionID")?;
-            let _union_master = read_player_game_save_i32(source, cursor, "m_lUnionMasterID")?;
+            self.union_master_id =
+                read_player_game_save_i32(source, cursor, "m_lUnionMasterID")?;
             for (field, destination) in [
                 ("m_EnemyFactions", &mut self.enemy_factions),
                 ("m_CityWarEnemyFactions", &mut self.city_war_enemy_factions),
@@ -3162,21 +3174,128 @@ impl CPlayer {
                 }
             }
             let count = read_player_game_save_count(source, cursor, "m_OwnedRegions")?;
-            let _ = read_player_game_save_slice(source, cursor, "m_OwnedRegions", count * 8)?;
+            self.faction_owned_regions.clear();
+            for _ in 0..count {
+                let wire = read_player_game_save_slice(source, cursor, "m_OwnedRegions", 8)?;
+                self.faction_owned_regions.push(wire.try_into().expect("размер проверен"));
+            }
         } else {
+            self.faction_logo_id = 0;
             self.faction_level = 0;
+            self.faction_experience = 0;
+            self.faction_force = 0;
+            self.faction_contribute = 0;
             self.faction_name.clear();
+            self.faction_title.clear();
             self.enemy_factions.clear();
             self.city_war_enemy_factions.clear();
+            self.faction_owned_regions.clear();
             self.faction_master_id = 0;
             self.union_id = 0;
+            self.union_master_id = 0;
         }
-        self.organizing_wire = source[start..*cursor].to_vec();
         Ok(())
+    }
+
+    fn encode_organizing_snapshot(&self) -> Option<Vec<u8>> {
+        let mut payload = Vec::new();
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_i32(self.faction_id);
+        if self.faction_id <= 0 {
+            return Some(payload);
+        }
+        writer.write_i32(self.faction_logo_id);
+        writer.write_u16(self.faction_level);
+        writer.write_i32(self.faction_experience);
+        writer.write_i32(self.faction_force);
+        writer.write_u32(self.faction_contribute);
+        writer.write_c_string(&self.faction_name);
+        writer.write_c_string(&self.faction_title);
+        writer.write_i32(self.faction_master_id);
+        writer.write_i32(self.union_id);
+        writer.write_i32(self.union_master_id);
+        writer.write_i32(i32::try_from(self.enemy_factions.len()).ok()?);
+        for faction_id in &self.enemy_factions {
+            writer.write_i32(*faction_id);
+        }
+        writer.write_i32(i32::try_from(self.city_war_enemy_factions.len()).ok()?);
+        for faction_id in &self.city_war_enemy_factions {
+            writer.write_i32(*faction_id);
+        }
+        writer.write_i32(i32::try_from(self.faction_owned_regions.len()).ok()?);
+        for region in &self.faction_owned_regions {
+            writer.write_bytes(region);
+        }
+        Some(payload)
     }
 
     pub(crate) const fn shape(&self) -> &CShape {
         self.move_shape.shape()
+    }
+
+    /// Точный short-вариант `CPlayer::AddToByteArray_ForClient(false)` для
+    /// area/query публикаций. Полный login/save вариант остаётся у отдельного
+    /// GameSave codec; здесь нет container payload-ов и account-данных.
+    pub(crate) fn encode_client_shape_snapshot(
+        &self,
+        goods_factory: &CGoodsFactory,
+        country_identity: u8,
+        personal_shop: Option<(i32, i32, &[u8])>,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        const VISIBLE_EQUIPMENT: [u32; 11] = [0, 1, 2, 3, 4, 9, 10, 12, 13, 14, 15];
+
+        let now_ms = now_milliseconds();
+        let mut payload = self.move_shape.encode_client_snapshot(
+            false,
+            self.is_dead(),
+            now_ms,
+            &mut now_milliseconds,
+        )?;
+        let mut writer = LegacyWriter::new(&mut payload);
+        writer.write_u8(self.base_properties.head_picture as u8);
+        writer.write_u8(u8::from(self.base_properties.display_head_piece));
+        for position in VISIBLE_EQUIPMENT {
+            writer.write_u32(
+                self.equipment
+                    .get_goods(position)
+                    .map_or(0, CGoods::base_properties_index),
+            );
+        }
+        for position in VISIBLE_EQUIPMENT {
+            writer.write_u8(self.equipment.get_goods(position).map_or(0, |goods| {
+                goods.addon_property_value(goods_factory, GAP_WEAPON_LEVEL, 1) as u8
+            }));
+        }
+        writer.write_u32(self.base_properties.health);
+        writer.write_u32(self.combat_properties.maximum_hp);
+        writer.write_u16(self.base_properties.pk_count);
+        writer.write_u8(u8::from(self.murderer_time_stamp_ms != 0));
+        writer.write_bytes(&self.encode_organizing_snapshot()?);
+        writer.write_u8(u8::from(self.contend_state));
+        writer.write_u8(u8::from(self.city_war_died_state));
+        writer.write_u8(self.base_properties.occupation as u8);
+        writer.write_u8(self.base_properties.sex as u8);
+        writer.write_u32(self.base_properties.mode);
+        if let Some((session_id, plug_id, shop_name)) = personal_shop {
+            writer.write_i32(session_id);
+            writer.write_i32(plug_id);
+            writer.write_c_string(shop_name);
+        } else {
+            writer.write_i32(0);
+            writer.write_i32(0);
+        }
+        writer.write_i32(self.emotion_index);
+        writer.write_u32(now_milliseconds().wrapping_sub(self.emotion_timestamp_ms));
+        writer.write_u8(self.country);
+        writer.write_u8(self.base_properties.face_picture as u8);
+        writer.write_u8(self.base_properties.level);
+        writer.write_u32(self.base_properties.credit);
+        writer.write_u8(country_identity);
+        writer.write_u32(self.base_properties.appellation_id);
+        writer.write_u32(self.war_soul_state);
+        writer.write_i32(self.base_properties.gods_battle_faction);
+        Some(payload)
     }
 
     pub(crate) const fn player_ai(&self) -> &CPlayerAI {
@@ -3416,32 +3535,39 @@ impl CPlayer {
         self.faction_declare_operator = value;
     }
 
-    pub(crate) const fn restore_faction_id(&mut self, faction_id: i32) {
-        self.faction_id = faction_id;
-    }
-
     pub(crate) fn restore_faction_identity(
         &mut self,
         faction_id: i32,
+        faction_logo_id: i32,
         faction_level: u16,
         faction_experience: i32,
+        faction_force: i32,
+        faction_contribute: u32,
         faction_master_id: i32,
         faction_name: &[u8],
+        faction_title: &[u8],
         union_id: i32,
         union_master_id: i32,
         enemy_factions: BTreeSet<i32>,
         city_war_enemy_factions: BTreeSet<i32>,
+        faction_owned_regions: Vec<[u8; 8]>,
     ) {
         self.faction_id = faction_id;
+        self.faction_logo_id = faction_logo_id;
         self.faction_level = faction_level;
         self.faction_experience = faction_experience;
+        self.faction_force = faction_force;
+        self.faction_contribute = faction_contribute;
         self.faction_master_id = faction_master_id;
         self.faction_name.clear();
         self.faction_name.extend_from_slice(faction_name);
+        self.faction_title.clear();
+        self.faction_title.extend_from_slice(faction_title);
         self.union_id = union_id;
         self.union_master_id = union_master_id;
         self.enemy_factions = enemy_factions;
         self.city_war_enemy_factions = city_war_enemy_factions;
+        self.faction_owned_regions = faction_owned_regions;
     }
 
     pub(crate) fn is_enemy_faction_member(&self, faction_id: i32) -> bool {

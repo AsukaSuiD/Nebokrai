@@ -280,7 +280,8 @@
 //! effect ordering принадлежат `CGame`; player relocation уже замыкает
 //! region/area/block state и `GS0163`; quest route замыкает `BF605/BF738` и
 //! destination FIFO, оставляя runtime-у только current action/skill facts и
-//! фактическое хранение AI. Non-player relocation и serializers ещё внешние.
+//! фактическое хранение AI. Non-player relocation и сериализаторы ещё не
+//! достигнутых категорий фигур остаются внешними.
 //! Friend commands `0x8FA0D..0F` проходят main route через canonical player
 //! maps, owned ordered friend state, addressed client wire и WS `0x60501/02`.
 //! Обратные WS presence `0x7F904/905` сохраняют исходный payload и доходят до
@@ -658,9 +659,7 @@ use crate::gameserver::appserver::message::servermessage::on_billing_client_reco
 use crate::gameserver::appserver::message::servermessage::{
     InitialRegionStartupContext, WarScheduleSetupContext, dispatch_server_message,
 };
-use crate::gameserver::appserver::message::shapemessage::{
-    GameShapeMessageRuntime, dispatch_game_shape_message,
-};
+use crate::gameserver::appserver::message::shapemessage::dispatch_game_shape_message;
 use crate::gameserver::appserver::message::shopmessage::dispatch_shop_message;
 use crate::gameserver::appserver::message::skillmessage::{
     GameSkillMessageRuntime, PlayerSkillEndRuntimeOutcome, dispatch_game_skill_message,
@@ -4160,7 +4159,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GameContainerMessageRuntime
     + GameGoodsMessageRuntime
     + GameSkillMessageRuntime
-    + GameShapeMessageRuntime
     + GamePlayerMessageRuntime
     + NationContendContext
     + GodsBattleNpcContendContext
@@ -41807,10 +41805,46 @@ impl CGame {
         )
     }
 
+    /// Канонический owner exact `CPlayer::AddToByteArray_ForClient(false)`.
+    /// SessionFactory предоставляет только реально живой seller plug, а
+    /// country identity вычисляется тем же mutable country owner-ом.
+    pub(crate) fn serialize_player_shape_snapshot(
+        &mut self,
+        region_id: i32,
+        shape: ShapeView,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<(ShapeIdentity, Vec<u8>)> {
+        let player_id = shape.identity.id;
+        let canonical_identity = self.find_player(player_id)?.shape().identity();
+        if canonical_identity != shape.identity
+            || self.find_player(player_id)?.server_region_id() != Some(region_id)
+        {
+            return None;
+        }
+        let personal_shop = self
+            .find_player(player_id)
+            .and_then(CPlayer::personal_shop_flag)
+            .and_then(|(session_id, plug_id)| {
+                self.session_factory
+                    .personal_shop_seller(plug_id)
+                    .map(|seller| (session_id, plug_id, seller.shop_name().to_vec()))
+            });
+        let country_identity = self.player_country_identity(player_id);
+        let payload = self.find_player(player_id)?.encode_client_shape_snapshot(
+            &self.goods_factory,
+            country_identity,
+            personal_shop
+                .as_ref()
+                .map(|(session, plug, name)| (*session, *plug, name.as_slice())),
+            now_milliseconds,
+        )?;
+        Some((canonical_identity, payload))
+    }
+
     /// Разрешает подтверждённый виртуальный клиентский сериализатор формы у
     /// канонического владельца региона. Достигнуты ground `CGoods`, `CNpc`,
     /// `CMonster`, `CBuild`, `CCityGate` и семейство `SummonedSkillShape`;
-    /// полный `CPlayer` snapshot остаётся отдельным незавершённым owner-ом.
+    /// player short-snapshot разрешается соседним mutable owner-ом выше.
     pub(crate) fn serialize_owned_shape_snapshot(
         &self,
         region_id: i32,
@@ -47501,7 +47535,7 @@ fn shape_view(
 
 // IMPLEMENTED: достигнутый `Release` teardown материализован выше. Широкий
 // RAW-блок и split funclets ниже сохранены как доказательство ещё не
-// материализованных player serializer-а, validate-time map и
+// материализованных full reconnect player serializer-а, validate-time map и
 // exception-specific debug paths; он не считается полностью заменённым.
 
 // ============================================================================

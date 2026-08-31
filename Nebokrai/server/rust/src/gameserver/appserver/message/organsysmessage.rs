@@ -1044,29 +1044,34 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
         0x7fe06 => {
             let player_id = read_i32(message, "player ID")?;
             let faction_id = read_i32(message, "faction ID")?;
+            let mut faction_logo_id = 0;
             let mut faction_level = 0;
             let mut faction_experience = 0;
+            let mut faction_force = 0;
+            let mut faction_contribute = 0;
             let mut faction_master_id = 0;
             let mut faction_name = Vec::new();
+            let mut faction_title = Vec::new();
             let mut union_id = 0;
             let mut union_master_id = 0;
             let mut enemy_factions = std::collections::BTreeSet::new();
             let mut city_war_enemy_factions = std::collections::BTreeSet::new();
+            let mut faction_owned_regions = Vec::new();
             if faction_id > 0 {
-                let _logo_id = read_i32(message, "faction logo ID")?;
+                faction_logo_id = read_i32(message, "faction logo ID")?;
                 faction_level = message.base_mut().get_word().ok_or(
                     FactionLifecycleDispatchError::UnexpectedEnd {
                         field: "faction level",
                     },
                 )?;
                 faction_experience = read_i32(message, "faction experience")?;
-                let _force = read_i32(message, "faction force")?;
-                let _contribute = read_i32(message, "faction contribute")?;
+                faction_force = read_i32(message, "faction force")?;
+                faction_contribute = read_i32(message, "faction contribute")? as u32;
                 faction_name = message
                     .base_mut()
                     .get_str_bytes(0x100)
                     .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
-                let _title = message
+                faction_title = message
                     .base_mut()
                     .get_str_bytes(0x100)
                     .ok_or(FactionLifecycleDispatchError::InvalidPayload)?;
@@ -1090,17 +1095,22 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
                     return Err(FactionLifecycleDispatchError::InvalidPayload);
                 }
                 for _ in 0..owned_count {
-                    let _region_id = read_i32(message, "owned region ID")?;
-                    let _war_type = message.base_mut().get_word().ok_or(
+                    let region_id = read_i32(message, "owned region ID")?;
+                    let war_type = message.base_mut().get_word().ok_or(
                         FactionLifecycleDispatchError::UnexpectedEnd {
                             field: "owned region war type",
                         },
                     )?;
-                    let _reserved = message.base_mut().get_word().ok_or(
+                    let reserved = message.base_mut().get_word().ok_or(
                         FactionLifecycleDispatchError::UnexpectedEnd {
                             field: "owned region reserved",
                         },
                     )?;
+                    let mut wire = [0; 8];
+                    wire[..4].copy_from_slice(&region_id.to_le_bytes());
+                    wire[4..6].copy_from_slice(&war_type.to_le_bytes());
+                    wire[6..].copy_from_slice(&reserved.to_le_bytes());
+                    faction_owned_regions.push(wire);
                 }
             }
             if !message.base_mut().unread_bytes().is_empty() {
@@ -1109,14 +1119,19 @@ fn dispatch_faction_lifecycle_message<Runtime: ScriptRegionChangeContext>(
             let correlated = if let Some(player) = game.find_player_mut(player_id) {
                 player.restore_faction_identity(
                     faction_id,
+                    faction_logo_id,
                     faction_level,
                     faction_experience,
+                    faction_force,
+                    faction_contribute,
                     faction_master_id,
                     &faction_name,
+                    &faction_title,
                     union_id,
                     union_master_id,
                     enemy_factions,
                     city_war_enemy_factions,
+                    faction_owned_regions,
                 );
                 true
             } else {

@@ -17,9 +17,9 @@
 //! wire. Внешний resolve не сохраняется: все production-вызовы `add_object`
 //! принадлежат достигнутым owner-ам; виртуальные сериализаторы недостигнутых
 //! категорий фигур остаются узкой границей исполнения.
-//! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы ground
-//! goods, NPC и всех достигнутых призванных форм и не уводит их в параллельный
-//! runtime callback.
+//! `QUERY_SHAPE_SNAPSHOT` напрямую использует точные сериализаторы player,
+//! ground goods, NPC и всех достигнутых призванных форм и не уводит их в
+//! параллельный runtime callback.
 //! Синхронные отправки не
 //! дублируются в `Vec`; диагностические исходы публикуются через `tracing`.
 //! Эмоция `0x8F905` сохраняет странность EXE: наличие `ChangeBody` сначала
@@ -27,7 +27,7 @@
 //! `PerformEmotion`. `CBaseAI::GetTarget` выражен текущей объектной командой
 //! игрока и её разрешением через тот же региональный владелец.
 
-use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::skills::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, colored_player_notice_message,
@@ -47,18 +47,6 @@ const PLAYER_TYPE: i32 = 400;
 pub(crate) struct ShapeSnapshot {
     pub(crate) identity: ShapeIdentity,
     pub(crate) payload: Vec<u8>,
-}
-
-pub(crate) trait GameShapeMessageRuntime: GameClockContext {
-    /// Единственный ещё внешний serializer — полный `CPlayer` snapshot.
-    /// Остальные зарегистрированные shape разрешаются canonical owner-ами
-    /// `CGame` и не могут быть подменены process runtime.
-    fn serialize_player_shape_snapshot(
-        &mut self,
-        game: &CGame,
-        region_id: i32,
-        shape: ShapeView,
-    ) -> Option<ShapeSnapshot>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,7 +77,7 @@ fn send_player_cannot_move(game: &CGame, player_id: i32) -> Result<(), GameShape
     Ok(())
 }
 
-pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
+pub(crate) fn dispatch_game_shape_message<Runtime: GameClockContext>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
@@ -311,13 +299,15 @@ pub(crate) fn dispatch_game_shape_message<Runtime: GameShapeMessageRuntime>(
             };
             let snapshot = match game.find_shape_in_region(region_id, identity) {
                 Some(shape) if identity.object_type == PLAYER_TYPE => {
-                    let Some(snapshot) = runtime
-                        .serialize_player_shape_snapshot(game, region_id, shape)
-                    else {
+                    let Some((identity, payload)) = game.serialize_player_shape_snapshot(
+                        region_id,
+                        shape,
+                        || runtime.now_milliseconds(),
+                    ) else {
                         trace!(player_id, region_id, target_type = identity.object_type, target_id = identity.id, "снимок игрока не сериализован");
                         return Some(Ok(()));
                     };
-                    snapshot
+                    ShapeSnapshot { identity, payload }
                 }
                 Some(_) => {
                     let Some((identity, payload)) = game.serialize_owned_shape_snapshot(
