@@ -752,8 +752,8 @@ use crate::gameserver::appserver::servernationregion::{
     NationMoraleMutation, ServerNationRegion, classify_nation_morale_target,
 };
 use crate::gameserver::appserver::serverregion::{
-    CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin, RegionTaxSessionEndpoint,
-    RegionTaxSessionKind, ServerRegionAreaTransitionContext, ServerRegionClearPlayerTick,
+    AreaTransitionPlan, CServerRegion, RegionMembershipBlock, RegionTaxSessionBegin,
+    RegionTaxSessionEndpoint, RegionTaxSessionKind, ServerRegionClearPlayerTick,
     ServerRegionDecodeError, ServerRegionMembershipContext, ServerRegionMonsterContext,
     ServerRegionMonsterRectBlock, ServerRegionNpcContext, ServerRegionNpcSetup,
     ServerRegionNpcSpawnBlock, ServerRegionNpcSpawnOutcome, ServerRegionWeather,
@@ -4162,7 +4162,6 @@ pub(crate) trait GameMainLoopRuntime:
     + GamePlayerMessageRuntime
     + NationContendContext
     + GodsBattleNpcContendContext
-    + ServerRegionAreaTransitionContext
     + GameExitRuntime
 {}
 
@@ -18695,6 +18694,10 @@ impl CGame {
         else {
             return 0;
         };
+        self.country_identity_for_player(country_id, player_id)
+    }
+
+    fn country_identity_for_player(&mut self, country_id: u8, player_id: i32) -> u8 {
         self.country_handler
             .country_mut(country_id)
             .map_or(0, |country| country.identity_for_player(player_id))
@@ -41821,24 +41824,34 @@ impl CGame {
         {
             return None;
         }
-        let personal_shop = self
-            .find_player(player_id)
-            .and_then(CPlayer::personal_shop_flag)
+        let player = self.players.remove(&player_id)?;
+        let payload = self.encode_player_shape_snapshot(&player, now_milliseconds);
+        self.players.insert(player_id, player);
+        Some((canonical_identity, payload?))
+    }
+
+    fn encode_player_shape_snapshot(
+        &mut self,
+        player: &CPlayer,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        let personal_shop = player
+            .personal_shop_flag()
             .and_then(|(session_id, plug_id)| {
                 self.session_factory
                     .personal_shop_seller(plug_id)
                     .map(|seller| (session_id, plug_id, seller.shop_name().to_vec()))
             });
-        let country_identity = self.player_country_identity(player_id);
-        let payload = self.find_player(player_id)?.encode_client_shape_snapshot(
+        let country_identity =
+            self.country_identity_for_player(player.country(), player.player_id());
+        player.encode_client_shape_snapshot(
             &self.goods_factory,
             country_identity,
             personal_shop
                 .as_ref()
                 .map(|(session, plug, name)| (*session, *plug, name.as_slice())),
             now_milliseconds,
-        )?;
-        Some((canonical_identity, payload))
+        )
     }
 
     /// Разрешает подтверждённый виртуальный клиентский сериализатор формы у
@@ -41851,8 +41864,18 @@ impl CGame {
         identity: ShapeIdentity,
         now_milliseconds: impl FnMut() -> u32,
     ) -> Option<(ShapeIdentity, Vec<u8>)> {
+        let owner = self.find_region(region_id)?;
+        self.serialize_owned_shape_snapshot_in(owner, identity, now_milliseconds)
+    }
+
+    fn serialize_owned_shape_snapshot_in(
+        &self,
+        owner: &ServerRegionOwner,
+        identity: ShapeIdentity,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<(ShapeIdentity, Vec<u8>)> {
         if identity.object_type == NPC_TYPE {
-            let npc = self.find_region(region_id)?.base().find_npc_by_id(identity.id)?;
+            let npc = owner.base().find_npc_by_id(identity.id)?;
             let canonical_identity = npc.move_shape().shape().identity();
             if canonical_identity != identity {
                 return None;
@@ -41861,10 +41884,7 @@ impl CGame {
             return Some((canonical_identity, payload));
         }
         if identity.object_type == MONSTER_TYPE {
-            let monster = self
-                .find_region(region_id)?
-                .base()
-                .find_monster_by_id(identity.id)?;
+            let monster = owner.base().find_monster_by_id(identity.id)?;
             let canonical_identity = monster.move_shape().shape().identity();
             if canonical_identity != identity {
                 return None;
@@ -41881,10 +41901,7 @@ impl CGame {
             return Some((canonical_identity, payload));
         }
         if identity.object_type == GOODS_TYPE {
-            let goods = self
-                .find_region(region_id)?
-                .base()
-                .find_ground_goods(identity.ex_id)?;
+            let goods = owner.base().find_ground_goods(identity.ex_id)?;
             let canonical_identity = goods.identity();
             if canonical_identity != identity {
                 return None;
@@ -41894,7 +41911,7 @@ impl CGame {
             return Some((canonical_identity, payload));
         }
         if identity.object_type == BUILD_OBJECT_TYPE as i32 {
-            let build = self.find_region(region_id)?.country_flag(identity.id)?;
+            let build = owner.country_flag(identity.id)?;
             let canonical_identity = build.move_shape().shape().identity();
             if canonical_identity != identity {
                 return None;
@@ -41905,7 +41922,7 @@ impl CGame {
             return Some((canonical_identity, payload));
         }
         if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 {
-            let gate = self.find_region(region_id)?.city_gate(identity.id)?;
+            let gate = owner.city_gate(identity.id)?;
             let canonical_identity = gate.move_shape().shape().identity();
             if canonical_identity != identity {
                 return None;
@@ -41918,13 +41935,85 @@ impl CGame {
         if identity.object_type != SUMMON_SHAPE_TYPE {
             return None;
         }
-        let phalanx = self.find_region(region_id)?.base().find_skill_phalanx(identity.id)?;
+        let phalanx = owner.base().find_skill_phalanx(identity.id)?;
         let canonical_identity = phalanx.shape().identity();
         if canonical_identity != identity {
             return None;
         }
         let payload = phalanx.encode_client_snapshot(now_milliseconds)?;
         Some((canonical_identity, payload))
+    }
+
+    fn shape_enter_message(identity: ShapeIdentity, payload: &[u8]) -> Option<CMessage> {
+        let mut message = CMessage::new(0x000b_f502);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.base_mut().add_guid(identity.ex_id);
+        message.add_long(i32::try_from(payload.len()).ok()?);
+        message.base_mut().add(payload);
+        message.add_byte(0);
+        Some(message)
+    }
+
+    /// Исполняет сетевую половину `OnShapeChangeArea` до membership mutation:
+    /// moving snapshot публикуется каждой новой exclusive area, затем игроку
+    /// в исходном area-order приходят уже присутствующие shapes.
+    fn deliver_area_transition(
+        &mut self,
+        owner: &ServerRegionOwner,
+        plan: &AreaTransitionPlan,
+        moving_player: Option<&CPlayer>,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) {
+        let moving_snapshot = if plan.moving.object_type == PLAYER_TYPE {
+            moving_player
+                .filter(|player| player.shape().identity() == plan.moving)
+                .and_then(|player| {
+                    self.encode_player_shape_snapshot(player, &mut now_milliseconds)
+                        .map(|payload| (plan.moving, payload))
+                })
+        } else {
+            self.serialize_owned_shape_snapshot_in(owner, plan.moving, &mut now_milliseconds)
+        };
+        let Some((moving_identity, moving_payload)) = moving_snapshot else {
+            return;
+        };
+        let Some(moving_message) = Self::shape_enter_message(moving_identity, &moving_payload) else {
+            return;
+        };
+        for audience in &plan.audience {
+            let area = owner.base().get_area(audience.area_x, audience.area_y);
+            let _ = moving_message.send_to_area(
+                area.map(|area| (owner.base(), area)),
+                (moving_identity.object_type == PLAYER_TYPE).then_some(moving_identity.id),
+                self,
+            );
+            if moving_identity.object_type != PLAYER_TYPE {
+                continue;
+            }
+            for shape in &audience.shapes_for_moving_player {
+                let snapshot = if shape.identity.object_type == PLAYER_TYPE {
+                    self.serialize_player_shape_snapshot(
+                        owner.base().id,
+                        *shape,
+                        &mut now_milliseconds,
+                    )
+                } else {
+                    self.serialize_owned_shape_snapshot_in(
+                        owner,
+                        shape.identity,
+                        &mut now_milliseconds,
+                    )
+                };
+                let Some((identity, payload)) = snapshot else {
+                    continue;
+                };
+                let Some(message) = Self::shape_enter_message(identity, &payload) else {
+                    continue;
+                };
+                let _ = message.send_to_player(self.net_server(), moving_identity.id);
+            }
+        }
     }
 
     /// Достигнутый `CBaseAI::GetTarget` игрока: до планирования FIFO-команды
@@ -45482,13 +45571,27 @@ impl CGame {
                             figure: player.figure(),
                             ..ShapeRuntimeFacts::default()
                         };
-                        let result = owner.base_mut().apply_area_transition(
-                            player.movement_shape_mut(),
-                            facts,
-                            now_ms,
-                            &area_resolver,
-                            runtime,
-                        );
+                        let result = match owner
+                            .base()
+                            .plan_area_transition(player.shape(), &area_resolver)
+                        {
+                            Ok(Some(plan)) => {
+                                self.deliver_area_transition(
+                                    &owner,
+                                    &plan,
+                                    Some(&player),
+                                    || runtime.now_milliseconds(),
+                                );
+                                Ok(owner.base_mut().commit_area_transition(
+                                    player.movement_shape_mut(),
+                                    facts,
+                                    now_ms,
+                                    &plan,
+                                ))
+                            }
+                            Ok(None) => Ok(false),
+                            Err(error) => Err(error),
+                        };
                         if matches!(result, Ok(true))
                             && let Some(area_index) = player.shape().area_index()
                         {
@@ -45506,20 +45609,52 @@ impl CGame {
                             .resolve_shape(identity)
                             .map(|shape| shape.figure)
                             .unwrap_or_default();
-                        owner.base_mut().apply_owned_monster_area_transition(
+                        match owner.base().plan_owned_monster_area_transition(
                             identity.id,
-                            figure,
-                            now_ms,
                             &area_resolver,
-                            runtime,
-                        )
+                        ) {
+                            Some(Ok(Some(plan))) => {
+                                self.deliver_area_transition(
+                                    &owner,
+                                    &plan,
+                                    None,
+                                    || runtime.now_milliseconds(),
+                                );
+                                owner
+                                    .base_mut()
+                                    .commit_owned_monster_area_transition(
+                                        identity.id,
+                                        figure,
+                                        now_ms,
+                                        &plan,
+                                    )
+                                    .map(Ok)
+                            }
+                            Some(Ok(None)) => Some(Ok(false)),
+                            Some(Err(error)) => Some(Err(error)),
+                            None => None,
+                        }
                     }
-                    NPC_TYPE => owner.base_mut().apply_owned_npc_area_transition(
-                        identity.id,
-                        now_ms,
-                        &area_resolver,
-                        runtime,
-                    ),
+                    NPC_TYPE => match owner
+                        .base()
+                        .plan_owned_npc_area_transition(identity.id, &area_resolver)
+                    {
+                        Some(Ok(Some(plan))) => {
+                            self.deliver_area_transition(
+                                &owner,
+                                &plan,
+                                None,
+                                || runtime.now_milliseconds(),
+                            );
+                            owner
+                                .base_mut()
+                                .commit_owned_npc_area_transition(identity.id, now_ms, &plan)
+                                .map(Ok)
+                        }
+                        Some(Ok(None)) => Some(Ok(false)),
+                        Some(Err(error)) => Some(Err(error)),
+                        None => None,
+                    },
                     _ => None,
                 };
                 area_transitions = area_transitions.wrapping_add(1);

@@ -567,24 +567,22 @@ pub(crate) enum AreaTransitionBlock {
     StaleAreaIndex { index: usize, available: usize },
 }
 
-pub(crate) trait ServerRegionAreaTransitionContext {
-    /// Сохраняет player-special, goods old-client и обычную virtual
-    /// serialization ветви `OnShapeChangeArea`.
-    fn serialize_moving_shape_for_area(&mut self, identity: ShapeIdentity) -> Vec<u8>;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AreaTransitionAudience {
+    pub(crate) area_x: i32,
+    pub(crate) area_y: i32,
+    pub(crate) shapes_for_moving_player: Vec<ShapeView>,
+}
 
-    fn serialize_area_shape(&mut self, shape: ShapeView) -> Vec<u8>;
-
-    /// Шлёт `0xBF502` в новую exclusive area, исключая сам moving shape.
-    fn send_shape_entered_area(
-        &mut self,
-        area_x: i32,
-        area_y: i32,
-        identity: ShapeIdentity,
-        payload: &[u8],
-    );
-
-    /// Шлёт player-у `0xBF502` одного уже присутствующего shape новой area.
-    fn send_area_shape_to_player(&mut self, player_id: i32, shape: ShapeView, payload: &[u8]);
+/// Immutable effect-plan исходного `OnShapeChangeArea`. Регион вычисляет
+/// exclusive areas и их ordered shape snapshots до membership mutation;
+/// `CGame` исполняет клиентский wire, затем регион применяет target index.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AreaTransitionPlan {
+    pub(crate) moving: ShapeIdentity,
+    pub(crate) current_index: usize,
+    pub(crate) target_index: Option<usize>,
+    pub(crate) audience: Vec<AreaTransitionAudience>,
 }
 
 pub(crate) trait ServerRegionMembershipContext: RegionRandomContext {}
@@ -3904,19 +3902,13 @@ impl CServerRegion {
             .collect()
     }
 
-    pub(crate) fn apply_area_transition<
-        Resolver: ShapeResolver,
-        Context: ServerRegionAreaTransitionContext,
-    >(
-        &mut self,
-        shape: &mut CShape,
-        facts: ShapeRuntimeFacts,
-        now_ms: u32,
+    pub(crate) fn plan_area_transition<Resolver: ShapeResolver>(
+        &self,
+        shape: &CShape,
         resolver: &Resolver,
-        context: &mut Context,
-    ) -> Result<bool, AreaTransitionBlock> {
+    ) -> Result<Option<AreaTransitionPlan>, AreaTransitionBlock> {
         let Some(current_index) = shape.area_index() else {
-            return Ok(false);
+            return Ok(None);
         };
         let available = self.areas.len();
         let current_area =
@@ -3932,7 +3924,7 @@ impl CServerRegion {
         };
         let next = shape.next_area_coordinates();
         if current == next {
-            return Ok(false);
+            return Ok(None);
         }
 
         let old_neighbors = self.neighbor_area_indices(current);
@@ -3940,53 +3932,70 @@ impl CServerRegion {
         new_exclusive.retain(|index| !old_neighbors.contains(index));
 
         let moving = shape.identity();
-        let moving_payload = context.serialize_moving_shape_for_area(moving);
         let registered = RegisteredShapeResolver {
             registry: &self.registry,
             resolver,
         };
+        let mut audience = Vec::new();
         for area_index in new_exclusive {
             let area = &self.areas[area_index];
             if area.get_num_shapes() == 0 {
                 continue;
             }
-            context.send_shape_entered_area(area.x(), area.y(), moving, &moving_payload);
+            let mut shapes_for_moving_player = Vec::new();
             if moving.object_type == PLAYER_TYPE {
-                let mut shapes = Vec::new();
-                area.get_all_shapes(&registered, &mut shapes);
-                for other in shapes {
-                    if other.identity == moving {
-                        continue;
-                    }
-                    let payload = context.serialize_area_shape(other);
-                    context.send_area_shape_to_player(moving.id, other, &payload);
-                }
+                area.get_all_shapes(&registered, &mut shapes_for_moving_player);
+                shapes_for_moving_player.retain(|shape| shape.identity != moving);
             }
+            audience.push(AreaTransitionAudience {
+                area_x: area.x(),
+                area_y: area.y(),
+                shapes_for_moving_player,
+            });
         }
 
-        let Some(target_index) = self.area_index_by_coordinates(next) else {
-            return Ok(false);
-        };
-        self.areas[current_index].remove_object(moving, facts);
-        self.areas[target_index].add_object(moving, facts, now_ms);
-        shape.set_area_index(Some(target_index));
-
-        Ok(true)
+        Ok(Some(AreaTransitionPlan {
+            moving,
+            current_index,
+            target_index: self.area_index_by_coordinates(next),
+            audience,
+        }))
     }
 
-    pub(crate) fn apply_owned_monster_area_transition<
-        Resolver: ShapeResolver,
-        Context: ServerRegionAreaTransitionContext,
-    >(
+    pub(crate) fn commit_area_transition(
+        &mut self,
+        shape: &mut CShape,
+        facts: ShapeRuntimeFacts,
+        now_ms: u32,
+        plan: &AreaTransitionPlan,
+    ) -> bool {
+        let Some(target_index) = plan.target_index else {
+            return false;
+        };
+        self.areas[plan.current_index].remove_object(plan.moving, facts);
+        self.areas[target_index].add_object(plan.moving, facts, now_ms);
+        shape.set_area_index(Some(target_index));
+        true
+    }
+
+    pub(crate) fn plan_owned_monster_area_transition<Resolver: ShapeResolver>(
+        &self,
+        monster_id: i32,
+        resolver: &Resolver,
+    ) -> Option<Result<Option<AreaTransitionPlan>, AreaTransitionBlock>> {
+        let monster = self.owned_monsters.get(&monster_id)?;
+        Some(self.plan_area_transition(monster.move_shape().shape(), resolver))
+    }
+
+    pub(crate) fn commit_owned_monster_area_transition(
         &mut self,
         monster_id: i32,
         figure: super::shape::ShapeFigure,
         now_ms: u32,
-        resolver: &Resolver,
-        context: &mut Context,
-    ) -> Option<Result<bool, AreaTransitionBlock>> {
+        plan: &AreaTransitionPlan,
+    ) -> Option<bool> {
         let mut taken = self.owned_monsters.take(monster_id)?;
-        let result = self.apply_area_transition(
+        let result = self.commit_area_transition(
             taken.monster_mut().move_shape_mut().shape_mut(),
             ShapeRuntimeFacts {
                 monster: Some(super::shape::MonsterAreaClass::Active),
@@ -3995,25 +4004,29 @@ impl CServerRegion {
                 ..ShapeRuntimeFacts::default()
             },
             now_ms,
-            resolver,
-            context,
+            plan,
         );
         self.owned_monsters.restore(taken);
         Some(result)
     }
 
-    pub(crate) fn apply_owned_npc_area_transition<
-        Resolver: ShapeResolver,
-        Context: ServerRegionAreaTransitionContext,
-    >(
+    pub(crate) fn plan_owned_npc_area_transition<Resolver: ShapeResolver>(
+        &self,
+        npc_id: i32,
+        resolver: &Resolver,
+    ) -> Option<Result<Option<AreaTransitionPlan>, AreaTransitionBlock>> {
+        let npc = self.owned_npcs.get(&npc_id)?;
+        Some(self.plan_area_transition(npc.move_shape().shape(), resolver))
+    }
+
+    pub(crate) fn commit_owned_npc_area_transition(
         &mut self,
         npc_id: i32,
         now_ms: u32,
-        resolver: &Resolver,
-        context: &mut Context,
-    ) -> Option<Result<bool, AreaTransitionBlock>> {
+        plan: &AreaTransitionPlan,
+    ) -> Option<bool> {
         let mut npc = self.owned_npcs.remove(&npc_id)?;
-        let result = self.apply_area_transition(
+        let result = self.commit_area_transition(
             npc.move_shape_mut().shape_mut(),
             ShapeRuntimeFacts {
                 is_npc: true,
@@ -4021,8 +4034,7 @@ impl CServerRegion {
                 ..ShapeRuntimeFacts::default()
             },
             now_ms,
-            resolver,
-            context,
+            plan,
         );
         self.owned_npcs.insert(npc_id, npc);
         Some(result)
