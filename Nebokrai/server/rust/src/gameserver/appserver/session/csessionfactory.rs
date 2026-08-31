@@ -32,7 +32,9 @@
 //! порядок вставки и промежуточные снимки сериализации. Переходы распределения
 //! и чата получают владельцев участников в порядке той же сессии. Снимок из
 //! WorldServer и последующая репликация используют тот же реестр и сохраняют
-//! порядок клиентских снимков.
+//! порядок клиентских снимков. Session start timestamps берутся из текущего
+//! MainLoop sample; ненулевой lifetime команды завершается через terminal
+//! report, чтобы `CGame` сохранил derived World/client side effects.
 
 use std::collections::BTreeMap;
 
@@ -241,6 +243,7 @@ impl Default for CSessionFactory {
 impl CSessionFactory {
     pub(crate) fn create_team_session(
         &mut self,
+        now_ms: u32,
         team_id: u32,
         leader: (i32, i32, &[u8]),
         candidate: (i32, i32, &[u8]),
@@ -250,10 +253,10 @@ impl CSessionFactory {
         let candidate_plug_id = self.next_plug_id.wrapping_add(1);
         let mut session = CSession::normal(2, 8, 0);
         let mut team = CTeam::new(team_id);
-        if !session.start() {
+        if !session.start(now_ms) {
             return None;
         }
-        let empty_snapshot = team.serialize(&session, std::iter::empty());
+        let empty_snapshot = team.serialize(&session, now_ms, std::iter::empty());
 
         let mut leader_base = CPlug::new();
         leader_base.set_id(leader_plug_id);
@@ -264,7 +267,7 @@ impl CSessionFactory {
         if !session.insert_plug(leader_plug_id) {
             return None;
         }
-        let leader_snapshot = team.serialize(&session, [&leader_teammate]);
+        let leader_snapshot = team.serialize(&session, now_ms, [&leader_teammate]);
 
         let mut candidate_base = CPlug::new();
         candidate_base.set_id(candidate_plug_id);
@@ -276,7 +279,11 @@ impl CSessionFactory {
         if !session.insert_plug(candidate_plug_id) {
             return None;
         }
-        let candidate_snapshot = team.serialize(&session, [&leader_teammate, &candidate_teammate]);
+        let candidate_snapshot = team.serialize(
+            &session,
+            now_ms,
+            [&leader_teammate, &candidate_teammate],
+        );
         team.set_leader(leader.0);
 
         self.next_session_id = self.next_session_id.wrapping_add(1);
@@ -299,16 +306,25 @@ impl CSessionFactory {
 
     pub(crate) fn insert_team_member(
         &mut self,
+        now_ms: u32,
         session_id: i32,
         owner_id: i32,
         owner_region_id: i32,
         owner_name: &[u8],
     ) -> Option<TeamMemberInserted> {
-        self.insert_team_member_owned(session_id, 400, owner_id, owner_region_id, owner_name)
+        self.insert_team_member_owned(
+            now_ms,
+            session_id,
+            400,
+            owner_id,
+            owner_region_id,
+            owner_name,
+        )
     }
 
     pub(crate) fn insert_team_member_owned(
         &mut self,
+        now_ms: u32,
         session_id: i32,
         owner_type: i32,
         owner_id: i32,
@@ -340,6 +356,7 @@ impl CSessionFactory {
         let team = self.teams.get(&session_id)?;
         let snapshot = team.serialize(
             session,
+            now_ms,
             session
                 .plug_ids_storage()
                 .iter()
@@ -361,6 +378,7 @@ impl CSessionFactory {
 
     pub(crate) fn restore_team_session(
         &mut self,
+        now_ms: u32,
         snapshot: TeamSessionSnapshot,
     ) -> Option<TeamSessionRestored> {
         let session_id = self.next_session_id;
@@ -370,7 +388,7 @@ impl CSessionFactory {
             snapshot.maximum_plugs,
             snapshot.lifetime,
         );
-        if !session.start() {
+        if !session.start(now_ms) {
             return None;
         }
         let team = CTeam::restored(
@@ -387,6 +405,7 @@ impl CSessionFactory {
         let mut player_ids = Vec::with_capacity(snapshot.members.len());
         for member in snapshot.members {
             let inserted = self.insert_team_member_owned(
+                now_ms,
                 session_id,
                 member.owner_type,
                 member.owner_id,
@@ -476,6 +495,30 @@ impl CSessionFactory {
             .plug_ids_storage()
             .iter()
             .map(|plug_id| self.teammates.get(plug_id).map(CTeamate::owner_id))
+            .collect()
+    }
+
+    /// Base `CSession::AI` lifetime gate для concrete `CTeam`: сначала
+    /// выставляется terminal End state, затем registry owner собирает сессию.
+    /// Возвращённый отчёт позволяет `CGame` исполнить derived callbacks и
+    /// межсерверную публикацию до следующего session pass.
+    pub(crate) fn expire_team_sessions(&mut self, now_ms: u32) -> Vec<TeamSessionDisbanded> {
+        let session_ids = self
+            .teams
+            .keys()
+            .copied()
+            .filter(|session_id| {
+                self.sessions
+                    .get(session_id)
+                    .is_some_and(|session| session.lifetime_expired(now_ms))
+            })
+            .collect::<Vec<_>>();
+        session_ids
+            .into_iter()
+            .filter_map(|session_id| {
+                let _plug_callbacks = self.sessions.get_mut(&session_id)?.end();
+                self.disband_team(session_id)
+            })
             .collect()
     }
 
@@ -584,12 +627,13 @@ impl CSessionFactory {
     /// `CreatePlug/InsertPlug` в `0x8FA07`.
     pub(crate) fn create_player_trade_session(
         &mut self,
+        now_ms: u32,
         inviter_id: i32,
         answerer_id: i32,
     ) -> Option<(i32, i32, i32)> {
         let session_id = self.next_session_id;
         let mut session = CSession::normal(2, 2, 0);
-        if !session.start() {
+        if !session.start(now_ms) {
             return None;
         }
         let inviter_plug_id = self.next_plug_id;
@@ -697,12 +741,13 @@ impl CSessionFactory {
     /// поэтому safe atomic publication не меняет достижимый legacy outcome.
     pub(crate) fn create_personal_shop_seller_session(
         &mut self,
+        now_ms: u32,
         player_id: i32,
     ) -> Option<(i32, i32)> {
         let session_id = self.next_session_id;
         self.next_session_id = self.next_session_id.wrapping_add(1);
         let mut session = CSession::normal(1, 20, 0);
-        if !session.start() {
+        if !session.start(now_ms) {
             return None;
         }
 
@@ -1182,13 +1227,14 @@ impl CSessionFactory {
     }
     pub(crate) fn create_equipment_session(
         &mut self,
+        now_ms: u32,
         kind: EquipmentSessionPlugKind,
         player_id: i32,
     ) -> Option<(i32, i32)> {
         let session_id = self.next_session_id;
         self.next_session_id = self.next_session_id.wrapping_add(1);
         let mut session = CSession::normal(1, 1, 0);
-        if !session.start() {
+        if !session.start(now_ms) {
             return None;
         }
 

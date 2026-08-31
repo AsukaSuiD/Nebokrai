@@ -14520,6 +14520,10 @@ impl CGame {
         &mut self.session_factory
     }
 
+    pub(crate) const fn current_tick_ms(&self) -> u32 {
+        self.main_loop_state.current_tick_ms
+    }
+
     pub(crate) fn player_trade_distance(&self, first_id: i32, second_id: i32) -> Option<i32> {
         let first_player = self.players.get(&first_id)?;
         let second_player = self.players.get(&second_id)?;
@@ -14543,8 +14547,11 @@ impl CGame {
         inviter_id: i32,
         answerer_id: i32,
     ) -> Option<(i32, i32, i32)> {
-        self.session_factory
-            .create_player_trade_session(inviter_id, answerer_id)
+        self.session_factory.create_player_trade_session(
+            self.main_loop_state.current_tick_ms,
+            inviter_id,
+            answerer_id,
+        )
     }
 
     pub(crate) fn record_player_trade_offer(
@@ -15737,6 +15744,38 @@ impl CGame {
             );
         }
         idle.len()
+    }
+
+    /// `CTeam::AI` вызывает base `CSession::AI` до минутной derived-проверки.
+    /// Lifetime-End публикует `0x60002`, исполняет ordered teammate terminal
+    /// effects и только затем оставляет registry очищенным.
+    fn expire_team_sessions(&mut self, now_ms: u32) -> usize {
+        let expired = self.session_factory.expire_team_sessions(now_ms);
+        for disbanded in &expired {
+            let mut ended = CMessage::new(0x0006_0002);
+            ended.add_ulong(disbanded.team_id);
+            let world_delivery = ended.send(self, false);
+            for (index, player_id) in disbanded.player_ids.iter().copied().enumerate() {
+                if let Some(player) = self.players.get_mut(&player_id) {
+                    player.set_team_membership(0);
+                }
+                let recipients = std::iter::once(player_id)
+                    .chain(disbanded.player_ids[index + 1..].iter().copied())
+                    .filter(|recipient| self.players.contains_key(recipient));
+                self.publish_team_member_left(disbanded.team_id, player_id, recipients);
+            }
+            self.team_session_ids.remove(&disbanded.team_id);
+            self.team_snapshot_queries.remove(&disbanded.team_id);
+            self.publish_team_recruitment_count(disbanded.leader_id, 1);
+            tracing::trace!(
+                session_id = disbanded.session_id,
+                team_id = disbanded.team_id,
+                affected_player_ids = ?disbanded.player_ids,
+                ?world_delivery,
+                "истёк lifetime группы"
+            );
+        }
+        expired.len()
     }
 
     /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,
@@ -19637,7 +19676,11 @@ impl CGame {
         }
         let Some((session_id, plug_id)) = self
             .session_factory
-            .create_equipment_session(kind, player_id)
+            .create_equipment_session(
+                self.main_loop_state.current_tick_ms,
+                kind,
+                player_id,
+            )
         else {
             tracing::trace!(player_id, ?kind, "фабрика отклонила сессию оборудования");
             return;
@@ -31785,6 +31828,7 @@ impl CGame {
         let (session_id, team_id, teammate_count) = if leader_team_id == 0 {
             let team_id = self.get_team_id(1);
             let created: TeamSessionCreated = self.session_factory.create_team_session(
+                self.main_loop_state.current_tick_ms,
                 team_id,
                 (leader_id, leader_region_id, &leader_name),
                 (candidate_id, candidate_region_id, &candidate_name),
@@ -31869,6 +31913,7 @@ impl CGame {
         } else {
             let session_id = self.get_team_session_id(leader_team_id as u32);
             let inserted: TeamMemberInserted = self.session_factory.insert_team_member(
+                self.main_loop_state.current_tick_ms,
                 session_id,
                 candidate_id,
                 candidate_region_id,
@@ -32251,6 +32296,7 @@ impl CGame {
             owner_name = player.player_name().to_vec();
         }
         let inserted = self.session_factory.insert_team_member_owned(
+            self.main_loop_state.current_tick_ms,
             session_id,
             owner_type,
             owner_id,
@@ -32484,7 +32530,9 @@ impl CGame {
         }
         let members = snapshot.members.clone();
         let leader_id = snapshot.leader_id;
-        let restored: TeamSessionRestored = self.session_factory.restore_team_session(snapshot)?;
+        let restored: TeamSessionRestored = self
+            .session_factory
+            .restore_team_session(self.main_loop_state.current_tick_ms, snapshot)?;
         self.team_session_ids
             .insert(restored.team_id, restored.session_id);
         self.team_snapshot_queries.remove(&restored.team_id);
@@ -47435,6 +47483,10 @@ impl CGame {
         }
 
         state.current_tick_ms = runtime.now_milliseconds();
+        // Session constructors вызываются из script/message owners без clock
+        // аргумента; публикуем только уже взятый legacy tick sample, оставляя
+        // остальные счётчики локальными до завершения всего прохода.
+        self.main_loop_state.current_tick_ms = state.current_tick_ms;
         self.expire_script_faction_sessions(state.current_tick_ms);
         state.calls_since_runtime_log = state.calls_since_runtime_log.wrapping_add(1);
         let refresh_elapsed = state
@@ -47508,6 +47560,8 @@ impl CGame {
             let started = runtime.now_milliseconds();
             let _team_snapshot_requests =
                 self.run_team_snapshot_queries(runtime.now_milliseconds());
+            let _expired_team_sessions =
+                self.expire_team_sessions(runtime.now_milliseconds());
             let _idle_team_sessions =
                 self.garbage_collect_idle_team_sessions(runtime.now_milliseconds());
             let terminal_equipment_sessions = self
@@ -47531,6 +47585,8 @@ impl CGame {
             self.process_messages(runtime);
             let _team_snapshot_requests =
                 self.run_team_snapshot_queries(runtime.now_milliseconds());
+            let _expired_team_sessions =
+                self.expire_team_sessions(runtime.now_milliseconds());
             let _idle_team_sessions =
                 self.garbage_collect_idle_team_sessions(runtime.now_milliseconds());
             let terminal_equipment_sessions = self

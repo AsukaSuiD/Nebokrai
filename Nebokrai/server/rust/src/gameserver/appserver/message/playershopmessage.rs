@@ -498,9 +498,10 @@ fn open_player_shop(
     }
 
     if !game.globe_setup().auction_enabled() || source_world_server_id != 0 {
+        let now_ms = game.current_tick_ms();
         let Some((session_id, plug_id)) = game
             .session_factory_mut()
-            .create_personal_shop_seller_session(player_id)
+            .create_personal_shop_seller_session(now_ms, player_id)
         else {
             trace!(player_id, source_world_server_id, "сессию продавца личной лавки создать не удалось");
             return Ok(());

@@ -71,6 +71,7 @@ impl CTeam {
     pub(crate) fn serialize<'a>(
         &self,
         session: &CSession,
+        now_ms: u32,
         teammates: impl IntoIterator<Item = &'a CTeamate>,
     ) -> Vec<u8> {
         let teammates: Vec<&CTeamate> = teammates.into_iter().collect();
@@ -79,7 +80,7 @@ impl CTeam {
         writer.write_i32(1);
         writer.write_u32(session.minimum_plugs());
         writer.write_u32(session.maximum_plugs());
-        writer.write_u32(session.lifetime());
+        writer.write_u32(session.remaining_lifetime(now_ms));
         writer.write_u32(self.team_id);
         writer.write_c_string(&self.team_name);
         writer.write_c_string(&self.password);

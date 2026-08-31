@@ -9,7 +9,9 @@
 //! `from_plug_ids` является assembly-границей уже восстановленного registry
 //! state. Для normal equipment-session материализован terminal `End`:
 //! ended/remove state и ordered обход plug IDs; concrete plug callback/registry
-//! lookup выполняет `CSessionFactory`.
+//! lookup выполняет `CSessionFactory`. `Start` сохраняет caller-owned DWORD
+//! tick, `Serialize` выдаёт wrapping остаток lifetime, а base `AI` lifetime
+//! gate подключён к concrete team owner до его derived idle-проверки.
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CSession {
@@ -17,6 +19,7 @@ pub(crate) struct CSession {
     minimum_plugs: u32,
     maximum_plugs: u32,
     lifetime: u32,
+    starting_time_stamp: u32,
     started: bool,
     ended: bool,
     aborted: bool,
@@ -30,6 +33,7 @@ impl CSession {
             minimum_plugs: 0,
             maximum_plugs: u32::MAX,
             lifetime: 0,
+            starting_time_stamp: 0,
             started: true,
             ended: false,
             aborted: false,
@@ -43,6 +47,7 @@ impl CSession {
             minimum_plugs,
             maximum_plugs,
             lifetime,
+            starting_time_stamp: 0,
             started: false,
             ended: false,
             aborted: false,
@@ -50,10 +55,11 @@ impl CSession {
         }
     }
 
-    pub(crate) const fn start(&mut self) -> bool {
+    pub(crate) const fn start(&mut self, now_ms: u32) -> bool {
         if self.started || self.ended || self.aborted {
             return false;
         }
+        self.starting_time_stamp = now_ms;
         self.started = true;
         true
     }
@@ -83,12 +89,14 @@ impl CSession {
     }
 
     pub(crate) fn end(&mut self) -> Vec<i32> {
+        self.starting_time_stamp = 0;
         self.ended = true;
         self.remove_requested = true;
         self.plug_ids.clone()
     }
 
     pub(crate) fn abort(&mut self) -> Vec<i32> {
+        self.starting_time_stamp = 0;
         self.aborted = true;
         self.remove_requested = true;
         self.plug_ids.clone()
@@ -114,8 +122,26 @@ impl CSession {
         self.maximum_plugs
     }
 
-    pub(crate) const fn lifetime(&self) -> u32 {
-        self.lifetime
+    /// Exact base `AI` lifetime gate: legacy compares the wrapping DWORD sum
+    /// with the current `timeGetTime` sample and ignores dormant sessions.
+    pub(crate) const fn lifetime_expired(&self, now_ms: u32) -> bool {
+        self.started
+            && !self.ended
+            && !self.aborted
+            && self.lifetime != 0
+            && self.starting_time_stamp.wrapping_add(self.lifetime) <= now_ms
+    }
+
+    /// `Serialize` publishes the remaining lifetime, not the constructor
+    /// duration. Zero-lifetime sessions keep the literal zero wire value.
+    pub(crate) const fn remaining_lifetime(&self, now_ms: u32) -> u32 {
+        if self.lifetime == 0 {
+            0
+        } else {
+            self.starting_time_stamp
+                .wrapping_add(self.lifetime)
+                .wrapping_sub(now_ms)
+        }
     }
 }
 
