@@ -299,15 +299,19 @@ use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
     EQUIP_PLACE_HEADGEAR, GAP_AGILITY_CORRECTION, GAP_ARMOR_CORRECTION, GAP_ATTACK_AVOID,
     GAP_ATTACK_SPEED_CORRECTION, GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON,
-    GAP_BF_AGILITY_POTENTIAL, GAP_BF_ALL_SKILL, GAP_BF_ATTACK, GAP_BF_ATTACK_ADDON,
-    GAP_BF_ATTACK_POTENTIAL, GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST, GAP_BF_BLAST_ADDON,
-    GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE, GAP_BF_BRAVE_POTENTIAL, GAP_BF_CUT_HURT_ADDON,
+    GAP_BF_AGILITY_BASE, GAP_BF_AGILITY_POTENTIAL, GAP_BF_ALL_SKILL, GAP_BF_ATTACK,
+    GAP_BF_ATTACK_ADDON,
+    GAP_BF_ATTACK_BASE, GAP_BF_ATTACK_POTENTIAL, GAP_BF_BATTLE_FAIRY, GAP_BF_BLAST,
+    GAP_BF_BLAST_ADDON, GAP_BF_BLAST_POTENTIAL, GAP_BF_BRAVE, GAP_BF_BRAVE_BASE,
+    GAP_BF_BRAVE_POTENTIAL, GAP_BF_CUT_HURT_ADDON,
     GAP_BF_CUT_HURT_SCALE, GAP_BF_EARTH, GAP_BF_EARTH_SKILL, GAP_BF_HP, GAP_BF_HUOXIESHU_SKILL,
-    GAP_BF_LIFE_ADDON, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAN, GAP_BF_MAN_SKILL, GAP_BF_MAX_HP,
-    GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON, GAP_BF_POTENTIAL, GAP_BF_SKY, GAP_BF_SKY_SKILL,
-    GAP_BF_SPRITE, GAP_BF_SPRITE_ADDON, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON,
-    GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_POTENTIAL, GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON,
-    GAP_BF_STRENGH_POTENTIAL, GAP_BF_WEAPON_LEVEL, GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
+    GAP_BF_LEVEL, GAP_BF_LIFE_ADDON, GAP_BF_LINGZHISHU_SKILL, GAP_BF_MAN, GAP_BF_MAN_SKILL,
+    GAP_BF_MAX_HP, GAP_BF_MAX_MP, GAP_BF_MP, GAP_BF_MP_ADDON, GAP_BF_POTENTIAL,
+    GAP_BF_PULLULATERATE, GAP_BF_SKY, GAP_BF_SKY_SKILL, GAP_BF_SPRITE, GAP_BF_SPRITE_ADDON,
+    GAP_BF_SPRITE_BASE, GAP_BF_SPRITE_POTENTIAL, GAP_BF_SPRITUALISE_ADDON,
+    GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_BASE, GAP_BF_SPRITUALISM_POTENTIAL,
+    GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_BASE, GAP_BF_STRENGH_POTENTIAL,
+    GAP_BF_WEAPON_LEVEL, GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
     GAP_BURDEN_UPPER_LIMIT_CORRECTION, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
@@ -1972,7 +1976,7 @@ pub(crate) struct PlayerContinuousKillUpdate {
     pub(crate) bonus_experience: u32,
 }
 
-fn apply_ride_goods_properties(
+fn apply_equipment_goods_properties(
     properties: &mut PlayerCombatProperties,
     goods: &CGoods,
     factory: &CGoodsFactory,
@@ -1991,7 +1995,7 @@ fn apply_ride_goods_properties(
     }
 
     let enabled = goods.enabled_addon_properties(factory);
-    // Native `UpdateProperty` вызывает MountEquipRide(true), затем false:
+    // Native equipment/ride owners вызывают positive, затем negative pass:
     // первый pass принимает неотрицательные addon-ы, второй — отрицательные.
     for positive_pass in [true, false] {
         for &stored_type in &enabled {
@@ -4616,13 +4620,204 @@ impl CPlayer {
         self.move_shape.take_boss_blue_quake_state()
     }
 
-    /// Применяет канонические состояния в исходном порядке общего
-    /// `CPlayer::UpdateProperty`. Формулы остаются методами конкретных владельцев состояний;
-    /// наружу выходят только визуальные действия, требующие сетевого владельца.
+    /// Базовая и equipment/CiQing половина `CPlayer::UpdateProperty` до
+    /// виртуального `CMoveShape::UpdateProperty`. Два signed addon-pass-а
+    /// сохраняют slot order `MountAllEquip`. Восемь recovery scalar-ов
+    /// пока не имеют материализованных `GlobeSetup` offsets, поэтому этот
+    /// проход сохраняет их загруженные значения вместо выдуманных defaults.
+    pub(crate) fn recompute_base_and_equipment_properties(
+        &self,
+        coefficients: GlobePlayerPropertyCoefficients,
+        base_combat_scales: [f32; 5],
+        critical_rate: f32,
+        goods_factory: &CGoodsFactory,
+    ) -> PlayerCombatProperties {
+        let occupation = usize::from(self.base_properties.occupation).min(2);
+        let base_u16 = |offset| read_player_wire_u16(&self.base_property_wire, offset);
+        let base_u32 = |offset| read_player_wire_u32(&self.base_property_wire, offset);
+        let derived = |value: u32, coefficient: f32| {
+            ((value as f32) * coefficient).round() as u32
+        };
+        let mut properties = PlayerCombatProperties {
+            maximum_hp: self
+                .base_properties
+                .base_maximum_hp
+                .wrapping_add(derived(
+                    self.base_properties.base_constitution,
+                    coefficients.con_to_max_hp[occupation],
+                )),
+            maximum_mp: self
+                .base_properties
+                .base_maximum_mp
+                .wrapping_add(derived(
+                    self.base_properties.base_intelligence,
+                    coefficients.int_to_max_mp[occupation],
+                )),
+            strength: self.base_properties.base_strength,
+            dexterity: self.base_properties.base_dexterity,
+            constitution: self.base_properties.base_constitution,
+            intelligence: self.base_properties.base_intelligence,
+            minimum_attack: base_u32(0xcc).wrapping_add(derived(
+                self.base_properties.base_dexterity,
+                coefficients.dex_to_min_attack[occupation],
+            )),
+            maximum_attack: base_u32(0xd0).wrapping_add(derived(
+                self.base_properties.base_strength,
+                coefficients.str_to_max_attack[occupation],
+            )),
+            attack_speed: base_u16(0xe0),
+            hit: base_u16(0xd4),
+            dodge: base_u16(0xd8),
+            cch: base_u16(0xd6),
+            defense: base_u32(0xdc).wrapping_add(derived(
+                self.base_properties.base_constitution,
+                coefficients.con_to_defense[occupation],
+            )),
+            element_resistance: base_u32(0xe4).wrapping_add(derived(
+                self.base_properties.base_intelligence,
+                coefficients.int_to_resistant[occupation],
+            )),
+            hp_recovery: base_u16(0xe2),
+            mp_recovery: base_u16(0xe8),
+            burden: self.base_properties.base_burden.wrapping_add(
+                derived(
+                    self.base_properties.base_strength,
+                    coefficients.str_to_burden[occupation],
+                ) as u16,
+            ),
+            reank: base_u16(0xea).wrapping_add(
+                derived(
+                    self.base_properties.base_dexterity,
+                    coefficients.dex_to_stiff[occupation],
+                ) as u16,
+            ),
+            element_modify: derived(
+                self.base_properties.base_intelligence,
+                coefficients.int_to_element[occupation],
+            ) as i32,
+            blast_attack_scale_bits: base_combat_scales[0].to_bits(),
+            blast_defense_scale_bits: base_combat_scales[1].to_bits(),
+            element_blast_attack_scale_bits: base_combat_scales[2].to_bits(),
+            element_blast_defense_scale_bits: base_combat_scales[3].to_bits(),
+            full_miss_scale_bits: base_combat_scales[4].to_bits(),
+            critical_rate_bits: critical_rate.to_bits(),
+            resume_hp_peace: self.combat_properties.resume_hp_peace,
+            resume_mp_peace: self.combat_properties.resume_mp_peace,
+            resume_hp_fight: self.combat_properties.resume_hp_fight,
+            resume_mp_fight: self.combat_properties.resume_mp_fight,
+            restored_hp_peace: self.combat_properties.restored_hp_peace,
+            restored_mp_peace: self.combat_properties.restored_mp_peace,
+            restored_hp_fight: self.combat_properties.restored_hp_fight,
+            restored_mp_fight: self.combat_properties.restored_mp_fight,
+            ..PlayerCombatProperties::default()
+        };
+        for (_, goods) in self.equipment.traversing_goods() {
+            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
+                && goods.addon_property_value(goods_factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
+            {
+                continue;
+            }
+            apply_equipment_goods_properties(
+                &mut properties,
+                goods,
+                goods_factory,
+                coefficients,
+                occupation,
+            );
+        }
+        for position in 0..self.ci_qing.size() {
+            let Some(goods) = self.ci_qing.get_goods(position) else {
+                continue;
+            };
+            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
+                && goods.addon_property_value(goods_factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
+            {
+                continue;
+            }
+            apply_equipment_goods_properties(
+                &mut properties,
+                goods,
+                goods_factory,
+                coefficients,
+                occupation,
+            );
+        }
+        properties
+    }
+
+    /// Мутирующая prelude исходного `CPlayer::UpdateProperty`: slot 10
+    /// пересчитывает производные battle-fairy addon-ы до `MountAllEquip`.
+    /// Значения `2` остаются instance-modifier-ами, а текущие HP/MP здесь
+    /// намеренно не зажимаются — native owner обновляет только максимумы.
+    pub(crate) fn refresh_battle_fairy_equipment_properties(
+        &mut self,
+        factory: &CGoodsFactory,
+    ) {
+        let Some(goods) = self.equipment.get_goods_mut(10) else {
+            return;
+        };
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 0 {
+            return;
+        }
+        let level = goods.addon_property_value(factory, GAP_BF_LEVEL, 1);
+        let pullulate = goods.addon_property_value(factory, GAP_BF_PULLULATERATE, 1) as f32;
+        let growth = (level.wrapping_sub(1) as f32) * pullulate * 0.0001_f32 + 1.0_f32;
+        for (value_property, base_property, potential_property) in [
+            (GAP_BF_BRAVE, GAP_BF_BRAVE_BASE, GAP_BF_BRAVE_POTENTIAL),
+            (
+                GAP_BF_AGILITY,
+                GAP_BF_AGILITY_BASE,
+                GAP_BF_AGILITY_POTENTIAL,
+            ),
+            (
+                GAP_BF_SPRITUALISM,
+                GAP_BF_SPRITUALISM_BASE,
+                GAP_BF_SPRITUALISM_POTENTIAL,
+            ),
+            (
+                GAP_BF_STRENGH,
+                GAP_BF_STRENGH_BASE,
+                GAP_BF_STRENGH_POTENTIAL,
+            ),
+            (
+                GAP_BF_ATTACK,
+                GAP_BF_ATTACK_BASE,
+                GAP_BF_ATTACK_POTENTIAL,
+            ),
+            (
+                GAP_BF_SPRITE,
+                GAP_BF_SPRITE_BASE,
+                GAP_BF_SPRITE_POTENTIAL,
+            ),
+        ] {
+            let base = goods.addon_property_value(factory, base_property, 1) as f32;
+            let potential = goods.addon_property_value(factory, potential_property, 1) as f32;
+            let modifier = goods.addon_property_value(factory, value_property, 2) as f32;
+            let value = (modifier + potential + base * growth).round() as i32;
+            let _ = goods.set_addon_property_value_core(value_property, 1, value);
+        }
+        let blast = goods
+            .addon_property_value(factory, GAP_BF_BLAST_POTENTIAL, 1)
+            .wrapping_add(goods.addon_property_value(factory, GAP_BF_BLAST, 2));
+        let _ = goods.set_addon_property_value_core(GAP_BF_BLAST, 1, blast);
+        let maximum_hp = goods.addon_property_value(factory, GAP_BF_STRENGH, 1);
+        let maximum_mp = goods.addon_property_value(factory, GAP_BF_SPRITUALISM, 1);
+        let _ = goods.set_addon_property_value_core(GAP_BF_MAX_HP, 1, maximum_hp);
+        let _ = goods.set_addon_property_value_core(GAP_BF_MAX_MP, 1, maximum_mp);
+        let _ = goods.set_instance_addon_modifier(GAP_BF_CUT_HURT_SCALE, 1, 0);
+    }
+
+    /// Применяет все уже материализованные семейства общего
+    /// `CPlayer::UpdateProperty`. Формулы остаются методами конкретных
+    /// владельцев состояний; наружу выходят только сетевые visuals. В raw
+    /// состояния лежат в одном insertion-ordered vector, тогда как безопасная
+    /// модель пока разделяет их по владельцам, поэтому cross-family порядок
+    /// остаётся точной неизвестностью этого owner-а.
     pub(crate) fn apply_materialized_state_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
         coefficients: GlobePlayerPropertyCoefficients,
+        goods_factory: &CGoodsFactory,
     ) -> PlayerStatePropertyPass {
         if let Some(state) = self.move_shape.persistent_agility_family_state() {
             properties = state.apply_to_player(properties);
@@ -4672,6 +4867,8 @@ impl CPlayer {
                 super::moveshape::ReachedPropertyState::Roar(state) => state.apply_to_player(properties),
             };
         }
+        let properties =
+            self.apply_change_body_state_properties(properties, coefficients, goods_factory);
         PlayerStatePropertyPass {
             properties,
             callosity_visual,
@@ -5517,12 +5714,12 @@ impl CPlayer {
         found
     }
 
-    pub(crate) fn apply_change_body_properties(
+    fn apply_change_body_state_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
         coefficients: GlobePlayerPropertyCoefficients,
         goods_factory: &CGoodsFactory,
-    ) {
+    ) -> PlayerCombatProperties {
         let occupation = usize::from(self.base_properties.occupation).min(2);
         let signed = |target: &mut u32, value: i64| {
             *target = ((*target as i64) + value).clamp(1, i32::MAX as i64) as u32;
@@ -5673,7 +5870,7 @@ impl CPlayer {
                 .wrapping_add(state.blast_element_attack);
         }
         if let Some(goods) = self.ride_goods(goods_factory) {
-            apply_ride_goods_properties(
+            apply_equipment_goods_properties(
                 &mut properties,
                 &goods,
                 goods_factory,
@@ -5687,7 +5884,7 @@ impl CPlayer {
         for state in self.move_shape.fury_states().iter().copied() {
             properties.maximum_attack = state.apply_to_player_maximum_attack(properties.maximum_attack);
         }
-        self.apply_recomputed_combat_properties(properties, goods_factory);
+        properties
     }
 
     pub(crate) fn add_extended_state(

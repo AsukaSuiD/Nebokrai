@@ -64,8 +64,8 @@ use super::super::shape::{ShapeCoordinateBlock, ShapeIdentity};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::gameserver::gameserver::game::{
     CGame, GameClockContext, GameContainerMessageRuntime, GameWarRegionHandle,
-    RealmAppellationScriptContext, ScriptRegionChangeContext, ServerRegionOwner,
-    colored_player_notice_message, format_legacy_text_fields,
+    ScriptRegionChangeContext, ServerRegionOwner, colored_player_notice_message,
+    format_legacy_text_fields,
 };
 use crate::nets::netserver::message::CMessage;
 use crate::public::netsessionmanager::NetSessionCallbackOutcome;
@@ -81,7 +81,6 @@ pub(crate) trait GameOrganizingWarRuntime:
     + GameContainerMessageRuntime
     + ServerRegionMonsterContext
     + GameClockContext
-    + RealmAppellationScriptContext
 {
 }
 

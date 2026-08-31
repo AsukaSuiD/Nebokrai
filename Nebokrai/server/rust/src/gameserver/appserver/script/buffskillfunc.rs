@@ -5,7 +5,7 @@
 //! Исполнение сохраняет player-before-argument gate и передаёт mutation в
 //! concrete realm/property owner, а не в отдельный script shadow.
 
-use crate::gameserver::gameserver::game::{CGame, RealmAppellationScriptContext};
+use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) const SCRIPT_FUNCTION_ADD_JING_JIE_BUFF: i32 = 11131;
 pub(crate) const SCRIPT_FUNCTION_ADD_JING_JIE_BUFF_NAME: &[u8] = b"AddJingJieBuff";
@@ -17,7 +17,7 @@ pub(crate) enum BuffSkillScriptFunctionOutcome {
     Handled { legacy_return: i32 },
 }
 
-pub(crate) fn run_buff_skill_script_function<Context: RealmAppellationScriptContext>(
+pub(crate) fn run_buff_skill_script_function<Context>(
     game: &mut CGame,
     context: &mut Context,
     script_player_id: Option<i32>,

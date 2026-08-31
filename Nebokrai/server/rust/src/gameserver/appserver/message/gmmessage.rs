@@ -67,8 +67,8 @@ use crate::gameserver::appserver::script::script::{
     ScriptExecutionContext, legacy_atoi,
 };
 use crate::gameserver::gameserver::game::{
-    CGame, GameClockContext, GameKickAroundOutcome, RealmAppellationScriptContext,
-    ScriptRegionChangeContext, colored_text_message,
+    CGame, GameClockContext, GameKickAroundOutcome, ScriptRegionChangeContext,
+    colored_text_message,
 };
 use crate::nets::netserver::message::CMessage;
 use tracing::trace;
@@ -153,9 +153,7 @@ pub(crate) enum GmMessageError {
 
 /// Материализует полный selector-owner `OnGMMessage`; `None` означает, что
 /// сообщение принадлежит другому диспетчеру.
-pub(crate) fn dispatch_gm_message<
-    Runtime: GameClockContext + ScriptRegionChangeContext + RealmAppellationScriptContext,
->(
+pub(crate) fn dispatch_gm_message<Runtime: GameClockContext + ScriptRegionChangeContext>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,

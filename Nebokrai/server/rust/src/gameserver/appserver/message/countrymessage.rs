@@ -19,9 +19,7 @@ use super::super::country::countrywarsys::{
 };
 use super::super::region::RegionRandomContext;
 use super::super::servercountryregion::{CountryBattleStateBlock, CountryRegionRuntimeContext};
-use crate::gameserver::gameserver::game::{
-    CGame, RealmAppellationScriptContext, ScriptRegionChangeContext, ServerRegionOwner,
-};
+use crate::gameserver::gameserver::game::{CGame, ScriptRegionChangeContext, ServerRegionOwner};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::nets::netserver::message::CMessage;
 use std::mem::size_of;
@@ -30,7 +28,6 @@ pub(crate) trait GameCountryWarRuntime:
     CountryRegionRuntimeContext
     + RegionRandomContext
     + ScriptRegionChangeContext
-    + RealmAppellationScriptContext
 {
 }
 

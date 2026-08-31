@@ -426,7 +426,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .find_player_mut(player_id)
                 .expect("stat-allocation player сохранён после context lookup")
                 .allocate_stat_point(selector as u8, constitution_hp, intelligence_mp);
-            let properties = runtime.recompute_enhancement_player_properties(
+            let properties = game.recompute_player_properties(
                 game.find_player(player_id)
                     .expect("stat-allocation player сохранён после mutation"),
             );
@@ -744,7 +744,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 consume = false;
                 if facts.mount_state_exists {
                     let _ended = game.end_player_ride(player_id);
-                    let properties = runtime.recompute_enhancement_player_properties(
+                    let properties = game.recompute_player_properties(
                         game.find_player(player_id).expect("mount player сохранён"),
                     );
                     game.apply_player_state_properties(player_id, properties);
@@ -765,7 +765,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                         &original_name,
                     );
                     if applied {
-                        let properties = runtime.recompute_enhancement_player_properties(
+                        let properties = game.recompute_player_properties(
                             game.find_player(player_id)
                                 .expect("mounted player сохранён"),
                         );

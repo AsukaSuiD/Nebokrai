@@ -451,8 +451,7 @@ use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeResolver};
 use crate::gameserver::gameserver::game::{
     BattleFairyScriptAction, CGame, CiQingComposeContext, GameClockContext,
     GameContainerMessageRuntime, GameKickAroundOutcome, MonsterDeathContext, NationCombatContext,
-    PlayerReliveContext,
-    RealmAppellationScriptContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
+    PlayerReliveContext, ScriptDepotOpenOutcome, ScriptNpcShopOpenOutcome,
     ScriptRegionChangeContext, ScriptTimedGoodsParameters, ServerRegionOwner,
     colored_player_notice_message, colored_text_message, format_legacy_text_fields,
 };
@@ -847,7 +846,6 @@ pub(crate) trait ScriptFunctionRuntime:
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
     + CityGateRuntimeContext
-    + RealmAppellationScriptContext
     + ScriptAwardAuthenticationContext
     + MoveShapeCommandContext
     + ServerRegionMonsterContext
@@ -863,7 +861,6 @@ impl<T> ScriptFunctionRuntime for T where
         + GameContainerMessageRuntime
         + ScriptRegionChangeContext
         + CityGateRuntimeContext
-        + RealmAppellationScriptContext
         + ScriptAwardAuthenticationContext
         + MoveShapeCommandContext
         + ServerRegionMonsterContext

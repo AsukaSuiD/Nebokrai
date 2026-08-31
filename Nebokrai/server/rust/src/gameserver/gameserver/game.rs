@@ -543,6 +543,23 @@ use rustix::time::{ClockId, clock_gettime};
 use thiserror::Error;
 use tracing::{debug, info, trace, warn};
 
+macro_rules! player_property_recompute {
+    ($game:expr) => {{
+        let coefficients = $game.globe_setup.player_property_coefficients();
+        let base_combat_scales = $game.globe_setup.base_combat_scales();
+        let critical_rate = $game.globe_setup.critical_rate();
+        let goods_factory = $game.goods_factory.clone();
+        move |player: &CPlayer| {
+            player.recompute_base_and_equipment_properties(
+                coefficients,
+                base_combat_scales,
+                critical_rate,
+                &goods_factory,
+            )
+        }
+    }};
+}
+
 use crate::gameserver::appserver::ai::playerai::{
     BattleFairySkillQueueOutcome, CPlayerAI, PlayerAutoProgress,
 };
@@ -2278,24 +2295,12 @@ struct PlayerTradeAuditParty {
     name: Vec<u8>,
 }
 
-/// Единая runtime-граница virtual `CPlayer::UpdateProperty`. Все reached
-/// callers применяют один полный snapshot независимо от причины mutation;
-/// локальные `CGame` owners сохраняют собственный порядок publication и
-/// последующие TaoZhuang/state side effects.
-pub(crate) trait PlayerPropertyContext {
-    fn recompute_enhancement_player_properties(
-        &mut self,
-        player: &CPlayer,
-    ) -> PlayerCombatProperties;
-}
-
 /// Общая граница завершения смерти монстра. Она нужна и боевому проходу ИИ,
 /// и `KillMonster`: награда, добыча, свойства игрока и помещение предмета в
 /// регион используют одних владельцев и не расходятся по двум реализациям.
 pub(crate) trait MonsterDeathContext:
     GameClockContext
     + ServerRegionMembershipContext
-    + PlayerPropertyContext
     + NationCombatContext
 {
 }
@@ -2303,15 +2308,9 @@ pub(crate) trait MonsterDeathContext:
 impl<T> MonsterDeathContext for T where
     T: GameClockContext
         + ServerRegionMembershipContext
-        + PlayerPropertyContext
         + NationCombatContext
 {
 }
-
-/// Exact virtual `CPlayer::UpdateProperty` после realm hidden-skill mutation.
-/// Runtime владеет ещё не сведёнными equipment/state/GlobeSetup источниками;
-/// CGame применяет возвращённый полный snapshot и сам публикует `0xBF721`.
-pub(crate) trait RealmAppellationScriptContext: PlayerPropertyContext {}
 
 /// ChangeRegion использует только уже материализованные clock, spatial,
 /// container и property owners вызывающей среды.
@@ -2352,7 +2351,7 @@ pub(crate) trait GameRegionEnterContext: NationCombatContext + ServerRegionMonst
 /// recompute получают тот же live runtime в исходном порядке. GoodsAI tree
 /// принадлежит canonical player и заполняется после успешной регистрации.
 pub(crate) trait GamePlayerLoginContext:
-    NationCombatContext + PlayerPropertyContext
+    NationCombatContext
 {
     fn publish_initial_player_client_snapshot(
         &mut self,
@@ -2480,7 +2479,7 @@ pub(crate) enum CiQingOtherPersonTarget {
 /// runtime fact. RideState overlay и
 /// personal-shop mount gate также принадлежат canonical player owner-у.
 pub(crate) trait GameContainerMessageRuntime:
-    GameClockContext + PlayerPropertyContext + ServerRegionMembershipContext
+    GameClockContext + ServerRegionMembershipContext
 {}
 
 /// Runtime facts equipment-container-а выводятся только из canonical player,
@@ -3145,7 +3144,6 @@ pub(crate) trait PlayerReliveContext:
     RegionRandomContext
     + GameContainerMessageRuntime
     + ScriptRegionChangeContext
-    + RealmAppellationScriptContext
 {
     fn auto_start_player_passive_skills(&mut self, player: &mut CPlayer);
     fn player_enter_region_after_relive(&mut self, player: &mut CPlayer);
@@ -4678,7 +4676,7 @@ impl CGame {
         buyer_plug_id: i32,
         goods_id: CGuid,
         billing_completion: bool,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> PersonalShopBillingCompletion {
         if !self.personal_shop_session_available(session_id) {
             tracing::trace!(
@@ -4953,8 +4951,7 @@ impl CGame {
                 &goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut removal = seller_player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -5631,26 +5628,54 @@ impl CGame {
         OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods)
     }
 
+    pub(crate) fn recompute_player_properties(&self, player: &CPlayer) -> PlayerCombatProperties {
+        player.recompute_base_and_equipment_properties(
+            self.globe_setup.player_property_coefficients(),
+            self.globe_setup.base_combat_scales(),
+            self.globe_setup.critical_rate(),
+            &self.goods_factory,
+        )
+    }
+
     pub(crate) fn apply_recomputed_player_properties(
         &mut self,
         player_id: i32,
         properties: PlayerCombatProperties,
     ) -> bool {
+        self.commit_recomputed_player_properties(player_id, properties, true)
+    }
+
+    fn commit_recomputed_player_properties(
+        &mut self,
+        player_id: i32,
+        properties: PlayerCombatProperties,
+        publish_state_visuals: bool,
+    ) -> bool {
         let coefficients = self.globe_setup.player_property_coefficients();
+        let goods_factory = self.goods_factory.clone();
         let Some(pass) = self
             .find_player_mut(player_id)
-            .map(|player| player.apply_materialized_state_properties(properties, coefficients))
+            .map(|player| {
+                player.refresh_battle_fairy_equipment_properties(&goods_factory);
+                player.apply_materialized_state_properties(
+                    properties,
+                    coefficients,
+                    &goods_factory,
+                )
+            })
         else {
             return false;
         };
-        for state in pass.script_visuals {
-            let _ = self.send_script_move_state_visual(player_id, state, true);
-        }
-        if let Some(state) = pass.callosity_visual {
-            send_callosity_state_begin(self, player_id, state);
-        }
-        if let Some(state) = pass.hearten_visual {
-            send_hearten_state_visual(self, player_id, state, true, game_tick_milliseconds);
+        if publish_state_visuals {
+            for state in pass.script_visuals {
+                let _ = self.send_script_move_state_visual(player_id, state, true);
+            }
+            if let Some(state) = pass.callosity_visual {
+                send_callosity_state_begin(self, player_id, state);
+            }
+            if let Some(state) = pass.hearten_visual {
+                send_hearten_state_visual(self, player_id, state, true, game_tick_milliseconds);
+            }
         }
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         let Some(player) = players.get_mut(&player_id) else {
@@ -6363,7 +6388,7 @@ impl CGame {
         goods_id: CGuid,
         amount: u32,
         destination_position: u32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Result<AuctionListingTransferReport, AuctionListingTransferBlock> {
         if destination_position >= 2
             || !player
@@ -6622,8 +6647,7 @@ impl CGame {
                     goods,
                     pack_add_enabled,
                 );
-                let mut recompute =
-                    |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                let mut recompute = player_property_recompute!(self);
                 let mut report = player.remove_equipment_goods(
                     goods_id,
                     &self.goods_factory,
@@ -7212,8 +7236,7 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -7536,8 +7559,7 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -7763,8 +7785,7 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -8231,8 +8252,7 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -8792,8 +8812,7 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -10255,8 +10274,7 @@ impl CGame {
             &old_goods,
             self.globe_setup.pack_add_enabled(),
         );
-        let mut recompute =
-            |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+        let mut recompute = player_property_recompute!(self);
         let mut removed_report = player.remove_equipment_goods(
             old_goods.identity().ex_id,
             &self.goods_factory,
@@ -10558,8 +10576,7 @@ impl CGame {
                 &source,
                 pack_add_enabled,
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -11499,8 +11516,7 @@ impl CGame {
                 goods,
                 pack_add_enabled,
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -11672,8 +11688,7 @@ impl CGame {
                     goods,
                     pack_add_enabled,
                 );
-                let mut recompute =
-                    |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                let mut recompute = player_property_recompute!(self);
                 let mut report = player.remove_equipment_goods(
                     goods_id,
                     &self.goods_factory,
@@ -11774,7 +11789,7 @@ impl CGame {
         position: u32,
         incoming: &mut Option<CGoods>,
         pack_add_enabled: bool,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> EnhancementTransferAddition {
         if extend_id == 1 {
             let owner_progress_allows = player.current_progress() == PlayerProgress::None;
@@ -11796,15 +11811,10 @@ impl CGame {
         );
         let mut goods_ai_ids = Vec::new();
         let mut report = {
-            let context_cell = std::cell::RefCell::new(&mut *context);
             let mut register = |goods: &CGoods| {
                 goods_ai_ids.push(goods.identity().ex_id);
             };
-            let mut recompute = |player: &CPlayer| {
-                context_cell
-                    .borrow_mut()
-                    .recompute_enhancement_player_properties(player)
-            };
+            let mut recompute = player_property_recompute!(self);
             player.add_equipment_goods(
                 position,
                 incoming,
@@ -13331,7 +13341,7 @@ impl CGame {
     /// war clock, исполняет virtual contend cancel, затем устанавливает
     /// половину global death penalty без setter-wire.
     pub(crate) fn player_died_in_nation_region<
-        Context: NationCombatContext + RealmAppellationScriptContext,
+        Context: NationCombatContext,
     >(
         &mut self,
         player_id: i32,
@@ -14809,7 +14819,7 @@ impl CGame {
         billing_payer_id: Option<i32>,
         billing_amount: u32,
         transaction: &[u8],
-        context: &mut Context,
+        _context: &mut Context,
     ) -> bool {
         let audit_parties = parties.each_ref().map(|party| {
             let player = self
@@ -14923,8 +14933,7 @@ impl CGame {
                         &source,
                         self.globe_setup.pack_add_enabled(),
                     );
-                    let mut recompute =
-                        |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                    let mut recompute = player_property_recompute!(self);
                     let mut removal = player.remove_equipment_goods(
                         offer.goods_id,
                         &self.goods_factory,
@@ -16355,7 +16364,7 @@ impl CGame {
         player_id: i32,
         property: &[u8],
         value: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<i32>
     where
         Context: GameContainerMessageRuntime + NationCombatContext,
@@ -16375,9 +16384,10 @@ impl CGame {
             let _ = self.send_game_shape_around(region.base(), player.shape(), None, &changed);
         }
         let recomputed = {
+            let recompute = player_property_recompute!(self);
             let player = self.players.get_mut(&player_id)?;
             let _ = player.set_script_value(property, value)?;
-            context.recompute_enhancement_player_properties(player)
+            recompute(player)
         };
         let _ = self.apply_recomputed_player_properties(player_id, recomputed);
 
@@ -16406,7 +16416,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<i32>
     where
-        Runtime: PlayerPropertyContext + GameClockContext,
+        Runtime: GameClockContext,
     {
         let player = self.find_player(player_id)?;
         let _ = player.script_value(property)?;
@@ -16495,7 +16505,7 @@ impl CGame {
         player_name: &[u8],
         property: &[u8],
         delta: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<i32>
     where
         Context: GameContainerMessageRuntime + NationCombatContext,
@@ -16508,7 +16518,7 @@ impl CGame {
             .unwrap_or(0);
         let recomputed = {
             let player = self.players.get(&player_id)?;
-            context.recompute_enhancement_player_properties(player)
+            self.recompute_player_properties(player)
         };
         let _ = self.apply_recomputed_player_properties(player_id, recomputed);
         let player = self
@@ -16527,7 +16537,7 @@ impl CGame {
         player_name: &[u8],
         property: &[u8],
         value: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<i32>
     where
         Context: GameContainerMessageRuntime + NationCombatContext,
@@ -16541,7 +16551,7 @@ impl CGame {
 
         let recomputed = {
             let player = self.players.get(&player_id)?;
-            context.recompute_enhancement_player_properties(player)
+            self.recompute_player_properties(player)
         };
         let _ = self.apply_recomputed_player_properties(player_id, recomputed);
         let player = self
@@ -16696,13 +16706,13 @@ impl CGame {
     /// `AddSkill` достигнут из goods-script runtime: обычный skill публикует
     /// адресный `TellClient(0xBF71D)` целевому игроку, а внутренние realm title/
     /// bonus skills подавляют этот packet и проходят полный property recompute.
-    pub(crate) fn add_script_player_skill<Context: RealmAppellationScriptContext>(
+    pub(crate) fn add_script_player_skill<Context>(
         &mut self,
         script_player_id: i32,
         target_name: &[u8],
         skill_name: &[u8],
         level: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> i32 {
         let target_id = if target_name.is_empty() {
             self.find_player(script_player_id).map(CPlayer::player_id)
@@ -16734,7 +16744,7 @@ impl CGame {
                 let player = self
                     .find_player(target_id)
                     .expect("realm skill mutation сохраняет canonical player");
-                context.recompute_enhancement_player_properties(player)
+                self.recompute_player_properties(player)
             };
             let _ = self.apply_recomputed_player_properties(target_id, current_properties);
             let applied_properties = self
@@ -16982,7 +16992,7 @@ impl CGame {
     /// клиенту и WorldServer.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn change_player_region<
-        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+        Context: ScriptRegionChangeContext,
     >(
         &mut self,
         player_id: i32,
@@ -17380,7 +17390,7 @@ impl CGame {
     /// `CArea::FindShapes(400)`, после чего каждый игрок проходит через общий
     /// владелец `change_player_region`.
     pub(crate) fn move_script_players_in_rectangles<
-        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+        Context: ScriptRegionChangeContext,
     >(
         &mut self,
         mut arguments: [i32; 10],
@@ -19652,7 +19662,7 @@ impl CGame {
         player: &mut CPlayer,
         plug: &mut CEquipmentUpgrade,
         cell: UpgradeEquipmentCell,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(goods_id) = plug.goods_id(cell) else {
             return;
@@ -19687,8 +19697,7 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut removal = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -20238,7 +20247,7 @@ impl CGame {
         player_id: i32,
         source: &EquipmentComposeSourceSnapshot,
         previous: &PreviousContainer,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> bool {
         let Some(mut player) = self.players.remove(&player_id) else {
             return false;
@@ -20265,8 +20274,7 @@ impl CGame {
                 goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut equipment = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -21019,7 +21027,7 @@ impl CGame {
         player_id: i32,
         base_index: u32,
         requested: u32,
-        runtime: &mut Runtime,
+        _runtime: &mut Runtime,
     ) -> u32 {
         if base_index == 0 || requested == 0 {
             return 0;
@@ -21072,8 +21080,7 @@ impl CGame {
                     goods,
                     self.globe_setup.pack_add_enabled(),
                 );
-                let mut recompute =
-                    |player: &CPlayer| runtime.recompute_enhancement_player_properties(player);
+                let mut recompute = player_property_recompute!(self);
                 let mut report = player.remove_equipment_goods(
                     identity.ex_id,
                     &self.goods_factory,
@@ -21538,7 +21545,7 @@ impl CGame {
     pub(crate) fn delete_script_selected_goods<Context: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(mut player) = self.players.remove(&player_id) else {
             return;
@@ -21563,8 +21570,7 @@ impl CGame {
                 &goods,
                 self.globe_setup.pack_add_enabled(),
             );
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -26584,7 +26590,7 @@ impl CGame {
     fn delete_goods_for_destroy_open<Context: GameContainerMessageRuntime>(
         &mut self,
         request: GoodsDestroyDeleteRequest,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(location) = self.players.get(&request.player_id).and_then(|player| {
             player.owned_goods_location(request.container_extend_id, request.goods_id)
@@ -26624,8 +26630,7 @@ impl CGame {
                     &goods,
                     self.globe_setup.pack_add_enabled(),
                 );
-                let mut recompute =
-                    |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+                let mut recompute = player_property_recompute!(self);
                 let mut report = player.remove_equipment_goods(
                     request.goods_id,
                     &self.goods_factory,
@@ -27104,7 +27109,7 @@ impl CGame {
             .map(CPlayer::attempt_appellation_id)
     }
 
-    pub(crate) fn add_script_appellation_state<Context: RealmAppellationScriptContext>(
+    pub(crate) fn add_script_appellation_state<Context>(
         &mut self,
         player_id: i32,
         state_id: u32,
@@ -27131,7 +27136,7 @@ impl CGame {
         mutation.legacy_return
     }
 
-    pub(crate) fn delete_script_appellation_state<Context: RealmAppellationScriptContext>(
+    pub(crate) fn delete_script_appellation_state<Context>(
         &mut self,
         player_id: i32,
         state_id: u32,
@@ -27193,7 +27198,7 @@ impl CGame {
                 .contains(&goods_base_index)
     }
 
-    pub(crate) fn add_script_extended_state<Context: RealmAppellationScriptContext>(
+    pub(crate) fn add_script_extended_state<Context>(
         &mut self,
         player_id: i32,
         state_id: u32,
@@ -27233,7 +27238,7 @@ impl CGame {
     /// `RemoveState(SKILL_GOD_BLESS)` до поиска/replacement extended state.
     /// End-visual и `OnChangeStates` поэтому также завершаются до новой
     /// мутации, даже если последующее создание extended state откажет.
-    fn remove_script_god_bless_state<Context: RealmAppellationScriptContext>(
+    fn remove_script_god_bless_state<Context>(
         &mut self,
         player_id: i32,
         now_ms: u32,
@@ -27263,7 +27268,7 @@ impl CGame {
         true
     }
 
-    pub(crate) fn delete_script_extended_state<Context: RealmAppellationScriptContext>(
+    pub(crate) fn delete_script_extended_state<Context>(
         &mut self,
         player_id: i32,
         state_id: u32,
@@ -27285,7 +27290,7 @@ impl CGame {
         mutation.legacy_return
     }
 
-    pub(crate) fn delete_script_extended_state_by_type<Context: RealmAppellationScriptContext>(
+    pub(crate) fn delete_script_extended_state_by_type<Context>(
         &mut self,
         player_id: i32,
         state_type: u16,
@@ -27353,7 +27358,7 @@ impl CGame {
         let _ = self.send_player_shape_around(player_id, None, &message);
     }
 
-    fn update_player_extended_states<Context: RealmAppellationScriptContext>(
+    fn update_player_extended_states<Context>(
         &mut self,
         player_id: i32,
         now_ms: u32,
@@ -27417,7 +27422,7 @@ impl CGame {
         (ended, items_consumed)
     }
 
-    fn update_player_appellation_states<Context: RealmAppellationScriptContext>(
+    fn update_player_appellation_states<Context>(
         &mut self,
         player_id: i32,
         now_ms: u32,
@@ -27529,32 +27534,29 @@ impl CGame {
         player_id: i32,
         properties: PlayerCombatProperties,
     ) {
-        let coefficients = self.globe_setup.player_property_coefficients();
-        let goods_factory = self.goods_factory.clone();
-        let Some(player) = self.find_player_mut(player_id) else {
+        if !self.commit_recomputed_player_properties(player_id, properties, false) {
             return;
-        };
-        player.apply_change_body_properties(properties, coefficients, &goods_factory);
+        }
         if let Some(player) = self.find_player(player_id) {
             let _ = self.send_player_properties_changed(player);
         }
     }
 
-    fn refresh_ride_properties<Context: RealmAppellationScriptContext>(
+    fn refresh_ride_properties<Context>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let Some(properties) = self
             .find_player(player_id)
-            .map(|player| context.recompute_enhancement_player_properties(player))
+            .map(|player| self.recompute_player_properties(player))
         else {
             return;
         };
         self.apply_player_state_properties(player_id, properties);
     }
 
-    fn update_player_ride_state<Context: RealmAppellationScriptContext>(
+    fn update_player_ride_state<Context>(
         &mut self,
         player_id: i32,
         now_ms: u32,
@@ -27577,7 +27579,7 @@ impl CGame {
         false
     }
 
-    pub(crate) fn add_script_change_body_state<Context: RealmAppellationScriptContext>(
+    pub(crate) fn add_script_change_body_state<Context>(
         &mut self,
         player_id: i32,
         state_id: u32,
@@ -27615,7 +27617,7 @@ impl CGame {
         mutation.legacy_return
     }
 
-    pub(crate) fn delete_script_change_body_state<Context: RealmAppellationScriptContext>(
+    pub(crate) fn delete_script_change_body_state<Context>(
         &mut self,
         player_id: i32,
         state_id: u32,
@@ -27640,7 +27642,7 @@ impl CGame {
 
     /// Exact client `0x8FA15`: завершает первый `m_vStates` элемент с
     /// `CState::m_lID == 0x37`, затем исполняет `CPlayer::UpdateProperty`.
-    pub(crate) fn end_first_player_change_body_state<Context: RealmAppellationScriptContext>(
+    pub(crate) fn end_first_player_change_body_state<Context>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -27661,7 +27663,7 @@ impl CGame {
         Some(state_id)
     }
 
-    fn end_change_body_states<Context: RealmAppellationScriptContext>(
+    fn end_change_body_states<Context>(
         &mut self,
         player_id: i32,
         state_ids: Vec<u32>,
@@ -27678,7 +27680,7 @@ impl CGame {
         }
     }
 
-    fn update_player_change_body_states<Context: RealmAppellationScriptContext>(
+    fn update_player_change_body_states<Context>(
         &mut self,
         player_id: i32,
         now_ms: u32,
@@ -28064,7 +28066,7 @@ impl CGame {
         removed
     }
 
-    pub(crate) fn change_body_after_region_transition<Context: RealmAppellationScriptContext>(
+    pub(crate) fn change_body_after_region_transition<Context>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -28076,7 +28078,7 @@ impl CGame {
         self.end_change_body_states(player_id, state_ids, Some(b"GS1146"), context);
     }
 
-    pub(crate) fn change_body_after_player_lost<Context: RealmAppellationScriptContext>(
+    pub(crate) fn change_body_after_player_lost<Context>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -28090,7 +28092,7 @@ impl CGame {
         ended
     }
 
-    fn change_body_after_player_death<Context: RealmAppellationScriptContext>(
+    fn change_body_after_player_death<Context>(
         &mut self,
         player_id: i32,
         context: &mut Context,
@@ -28102,23 +28104,16 @@ impl CGame {
         self.end_change_body_states(player_id, state_ids, None, context);
     }
 
-    fn refresh_script_change_body_properties<Context: RealmAppellationScriptContext>(
+    fn refresh_script_change_body_properties<Context>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) {
         let properties = match self.find_player(player_id) {
-            Some(player) => context.recompute_enhancement_player_properties(player),
+            Some(player) => self.recompute_player_properties(player),
             None => return,
         };
-        let coefficients = self.globe_setup.player_property_coefficients();
-        let goods_factory = self.goods_factory.clone();
-        self.find_player_mut(player_id)
-            .expect("ChangeBody recompute сохраняет player")
-            .apply_change_body_properties(properties, coefficients, &goods_factory);
-        if let Some(player) = self.find_player(player_id) {
-            let _ = self.send_player_properties_changed(player);
-        }
+        self.apply_player_state_properties(player_id, properties);
     }
 
     fn send_change_body_hotkeys(&self, player_id: i32, slots: impl IntoIterator<Item = usize>) {
@@ -28198,11 +28193,11 @@ impl CGame {
     /// Reached `AddJingJieBuff` tail: hidden skill и max-HP/max-MP mutation
     /// принадлежат realm owner-у, а изменившийся property snapshot публикуется
     /// тем же адресным `CPlayer::OnChangeProperties` wire `0xBF721`.
-    pub(crate) fn set_script_realm_appellation_bonus<Context: RealmAppellationScriptContext>(
+    pub(crate) fn set_script_realm_appellation_bonus<Context>(
         &mut self,
         player_id: i32,
         appellation_id: u32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<i32> {
         let mutation = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
@@ -28217,7 +28212,7 @@ impl CGame {
             let player = self
                 .find_player(player_id)
                 .expect("realm mutation сохраняет canonical player");
-            context.recompute_enhancement_player_properties(player)
+            self.recompute_player_properties(player)
         };
         let _ = self.apply_recomputed_player_properties(player_id, current_properties);
         let applied_properties = self
@@ -30060,17 +30055,12 @@ impl CGame {
         } else {
             None
         };
-        let recomputed = context.recompute_enhancement_player_properties(
+        let recomputed = self.recompute_player_properties(
             self.players
                 .get(&expected_player_id)
                 .expect("login script не удаляет player owner"),
         );
-        let coefficients = self.globe_setup.player_property_coefficients();
-        let goods_factory = self.goods_factory.clone();
-        self.players
-            .get_mut(&expected_player_id)
-            .expect("login property callback не удаляет player owner")
-            .apply_change_body_properties(recomputed, coefficients, &goods_factory);
+        let _ = self.commit_recomputed_player_properties(expected_player_id, recomputed, false);
         context.publish_initial_player_client_snapshot(self, expected_player_id, first_login);
         let mut billing = CMessage::new(0x000e_f201);
         add_legacy_c_string(
@@ -30437,7 +30427,7 @@ impl CGame {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn script_set_region_for_team<
-        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+        Context: ScriptRegionChangeContext,
     >(
         &mut self,
         player_id: i32,
@@ -30550,7 +30540,7 @@ impl CGame {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn script_set_team_region<
-        Context: ScriptRegionChangeContext + RealmAppellationScriptContext,
+        Context: ScriptRegionChangeContext,
     >(
         &mut self,
         player_id: i32,
@@ -33774,11 +33764,11 @@ impl CGame {
     pub(crate) fn update_player_properties<Context: GameContainerMessageRuntime>(
         &mut self,
         player_id: i32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> Option<(i32, bool)> {
         let properties = self
             .find_player(player_id)
-            .map(|player| context.recompute_enhancement_player_properties(player))?;
+            .map(|player| self.recompute_player_properties(player))?;
         if !self.apply_recomputed_player_properties(player_id, properties) {
             return None;
         }
@@ -34951,7 +34941,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         experience: u32,
-        context: &mut Context,
+        _context: &mut Context,
     ) -> bool {
         let Some((goods_id, source)) = self.players.get(&player_id).and_then(|player| {
             let goods_id = player.enhancement_selected_goods_id()?;
@@ -35088,8 +35078,7 @@ impl CGame {
                     self.globe_setup.pack_add_enabled(),
                 )
             };
-            let mut recompute =
-                |player: &CPlayer| context.recompute_enhancement_player_properties(player);
+            let mut recompute = player_property_recompute!(self);
             let mut report = player.remove_equipment_goods(
                 goods_id,
                 &self.goods_factory,
@@ -36589,7 +36578,7 @@ impl CGame {
         &mut self,
         player_id: i32,
         position: u32,
-        runtime: &mut Runtime,
+        _runtime: &mut Runtime,
     ) {
         let fray = self.globe_setup.goods_durability_fray();
         let (old, current, identity, payload) = {
@@ -36640,7 +36629,7 @@ impl CGame {
             let _ = update.send_to_player(self.net_server(), player_id);
             if let Some(properties) = self
                 .find_player(player_id)
-                .map(|player| runtime.recompute_enhancement_player_properties(player))
+                .map(|player| self.recompute_player_properties(player))
             {
                 let _ = self.apply_recomputed_player_properties(player_id, properties);
                 if let Some(player) = self.find_player(player_id) {
@@ -36822,7 +36811,7 @@ impl CGame {
             previous_vigour,
             current_vigour: player.vigour(),
         };
-        let _ = self.finish_player_auto_progress(mutation, runtime);
+        let _ = self.finish_player_auto_progress(mutation);
         true
     }
 
@@ -42301,7 +42290,7 @@ impl CGame {
     fn run_player_goods_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
-        runtime: &mut Runtime,
+        _runtime: &mut Runtime,
     ) -> Option<()> {
         let player = self.players.get_mut(&player_id)?;
         let moved_to_delete_queue = player.done_goods_ai_tree();
@@ -42324,8 +42313,7 @@ impl CGame {
                     &goods,
                     self.globe_setup.pack_add_enabled(),
                 );
-                let mut recompute =
-                    |player: &CPlayer| runtime.recompute_enhancement_player_properties(player);
+                let mut recompute = player_property_recompute!(self);
                 let mut report = player.remove_equipment_goods(
                     *goods_id,
                     &self.goods_factory,
@@ -42417,15 +42405,14 @@ impl CGame {
         Some(())
     }
 
-    fn recompute_player_level_properties<Runtime: PlayerPropertyContext>(
+    fn recompute_player_level_properties(
         &mut self,
         player_id: i32,
         refill_mana: bool,
-        runtime: &mut Runtime,
     ) -> bool {
         let Some(properties) = self
             .find_player(player_id)
-            .map(|player| runtime.recompute_enhancement_player_properties(player))
+            .map(|player| self.recompute_player_properties(player))
         else {
             return false;
         };
@@ -42445,10 +42432,9 @@ impl CGame {
     /// опыта. Разность опыта намеренно остаётся переполняющимся `DWORD` со
     /// знаковой проверкой; донор Linux менял её на `i64`, но целевой EXE этого
     /// исправления не содержит.
-    fn finish_player_auto_progress<Runtime: PlayerPropertyContext>(
+    fn finish_player_auto_progress(
         &mut self,
         mutation: PlayerAutoProgress,
-        runtime: &mut Runtime,
     ) -> Option<()> {
         let player_id = mutation.player_id;
         let original_level = self.find_player(player_id)?.level();
@@ -42523,7 +42509,7 @@ impl CGame {
             let base_maximum_rp = self.globe_setup.base_max_rp(occupation, level);
             self.find_player_mut(player_id)?
                 .set_base_maximum_rp(base_maximum_rp);
-            let property_applied = self.recompute_player_level_properties(player_id, true, runtime);
+            let property_applied = self.recompute_player_level_properties(player_id, true);
             steps = steps.wrapping_add(1);
             tracing::trace!(
                 player_id,
@@ -42544,8 +42530,7 @@ impl CGame {
                 as i32;
         }
 
-        let final_property_applied =
-            self.recompute_player_level_properties(player_id, false, runtime);
+        let final_property_applied = self.recompute_player_level_properties(player_id, false);
         let player = self.find_player(player_id)?;
         let current_level = player.level();
         let level_delta = current_level.wrapping_sub(original_level);
@@ -42632,11 +42617,8 @@ impl CGame {
     pub(crate) fn check_script_player_level<Runtime>(
         &mut self,
         player_id: i32,
-        runtime: &mut Runtime,
-    ) -> i32
-    where
-        Runtime: PlayerPropertyContext,
-    {
+        _runtime: &mut Runtime,
+    ) -> i32 {
         let Some(player) = self.find_player(player_id) else {
             return 0;
         };
@@ -42650,10 +42632,7 @@ impl CGame {
             previous_vigour: player.vigour(),
             current_vigour: player.vigour(),
         };
-        i32::from(
-            self.finish_player_auto_progress(mutation, runtime)
-                .is_some(),
-        )
+        i32::from(self.finish_player_auto_progress(mutation).is_some())
     }
 
     /// Полный `CPlayer::DoneTaoZhuang`: live equipment/CiQing state идёт через
@@ -44960,7 +44939,7 @@ impl CGame {
                             });
                             if progress
                                 .and_then(|mutation| {
-                                    self.finish_player_auto_progress(mutation, runtime)
+                                    self.finish_player_auto_progress(mutation)
                                 })
                                 .is_some()
                             {
@@ -45821,8 +45800,7 @@ impl CGame {
     ) where
         Runtime: CountryRegionRuntimeContext
             + RegionRandomContext
-            + ScriptRegionChangeContext
-            + RealmAppellationScriptContext,
+            + ScriptRegionChangeContext,
     {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
@@ -45987,8 +45965,7 @@ impl CGame {
     ) where
         Runtime: CityRegionContext
             + RegionRandomContext
-            + ScriptRegionChangeContext
-            + RealmAppellationScriptContext,
+            + ScriptRegionChangeContext,
     {
         let Some(owner) = self.take_region_owner(region_id) else {
             return;
@@ -46113,7 +46090,7 @@ impl CGame {
         player_id: i32,
         runtime: &mut Runtime,
     ) where
-        Runtime: RegionRandomContext + ScriptRegionChangeContext + RealmAppellationScriptContext,
+        Runtime: RegionRandomContext + ScriptRegionChangeContext,
     {
         let Some(player) = self.find_player(player_id) else {
             warn!(target: "miracle_server::gameserver::ai", source_region_id, player_id, "невозможно вернуть отсутствующего игрока из региона");
