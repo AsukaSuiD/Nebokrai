@@ -5,8 +5,10 @@
 //! время восстановления, расстояние, направление, задержку и точный пакет
 //! запуска с длительностью полёта. После применения создаётся принадлежащий
 //! региону `CFireBoltPhalanx`; урон выполняется только его ИИ после строгой
-//! временной границы. Не достигнутый `CSoulCollectState` не подменяется
-//! параллельным состоянием. Обычное, отказное и клиентское завершение после
+//! временной границы. При создании допустимого снаряда канонический
+//! `CSoulCollectState` целиком потребляется, его visual завершается, а оба
+//! множителя передаются phalanx-owner-у. Обычное, отказное и клиентское
+//! завершение после
 //! `Begin` используют подтверждённый хвост `End(1)`: возврат движения,
 //! `AfterUseSkill`, очистку текущего навыка и фиксацию времени восстановления.
 //! Координатная перегрузка `Begin` остаётся ниже.
@@ -20,6 +22,7 @@ use super::basemagic::{
 };
 use super::fireboltphalanx::CFireBoltPhalanx;
 use super::kernel::{SkillStage, SkillTermination};
+use super::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -298,6 +301,25 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
             permitted_to_kill_guild_member: i32::from(permissions.guild_member),
             permitted_to_kill_criminal: i32::from(permissions.criminal),
         }).unwrap_or_default();
+        let soul = game
+            .find_player_mut(player_id)
+            .and_then(CPlayer::take_soul_collect_state);
+        let (soul_count, soul_variable) = soul.map_or((0, 0), |state| {
+            send_soul_collect_state_visual(
+                game,
+                region_id,
+                ShapeIdentity {
+                    object_type: PLAYER_TYPE,
+                    id: player_id,
+                    ex_id: Default::default(),
+                },
+                source_x,
+                source_y,
+                state,
+                false,
+            );
+            (state.souls(), state.variable_percent() as i32)
+        });
         let summon_id = game.allocate_summon_shape_id();
         let summon_started_at_ms = runtime.now_milliseconds();
         let mut phalanx = CFireBoltPhalanx::new(
@@ -311,8 +333,8 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
             element_modifier,
             target,
             attack_time_ms as u32,
-            0,
-            0,
+            soul_count,
+            soul_variable,
         );
         phalanx.shape_mut().set_region_id(region_id);
         let (tile_x, tile_y, _) = path[0];
