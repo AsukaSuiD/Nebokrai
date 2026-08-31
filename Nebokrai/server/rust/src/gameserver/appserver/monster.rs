@@ -2404,7 +2404,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::AddToByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:151
@@ -2412,6 +2412,9 @@ impl CMonster {
 // ADDRESS: 004e8400
 // PROTOTYPE: bool __thiscall AddToByteArray(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
 //
+// Реализовано выше: CMoveShape client snapshot, maxHP/HP, kind/figure,
+// sound/colors и exact ordinary/pet/carriage master tail. Property и имя
+// master-а разрешает канонический владелец CGame.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //

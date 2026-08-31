@@ -4607,7 +4607,7 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 
 // ============================================================================
 // FUNCTION: CMoveShape::AddToByteArray_ForClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:1779
@@ -4615,6 +4615,9 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 // ADDRESS: 004cdd30
 // PROTOTYPE: bool __thiscall AddToByteArray_ForClient(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1, bool param_2)
 //
+// Реализовано выше: CShape prefix, died-byte, ordered state triples и special
+// CTeamState name-tail. Неизвестный legacy record безопасно блокирует snapshot,
+// потому что его недоказанный размер не позволяет вычислить следующий offset.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
