@@ -5489,6 +5489,13 @@ impl CPlayer {
         self.move_shape.replace_rush_state(state)
     }
 
+    pub(crate) fn activate_loaded_rush_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::rushstate::RushState> {
+        self.move_shape.activate_loaded_rush_state(now_ms)
+    }
+
     pub(crate) fn take_expired_rush_state(
         &mut self,
         now_ms: u32,

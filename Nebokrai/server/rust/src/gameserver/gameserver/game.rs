@@ -984,7 +984,7 @@ use crate::gameserver::appserver::skills::rush::{
     cancel_player_rush, execute_player_rush, is_rush_dispatch, RUSH_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::rushstate::{
-    expire_monster_rush_state, expire_player_rush_state,
+    expire_monster_rush_state, expire_player_rush_state, send_rush_state_visual,
 };
 use crate::gameserver::appserver::skills::rush2::{
     cancel_player_rush_2, execute_player_rush_2, is_rush_2_dispatch, RUSH_2_SKILL_ID,
@@ -30154,6 +30154,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_boa_lock_state(login_tick_ms);
+        let loaded_rush_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_rush_state(login_tick_ms);
         let loaded_knock_out_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30312,6 +30317,21 @@ impl CGame {
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
         {
             send_boa_lock_state_visual(
+                self,
+                region_id,
+                player.shape().identity(),
+                x,
+                y,
+                state,
+                true,
+                || login_tick_ms,
+            );
+        }
+        if let Some(state) = loaded_rush_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_rush_state_visual(
                 self,
                 region_id,
                 player.shape().identity(),

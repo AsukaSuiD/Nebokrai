@@ -6,8 +6,11 @@
 //! `0xBFE03/0xBFE04`. Игрок и монстр хранят один типизированный экземпляр в
 //! `CanonicalStateStorage`; пространственный владелец остаётся у `CGame` и
 //! `CServerRegion`. Vtable exact EXE подтверждает общий с `CBlindState`
-//! клиентский срок по `0x005F2CD0`.
+//! клиентский срок по `0x005F2CD0` и serializer-пару
+//! `0x005F51E0/0x005EAAC0`: persisted-запись `ID + remaining time` занимает
+//! 8 байт. Spatial login восстанавливает оба вложенных запрета.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
@@ -15,6 +18,7 @@ use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const RUSH_STATE_ID: u32 = 0x73;
+pub(crate) const RUSH_STATE_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RushState {
@@ -25,6 +29,41 @@ pub(crate) struct RushState {
 impl RushState {
     pub(crate) const fn new(started_at_ms: u32, keep_time_ms: u32) -> Self {
         Self { started_at_ms, keep_time_ms }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != RUSH_STATE_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        Ok(Self::new(0, reader.read_u32()?))
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
+        self.started_at_ms = now_ms;
+        self
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; RUSH_STATE_BYTES] {
+        self.encoded_with_remaining(self.keep_time_ms)
+    }
+
+    pub(crate) fn encoded(
+        self,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> [u8; RUSH_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_time(now_milliseconds) as u32)
+    }
+
+    fn encoded_with_remaining(self, remaining: u32) -> [u8; RUSH_STATE_BYTES] {
+        let mut bytes = [0; RUSH_STATE_BYTES];
+        bytes[..4].copy_from_slice(&RUSH_STATE_ID.to_le_bytes());
+        bytes[4..].copy_from_slice(&remaining.to_le_bytes());
+        bytes
     }
 
     pub(crate) const fn skill_id(self) -> u32 { RUSH_STATE_ID }
@@ -53,6 +92,21 @@ fn state_message(
         message.add_long(0);
     }
     message
+}
+
+#[allow(clippy::too_many_arguments, reason = "поля задают точную точку круговой доставки состояния")]
+pub(crate) fn send_rush_state_visual(
+    game: &mut CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+    tile_x: i32,
+    tile_y: i32,
+    state: RushState,
+    begin: bool,
+    now_milliseconds: impl FnMut() -> u32,
+) {
+    let message = state_message(identity, state, begin, now_milliseconds);
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
 pub(crate) fn replace_player_rush_state(

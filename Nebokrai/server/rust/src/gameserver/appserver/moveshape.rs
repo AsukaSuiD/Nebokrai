@@ -91,7 +91,9 @@ use crate::gameserver::appserver::skills::healstate::{
 };
 use crate::gameserver::appserver::skills::furystate::FuryState;
 use crate::gameserver::appserver::skills::ragebreakstate::RageBreakState;
-use crate::gameserver::appserver::skills::rushstate::RushState;
+use crate::gameserver::appserver::skills::rushstate::{
+    RUSH_STATE_BYTES, RUSH_STATE_ID, RushState,
+};
 use crate::gameserver::appserver::skills::rushstate2::Rush2State;
 use crate::gameserver::appserver::skills::roarstate::RoarState;
 use crate::gameserver::appserver::skills::energyholdingstate::{
@@ -948,6 +950,13 @@ impl CMoveShape {
                 &state.encoded(&mut timed_state_now_milliseconds),
             );
         }
+        if let Some(state) = self.rush_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &state.encoded(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -1155,6 +1164,11 @@ impl CMoveShape {
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(BOA_LOCK_STATE_ID))
             .and_then(|offset| BoaLockState::decode(&states, offset).ok());
+        self.rush_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(RUSH_STATE_ID))
+            .and_then(|offset| RushState::decode(&states, offset).ok());
         self.strike_states = known_offsets
             .iter()
             .copied()
@@ -2989,12 +3003,24 @@ impl CMoveShape {
     pub(crate) fn pillar_state(&self) -> Option<PillarState> { self.pillar_state }
 
     pub(crate) fn replace_rush_state(&mut self, state: RushState) -> Option<RushState> {
+        self.remove_serialized_state_record(state.skill_id(), RUSH_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.rush_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_rush_state(&mut self, now_ms: u32) -> Option<RushState> {
+        let state = self.rush_state?.activate_loaded(now_ms);
+        self.rush_state = Some(state);
+        self.set_moveable(false);
+        self.set_fightable(false);
+        Some(state)
     }
 
     pub(crate) fn take_expired_rush_state(&mut self, now_ms: u32) -> Option<RushState> {
         self.rush_state.filter(|state| state.expired(now_ms))?;
-        self.rush_state.take()
+        let state = self.rush_state.take()?;
+        self.remove_serialized_state_record(state.skill_id(), RUSH_STATE_BYTES);
+        Some(state)
     }
 
     pub(crate) fn replace_rush_2_state(&mut self, state: Rush2State) -> Option<Rush2State> {
@@ -4521,6 +4547,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             BOSS_BLUE_QUAKE_STATE_ID => BOSS_BLUE_QUAKE_STATE_BYTES,
             KNIGHT_CUT_STATE_ID => KNIGHT_CUT_STATE_BYTES,
             BOA_LOCK_STATE_ID => BOA_LOCK_STATE_BYTES,
+            RUSH_STATE_ID => RUSH_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID
