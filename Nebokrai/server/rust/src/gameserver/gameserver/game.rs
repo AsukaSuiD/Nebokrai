@@ -40172,7 +40172,8 @@ impl CGame {
                     delivery,
                     "очередь навыка игрока отклонена общим владельцем расписания"
                 );
-                return (1, 1);
+                execution_count = execution_count.wrapping_add(1);
+                player_execution_count = 1;
             }
         }
         if execute_player_skill
