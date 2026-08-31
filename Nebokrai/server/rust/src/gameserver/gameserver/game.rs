@@ -699,8 +699,8 @@ use crate::gameserver::appserver::message::skillmessage::{
 use crate::gameserver::appserver::message::teammessage::dispatch_game_team_message;
 use crate::gameserver::appserver::message::unibillmessage::dispatch_increment_shop_billing_message;
 use crate::gameserver::appserver::ai::carriage::{
-    CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts, CarriageMovementPlan,
-    plan_carriage_movement,
+    CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts, CarriageMasterRef,
+    CarriageMovementPlan, carriage_master_ref, plan_carriage_movement,
 };
 use crate::gameserver::appserver::ai::pet::{
     PetLifecycleFacts, PetLifecycleNotice, execute_owned_pet_active_search,
@@ -38164,18 +38164,37 @@ impl CGame {
             return false;
         };
         let now_ms = runtime.now_milliseconds();
-        let master_snapshot = (master.master_type == PLAYER_TYPE && master.master_id != 0)
-            .then(|| self.find_player(master.master_id))
-            .flatten()
-            .filter(|player| player.server_region_id() == Some(region_id))
-            .map(|player| (player.shape().clone(), player.active_carriage_id()));
+        let master_ref = carriage_master_ref(master);
+        let master_snapshot = match master_ref {
+            Some(CarriageMasterRef::Player(player_id)) => self
+                .find_player(player_id)
+                .filter(|player| player.server_region_id() == Some(region_id))
+                .map(|player| (player.shape().clone(), Some(player.active_carriage_id()))),
+            Some(CarriageMasterRef::Region(identity)) => {
+                let shape = match identity.object_type {
+                    MONSTER_TYPE => owner
+                        .base()
+                        .find_monster_by_id(identity.id)
+                        .map(|monster| monster.move_shape().shape().clone()),
+                    NPC_TYPE => owner
+                        .base()
+                        .find_npc_by_id(identity.id)
+                        .map(|npc| npc.move_shape().shape().clone()),
+                    _ => None,
+                };
+                shape.map(|shape| (shape, None))
+            }
+            None => None,
+        };
         let master_present = master_snapshot.is_some();
         let mut master_owns = master_snapshot
             .as_ref()
-            .is_some_and(|(_, carriage_id)| *carriage_id == monster_id);
+            .is_some_and(|(_, carriage_id)| *carriage_id == Some(monster_id));
         let master_owns_other = master_snapshot
             .as_ref()
-            .is_some_and(|(_, carriage_id)| *carriage_id != 0 && *carriage_id != monster_id);
+            .is_some_and(|(_, carriage_id)| {
+                carriage_id.is_some_and(|carriage_id| carriage_id != 0 && carriage_id != monster_id)
+            });
 
         let mut vanish_reason = CMoveShape::is_died(health).then_some(3);
         let mut vanish = vanish_reason.is_some();
@@ -38270,6 +38289,7 @@ impl CGame {
         };
         if !vanish && master_outcome.checked {
             if master_outcome.rebound
+                && matches!(master_ref, Some(CarriageMasterRef::Player(_)))
                 && let Some(player) = self.find_player_mut(master.master_id)
             {
                 player.bind_active_carriage(monster_id);
