@@ -27,7 +27,8 @@ use crate::gameserver::gameserver::game::{
 use crate::nets::netserver::message::CMessage;
 
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 100;
+// Target identity совпадает с canonical monster type region registry.
+const MONSTER_TYPE: i32 = 600;
 
 fn add_legacy_c_string(
     message: &mut crate::nets::basemessage::CBaseMessage,

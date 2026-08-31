@@ -29,7 +29,8 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 100;
+// `PlayerSkillDispatch` несёт canonical `CShape::GetType`, как и region map.
+const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const ARCHERY_SKILL_ID: u32 = 2;
 

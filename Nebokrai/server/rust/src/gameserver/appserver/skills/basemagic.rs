@@ -13,7 +13,9 @@
 //! восстановления. Все
 //! достигнутые перегрузки, проверки и визуальные пакеты реализованы этим
 //! владельцем; `CGame` оставляет только доступ к региону, владельцам целей и
-//! фактическую доставку.
+//! фактическую доставку. Target identity использует canonical region type
+//! монстра `600`; значение `100` относится к другой legacy enum и не является
+//! `CShape::GetType`.
 
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagicphalanx::CBaseMagicPhalanx;
@@ -29,7 +31,7 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 100;
+const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const BASE_MAGIC_SKILL_ID: u32 = 3;
 pub(crate) const BASE_MAGIC_EFFECT_MESSAGE: i32 = 0x000b_fe01;
