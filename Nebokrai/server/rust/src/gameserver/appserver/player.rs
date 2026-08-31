@@ -5416,6 +5416,13 @@ impl CPlayer {
         self.move_shape.activate_loaded_blind_state(now_ms)
     }
 
+    pub(crate) fn activate_loaded_knock_out_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::knockoutstate::KnockOutState> {
+        self.move_shape.activate_loaded_knock_out_state(now_ms)
+    }
+
     pub(crate) fn activate_loaded_hearten_state(&mut self, now_ms: u32) {
         self.move_shape.activate_loaded_hearten_state(now_ms);
     }

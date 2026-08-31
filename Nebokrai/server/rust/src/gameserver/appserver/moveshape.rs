@@ -109,7 +109,9 @@ use crate::gameserver::appserver::skills::manashieldstate::{
 use crate::gameserver::appserver::skills::promotionstate::{
     PromotionState, PROMOTION_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::knockoutstate::KnockOutState;
+use crate::gameserver::appserver::skills::knockoutstate::{
+    KNOCK_OUT_STATE_BYTES, KNOCK_OUT_STATE_ID, KnockOutState,
+};
 use crate::gameserver::appserver::skills::boalockstate::BoaLockState;
 use crate::gameserver::appserver::skills::blindstate::{
     BLIND_STATE_BYTES, BLIND_STATE_ID, BlindState,
@@ -867,6 +869,18 @@ impl CMoveShape {
                 );
             }
         }
+        if let Some(state) = self.knock_out_state {
+            if let Some(offset) = known_state_record_offsets(&payload)
+                .into_iter()
+                .find(|offset| read_u32(&payload, *offset) == Some(KNOCK_OUT_STATE_ID))
+            {
+                write_u32(
+                    &mut payload,
+                    offset + 4,
+                    state.client_time(&mut timed_state_now_milliseconds) as u32,
+                );
+            }
+        }
         if let Some(state) = self.hearten_state {
             update_known_state_record(
                 &mut payload,
@@ -993,6 +1007,17 @@ impl CMoveShape {
             .and_then(|offset| BlindState::decode(&states, offset).ok());
         if let Some(state) = self.blind_state {
             self.blind_state_order.insert(state.skill_id());
+        }
+        self.blind_state_order.shift_remove(&KNOCK_OUT_STATE_ID);
+        self.curable_state_order.shift_remove(&KNOCK_OUT_STATE_ID);
+        self.knock_out_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(KNOCK_OUT_STATE_ID))
+            .and_then(|offset| KnockOutState::decode(&states, offset).ok());
+        if let Some(state) = self.knock_out_state {
+            self.blind_state_order.insert(state.skill_id());
+            self.curable_state_order.insert(state.skill_id());
         }
         self.strike_states = known_offsets
             .iter()
@@ -2648,9 +2673,19 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_knock_out_state(&mut self, state: KnockOutState) -> Option<KnockOutState> {
+        self.remove_serialized_state_record(state.skill_id(), KNOCK_OUT_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.blind_state_order.insert(state.skill_id());
         self.curable_state_order.insert(state.skill_id());
         self.knock_out_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_knock_out_state(&mut self, now_ms: u32) -> Option<KnockOutState> {
+        let state = self.knock_out_state?.activate_loaded(now_ms);
+        self.knock_out_state = Some(state);
+        self.set_moveable(false);
+        self.set_fightable(false);
+        Some(state)
     }
 
     pub(crate) fn activate_loaded_blind_state(&mut self, now_ms: u32) -> Option<BlindState> {
@@ -2755,6 +2790,7 @@ impl CMoveShape {
         self.knock_out_state = None;
         self.blind_state_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), KNOCK_OUT_STATE_BYTES);
         Some(state)
     }
 
@@ -2762,6 +2798,7 @@ impl CMoveShape {
         let state = self.knock_out_state.take()?;
         self.blind_state_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), KNOCK_OUT_STATE_BYTES);
         Some(state)
     }
 
@@ -4230,6 +4267,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
             METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
             BLIND_STATE_ID => BLIND_STATE_BYTES,
+            KNOCK_OUT_STATE_ID => KNOCK_OUT_STATE_BYTES,
             HEAL_SKILL_ID
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID
