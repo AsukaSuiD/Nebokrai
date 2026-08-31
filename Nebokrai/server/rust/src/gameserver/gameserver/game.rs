@@ -13087,6 +13087,42 @@ impl CGame {
         region: &CServerRegion,
         monster: &CMonster,
     ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let (property, master_name) = self.monster_client_snapshot_context(monster)?;
+        let message = monster.build_fresh_enter_message(property, master_name)?;
+        Some(self.send_game_shape_around(
+            region,
+            monster.move_shape().shape(),
+            None,
+            &message,
+        ))
+    }
+
+    pub(crate) fn send_monster_entered_around(
+        &self,
+        region: &CServerRegion,
+        monster: &CMonster,
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Result<i32, ShapeCoordinateBlock>> {
+        let (property, master_name) = self.monster_client_snapshot_context(monster)?;
+        let message = monster.build_enter_message(
+            property,
+            master_name,
+            now_ms,
+            timed_state_now_milliseconds,
+        )?;
+        Some(self.send_game_shape_around(
+            region,
+            monster.move_shape().shape(),
+            None,
+            &message,
+        ))
+    }
+
+    fn monster_client_snapshot_context<'a>(
+        &'a self,
+        monster: &CMonster,
+    ) -> Option<(&'a MonsterProperties, &'a [u8])> {
         let property = self
             .find_monster_property_by_origin_name(monster.base_property_key()?)?;
         let master = monster.master_info();
@@ -13097,13 +13133,7 @@ impl CGame {
         } else {
             self.get_string_by_id(b"GS0119")
         };
-        let message = monster.build_fresh_enter_message(property, master_name)?;
-        Some(self.send_game_shape_around(
-            region,
-            monster.move_shape().shape(),
-            None,
-            &message,
-        ))
+        Some((property, master_name))
     }
 
     pub(crate) fn send_game_position_around(
