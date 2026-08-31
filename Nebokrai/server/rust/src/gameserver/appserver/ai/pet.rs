@@ -13,7 +13,9 @@
 //!
 //! Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально
 //! Декомпилятор: Ghidra 12.1.2
-//! Сохранены ещё не сопоставленные боевые и событийные ветви `CPet`.
+//! Встречный сброс цели при отказе от атаки сопоставлен с `GetAI` цели и
+//! виртуальным `OnLoseTarget`; сохранены остальные ещё не сопоставленные
+//! боевые и событийные ветви `CPet`.
 
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
@@ -532,10 +534,10 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 
 // ============================================================================
 // FUNCTION: CPet::OnStayingSchedule
-// STATUS: PARTIALLY_IMPLEMENTED
+// STATUS: IMPLEMENTED
 // IMPLEMENTED: target-loss, выбор навыка, точный диапазон без движения,
-// `Begin` и FIFO `ATTACK/SEARCH_ENEMY` проходят через monsterbaseattack.
-// UNKNOWN: особая ветвь goods/team target-а до общего target-loss.
+// `Begin`, FIFO `ATTACK/SEARCH_ENEMY` и встречный `GetAI → OnLoseTarget`
+// проходят через monsterbaseattack.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:399
@@ -549,11 +551,11 @@ pub(crate) fn execute_owned_pet_follow<Runtime: GameMainLoopRuntime>(
 
 // ============================================================================
 // FUNCTION: CPet::OnAttackingSchedule
-// STATUS: PARTIALLY_IMPLEMENTED
+// STATUS: IMPLEMENTED
 // IMPLEMENTED: master-centered tracing limit, target-loss, attackability,
 // выбор навыка, `Begin` и FIFO `ATTACK/SEARCH_ENEMY` проходят через
-// monsterbaseattack.
-// UNKNOWN: особая ветвь goods/team target-а до общего target-loss.
+// monsterbaseattack; встречный `GetAI → OnLoseTarget` сохраняет derived
+// переход цели.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\pet.cpp:235

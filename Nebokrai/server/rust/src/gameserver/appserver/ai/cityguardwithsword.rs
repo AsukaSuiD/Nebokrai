@@ -209,11 +209,11 @@ pub(crate) enum CitySwordTraceOutcome {
     Handled,
 }
 
-/// Выполняет унаследованный `OnLoseTarget` AI10/AI15/AI19 перед тем, как
-/// окружающий `OnSchedule` поставит `SearchEnemy`: цель очищается, владелец
-/// возвращается к сохранённому посту, а заблокированная клетка заменяется одним
-/// `GetRandomPosInRange` на квадрате 3×3.
-pub(crate) fn lose_guard_sword_target<Runtime: GameMainLoopRuntime>(
+/// Выполняет виртуальный `OnLoseTarget` AI10/AI15/AI19: цель очищается,
+/// владелец возвращается к сохранённому посту, а заблокированная клетка
+/// заменяется одним `GetRandomPosInRange` на квадрате 3×3. Следующее событие
+/// расписания намеренно остаётся вызывающей стороне.
+pub(crate) fn release_guard_sword_target<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
@@ -256,6 +256,17 @@ pub(crate) fn lose_guard_sword_target<Runtime: GameMainLoopRuntime>(
             0,
         );
     }
+}
+
+/// Выполняет `OnLoseTarget` мечевого охранника перед внешним
+/// `ASA_SEARCH_ENEMY` из его schedule-owner-а.
+pub(crate) fn lose_guard_sword_target<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    runtime: &mut Runtime,
+) {
+    release_guard_sword_target(game, region, monster_id, runtime);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
     }

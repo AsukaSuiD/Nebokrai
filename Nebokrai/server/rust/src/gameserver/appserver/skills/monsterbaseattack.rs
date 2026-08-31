@@ -116,8 +116,8 @@ use crate::gameserver::appserver::ai::bossfiend::{
 };
 use crate::gameserver::appserver::ai::bossidle::queue_boss_idle;
 use crate::gameserver::appserver::ai::cityguardwithsword::{
-    CitySwordTraceOutcome, lose_guard_sword_target, select_city_guard_enemy,
-    trace_city_sword_target,
+    CitySwordTraceOutcome, lose_guard_sword_target, release_guard_sword_target,
+    select_city_guard_enemy, trace_city_sword_target,
 };
 use crate::gameserver::appserver::ai::cityguardwithbow::city_bow_target_ready;
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
@@ -139,7 +139,9 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::ai::puninesscreature::search_puniness_enemy;
-use crate::gameserver::appserver::ai::pet::lose_pet_target_and_search;
+use crate::gameserver::appserver::ai::pet::{
+    lose_pet_target_and_search, queue_pet_idle,
+};
 use crate::gameserver::appserver::ai::nationgladiator::select_nation_gladiator_enemy;
 use crate::gameserver::appserver::ai::nationcouguardwithsword::select_nation_country_guard_enemy;
 use crate::gameserver::appserver::ai::smartgladiator::select_smart_gladiator_enemy;
@@ -245,6 +247,51 @@ fn installed_monster_skill(skills: &[MonsterSkill], skill_id: u16) -> Option<Mon
         .copied()
         .filter(|skill| skill.id == skill_id)
         .max_by_key(|skill| skill.level)
+}
+
+/// Точная встречная ветвь `CPet::OnStayingSchedule` и
+/// `CPet::OnAttackingSchedule`. `GetAI` цели возвращает AI-owner, чьи поля
+/// target type/id сравниваются с самим питомцем; только совпавший AI получает
+/// виртуальный `OnLoseTarget`. Derived-переходы питомца и мечевого охранника
+/// сохраняются, но внешний `SearchEnemy` текущего питомца сюда не переносится.
+fn release_reciprocal_monster_target<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    target_id: i32,
+    pet_identity: ShapeIdentity,
+    runtime: &mut Runtime,
+) {
+    let Some((reciprocal, tamed, pet_action, stop_frame, ai_type)) = region
+        .find_monster_by_id(target_id)
+        .and_then(|target| {
+            let property = game
+                .find_monster_property_by_origin_name(target.base_property_key()?)?;
+            Some((
+                target.ai_target() == Some(pet_identity),
+                target.is_tamed(),
+                target.pet_action(),
+                property.stop_frame,
+                property.ai,
+            ))
+        })
+    else {
+        return;
+    };
+    if !reciprocal {
+        return;
+    }
+    if tamed {
+        if let Some(target) = region.find_monster_by_id_mut(target_id) {
+            target.clear_ai_target();
+        }
+        if pet_action == 0 {
+            let _ = queue_pet_idle(region, target_id, stop_frame, runtime);
+        }
+    } else if matches!(ai_type, 10 | 15 | 19) {
+        release_guard_sword_target(game, region, target_id, runtime);
+    } else if let Some(target) = region.find_monster_by_id_mut(target_id) {
+        target.clear_ai_target();
+    }
 }
 
 fn default_monster_attack_skill_id(game: &CGame, skills: &[MonsterSkill]) -> u16 {
@@ -914,16 +961,23 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             || schedule_target.city_dead
             || !attackable
         {
-            if !attackable && tamed && target.object_type == PLAYER_TYPE {
-                game.release_reciprocal_player_target(
-                    target.id,
-                    ShapeIdentity {
-                        object_type: MONSTER_TYPE,
-                        id: monster_id,
-                        ex_id: CGuid::GUID_INVALID,
-                    },
-                    runtime,
-                );
+            if !attackable && tamed {
+                let pet_identity = ShapeIdentity {
+                    object_type: MONSTER_TYPE,
+                    id: monster_id,
+                    ex_id: CGuid::GUID_INVALID,
+                };
+                if target.object_type == PLAYER_TYPE {
+                    game.release_reciprocal_player_target(target.id, pet_identity, runtime);
+                } else if target.object_type == MONSTER_TYPE {
+                    release_reciprocal_monster_target(
+                        game,
+                        region,
+                        target.id,
+                        pet_identity,
+                        runtime,
+                    );
+                }
             }
             if tamed {
                 lose_pet_target_and_search(
