@@ -18,6 +18,10 @@ name = "billingserver"
 path = "src/bin/billingserver.rs"
 
 [[bin]]
+name = "gameserver"
+path = "src/bin/gameserver.rs"
+
+[[bin]]
 name = "loginserver"
 path = "src/bin/loginserver.rs"
 

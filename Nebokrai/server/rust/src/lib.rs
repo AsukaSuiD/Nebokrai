@@ -9,7 +9,7 @@ mod authserver;
 mod billingserver;
 #[allow(dead_code, reason = "каждый процесс использует только свои DB-owner-ы")]
 mod dbaccess;
-#[allow(dead_code, reason = "GameServer не получает process entrypoint в этом проходе")]
+#[allow(dead_code, reason = "GameServer использует только достигнутые owner-ы своего процесса")]
 mod gameserver;
 #[allow(dead_code, reason = "LoginServer подключается отдельным process owner-ом")]
 mod loginserver;
@@ -27,6 +27,6 @@ mod worldserver;
 mod process;
 
 pub use process::{
-    run_authserver_process, run_billingserver_process, run_loginserver_process,
-    run_miscserver_process, run_worldserver_process,
+    run_authserver_process, run_billingserver_process, run_gameserver_process,
+    run_loginserver_process, run_miscserver_process, run_worldserver_process,
 };

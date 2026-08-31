@@ -9,12 +9,14 @@ use tokio::signal::unix::{SignalKind, signal};
 
 mod authserver;
 mod billingserver;
+mod gameserver;
 mod loginserver;
 mod miscserver;
 mod worldserver;
 
 pub use authserver::run_authserver_process;
 pub use billingserver::run_billingserver_process;
+pub use gameserver::run_gameserver_process;
 pub use loginserver::run_loginserver_process;
 pub use miscserver::run_miscserver_process;
 pub use worldserver::run_worldserver_process;
