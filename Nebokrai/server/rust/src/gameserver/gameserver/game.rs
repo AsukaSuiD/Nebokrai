@@ -36819,7 +36819,7 @@ impl CGame {
         target: ShapeIdentity,
         runtime: &mut Runtime,
     ) {
-        let Some((current_skill_id, interrupted_delayed_skill)) = self
+        let Some((current_skill_id, interrupted_delayed_skill, default_attack_skill_id)) = self
             .find_player(player_id)
             .and_then(|player| {
                 let matches_target = matches!(
@@ -36882,7 +36882,11 @@ impl CGame {
                 || player.player_ai().rush().is_some()
                 || player.player_ai().rush_2().is_some()
                 || player.player_ai().knock_out().is_some();
-                    (player.current_skill_id(), interrupted_delayed_skill)
+                    (
+                        player.current_skill_id(),
+                        interrupted_delayed_skill,
+                        player.default_attack_skill_id(self.goods_factory()),
+                    )
                 })
             })
         else {
@@ -36910,6 +36914,9 @@ impl CGame {
         };
         if released {
             let _ = self.send_base_attack_failure(player_id, 2);
+            if let Some(player) = self.find_player_mut(player_id) {
+                player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
+            }
         }
     }
 
@@ -36922,9 +36929,16 @@ impl CGame {
         player_id: i32,
         runtime: &mut Runtime,
     ) -> bool {
-        let Some(current_skill_id) = self
+        let Some((current_skill_id, default_attack_skill_id)) = self
             .find_player(player_id)
-            .and_then(CPlayer::current_skill_id)
+            .and_then(|player| {
+                player.current_skill_id().map(|current_skill_id| {
+                    (
+                        current_skill_id,
+                        player.default_attack_skill_id(self.goods_factory()),
+                    )
+                })
+            })
         else {
             return false;
         };
@@ -36953,6 +36967,9 @@ impl CGame {
         };
         if interrupted {
             let _ = self.send_base_attack_failure(player_id, 2);
+        }
+        if let Some(player) = self.find_player_mut(player_id) {
+            player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
         }
         interrupted
     }

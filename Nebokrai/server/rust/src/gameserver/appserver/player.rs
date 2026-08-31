@@ -252,6 +252,8 @@
 //! virtual property owner остаётся injected callback-границей.
 //! Monster-death caller восстанавливает transient continuous-kill clock/count,
 //! persisted `wHitTopLog`, milestone EXP и exact `0xBF706/0xBF707` wire.
+//! Потеря цели возвращает ended-навык к exact occupation/equipment-dependent
+//! default `1/2/3`; active execution при этом остаётся отдельной AI-проекцией.
 //! GodsBattle player snapshot теперь также хранит persisted faction/SZL;
 //! faction membership появляется только в concrete region AddObject-tail и
 //! удаляется его RemoveObject/DelObj-tail, не при восстановлении snapshot-а.
@@ -329,7 +331,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
     GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
     GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION, GAP_WAKAN_CORRECTION,
-    GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
+    GAP_WEAPON_CATEGORY, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
 use super::legacycodec::{LegacyReader, LegacyWriter};
@@ -345,6 +347,9 @@ use super::serverregion::CServerRegion;
 use super::shape::{
     CShape, ShapeCoordinateBlock, ShapeDecodeError, ShapeFigure, ShapeIdentity, ShapeView,
 };
+use super::skills::archery::ARCHERY_SKILL_ID;
+use super::skills::baseattack::BASE_ATTACK_SKILL_ID;
+use super::skills::basemagic::BASE_MAGIC_SKILL_ID;
 use super::skills::skillfactory::{CSkillFactory, UNKNOWN_SKILL_ID};
 use super::states::automaticrestore::AutomaticRestoreMutation;
 use super::restorestate::ConsumableRestoreMutation;
@@ -1793,6 +1798,10 @@ pub(crate) enum PlayerTalkChannel {
 pub(crate) struct CPlayer {
     move_shape: CMoveShape,
     player_ai: CPlayerAI,
+    /// Завершённый default skill, на который native `SetCurrentSkill`
+    /// возвращает игрока после потери цели. Активное выполнение по-прежнему
+    /// хранится отдельно в `CMoveShape::current_skill_id` и concrete AI owner-е.
+    idle_attack_skill_id: u32,
     figure: ShapeFigure,
     faction_id: i32,
     faction_logo_id: i32,
@@ -2150,6 +2159,7 @@ impl CPlayer {
         let mut player = Self {
             move_shape,
             player_ai: CPlayerAI::default(),
+            idle_attack_skill_id: BASE_ATTACK_SKILL_ID,
             figure,
             faction_id: 0,
             faction_logo_id: 0,
@@ -10137,6 +10147,33 @@ impl CPlayer {
         self.move_shape.current_skill_id()
     }
 
+    /// Exact `CPlayer::GetDefaultAttackSkillID`: лучник использует базовую
+    /// стрельбу только с луком, арбалетом либо weapon-category `8`; маг всегда
+    /// возвращается к базовой магии, остальные варианты — к обычной атаке.
+    pub(crate) fn default_attack_skill_id(&self, factory: &CGoodsFactory) -> u32 {
+        match self.occupation() {
+            1 if self.equipment.get_goods(2).is_some_and(|weapon| {
+                matches!(
+                    weapon.addon_property_value(factory, GAP_WEAPON_CATEGORY, 1),
+                    3 | 4 | 8
+                )
+            }) => ARCHERY_SKILL_ID,
+            2 => BASE_MAGIC_SKILL_ID,
+            _ => BASE_ATTACK_SKILL_ID,
+        }
+    }
+
+    /// Native `OnLoseTarget` назначает завершённый default skill. Rust
+    /// хранит active concrete execution отдельно, поэтому его ended-состояние
+    /// выражается `None`, а выбранный default ID — отдельным idle-полем.
+    pub(crate) const fn restore_default_attack_skill_after_target_loss(
+        &mut self,
+        default_attack_skill_id: u32,
+    ) {
+        self.move_shape.set_current_skill_id(None);
+        self.idle_attack_skill_id = default_attack_skill_id;
+    }
+
     pub(crate) const fn war_soul_state(&self) -> u32 {
         self.war_soul_state
     }
@@ -14544,20 +14581,9 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 
 // MATERIALIZED: personal-shop flag storage lives above. Non-zero assignment is
 // reached only after CSessionFactory seller ownership validation in the message caller;
-// `(0, 0)` remains the unconditional terminal reset.
-// ============================================================================
-// FUNCTION: CPlayer::GetDefaultAttackSkillID
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:562
-// RVA: 0x0002AFD0
-// ADDRESS: 0042afd0
-// PROTOTYPE: tagSkillID __thiscall GetDefaultAttackSkillID(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// `(0, 0)` remains the unconditional terminal reset. Exact
+// `GetDefaultAttackSkillID` materialized by the player owner above and reached
+// from both reciprocal and death `OnLoseTarget` paths.
 
 // IMPLEMENTED: `CPlayer::OnDecreaseMurdererSign` входит в reached
 // `CGame::AI -> PeriodicalUpdate` pass через `decrease_murderer_sign`.
