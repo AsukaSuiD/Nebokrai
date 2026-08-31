@@ -1,6 +1,14 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Wire-граница сохранённого `CWangshengState` (`0x221`).
+//!
+//! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
+//! `appserver/skills/wangshengstate.cpp`. Vtable exact EXE подтверждает
+//! отдельные slots `Serialize`/`Unserialize`: запись состоит из трёх `DWORD`
+//! — ID, оставшегося времени и прибавки атаки — и занимает 12 байт. Пока
+//! доказанный размер подключён к общему codec; runtime самого навыка остаётся
+//! у `wangsheng.rs`, а неподтверждённый persisted lifecycle не изобретается.
+
+pub(crate) const WANGSHENG_STATE_ID: u32 = 0x221;
+pub(crate) const WANGSHENG_STATE_BYTES: usize = 12;
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
