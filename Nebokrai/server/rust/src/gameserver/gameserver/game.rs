@@ -18867,7 +18867,7 @@ impl CGame {
     /// Подтверждение клиента `8F801` завершает отложенную локальную смену в
     /// точном порядке `CServerRegion::OnMessage`: spatial add, `BF502/BF501`,
     /// погода, девять соседних area и лишь затем `CPlayer::OnEnterRegion`.
-    pub(crate) fn enter_changed_player_region<Context: PlayerRegionChangeContext>(
+    pub(crate) fn enter_changed_player_region<Context: GameClockContext>(
         &mut self,
         player_id: i32,
         region_id: i32,
@@ -18904,10 +18904,12 @@ impl CGame {
             .get_block(current.0, current.1)
             .unwrap_or_default()
             != 0
-            && let Ok(position) = owner
-                .base()
-                .region
-                .get_random_pos_in_range(current.0, current.1, 3, 3, context)
+            && let Ok(position) = self.with_legacy_random_stream(|_, random| {
+                owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(current.0, current.1, 3, 3, random)
+            })
         {
             player
                 .movement_shape_mut()
@@ -18933,19 +18935,24 @@ impl CGame {
             blocks_region_cell: !player.is_dead(),
             figure: player.figure(),
         };
-        let membership = owner.base_mut().add_object_with_area_entry(
-            player.move_shape_mut(),
-            facts,
-            self.globe_setup.area_width(),
-            self.globe_setup.area_height(),
-            context.now_milliseconds(),
-            context,
-            |region, area_index, context| {
-                self.wake_owned_monsters_around_area(region, area_index, || {
-                    context.now_milliseconds()
-                });
-            },
-        );
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        let membership_tick_ms = context.now_milliseconds();
+        let membership = self.with_legacy_random_stream(|game, random| {
+            owner.base_mut().add_object_with_area_entry(
+                player.move_shape_mut(),
+                facts,
+                area_width,
+                area_height,
+                membership_tick_ms,
+                random,
+                |region, area_index, context| {
+                    game.wake_owned_monsters_around_area(region, area_index, || {
+                        context.now_milliseconds()
+                    });
+                },
+            )
+        });
         self.restore_region_owner(owner);
         self.players.insert(player_id, player);
         if membership.is_ok() {
@@ -29976,7 +29983,9 @@ impl CGame {
         };
         let mut relocation = None;
         if player.shape().get_pos_x() == -0.5 && player.shape().get_pos_y() == -0.5 {
-            if let Ok(position) = owner.base().region.get_random_pos(context) {
+            if let Ok(position) = self.with_legacy_random_stream(|_, random| {
+                owner.base().region.get_random_pos(random)
+            }) {
                 player
                     .movement_shape_mut()
                     .set_pos_xy_base(position.x as f32 + 0.5, position.y as f32 + 0.5);
@@ -29993,10 +30002,12 @@ impl CGame {
             .get_block(tile.0, tile.1)
             .unwrap_or_default()
             != 0
-            && let Ok(position) = owner
-                .base()
-                .region
-                .get_random_pos_in_range(tile.0, tile.1, 3, 3, context)
+            && let Ok(position) = self.with_legacy_random_stream(|_, random| {
+                owner
+                    .base()
+                    .region
+                    .get_random_pos_in_range(tile.0, tile.1, 3, 3, random)
+            })
         {
             player
                 .movement_shape_mut()
@@ -30012,19 +30023,24 @@ impl CGame {
             blocks_region_cell: !player.is_dead(),
             figure: player.figure(),
         };
-        let membership = owner.base_mut().add_object_with_area_entry(
-            player.move_shape_mut(),
-            facts,
-            self.globe_setup.area_width(),
-            self.globe_setup.area_height(),
-            context.now_milliseconds(),
-            context,
-            |region, area_index, context| {
-                self.wake_owned_monsters_around_area(region, area_index, || {
-                    context.now_milliseconds()
-                });
-            },
-        );
+        let area_width = self.globe_setup.area_width();
+        let area_height = self.globe_setup.area_height();
+        let membership_tick_ms = context.now_milliseconds();
+        let membership = self.with_legacy_random_stream(|game, random| {
+            owner.base_mut().add_object_with_area_entry(
+                player.move_shape_mut(),
+                facts,
+                area_width,
+                area_height,
+                membership_tick_ms,
+                random,
+                |region, area_index, context| {
+                    game.wake_owned_monsters_around_area(region, area_index, || {
+                        context.now_milliseconds()
+                    });
+                },
+            )
+        });
         self.restore_region_owner(owner);
         self.players.insert(expected_player_id, player);
         membership.map_err(GamePlayerLoginBlock::Membership)?;
