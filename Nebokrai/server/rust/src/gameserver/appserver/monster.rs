@@ -389,7 +389,34 @@ impl CMonster {
         let mut payload = self
             .move_shape
             .encode_fresh_client_snapshot(true, self.hit_points == 0)?;
-        let mut writer = LegacyWriter::new(&mut payload);
+        self.append_client_snapshot_tail(&mut payload, property, master_name);
+        Some(payload)
+    }
+
+    pub(crate) fn encode_client_snapshot(
+        &self,
+        property: &MonsterProperties,
+        master_name: &[u8],
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        let mut payload = self.move_shape.encode_client_snapshot(
+            true,
+            self.hit_points == 0,
+            now_ms,
+            timed_state_now_milliseconds,
+        )?;
+        self.append_client_snapshot_tail(&mut payload, property, master_name);
+        Some(payload)
+    }
+
+    fn append_client_snapshot_tail(
+        &self,
+        payload: &mut Vec<u8>,
+        property: &MonsterProperties,
+        master_name: &[u8],
+    ) {
+        let mut writer = LegacyWriter::new(payload);
         writer.write_u32(property.maximum_hp);
         writer.write_u32(self.hit_points);
         writer.write_u8(property.kind as u8);
@@ -414,7 +441,6 @@ impl CMonster {
         } else {
             writer.write_u8(0);
         }
-        Some(payload)
     }
 
     /// Формирует exact `CServerRegion::AddMonster` envelope `0xBF502` для
@@ -426,6 +452,30 @@ impl CMonster {
         master_name: &[u8],
     ) -> Option<CMessage> {
         let payload = self.encode_fresh_client_snapshot(property, master_name)?;
+        let identity = self.move_shape.shape().identity();
+        let mut message = CMessage::new(0x000b_f502);
+        message.add_long(identity.object_type);
+        message.add_long(identity.id);
+        message.base_mut().add_guid(identity.ex_id);
+        message.add_long(i32::try_from(payload.len()).ok()?);
+        message.base_mut().add(&payload);
+        message.add_byte(0);
+        Some(message)
+    }
+
+    pub(crate) fn build_enter_message(
+        &self,
+        property: &MonsterProperties,
+        master_name: &[u8],
+        now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<CMessage> {
+        let payload = self.encode_client_snapshot(
+            property,
+            master_name,
+            now_ms,
+            timed_state_now_milliseconds,
+        )?;
         let identity = self.move_shape.shape().identity();
         let mut message = CMessage::new(0x000b_f502);
         message.add_long(identity.object_type);
