@@ -19275,8 +19275,12 @@ impl CGame {
                 .and_then(|player| player.shape_view())
                 .and_then(|shape| {
                     let player = self.players.remove(&player_id)?;
-                    let payload = self
-                        .encode_player_shape_snapshot(&player, || context.now_milliseconds());
+                    let team_member_count = self.team_state_member_count(player.team_id());
+                    let payload = self.encode_player_shape_snapshot(
+                        &player,
+                        team_member_count,
+                        || context.now_milliseconds(),
+                    );
                     self.players.insert(player_id, player);
                     let payload = payload?;
                     let mut message = CMessage::new(0x000b_f502);
@@ -31169,6 +31173,11 @@ impl CGame {
                 .expect("property commit сохраняет player owner")
                 .level(),
         );
+        let team_id = self
+            .find_player(expected_player_id)
+            .expect("property commit сохраняет player owner")
+            .team_id();
+        let team_member_count = self.team_state_member_count(team_id);
         let player_payload = {
             let (players, goods_factory, skill_factory, quest_system) = (
                 &mut self.players,
@@ -31185,6 +31194,7 @@ impl CGame {
                     quest_system,
                     level_experience,
                     country_identity,
+                    team_member_count,
                     self.globe_setup.loan_time_limit(),
                     self.globe_setup.ci_qing_quest_id(),
                     login_tick_ms,
@@ -31376,6 +31386,18 @@ impl CGame {
 
     pub(crate) fn get_team_session_id(&self, team_id: u32) -> i32 {
         self.team_session_ids.get(&team_id).copied().unwrap_or(0)
+    }
+
+    /// Точный lookup `CTeamState::GetAdditionalData`: отсутствие team ID,
+    /// session mapping или живого `CTeam` оставляет исходное значение `1`.
+    fn team_state_member_count(&self, team_id: i32) -> usize {
+        if team_id == 0 {
+            return 1;
+        }
+        let session_id = self.get_team_session_id(team_id as u32);
+        self.session_factory
+            .team_member_count(session_id)
+            .unwrap_or(1)
     }
 
     /// `CPlayer::OnDied` получает команду через тот же process-owned
@@ -43213,8 +43235,11 @@ impl CGame {
         {
             return None;
         }
+        let team_id = self.find_player(player_id)?.team_id();
+        let team_member_count = self.team_state_member_count(team_id);
         let player = self.players.remove(&player_id)?;
-        let payload = self.encode_player_shape_snapshot(&player, now_milliseconds);
+        let payload =
+            self.encode_player_shape_snapshot(&player, team_member_count, now_milliseconds);
         self.players.insert(player_id, player);
         Some((canonical_identity, payload?))
     }
@@ -43222,6 +43247,7 @@ impl CGame {
     fn encode_player_shape_snapshot(
         &mut self,
         player: &CPlayer,
+        team_member_count: usize,
         now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         let personal_shop = player
@@ -43239,6 +43265,7 @@ impl CGame {
             personal_shop
                 .as_ref()
                 .map(|(session, plug, name)| (*session, *plug, name.as_slice())),
+            team_member_count,
             now_milliseconds,
         )
     }
@@ -43358,7 +43385,12 @@ impl CGame {
             moving_player
                 .filter(|player| player.shape().identity() == plan.moving)
                 .and_then(|player| {
-                    self.encode_player_shape_snapshot(player, &mut now_milliseconds)
+                    let team_member_count = self.team_state_member_count(player.team_id());
+                    self.encode_player_shape_snapshot(
+                        player,
+                        team_member_count,
+                        &mut now_milliseconds,
+                    )
                         .map(|payload| (plan.moving, payload))
                 })
         } else {

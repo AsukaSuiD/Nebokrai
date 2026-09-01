@@ -3317,15 +3317,17 @@ impl CPlayer {
         goods_factory: &CGoodsFactory,
         country_identity: u8,
         personal_shop: Option<(i32, i32, &[u8])>,
+        team_member_count: usize,
         mut now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         const VISIBLE_EQUIPMENT: [u32; 11] = [0, 1, 2, 3, 4, 9, 10, 12, 13, 14, 15];
 
         let now_ms = now_milliseconds();
-        let mut payload = self.move_shape.encode_client_snapshot(
+        let mut payload = self.move_shape.encode_client_snapshot_with_team_count(
             false,
             self.is_dead(),
             now_ms,
+            team_member_count,
             &mut now_milliseconds,
         )?;
         let mut writer = LegacyWriter::new(&mut payload);
@@ -3386,6 +3388,7 @@ impl CPlayer {
         quest_system: &CQuestSystem,
         level_experience: u32,
         country_identity: u8,
+        team_member_count: usize,
         loan_time_limit: u32,
         ci_qing_quest_id: u32,
         now_ms: u32,
@@ -3397,10 +3400,11 @@ impl CPlayer {
         const SKILL_USAGE_DELAY_TIME: u32 = 10_001;
 
         self.battle_fairy_summoned = self.war_soul_state != 0;
-        let mut payload = self.move_shape.encode_client_snapshot(
+        let mut payload = self.move_shape.encode_client_snapshot_with_team_count(
             true,
             self.is_dead(),
             now_ms,
+            team_member_count,
             timed_state_now_milliseconds,
         )?;
         payload.extend_from_slice(&self.synchronized_base_property_wire());

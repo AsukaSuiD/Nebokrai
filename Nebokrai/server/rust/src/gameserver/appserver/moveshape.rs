@@ -779,6 +779,26 @@ impl CMoveShape {
         include_child: bool,
         is_dead: bool,
         now_ms: u32,
+        timed_state_now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<Vec<u8>> {
+        self.encode_client_snapshot_with_team_count(
+            include_child,
+            is_dead,
+            now_ms,
+            1,
+            timed_state_now_milliseconds,
+        )
+    }
+
+    /// Player-owner передаёт сюда канонический размер своей `CTeam`: точный
+    /// `CTeamState::GetAdditionalData` запрашивает team session при каждом
+    /// полном снимке, а при её отсутствии оставляет исходный fallback `1`.
+    pub(crate) fn encode_client_snapshot_with_team_count(
+        &self,
+        include_child: bool,
+        is_dead: bool,
+        now_ms: u32,
+        team_member_count: usize,
         mut timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
         let states = self.serialized_ex_states(now_ms, &mut timed_state_now_milliseconds);
@@ -814,7 +834,7 @@ impl CMoveShape {
         for state in &self.team_recruitment_states {
             writer.write_i32(state.state_id());
             writer.write_i32(state.client_state_time());
-            writer.write_u32(state.initial_additional_data());
+            writer.write_u32(state.additional_data(team_member_count));
             writer.write_c_string(state.team_name());
         }
         Some(payload)

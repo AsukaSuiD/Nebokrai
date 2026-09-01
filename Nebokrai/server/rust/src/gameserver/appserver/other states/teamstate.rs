@@ -3,13 +3,14 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный owner
 //! `appserver/other states/teamstate.cpp`. Материализован достигнутый через
 //! client `0x8FF08` lifecycle: имя/пароль, state ID `100006`, бессрочное
-//! client-time и additional-data с password bit и исходным количеством один.
+//! client-time и additional-data с password bit: begin до session сообщает
+//! одного лидера, а полный снимок динамически берёт размер канонической team.
 //! Общий полиморфный список `CState` заменён каноническим типизированным
 //! хранилищем игрока. Владелец состояния строит пакеты начала, завершения и
 //! изменения числа участников; AI раз в пять секунд двумя отдельными чтениями
 //! часов проверяет, остался ли игрок лидером найденной team-session.
-//! Координатные overload-ы `Begin`, базовая сериализация и восстановление из
-//! старого хранилища пока не достигнуты и сохранены в RAW ниже.
+//! Координатные overload-ы `Begin` и восстановление из старого хранилища пока
+//! не достигнуты и сохранены в RAW ниже.
 
 use crate::gameserver::appserver::states::state::default_client_state_time;
 use crate::nets::netserver::message::CMessage;
