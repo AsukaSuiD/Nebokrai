@@ -37,7 +37,6 @@ use super::guardtarget::{
 use crate::gameserver::appserver::shape::ShapeView;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 
 const PLAYER_TYPE: i32 = 400;
@@ -132,12 +131,7 @@ pub(crate) fn select_village_country_guard_carriage(
             selected,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
@@ -171,12 +165,7 @@ pub(crate) fn select_village_country_guard_enemy(
             selected_player,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
@@ -204,12 +193,7 @@ pub(crate) fn select_village_country_guard_enemy(
             selected_pet,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,

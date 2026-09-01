@@ -98,12 +98,7 @@ pub(crate) fn select_city_guard_enemy(
             selected_player,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
@@ -141,12 +136,7 @@ pub(crate) fn select_city_guard_enemy(
             selected_pet,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
@@ -186,12 +176,7 @@ pub(crate) fn select_city_guard_enemy(
             selected_carriage,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
