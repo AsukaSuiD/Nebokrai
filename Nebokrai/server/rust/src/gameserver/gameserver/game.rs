@@ -15857,8 +15857,9 @@ impl CGame {
     }
 
     /// Base `CSession::AI` teammate traversal между lifetime gate и derived
-    /// `CTeam::AI`. Reconnect восстанавливает membership/snapshot, а истёкший
-    /// five-minute lose window публикует state `2` как обычный member-left.
+    /// `CTeam::AI`. Reconnect восстанавливает membership/snapshot, ended plug
+    /// выполняет terminal member-left, а истёкший five-minute lose window
+    /// публикует state `2`.
     fn run_team_plug_ai(&mut self, now_ms: u32) -> (usize, usize) {
         let report = {
             let (session_factory, players, regions) =
@@ -15883,6 +15884,47 @@ impl CGame {
                 "восстановлен потерянный участник группы"
             );
         }
+        for ended in &report.ended {
+            let source_local =
+                ended.owner_type == 400 && self.players.contains_key(&ended.owner_id);
+            if source_local {
+                self.players
+                    .get_mut(&ended.owner_id)
+                    .expect("ended source-local teammate остаётся canonical")
+                    .set_team_membership(0);
+            }
+            let recipients = std::iter::once(ended.owner_id).filter(|_| source_local).chain(
+                ended
+                    .remaining_player_ids
+                    .iter()
+                    .copied()
+                    .filter(|player_id| self.players.contains_key(player_id)),
+            );
+            self.publish_team_member_left(ended.team_id, ended.owner_id, recipients);
+            if source_local {
+                let mut world = CMessage::new(0x0006_0004);
+                world.add_ulong(ended.team_id);
+                world.add_long(ended.owner_type);
+                world.add_long(ended.owner_id);
+                let delivery = world.send(self, false);
+                tracing::trace!(
+                    session_id = ended.session_id,
+                    team_id = ended.team_id,
+                    owner_type = ended.owner_type,
+                    owner_id = ended.owner_id,
+                    ?delivery,
+                    "terminal-выход участника группы отправлен WorldServer"
+                );
+            }
+            tracing::trace!(
+                session_id = ended.session_id,
+                team_id = ended.team_id,
+                owner_type = ended.owner_type,
+                owner_id = ended.owner_id,
+                source_local,
+                "завершённый разъём участника группы удалён"
+            );
+        }
         for expired in &report.expired {
             let recipients = expired
                 .remaining_player_ids
@@ -15898,7 +15940,10 @@ impl CGame {
                 "истёк срок потерянного участника группы"
             );
         }
-        (report.recovered.len(), report.expired.len())
+        (
+            report.recovered.len(),
+            report.ended.len().saturating_add(report.expired.len()),
+        )
     }
 
     /// Exact `CGame::SetAuctionState`: false не меняет saved wall-clock,

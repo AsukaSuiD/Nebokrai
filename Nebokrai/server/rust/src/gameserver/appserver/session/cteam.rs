@@ -14,9 +14,10 @@
 //! `CGame` очередью повторов: вход задаёт ID команды, стадия сеанса отправляет
 //! `0x60008`, а успешный `0x7FD08` снимает запрос.
 
+use crate::gameserver::appserver::legacycodec::LegacyWriter;
+use crate::gameserver::appserver::session::cplug::CPlug;
 use crate::gameserver::appserver::session::csession::CSession;
 use crate::gameserver::appserver::session::cteamate::CTeamate;
-use crate::gameserver::appserver::legacycodec::LegacyWriter;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CTeam {
@@ -72,9 +73,9 @@ impl CTeam {
         &self,
         session: &CSession,
         now_ms: u32,
-        teammates: impl IntoIterator<Item = &'a CTeamate>,
+        teammates: impl IntoIterator<Item = (&'a CPlug, &'a CTeamate)>,
     ) -> Vec<u8> {
-        let teammates: Vec<&CTeamate> = teammates.into_iter().collect();
+        let teammates: Vec<(&CPlug, &CTeamate)> = teammates.into_iter().collect();
         let mut output = Vec::new();
         let mut writer = LegacyWriter::new(&mut output);
         writer.write_i32(1);
@@ -87,8 +88,8 @@ impl CTeam {
         writer.write_i32(self.leader_id);
         writer.write_u32(u32::try_from(teammates.len()).unwrap_or(u32::MAX));
         drop(writer);
-        for teammate in teammates {
-            teammate.serialize(&mut output);
+        for (plug, teammate) in teammates {
+            teammate.serialize(&mut output, plug.ended_state());
         }
         output
     }

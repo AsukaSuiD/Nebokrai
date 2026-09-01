@@ -32,7 +32,9 @@
 //! порядок вставки и промежуточные снимки сериализации. Переходы распределения
 //! и чата получают владельцев участников в порядке той же сессии. Снимок из
 //! WorldServer и последующая репликация используют тот же реестр и сохраняют
-//! порядок клиентских снимков. Session start timestamps берутся из текущего
+//! порядок клиентских снимков, включая base ended-флаг plug-а; session AI
+//! после проверки доступности выполняет его terminal callback и удаление.
+//! Session start timestamps берутся из текущего
 //! MainLoop sample; ненулевой lifetime команды завершается через terminal
 //! report, чтобы `CGame` сохранил derived World/client side effects.
 
@@ -161,6 +163,7 @@ pub(crate) struct TeamMemberInserted {
 pub(crate) struct TeamMemberSnapshot {
     pub(crate) owner_type: i32,
     pub(crate) owner_id: i32,
+    pub(crate) plug_ended: i32,
     pub(crate) owner_region_id: i32,
     pub(crate) owner_name: Vec<u8>,
 }
@@ -208,7 +211,18 @@ pub(crate) struct TeamMemberRecovered {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TeamPlugAiReport {
     pub(crate) recovered: Vec<TeamMemberRecovered>,
+    pub(crate) ended: Vec<TeamPlugEnded>,
     pub(crate) expired: Vec<TeamMemberRemoved>,
+}
+
+#[must_use = "ended team plug сохраняет owner и remaining members после terminal callback"]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TeamPlugEnded {
+    pub(crate) session_id: i32,
+    pub(crate) team_id: u32,
+    pub(crate) owner_type: i32,
+    pub(crate) owner_id: i32,
+    pub(crate) remaining_player_ids: Vec<i32>,
 }
 
 #[must_use = "team disband сохраняет ordered owners до registry GC"]
@@ -282,7 +296,7 @@ impl CSessionFactory {
         if !session.insert_plug(leader_plug_id) {
             return None;
         }
-        let leader_snapshot = team.serialize(&session, now_ms, [&leader_teammate]);
+        let leader_snapshot = team.serialize(&session, now_ms, [(&leader_base, &leader_teammate)]);
 
         let mut candidate_base = CPlug::new();
         candidate_base.set_id(candidate_plug_id);
@@ -297,7 +311,10 @@ impl CSessionFactory {
         let candidate_snapshot = team.serialize(
             &session,
             now_ms,
-            [&leader_teammate, &candidate_teammate],
+            [
+                (&leader_base, &leader_teammate),
+                (&candidate_base, &candidate_teammate),
+            ],
         );
         team.set_leader(leader.0);
 
@@ -346,6 +363,27 @@ impl CSessionFactory {
         owner_region_id: i32,
         owner_name: &[u8],
     ) -> Option<TeamMemberInserted> {
+        self.insert_team_member_owned_state(
+            now_ms,
+            session_id,
+            owner_type,
+            owner_id,
+            owner_region_id,
+            owner_name,
+            0,
+        )
+    }
+
+    fn insert_team_member_owned_state(
+        &mut self,
+        now_ms: u32,
+        session_id: i32,
+        owner_type: i32,
+        owner_id: i32,
+        owner_region_id: i32,
+        owner_name: &[u8],
+        plug_ended: i32,
+    ) -> Option<TeamMemberInserted> {
         if self
             .query_session_plug_by_owner(session_id, owner_type, owner_id)
             .is_some()
@@ -359,6 +397,7 @@ impl CSessionFactory {
         base.set_owner(owner_type, owner_id);
         base.set_session(session_id);
         base.set_plug_type(5);
+        base.set_ended_state(plug_ended);
         let teammate =
             CTeamate::new_owned(plug_id, owner_type, owner_id, owner_region_id, owner_name);
         if !self.sessions.get_mut(&session_id)?.insert_plug(plug_id) {
@@ -375,7 +414,7 @@ impl CSessionFactory {
             session
                 .plug_ids_storage()
                 .iter()
-                .filter_map(|id| self.teammates.get(id)),
+                .filter_map(|id| self.plugs.get(id).zip(self.teammates.get(id))),
         );
         let teammate_ids = session
             .plug_ids_storage()
@@ -419,13 +458,14 @@ impl CSessionFactory {
         let mut insertion_snapshots = Vec::with_capacity(snapshot.members.len());
         let mut player_ids = Vec::with_capacity(snapshot.members.len());
         for member in snapshot.members {
-            let inserted = self.insert_team_member_owned(
+            let inserted = self.insert_team_member_owned_state(
                 now_ms,
                 session_id,
                 member.owner_type,
                 member.owner_id,
                 member.owner_region_id,
                 &member.owner_name,
+                member.plug_ended,
             )?;
             player_ids.push(member.owner_id);
             insertion_snapshots.push(inserted.snapshot);
@@ -539,7 +579,7 @@ impl CSessionFactory {
 
     /// Base `CSession::AI` plug traversal для concrete teammate plugs. Один
     /// missing/expired plug завершает проход конкретной session, как ранний
-    /// `return` исходного списка; recovered plugs продолжают ordered обход.
+    /// `return` исходного списка; ended plug удаляется и обход продолжается.
     pub(crate) fn run_team_plug_ai(
         &mut self,
         now_ms: u32,
@@ -598,7 +638,9 @@ impl CSessionFactory {
                             session
                                 .plug_ids_storage()
                                 .iter()
-                                .filter_map(|id| self.teammates.get(id)),
+                                .filter_map(|id| {
+                                    self.plugs.get(id).zip(self.teammates.get(id))
+                                }),
                         );
                         report.recovered.push(TeamMemberRecovered {
                             session_id,
@@ -622,6 +664,41 @@ impl CSessionFactory {
                         }
                         break;
                     }
+                }
+                if self.plugs.get(&plug_id).is_some_and(CPlug::is_ended) {
+                    let Some(teammate) = self.teammates.get(&plug_id) else {
+                        continue;
+                    };
+                    let owner_type = teammate.owner_type();
+                    let owner_id = teammate.owner_id();
+                    let Some(team_id) = self.teams.get(&session_id).map(CTeam::team_id) else {
+                        continue;
+                    };
+                    if !self
+                        .sessions
+                        .get_mut(&session_id)
+                        .is_some_and(|session| session.remove_plug(plug_id))
+                    {
+                        continue;
+                    }
+                    self.plugs.remove(&plug_id);
+                    self.teammates.remove(&plug_id);
+                    let remaining_player_ids = self
+                        .sessions
+                        .get(&session_id)
+                        .into_iter()
+                        .flat_map(CSession::plug_ids_storage)
+                        .filter_map(|id| self.teammates.get(id))
+                        .filter(|teammate| teammate.owner_type() == 400)
+                        .map(CTeamate::owner_id)
+                        .collect();
+                    report.ended.push(TeamPlugEnded {
+                        session_id,
+                        team_id,
+                        owner_type,
+                        owner_id,
+                        remaining_player_ids,
+                    });
                 }
             }
         }

@@ -10,6 +10,7 @@
 //! signed owner ID.
 //!
 //! Base object и пять достигнутых scalar-полей выражены safe Rust storage;
+//! signed ended-dword сохраняется без нормализации на wire,
 //! `Option<&CPlayer>` заменяет исходный nullable `CMoveShape*`, сохраняя
 //! успешный RTTI-контракт. Terminal `Exit` проверяет живую session через
 //! factory-owner и только после session state dispatch фиксирует ended.
@@ -24,7 +25,7 @@ const PLAYER_TYPE: i32 = 400;
 pub(crate) struct CPlug {
     base_object: CBaseObject,
     plug_type: u32,
-    ended: bool,
+    ended: i32,
     session_id: i32,
     owner_type: i32,
     owner_id: i32,
@@ -35,7 +36,7 @@ impl CPlug {
         Self {
             base_object: CBaseObject::with_reached_constructor_defaults(),
             plug_type: 0,
-            ended: false,
+            ended: 0,
             session_id: 0,
             owner_type: 0,
             owner_id: 0,
@@ -76,11 +77,19 @@ impl CPlug {
     }
 
     pub(crate) const fn is_ended(&self) -> bool {
+        self.ended != 0
+    }
+
+    pub(crate) const fn ended_state(&self) -> i32 {
         self.ended
     }
 
+    pub(crate) const fn set_ended_state(&mut self, ended: i32) {
+        self.ended = ended;
+    }
+
     pub(crate) const fn mark_ended(&mut self) {
-        self.ended = true;
+        self.ended = 1;
     }
 
     pub(crate) fn get_owner<'a>(&self, game: &'a CGame) -> Option<&'a CPlayer> {

@@ -4,7 +4,9 @@
 //! `appserver/session/cteamate.cpp`. Материализована достигнутая часть
 //! приглашения и входа: идентификатор разъёма, владелец-игрок, снимок региона
 //! и имени, а также `Serialize`, который `OnPlugInserted` вкладывает в
-//! клиентское сообщение `0xBFD03`. Локальный выход доведён до членства игрока
+//! клиентское сообщение `0xBFD03`. Base ended-флаг передаётся owner-ом
+//! реестра, чтобы wire не расходился с `CPlug::Serialize`. Локальный выход
+//! доведён до членства игрока
 //! и сообщения `0xBFD05`. Достигнутые обработчики распределения и чата
 //! создают `0xBFD08/09` из типизированных владельцев сессии. Регион, состояние
 //! участника и удалённое восстановление используют тот же типизированный
@@ -118,12 +120,12 @@ impl CTeamate {
         }
     }
 
-    pub(crate) fn serialize(&self, output: &mut Vec<u8>) {
+    pub(crate) fn serialize(&self, output: &mut Vec<u8>, plug_ended: i32) {
         let mut writer = LegacyWriter::new(output);
         writer.write_i32(5);
         writer.write_i32(self.owner_type);
         writer.write_i32(self.owner_id);
-        writer.write_i32(0);
+        writer.write_i32(plug_ended);
         writer.write_i32(self.owner_region_id);
         writer.write_c_string(&self.owner_name);
     }

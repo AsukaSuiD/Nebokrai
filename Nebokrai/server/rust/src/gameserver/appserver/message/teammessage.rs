@@ -81,12 +81,13 @@ fn decode_remote_team_snapshot(message: &mut CMessage) -> Option<TeamSessionSnap
         }
         let owner_type = message.base_mut().get_long()?;
         let owner_id = message.base_mut().get_long()?;
-        let _plug_state = message.base_mut().get_long()?;
+        let plug_ended = message.base_mut().get_long()?;
         let owner_region_id = message.base_mut().get_long()?;
         let owner_name = message.base_mut().get_str_bytes(0x100)?;
         members.push(TeamMemberSnapshot {
             owner_type,
             owner_id,
+            plug_ended,
             owner_region_id,
             owner_name,
         });
