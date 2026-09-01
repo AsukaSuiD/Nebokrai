@@ -9,8 +9,10 @@
 //! `0x192`, активный `CStateSkill` `0x198`, эффекты `0x199`, `0x1A6` и
 //! `0x1F8`; неизвестные старые записи
 //! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
-//! доставку. Координатная перегрузка
-//! `Begin` остаётся ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! доставку. Координатная перегрузка `Begin` использует точный базовый
+//! `CState::GetSufferer` и fallback к `GetUser`, когда цель не найдена;
+//! `DoesTargetEffective` допускает игрока либо только carriage-монстра, не
+//! подменяя обычного или приручённого монстра заклинателем.
 
 use super::baseattack::time_reached;
 use super::bossbluequakestate::{
@@ -54,6 +56,7 @@ use super::rushstate2::{RUSH_2_STATE_ID, Rush2State, send_rush_2_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
@@ -84,7 +87,6 @@ struct CureTarget {
     tile_x: i32,
     tile_y: i32,
     dead: bool,
-    ordinary_monster: bool,
     display_name: Vec<u8>,
 }
 
@@ -106,20 +108,20 @@ fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Opt
                 tile_x,
                 tile_y,
                 dead: player.is_dead(),
-                ordinary_monster: false,
                 display_name: player.player_name().to_vec(),
             })
         }
         MONSTER_TYPE => {
             let monster = game.find_region(region_id)?.base().find_monster_by_id(identity.id)?;
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
-            let carriage = monster.is_carriage(property);
+            if !monster.is_carriage(property) {
+                return None;
+            }
             Some(CureTarget {
                 identity,
                 tile_x,
                 tile_y,
                 dead: monster.hit_points() == 0,
-                ordinary_monster: !monster.is_tamed() && !carriage,
                 display_name: monster.display_name().to_vec(),
             })
         }
@@ -127,10 +129,22 @@ fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Opt
     }
 }
 
-fn requested_target(dispatch: PlayerSkillDispatch, player_id: i32) -> Option<ShapeIdentity> {
+fn requested_target(
+    game: &CGame,
+    region_id: i32,
+    dispatch: PlayerSkillDispatch,
+    player_id: i32,
+) -> Option<ShapeIdentity> {
     match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id: CURE_SKILL_ID, .. } => Some(caster_identity(player_id)),
-        PlayerSkillDispatch::Object { skill_id: CURE_SKILL_ID, target: target @ ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } } => Some(target),
+        PlayerSkillDispatch::Point { skill_id: CURE_SKILL_ID, x, y } => {
+            resolve_coordinate_sufferer(game, region_id, x, y)
+                .or_else(|| Some(caster_identity(player_id)))
+        }
+        PlayerSkillDispatch::Object { skill_id: CURE_SKILL_ID, target: target @ ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } } => {
+            game.move_shape_target_tile(Some(region_id), target)
+                .map_or_else(|| Some(caster_identity(player_id)), |_| Some(target))
+        }
         _ => None,
     }
 }
@@ -421,6 +435,7 @@ fn install_cure_state(game: &mut CGame, region_id: i32, target: &CureTarget, sta
 pub(crate) const fn is_cure_target(dispatch: PlayerSkillDispatch) -> bool {
     matches!(dispatch,
         PlayerSkillDispatch::SelfTarget { skill_id: CURE_SKILL_ID, .. }
+        | PlayerSkillDispatch::Point { skill_id: CURE_SKILL_ID, .. }
         | PlayerSkillDispatch::Object { skill_id: CURE_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }
     )
 }
@@ -432,8 +447,8 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let Some(requested_identity) = requested_target(dispatch, player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some((region_id, source_x, source_y, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(CURE_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(requested_identity) = requested_target(game, region_id, dispatch, player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(CURE_SKILL_ID, level) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let maximum_distance = properties.query_property(TARGET_MAX_DISTANCE);
@@ -485,13 +500,10 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    let mut target = match target_snapshot(game, region_id, requested_identity) {
+    let target = match target_snapshot(game, region_id, requested_identity) {
         Some(target) => target,
         None => { abort_player_cure(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
     };
-    if target.ordinary_monster {
-        target = target_snapshot(game, region_id, caster_identity(player_id)).expect("заклинатель очищения сохранён");
-    }
     if target.dead {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
@@ -550,25 +562,3 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     finish_player_cure(game, player_id, player_ai, runtime);
     terminal(if installed { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\cure.cpp
-
-// ============================================================================
-// FUNCTION: CCure::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\cure.cpp:199
-// RVA: 0x001AD3A0
-// ADDRESS: 005ad3a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
