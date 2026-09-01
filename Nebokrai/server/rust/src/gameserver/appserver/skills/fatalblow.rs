@@ -5,7 +5,8 @@
 //! задержку повторного использования, расход MP боевого духа, время подготовки,
 //! визуальные пакеты и создание
 //! `CFatalBlowPhalanx`. `CGame` предоставляет владельцев, регион, регистрацию
-//! снаряда и доставку. Координатные перегрузки `Begin` пока остаются RAW.
+//! снаряда и доставку. Координатный и пустой `Begin` сохраняют исходный отказ
+//! `10 + ZHGS0045` и завершающий visual action `3` без generic failure `2`.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -109,6 +110,26 @@ fn master_info(player: &CPlayer) -> MasterInfo {
     }
 }
 
+pub(crate) const fn is_fatal_blow_dispatch(dispatch: BattleFairySkillDispatch) -> bool {
+    matches!(
+        dispatch,
+        BattleFairySkillDispatch::SelfTarget {
+            skill_id: FATAL_BLOW_SKILL_ID,
+            ..
+        } | BattleFairySkillDispatch::Point {
+            skill_id: FATAL_BLOW_SKILL_ID,
+            ..
+        } | BattleFairySkillDispatch::Object {
+            skill_id: FATAL_BLOW_SKILL_ID,
+            target: ShapeIdentity {
+                object_type: PLAYER_TYPE | MONSTER_TYPE,
+                ..
+            },
+            ..
+        }
+    )
+}
+
 pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -117,6 +138,15 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let (skill_level, target) = match dispatch {
+        BattleFairySkillDispatch::SelfTarget {
+            skill_id: FATAL_BLOW_SKILL_ID,
+            skill_level,
+            ..
+        } | BattleFairySkillDispatch::Point {
+            skill_id: FATAL_BLOW_SKILL_ID,
+            skill_level,
+            ..
+        } => return reject(game, player_id, skill_level, 10, b"ZHGS0045"),
         BattleFairySkillDispatch::Object {
             skill_id: FATAL_BLOW_SKILL_ID,
             skill_level,
@@ -340,35 +370,3 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
         QueuedSkillExecutionState::Rejected
     })
 }
-
-
-// Координатные перегрузки Begin пока не достигнуты действующим dispatcher-ом.
-// ============================================================================
-// FUNCTION: CFatalBlow::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fatalblow.cpp:210
-// RVA: 0x0011E1C0
-// ADDRESS: 0051e1c0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CFatalBlow::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\fatalblow.cpp:231
-// RVA: 0x0011E290
-// ADDRESS: 0051e290
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================

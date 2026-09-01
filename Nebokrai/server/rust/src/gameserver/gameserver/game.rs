@@ -1434,7 +1434,7 @@ use crate::gameserver::appserver::skills::blind::{
     BLIND_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::fatalblow::{
-    FATAL_BLOW_SKILL_ID, execute_battle_fairy_fatal_blow,
+    execute_battle_fairy_fatal_blow, is_fatal_blow_dispatch,
 };
 use crate::gameserver::appserver::skills::fatalblowphalanx::{
     calculate_owned_fatal_blow_attack, CFatalBlowPhalanx, FatalBlowPhalanxTick,
@@ -41177,17 +41177,7 @@ impl CGame {
                 execute_battle_fairy_attribute(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_life_shield {
                 execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)
-            } else if matches!(
-                dispatch,
-                BattleFairySkillDispatch::Object {
-                    skill_id: FATAL_BLOW_SKILL_ID,
-                    target: ShapeIdentity {
-                        object_type: PLAYER_TYPE | MONSTER_TYPE,
-                        ..
-                    },
-                    ..
-                }
-            ) {
+            } else if is_fatal_blow_dispatch(dispatch) {
                 execute_battle_fairy_fatal_blow(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
