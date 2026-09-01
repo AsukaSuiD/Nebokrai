@@ -6,6 +6,8 @@
 //! с двумя RNG-вызовами и отдельный бросок вероятности `CSpiderPoisonState`.
 //! `Attack` создаёт `tagAttackInformation` со штатными skill-id `0x7fffffff`
 //! и уровнем `1`; `CalculateAttackPower` заполняет урон, не меняя эти поля.
+//! Player-критический множитель переводится в `int` с x87 усечением к нулю;
+//! monster-вызов сохраняет RNG, но его виртуальный critical chance равен нулю.
 //! Состояние заменяется после удара и только при отсутствии `Cure`;
 //! `CGame` координирует владельцев и применение рассчитанных последствий.
 //! Две координатные перегрузки `Begin` сохранены ниже как RAW, поскольку
@@ -193,7 +195,7 @@ fn calculate_player_attack(game: &mut CGame, player_id: i32) -> Option<(MasterIn
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
         }
     }
     Some((master, attack))
