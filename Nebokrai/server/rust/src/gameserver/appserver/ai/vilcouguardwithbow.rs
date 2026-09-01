@@ -5,13 +5,16 @@
 //! поиск игроков и питомцев, преимущество игрока при равной дистанции и новый
 //! поиск после урона только вне боя. `OnIdle` ставит строгую очередь
 //! `ChangeSkill → Stand → SearchEnemy`; общий окружной selector теперь также
-//! исполняет сохранённый ниже проход вражеских повозок.
+//! исполняет сохранённый ниже проход вражеских повозок. Собственный
+//! `OnSchedule` не преследует цель и не ждёт `attack_speed`: вне дальности или
+//! при отказе `CheckCast` он отпускает цель и повторяет поиск.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\vilcouguardwithbow.cpp
+// `OnSchedule` сопоставлен с RVA 0x0020B890.
 
 // ============================================================================
 // FUNCTION: CVilCouGuardWithBow::CVilCouGuardWithBow

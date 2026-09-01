@@ -127,7 +127,7 @@ use crate::gameserver::appserver::ai::cityguardwithsword::{
     CitySwordTraceOutcome, lose_guard_sword_target, release_guard_sword_target,
     select_city_guard_enemy, trace_city_sword_target,
 };
-use crate::gameserver::appserver::ai::cityguardwithbow::city_bow_target_ready;
+use crate::gameserver::appserver::ai::cityguardwithbow::stationary_bow_target_ready;
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
     queue_fixed_archer_skill_delay, queue_stationary_guard_idle,
@@ -1019,9 +1019,8 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             &schedule_target,
         );
         if schedule_target.dead
-            || schedule_target.god
-            || schedule_target.city_dead
-            || !attackable
+            || (property.ai != 13
+                && (schedule_target.god || schedule_target.city_dead || !attackable))
         {
             if !attackable && tamed {
                 let pet_identity = ShapeIdentity {
@@ -1508,18 +1507,19 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     };
     if target_dead
-        || target_god
-        || target_city_dead
-        || (!tamed
-            && property.kind == 5
-            && target.object_type == PLAYER_TYPE
-            && !game.player_attackable_by_monster(
-                target.id,
-                region.id,
-                &property,
-                tamed,
-                attacker_master,
-            ))
+        || ((property.ai != 13 || cast.is_some())
+            && (target_god
+                || target_city_dead
+                || (!tamed
+                    && property.kind == 5
+                    && target.object_type == PLAYER_TYPE
+                    && !game.player_attackable_by_monster(
+                        target.id,
+                        region.id,
+                        &property,
+                        tamed,
+                        attacker_master,
+                    ))))
     {
         if tamed {
             lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
@@ -1577,9 +1577,9 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         }
     }
 
-    if property.ai == 11
+    if matches!(property.ai, 11 | 13)
         && cast.is_none()
-        && !city_bow_target_ready(
+        && !stationary_bow_target_ready(
             region,
             monster_view,
             target_x,

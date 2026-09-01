@@ -54,10 +54,10 @@ use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
 
-/// Exact `OnSchedule` AI11: городской лучник не двигается к цели. Нижняя и
-/// верхняя границы включительны; заблокированная прямая сохраняет отказ
-/// `CheckCast`, после которого caller ставит новый `SearchEnemy`.
-pub(crate) fn city_bow_target_ready(
+/// Exact `OnSchedule` стационарных AI11/AI13: лучник не двигается к цели.
+/// Нижняя и верхняя границы включительны; заблокированная прямая сохраняет
+/// отказ `CheckCast`, после которого caller ставит новый `SearchEnemy`.
+pub(crate) fn stationary_bow_target_ready(
     region: &CServerRegion,
     owner: ShapeView,
     target_x: i32,

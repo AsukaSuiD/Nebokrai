@@ -94,8 +94,9 @@ impl MonsterAiScheduleState {
     }
 }
 
-/// `CBossBlue::OnSchedule` и `CBossFiend::OnSchedule` переходят от
-/// `Tracing/CheckCast` прямо к `ASA_ATTACK` и не имеют дополнительной проверки
+/// `CVilCouGuardWithBow::OnSchedule`, `CBossBlue::OnSchedule` и
+/// `CBossFiend::OnSchedule` переходят от своей проверки дальности/`CheckCast`
+/// прямо к `ASA_ATTACK` и не имеют дополнительной проверки
 /// `CMonster::GetAttackSpeed`, присутствующей в обычном `CMonsterAI`.
 /// Задержка повторного применения самого навыка остаётся отдельной проверкой.
 pub(crate) const fn schedule_attack_interval(
@@ -104,7 +105,9 @@ pub(crate) const fn schedule_attack_interval(
 ) -> Option<u32> {
     if matches!(
         MonsterAiKind::from_ai_type(ai_type),
-        MonsterAiKind::BossBlue | MonsterAiKind::BossFiend
+        MonsterAiKind::VillageCountyGuardWithBow
+            | MonsterAiKind::BossBlue
+            | MonsterAiKind::BossFiend
     ) {
         None
     } else {
