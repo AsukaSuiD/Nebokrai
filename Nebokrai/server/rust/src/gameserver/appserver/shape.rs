@@ -31,8 +31,12 @@
 //! region argument разрешает owned area-index обратно в координаты вместо
 //! сохранения двух сырых `CArea*`.
 //! `Distance(CShape*)` RVA `0x0005B390` выражен через immutable `ShapeView`:
-//! сохраняются round-to-nearest-even positions, virtual figure extents,
+//! сохраняются truncation-toward-zero positions, virtual figure extents,
 //! wrapping subtraction и signed max без искусственного clamp к нулю.
+//! `RealDistance(CShape*)` RVA `0x0005B780` использует тот же view: после
+//! center-distance выбирает большую clearance-ось, вычитает figure extent
+//! обеих сторон и масштабирует евклидову дистанцию по этой оси. Нулевой
+//! указатель исходника выражен `Option` и возвращает `LONG_MAX`.
 //! Координатные `Distance(long,long)`, `Distance(long,long,long,long)` и
 //! `RealDistance(float,float)/(long,long)` RVA `0x0005B580..0x0005B730`
 //! также принадлежат этому owner-у. Общий integer helper теперь используется
@@ -282,10 +286,10 @@ impl ShapeView {
     /// Exact Chebyshev-like `CShape::Distance(CShape*)` с вычитанием figure
     /// half-extents каждой стороны. Отрицательный результат допустим.
     pub(crate) fn distance(self, other: Self) -> i32 {
-        let self_x = f32::from_bits(self.pos_x_bits).round_ties_even() as i32;
-        let other_x = f32::from_bits(other.pos_x_bits).round_ties_even() as i32;
-        let self_y = f32::from_bits(self.pos_y_bits).round_ties_even() as i32;
-        let other_y = f32::from_bits(other.pos_y_bits).round_ties_even() as i32;
+        let self_x = legacy_truncate_position(f32::from_bits(self.pos_x_bits));
+        let other_x = legacy_truncate_position(f32::from_bits(other.pos_x_bits));
+        let self_y = legacy_truncate_position(f32::from_bits(self.pos_y_bits));
+        let other_y = legacy_truncate_position(f32::from_bits(other.pos_y_bits));
         let horizontal = (self_x.wrapping_sub(other_x).unsigned_abs() as i32)
             .wrapping_sub(self.figure.get(2) as i32)
             .wrapping_sub(other.figure.get(2) as i32);
@@ -297,6 +301,45 @@ impl ShapeView {
         } else {
             vertical
         }
+    }
+
+    /// Exact `CShape::RealDistance(CShape*)` для двух живых shape-view.
+    pub(crate) fn real_distance(self, other: Option<Self>) -> i32 {
+        let Some(other) = other else {
+            return i32::MAX;
+        };
+        let self_x = legacy_truncate_position(f32::from_bits(self.pos_x_bits));
+        let self_y = legacy_truncate_position(f32::from_bits(self.pos_y_bits));
+        let other_x = legacy_truncate_position(f32::from_bits(other.pos_x_bits));
+        let other_y = legacy_truncate_position(f32::from_bits(other.pos_y_bits));
+        let center_distance = real_distance_from_truncated_position(
+            self_x,
+            self_y,
+            other_x as f32,
+            other_y as f32,
+        );
+        let horizontal_delta = ((self_x as f64 - other_x as f64).abs() as f32).trunc() as i32;
+        let vertical_delta = ((self_y as f64 - other_y as f64).abs() as f32).trunc() as i32;
+        let horizontal_clearance = horizontal_delta
+            .wrapping_sub(other.figure.get(2) as i32)
+            .wrapping_sub(self.figure.get(2) as i32);
+        let vertical_clearance = vertical_delta
+            .wrapping_sub(other.figure.get(0) as i32)
+            .wrapping_sub(self.figure.get(0) as i32);
+        let scaled = if horizontal_clearance >= vertical_clearance {
+            horizontal_clearance as f64 / horizontal_delta as f64 * center_distance as f64
+        } else {
+            vertical_clearance as f64 / vertical_delta as f64 * center_distance as f64
+        };
+        round_legacy_real_distance_f64(scaled)
+    }
+}
+
+fn legacy_truncate_position(value: f32) -> i32 {
+    if !value.is_finite() || value < i32::MIN as f32 || value >= 2_147_483_648.0 {
+        i32::MIN
+    } else {
+        value.trunc() as i32
     }
 }
 
@@ -321,7 +364,7 @@ pub(crate) fn distance_between_points(
         .max(legacy_absolute_delta(source_y, target_y))
 }
 
-fn real_distance_from_rounded_position(
+fn real_distance_from_truncated_position(
     source_x: i32,
     source_y: i32,
     target_x: f32,
@@ -333,8 +376,23 @@ fn real_distance_from_rounded_position(
 }
 
 fn round_legacy_real_distance(distance: f32) -> i32 {
+    if !distance.is_finite() || distance < i32::MIN as f32 || distance >= 2_147_483_648.0 {
+        return i32::MIN;
+    }
     let truncated = distance.trunc() as i32;
     if distance - truncated as f32 > 0.5 {
+        truncated.saturating_add(1)
+    } else {
+        truncated
+    }
+}
+
+fn round_legacy_real_distance_f64(distance: f64) -> i32 {
+    if !distance.is_finite() || distance < i32::MIN as f64 || distance >= 2_147_483_648.0 {
+        return i32::MIN;
+    }
+    let truncated = distance.trunc() as i32;
+    if distance - truncated as f64 > 0.5 {
         truncated.saturating_add(1)
     } else {
         truncated
@@ -350,7 +408,7 @@ pub(crate) fn real_distance_between_points(
     target_x: i32,
     target_y: i32,
 ) -> i32 {
-    round_legacy_real_distance(real_distance_from_rounded_position(
+    round_legacy_real_distance(real_distance_from_truncated_position(
         source_x,
         source_y,
         target_x as f32,
@@ -544,12 +602,12 @@ impl CShape {
         f32::from_bits(self.pos_y_bits)
     }
 
-    /// Exact `CShape::Distance(long,long)`: virtual X/Y сначала округляются
-    /// к ближайшему целому, затем выбирается максимальная абсолютная дельта.
+    /// Exact `CShape::Distance(long,long)`: virtual X/Y сначала усекаются к
+    /// нулю через x87 `fistp`, затем выбирается максимальная абсолютная дельта.
     pub(crate) fn distance_to_point(&self, x: i32, y: i32) -> i32 {
         distance_between_points(
-            self.get_pos_x().round_ties_even() as i32,
-            self.get_pos_y().round_ties_even() as i32,
+            legacy_truncate_position(self.get_pos_x()),
+            legacy_truncate_position(self.get_pos_y()),
             x,
             y,
         )
@@ -557,9 +615,9 @@ impl CShape {
 
     /// Exact primitive `CShape::RealDistance(float,float)`.
     pub(crate) fn real_distance_to_position(&self, x: f32, y: f32) -> f32 {
-        real_distance_from_rounded_position(
-            self.get_pos_x().round_ties_even() as i32,
-            self.get_pos_y().round_ties_even() as i32,
+        real_distance_from_truncated_position(
+            legacy_truncate_position(self.get_pos_x()),
+            legacy_truncate_position(self.get_pos_y()),
             x,
             y,
         )
@@ -1136,7 +1194,8 @@ fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) 
 
 // ============================================================================
 // FUNCTION: CShape::RealDistance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: `ShapeView::real_distance`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:450

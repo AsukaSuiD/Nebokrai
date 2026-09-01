@@ -18,7 +18,6 @@ use crate::gameserver::appserver::ai::gladiator::{
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 
 /// Применяет фракционный фильтр перед общим выбором ближайшей цели.
@@ -62,12 +61,7 @@ pub(crate) fn select_gods_battle_enemy(
             selected,
             GladiatorTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             owner_faction,
@@ -90,12 +84,7 @@ pub(crate) fn select_gods_battle_enemy(
             selected,
             GladiatorTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             owner_faction,
@@ -118,12 +107,7 @@ pub(crate) fn select_gods_battle_enemy(
             selected,
             GladiatorTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             owner_faction,
