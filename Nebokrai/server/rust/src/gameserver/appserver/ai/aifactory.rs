@@ -4,7 +4,9 @@
 //! исходный владелец
 //! `e:\\svn\\fengyun_russia_dev\\server\\gameserver\\appserver\\ai\\aifactory.cpp`
 //! подтверждают отображение `tagMonster::dwAI` на конкретный класс, запись
-//! исходного AI type и отдельное создание `CPet`/`CCarriage`. Rust не
+//! исходного AI type и отдельное создание `CPet`/`CCarriage`. Значения вне
+//! специализированных case-ов, включая пропуски внутри диапазона `0..=104`,
+//! создают обычный `CMonsterAI`, а не нулевой указатель. Rust не
 //! воспроизводит C++-иерархию и ручное владение указателями: тот же выбор
 //! хранится как типизированное состояние внутри единственного `CMonster`.
 //! `SetOwner` тем самым выражен принадлежностью binding-а монстру, а повторный
@@ -83,6 +85,11 @@ impl MonsterAiKind {
             104 => Self::BossFiend,
             _ => Self::Monster,
         }
+    }
+
+    /// Соответствует default-ветви точного `CAIFactory::CreateAI`.
+    pub(crate) const fn is_generic_ai_type(ai_type: u32) -> bool {
+        matches!(Self::from_ai_type(ai_type), Self::Monster)
     }
 }
 

@@ -16,12 +16,14 @@
 //! подтверждения приручения. `HasTarget` считает целью только пару с ненулевыми
 //! типом объекта и ID, включая отрицательные унаследованные значения. Timestamp
 //! попытки атаки принадлежит расписанию ИИ и не подменяет отдельные reuse-таймеры
-//! установленных навыков. Остальные
-//! AI-ветви ниже остаются RAW.
+//! установленных навыков. Default-ветвь `CAIFactory::CreateAI` также проходит
+//! этот общий runtime как обычный `CMonsterAI`, сохраняя исходный `ai_type`.
+//! Остальные AI-ветви ниже остаются RAW.
 //! Внешний virtual `Attack(skill, target)` не запускает навык: он только
 //! передаёт identity в `SetTarget`; client-команда и `CPetsControl` проводят
 //! этот контракт через ordered список питомцев игрока.
 
+use crate::gameserver::appserver::ai::aifactory::MonsterAiKind;
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -103,9 +105,10 @@ pub(crate) const fn hibernates_without_nearby_players(
     ai_type: u32,
     smart_gladiator_ready_to_idle: bool,
 ) -> bool {
-    matches!(
-        ai_type,
-        0 | 3
+    MonsterAiKind::is_generic_ai_type(ai_type)
+        || matches!(
+            ai_type,
+            0 | 3
             | 4
             | 5
             | 6
@@ -124,11 +127,13 @@ pub(crate) const fn hibernates_without_nearby_players(
             | 0x65
             | 0x67
             | 0x68
-    ) || (ai_type == 2 && smart_gladiator_ready_to_idle)
+        )
+        || (ai_type == 2 && smart_gladiator_ready_to_idle)
 }
 
 pub(crate) const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
     tamed
+        || MonsterAiKind::is_generic_ai_type(ai_type)
         || matches!(
             ai_type,
             0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 23 | 24

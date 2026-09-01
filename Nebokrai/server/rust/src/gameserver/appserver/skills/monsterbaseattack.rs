@@ -114,6 +114,7 @@ use super::taiji::TAIJI_SKILL_ID;
 use super::yunshenglightning::{YUNSHENG_LIGHTNING_SKILL_ID, execute_owned_yunsheng_lightning};
 use super::yakshaslash::{YAKSHA_SLASH_SKILL_ID, execute_owned_monster_yaksha_slash};
 use super::zombieclaw::{ZOMBIE_CLAW_SKILL_ID, execute_owned_zombie_claw};
+use crate::gameserver::appserver::ai::aifactory::MonsterAiKind;
 use crate::gameserver::appserver::ai::archer::select_archer_enemy;
 use crate::gameserver::appserver::ai::bossblue::{
     choose_boss_blue_attack_skill, select_boss_blue_enemy,
@@ -472,7 +473,8 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 /// Выполняет только подтверждённый `OnSearchEnemy` обычного агрессивного
 /// монстра, умного и пассивного гладиаторов, слабого существа, двух лучников,
 /// военного монстра, участника битвы богов, городского охранника, владыки,
-/// близнецов JiuMai и двух боссов.
+/// близнецов JiuMai и двух боссов. Фабричный fallback `CMonsterAI` выполняет
+/// унаследованный пустой `OnSearchEnemy`, но всё равно завершает FIFO-событие.
 /// Предшествующее событие уже обработано владельцем FIFO, поэтому здесь не
 /// начинается атака в том же такте.
 pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
@@ -764,6 +766,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 minimum_skill_distance,
             )
         }
+        _ if MonsterAiKind::is_generic_ai_type(property.ai) => None,
         _ => return false,
     };
     if let Some(selected) = selected
@@ -930,7 +933,8 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 13 | 14 | 15 | 17 | 18 | 19 | 20 | 21 | 24 | 100 | 0x65)
+        && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 13 | 14 | 15 | 17 | 18 | 19 | 20 | 21 | 24 | 100 | 0x65)
+            || MonsterAiKind::is_generic_ai_type(property.ai))
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
     }
