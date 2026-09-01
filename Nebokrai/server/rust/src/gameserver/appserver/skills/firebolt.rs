@@ -7,9 +7,8 @@
 //! региону `CFireBoltPhalanx`; урон выполняется только его ИИ после строгой
 //! временной границы. При создании допустимого снаряда канонический
 //! `CSoulCollectState` целиком потребляется, его visual завершается, а оба
-//! множителя передаются phalanx-owner-у. Object-target разрешение разделяет
-//! подтверждённый `CState::GetSufferer` с базовой магией, включая ближайшую
-//! клетку footprint построек. Обычное, отказное и клиентское завершение после
+//! множителя передаются phalanx-owner-у. Обычное, отказное и клиентское
+//! завершение после
 //! `Begin` используют подтверждённый хвост `End(1)`: возврат движения,
 //! `AfterUseSkill`, очистку текущего навыка и фиксацию времени восстановления.
 //! Координатная перегрузка `Begin` остаётся ниже.
@@ -20,7 +19,6 @@ use super::basemagic::{
     SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME,
     SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    is_base_magic_object_target_type,
 };
 use super::fireboltphalanx::CFireBoltPhalanx;
 use super::kernel::{SkillStage, SkillTermination};
@@ -40,6 +38,7 @@ pub(crate) const FIRE_BOLT_SKILL_ID: u32 = 0x132;
 
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
@@ -51,7 +50,14 @@ fn send_failure(game: &CGame, player_id: i32, code: u8) {
 }
 
 fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
-    game.base_magic_target_dead(region_id, target)
+    match target.object_type {
+        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
+        MONSTER_TYPE => game
+            .find_region(region_id)
+            .and_then(|owner| owner.base().find_monster_by_id(target.id))
+            .is_none_or(|monster| monster.hit_points() == 0),
+        _ => true,
+    }
 }
 
 fn send_start(game: &mut CGame, player_id: i32, level: i32) {
@@ -114,8 +120,13 @@ pub(crate) fn cancel_player_fire_bolt<Runtime: GameMainLoopRuntime>(
 }
 
 pub(crate) const fn is_fire_bolt_target(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch, PlayerSkillDispatch::Object { skill_id: FIRE_BOLT_SKILL_ID, target }
-        if is_base_magic_object_target_type(target.object_type))
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::Object {
+            skill_id: FIRE_BOLT_SKILL_ID,
+            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+        }
+    )
 }
 
 pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
@@ -171,14 +182,12 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let Some((target_x, target_y)) =
-            game.base_magic_target_point(region_id, source_x, source_y, target)
-        else {
+        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_failure(game, player_id, 10);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let path = game.base_magic_path(
-            region_id, source_x, source_y, target_x, target_y, None,
+            region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             send_failure(game, player_id, 0x0b);
@@ -217,9 +226,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
             finish_player_fire_bolt(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let Some((target_x, target_y)) =
-            game.base_magic_target_point(region_id, source_x, source_y, target)
-        else {
+        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_failure(game, player_id, 10);
             finish_player_fire_bolt(game, player_id, player_ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -227,7 +234,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_mana(mana.wrapping_sub(mp_loss));
             player.movement_shape_mut().set_direction(get_line_direction(
-                source_x, source_y, target_x, target_y,
+                source_x, source_y, target_view.tile_x, target_view.tile_y,
             ));
             player.set_skill_moveable(false);
         }
@@ -249,9 +256,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    let Some((target_x, target_y)) =
-        game.base_magic_target_point(region_id, source_x, source_y, target)
-    else {
+    let Some(target_view) = game.base_magic_target_view(region_id, target) else {
         send_failure(game, player_id, 10);
         finish_player_fire_bolt(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -264,22 +269,22 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let attack_time_ms = real_distance(
-        source_x, source_y, target_x, target_y,
+        source_x, source_y, target_view.tile_x, target_view.tile_y,
     )
     .wrapping_mul(summoned_speed as i32);
     send_fire(
-        game, player_id, target, target_x, target_y, level, attack_time_ms,
+        game, player_id, target, target_view.tile_x, target_view.tile_y, level, attack_time_ms,
     );
 
     let forced_distance = real_distance(
-        source_x, source_y, target_x, target_y,
+        source_x, source_y, target_view.tile_x, target_view.tile_y,
     ) as u32;
     let path = game.base_magic_path(
         region_id,
         source_x,
         source_y,
-        target_x,
-        target_y,
+        target_view.tile_x,
+        target_view.tile_y,
         Some(forced_distance),
     );
     if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {

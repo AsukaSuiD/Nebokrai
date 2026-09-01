@@ -41228,12 +41228,9 @@ impl CGame {
                 dispatch,
                 BattleFairySkillDispatch::Object {
                     skill_id: BATTLE_FAIRY_BASE_MAGIC_SKILL_ID,
-                    target: ShapeIdentity {
-                        object_type: PLAYER_TYPE | MONSTER_TYPE,
-                        ..
-                    },
+                    target,
                     ..
-                }
+                } if is_base_magic_object_target_type(target.object_type)
             ) {
                 execute_battle_fairy_base_magic(self, player_id, dispatch, player_ai, runtime)
             } else {
