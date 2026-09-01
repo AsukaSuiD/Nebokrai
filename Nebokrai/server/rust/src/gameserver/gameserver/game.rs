@@ -40457,6 +40457,14 @@ impl CGame {
                     monster.move_shape().shape().get_tile_y().ok()?,
                 ))
             }
+            NPC_TYPE => {
+                let region_id = region_id?;
+                let npc = self.find_region(region_id)?.base().find_npc_by_id(target.id)?;
+                Some((
+                    npc.move_shape().shape().get_tile_x().ok()?,
+                    npc.move_shape().shape().get_tile_y().ok()?,
+                ))
+            }
             _ => None,
         }
     }

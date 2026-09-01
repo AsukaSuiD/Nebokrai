@@ -5,6 +5,9 @@
 //! отдельную задержку повторного применения, длину клеточного пути, направление
 //! к цели и формат действий `0xBFE01`. После задержки `CGame` только разрешает
 //! регионального владельца и передаёт цель всем принадлежащим игроку питомцам.
+//! Объектная перегрузка принимает любой отличный от владельца `CMoveShape`;
+//! поэтому NPC проходит cast и назначение, а уже monster AI отвергает его своим
+//! `IsAttackAble` и выполняет обычную потерю цели.
 
 use super::baseattack::time_reached;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -22,6 +25,7 @@ use crate::public::tools::get_line_direction;
 pub(crate) const PETS_CONTROL_SKILL_ID: u32 = 0xd7;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
+const NPC_TYPE: i32 = 500;
 const MONSTER_TYPE: i32 = 600;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_TARGET_MAX_DISTANCE: u32 = 5_003;
@@ -93,7 +97,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
         PlayerSkillDispatch::Object {
             skill_id: PETS_CONTROL_SKILL_ID,
             target,
-        } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+        } if matches!(target.object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE)
             && !(target.object_type == PLAYER_TYPE && target.id == player_id) => {
             target
         }
@@ -171,7 +175,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if game.periodic_state_target_dead(region_id, target) {
+    if target.object_type != NPC_TYPE && game.periodic_state_target_dead(region_id, target) {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"GS0285");
         abort_player_pets_control(game, player_id);
