@@ -19,8 +19,8 @@
 //! wire строго на первом false, как исходная цепочка. После чтения base-wire
 //! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
 //! принимается как независимый persisted fact.
-//! Quest-map decoder сохраняет signed legacy count: отрицательное значение
-//! очищает карту и не отклоняет остальной player handoff.
+//! Quest-map и friend-list decoder-ы сохраняют signed legacy count:
+//! отрицательное значение очищает коллекцию и не отклоняет остальной handoff.
 //! Exact virtual tail этого decoder-а вызывает `CPlayer::InitSkills`: он
 //! гарантирует базовую защиту и профессии 0/1/2 их базовые attack-owner-ы, не
 //! заменяет уже загруженные записи и завершает вход `SetHP(GetMaxHP)`.
@@ -2632,8 +2632,8 @@ impl CPlayer {
         );
 
         player.friends.clear();
-        let friend_count = read_player_game_save_count(source, cursor, "m_listFriend")?;
-        for _ in 0..friend_count {
+        let friend_count = read_player_game_save_i32(source, cursor, "m_listFriend")?;
+        for _ in 0..friend_count.max(0) {
             player.friends.push(PlayerFriend {
                 name: read_player_game_save_string(source, cursor, "tagFriend.strName", 0x94)?,
                 online: read_player_game_save_u8(source, cursor, "tagFriend.bOnline")? != 0,
