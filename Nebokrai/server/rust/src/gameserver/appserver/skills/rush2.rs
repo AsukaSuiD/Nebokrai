@@ -4,8 +4,10 @@
 //! `appserver/skills/rush2.cpp`. Геометрия пути и wire-форма совпадают с
 //! `CRush`, поэтому переиспользуются узкие семейные функции. Отличия сохранены
 //! здесь: строгая проверка дальности, собственное `Rush2State` и вызов
-//! боевого контакта после состояния и отбрасывания. `CGame` только связывает
-//! каноническое состояние, пространство, боевой owner и доставку. Завершение
+//! боевого контакта после состояния и отбрасывания. Контакт сохраняет
+//! канонический default skill-id `0x7fffffff` конструктора
+//! `tagAttackInformation`. `CGame` только связывает каноническое состояние,
+//! пространство, боевой owner и доставку. Завершение
 //! использует подтверждённый семейный хвост `CRush::End`, но сохраняет
 //! отдельный cooldown второго навыка.
 
@@ -36,7 +38,7 @@ const TARGET_MAX_DISTANCE: u32 = 5_003;
 const STATE_PERSIST_TIME: u32 = 10_002;
 const TARGET_BACK_STEP: u32 = 1_001;
 const TARGET_MOVE_SPEED: u32 = 2_001;
-const UNKNOWN_ATTACK_SKILL_ID: u32 = 0x7fff_ffff;
+const DEFAULT_CONTACT_SKILL_ID: u32 = 0x7fff_ffff;
 
 pub(crate) fn is_rush_2_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     skill_id(dispatch) == RUSH_2_SKILL_ID
@@ -69,7 +71,7 @@ pub(crate) fn cancel_player_rush_2<Runtime: GameMainLoopRuntime>(
 fn contact_attack(player: &CPlayer) -> AttackInformation {
     let master = master_info(player);
     AttackInformation {
-        skill_id: UNKNOWN_ATTACK_SKILL_ID,
+        skill_id: DEFAULT_CONTACT_SKILL_ID,
         skill_level: 1,
         attacker_type: PLAYER_TYPE,
         attacker_id: player.player_id(),

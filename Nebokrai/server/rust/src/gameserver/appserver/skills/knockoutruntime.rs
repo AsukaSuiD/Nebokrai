@@ -1,5 +1,9 @@
 //! Рабочий владелец исполнения `CKnockOut` (`0x192`) с объектом-целью.
 //!
+//! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
+//! `appserver/skills/knockout.cpp` и `knockoutstate.cpp`. Контактные атаки
+//! player- и monster-ветвей сохраняют default skill-id `0x7fffffff` из
+//! конструктора `tagAttackInformation` и уровень `1`.
 //! Формулы, последовательность случайных чисел, проверки, время восстановления
 //! и сетевой формат принадлежат навыку. Player- и monster-owner-ы подключены
 //! к своим реальным AI/runtime путям; `CGame` остаётся координатором общей
@@ -34,7 +38,7 @@ pub(crate) const KNOCK_OUT_SKILL_ID: u32 = 0x192;
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
 const CURE_SKILL_ID: u32 = 0x131;
-const UNKNOWN_ATTACK_SKILL_ID: u32 = 0x7fff_ffff;
+const DEFAULT_CONTACT_SKILL_ID: u32 = 0x7fff_ffff;
 const DELAY: u32 = 10_001;
 const PERSIST: u32 = 10_002;
 const REUSE: u32 = 10_005;
@@ -135,8 +139,8 @@ fn attack(game: &mut CGame, player_id: i32, target_level: u8) -> Option<(MasterI
     let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(span)).max(0);
     let mut value = AttackInformation {
         // `CKnockOut::Attack` не переписывает значения конструктора
-        // `tagAttackInformation`: ID остаётся `SKILL_UNKNOW`, а уровень — 1.
-        skill_id: UNKNOWN_ATTACK_SKILL_ID, skill_level: 1, attacker_type: PLAYER_TYPE, attacker_id: player_id,
+        // `tagAttackInformation`: ID остаётся `0x7fffffff`, а уровень — 1.
+        skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1, attacker_type: PLAYER_TYPE, attacker_id: player_id,
         attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id,
         hit_modifier: 100, damage_factor: factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0,
         damages: vec![
@@ -174,7 +178,7 @@ fn monster_attack(
     let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
     let mut attack = AttackInformation {
         // Конструкторное значение сохраняется и для non-player owner-а.
-        skill_id: UNKNOWN_ATTACK_SKILL_ID, skill_level: 1,
+        skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1,
         attacker_type: MONSTER_TYPE, attacker_id: monster_id,
         attacker_team_id: 0, attacker_faction_id: 0, attacker_union_id: 0,
         hit_modifier: 100, damage_factor: 1.0, damage_modifier: 0,
