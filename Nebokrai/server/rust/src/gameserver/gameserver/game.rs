@@ -568,7 +568,8 @@ macro_rules! player_property_recompute {
         let base_combat_scales = $game.globe_setup.base_combat_scales();
         let critical_rate = $game.globe_setup.critical_rate();
         let goods_factory = $game.goods_factory.clone();
-        move |player: &CPlayer| {
+        move |player: &mut CPlayer| {
+            player.refresh_battle_fairy_equipment_properties(&goods_factory);
             player.recompute_base_and_equipment_properties(
                 coefficients,
                 base_combat_scales,
@@ -6008,13 +6009,25 @@ impl CGame {
         OldClientGoodsEncoder::new(&self.goods_factory, self.globe_setup.da_kong_key()).encode(goods)
     }
 
-    pub(crate) fn recompute_player_properties(&self, player: &CPlayer) -> PlayerCombatProperties {
-        player.recompute_base_and_equipment_properties(
-            self.globe_setup.player_property_coefficients(),
-            self.globe_setup.base_combat_scales(),
-            self.globe_setup.critical_rate(),
-            &self.goods_factory,
-        )
+    /// Мутирующая граница полного `CPlayer::UpdateProperty`: производные
+    /// battle-fairy addon-ы slot 10 пересобираются до `MountAllEquip`, поэтому
+    /// ни один caller не получает снимок от предыдущего property-pass-а.
+    pub(crate) fn recompute_player_properties_for_update(
+        &mut self,
+        player_id: i32,
+    ) -> Option<PlayerCombatProperties> {
+        let coefficients = self.globe_setup.player_property_coefficients();
+        let base_combat_scales = self.globe_setup.base_combat_scales();
+        let critical_rate = self.globe_setup.critical_rate();
+        let goods_factory = self.goods_factory.clone();
+        let player = self.players.get_mut(&player_id)?;
+        player.refresh_battle_fairy_equipment_properties(&goods_factory);
+        Some(player.recompute_base_and_equipment_properties(
+            coefficients,
+            base_combat_scales,
+            critical_rate,
+            &goods_factory,
+        ))
     }
 
     pub(crate) fn apply_recomputed_player_properties(
@@ -6037,7 +6050,6 @@ impl CGame {
         let Some(pass) = self
             .find_player_mut(player_id)
             .map(|player| {
-                player.refresh_battle_fairy_equipment_properties(&goods_factory);
                 player.apply_materialized_state_properties(
                     properties,
                     coefficients,
@@ -17192,10 +17204,7 @@ impl CGame {
             .get_mut(&player_id)?
             .change_script_value(property, delta)
             .unwrap_or(0);
-        let recomputed = {
-            let player = self.players.get(&player_id)?;
-            self.recompute_player_properties(player)
-        };
+        let recomputed = self.recompute_player_properties_for_update(player_id)?;
         let _ = self.apply_recomputed_player_properties(player_id, recomputed);
         let player = self
             .players
@@ -17225,10 +17234,7 @@ impl CGame {
             .set_script_value(property, value)
             .unwrap_or(0);
 
-        let recomputed = {
-            let player = self.players.get(&player_id)?;
-            self.recompute_player_properties(player)
-        };
+        let recomputed = self.recompute_player_properties_for_update(player_id)?;
         let _ = self.apply_recomputed_player_properties(player_id, recomputed);
         let player = self
             .players
@@ -17416,12 +17422,9 @@ impl CGame {
         if crate::gameserver::appserver::skills::realmappellation::is_internal_skill(
             mutation.skill_id,
         ) {
-            let current_properties = {
-                let player = self
-                    .find_player(target_id)
-                    .expect("realm skill mutation сохраняет canonical player");
-                self.recompute_player_properties(player)
-            };
+            let current_properties = self
+                .recompute_player_properties_for_update(target_id)
+                .expect("realm skill mutation сохраняет canonical player");
             let _ = self.apply_recomputed_player_properties(target_id, current_properties);
             let applied_properties = self
                 .find_player(target_id)
@@ -24401,21 +24404,23 @@ impl CGame {
         let coefficients = self.globe_setup.player_property_coefficients();
         let base_combat_scales = self.globe_setup.base_combat_scales();
         let critical_rate = self.globe_setup.critical_rate();
+        let goods_factory = self.goods_factory.clone();
         let (snapshot, current_properties) = {
             let player = self
-                .find_player(player_id)
+                .find_player_mut(player_id)
                 .expect("CiQing refresh получает canonical player");
+            player.refresh_battle_fairy_equipment_properties(&goods_factory);
             let previous = player.recompute_without_ci_qing_properties(
                 coefficients,
                 base_combat_scales,
                 critical_rate,
-                &self.goods_factory,
+                &goods_factory,
             );
             let current = player.recompute_base_and_equipment_properties(
                 coefficients,
                 base_combat_scales,
                 critical_rate,
-                &self.goods_factory,
+                &goods_factory,
             );
             let (_, tao_zhuang_add_values, tao_zhuang_id) =
                 player.ci_qing_property_snapshot();
@@ -28515,10 +28520,7 @@ impl CGame {
         player_id: i32,
         _context: &mut Context,
     ) {
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| self.recompute_player_properties(player))
-        else {
+        let Some(properties) = self.recompute_player_properties_for_update(player_id) else {
             return;
         };
         self.apply_player_state_properties(player_id, properties);
@@ -29068,9 +29070,8 @@ impl CGame {
     }
 
     fn refresh_script_change_body_properties(&mut self, player_id: i32) {
-        let properties = match self.find_player(player_id) {
-            Some(player) => self.recompute_player_properties(player),
-            None => return,
+        let Some(properties) = self.recompute_player_properties_for_update(player_id) else {
+            return;
         };
         self.apply_player_state_properties(player_id, properties);
     }
@@ -29167,12 +29168,9 @@ impl CGame {
                 skill_factory,
             )
         };
-        let current_properties = {
-            let player = self
-                .find_player(player_id)
-                .expect("realm mutation сохраняет canonical player");
-            self.recompute_player_properties(player)
-        };
+        let current_properties = self
+            .recompute_player_properties_for_update(player_id)
+            .expect("realm mutation сохраняет canonical player");
         let _ = self.apply_recomputed_player_properties(player_id, current_properties);
         let applied_properties = self
             .find_player(player_id)
@@ -31317,11 +31315,9 @@ impl CGame {
         } else {
             None
         };
-        let recomputed = self.recompute_player_properties(
-            self.players
-                .get(&expected_player_id)
-                .expect("login script не удаляет player owner"),
-        );
+        let recomputed = self
+            .recompute_player_properties_for_update(expected_player_id)
+            .expect("login script не удаляет player owner");
         let _ = self.commit_recomputed_player_properties(expected_player_id, recomputed, false);
         let country_identity = self.player_country_identity(expected_player_id);
         let level_experience = self.player_list.level_experience(
@@ -35146,9 +35142,7 @@ impl CGame {
     /// goods message, FourNation и skill/state pipeline без фиктивного
     /// container/runtime параметра.
     pub(crate) fn update_player_properties(&mut self, player_id: i32) -> Option<(i32, bool)> {
-        let properties = self
-            .find_player(player_id)
-            .map(|player| self.recompute_player_properties(player))?;
+        let properties = self.recompute_player_properties_for_update(player_id)?;
         if !self.apply_recomputed_player_properties(player_id, properties) {
             return None;
         }
@@ -35320,7 +35314,7 @@ impl CGame {
         player_id: i32,
         ex_id: CGuid,
         runtime: PlayerEquipmentRemoveRuntimeFacts,
-        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
     ) -> Option<PlayerEquipmentRemoveReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
@@ -35407,7 +35401,7 @@ impl CGame {
         incoming: &mut Option<CGoods>,
         runtime: PlayerEquipmentAddRuntimeFacts,
         register_with_goods_ai: &mut dyn FnMut(&CGoods),
-        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
     ) -> Option<PlayerEquipmentAddReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
@@ -37991,10 +37985,7 @@ impl CGame {
             update.add_ulong(payload.len() as u32);
             update.base_mut().add(&payload);
             let _ = update.send_to_player(self.net_server(), player_id);
-            if let Some(properties) = self
-                .find_player(player_id)
-                .map(|player| self.recompute_player_properties(player))
-            {
+            if let Some(properties) = self.recompute_player_properties_for_update(player_id) {
                 let _ = self.apply_recomputed_player_properties(player_id, properties);
                 if let Some(player) = self.find_player(player_id) {
                     let _ = self.send_player_properties_changed(player);
@@ -44325,10 +44316,7 @@ impl CGame {
         player_id: i32,
         refill_mana: bool,
     ) -> bool {
-        let Some(properties) = self
-            .find_player(player_id)
-            .map(|player| self.recompute_player_properties(player))
-        else {
+        let Some(properties) = self.recompute_player_properties_for_update(player_id) else {
             return false;
         };
         if !self.apply_recomputed_player_properties(player_id, properties) {

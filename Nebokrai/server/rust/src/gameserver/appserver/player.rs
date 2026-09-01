@@ -10674,7 +10674,7 @@ impl CPlayer {
         factory: &CGoodsFactory,
         skill_factory: &CSkillFactory,
         runtime: PlayerEquipmentRemoveRuntimeFacts,
-        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
     ) -> PlayerEquipmentRemoveReport {
         let player_id = self.player_id();
         let mut outcome = self.equipment.remove(
@@ -10766,7 +10766,7 @@ impl CPlayer {
         skill_factory: &CSkillFactory,
         runtime: PlayerEquipmentAddRuntimeFacts,
         register_with_goods_ai: &mut dyn FnMut(&CGoods),
-        recompute_properties: &mut dyn FnMut(&CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
     ) -> PlayerEquipmentAddReport {
         let player_id = self.player_id();
         let previous_expanded_package_num = self.equipment.expanded_package_num();

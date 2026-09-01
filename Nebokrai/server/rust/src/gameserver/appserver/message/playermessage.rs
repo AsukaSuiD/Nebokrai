@@ -430,10 +430,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 .find_player_mut(player_id)
                 .expect("stat-allocation player сохранён после context lookup")
                 .allocate_stat_point(selector as u8, constitution_hp, intelligence_mp);
-            let properties = game.recompute_player_properties(
-                game.find_player(player_id)
-                    .expect("stat-allocation player сохранён после mutation"),
-            );
+            let properties = game
+                .recompute_player_properties_for_update(player_id)
+                .expect("stat-allocation player сохранён после mutation");
             let _applied = game.apply_recomputed_player_properties(player_id, properties);
             let (wire, base_maximum_hp, base_maximum_mp) = {
                 let player = game
@@ -748,9 +747,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 consume = false;
                 if facts.mount_state_exists {
                     let _ended = game.end_player_ride(player_id);
-                    let properties = game.recompute_player_properties(
-                        game.find_player(player_id).expect("mount player сохранён"),
-                    );
+                    let properties = game
+                        .recompute_player_properties_for_update(player_id)
+                        .expect("mount player сохранён");
                     game.apply_player_state_properties(player_id, properties);
                 } else if game.find_player(player_id).is_some_and(|player| {
                     player.current_progress() != PlayerProgress::OpenStall
@@ -769,10 +768,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                         &original_name,
                     );
                     if applied {
-                        let properties = game.recompute_player_properties(
-                            game.find_player(player_id)
-                                .expect("mounted player сохранён"),
-                        );
+                        let properties = game
+                            .recompute_player_properties_for_update(player_id)
+                            .expect("mounted player сохранён");
                         game.apply_player_state_properties(player_id, properties);
                         consume = goods.addon_property_value(
                             game.goods_factory(),
