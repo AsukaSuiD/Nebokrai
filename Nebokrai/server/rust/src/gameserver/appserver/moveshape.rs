@@ -10,7 +10,9 @@
 //! сценарные состояния и езда принадлежат одному `CanonicalStateStorage`.
 //! Сырой `ex_states` скрыт внутри `LegacyStateCodec` и служит только для
 //! сохранения точного порядка, неизвестных записей и обратного двоичного кодека;
-//! игровое поведение читает типизированные состояния. Добавление, замена,
+//! игровое поведение читает типизированные состояния. Пересчёт свойств игрока
+//! проецирует уже достигнутые skill-state в том же insertion-order, включая
+//! повторные экземпляры одного ID. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
 //! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
@@ -691,6 +693,46 @@ pub(crate) enum ReachedPropertyState {
     PoisonFog(PoisonFogState),
     GodBless(GodBlessState),
     Roar(RoarState),
+}
+
+/// Типизированные skill-state, влияющие на `CPlayer::UpdateProperty`.
+/// Значения копируются из канонического хранилища в порядке соответствующих
+/// записей `m_vStates`; сырой payload остаётся только владельцем порядка.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerSkillPropertyState {
+    PersistentAgility(PersistentAgilityFamilyState),
+    Agility2(AgilityState2),
+    TaiJi(TaiJiState),
+    EnlargeMaxHp(EnlargeMaxHpState),
+    EnlargeMaxMp(EnlargeMaxMpState),
+    EnlargeFullMiss(EnlargeFullMissState),
+    Origin(OriginState),
+    Hearten(HeartenState),
+    Callosity(CallosityFamilyState),
+    Swordship(SwordshipState),
+    WuXing(WuXingState),
+    BattleFairyAttribute(BattleFairyAttributeState),
+    TianShenXiaFan(TianShenXiaFanState),
+    Weak(WeakState),
+    PoisonFog(PoisonFogState),
+    GodBless(GodBlessState),
+    Roar(RoarState),
+}
+
+fn next_ordered_state<T: Copy>(
+    states: &[T],
+    state_id: u32,
+    occurrences: &mut BTreeMap<u32, usize>,
+    id: impl Fn(T) -> u32,
+) -> Option<T> {
+    let occurrence = occurrences.entry(state_id).or_default();
+    let state = states
+        .iter()
+        .copied()
+        .filter(|state| id(*state) == state_id)
+        .nth(*occurrence)?;
+    *occurrence = occurrence.wrapping_add(1);
+    Some(state)
 }
 
 impl Default for CMoveShape {
@@ -3526,6 +3568,125 @@ impl CMoveShape {
         }
         states.sort_by(|left, right| right.0.cmp(&left.0));
         states.into_iter().map(|(_, state)| state).collect()
+    }
+
+    /// Восстанавливает относительный порядок уже типизированных skill-state
+    /// по byte-exact записям исходного `m_vStates`. Повторные экземпляры одного
+    /// ID выбираются последовательно, поэтому два одинаковых состояния не
+    /// схлопываются в одно при пересчёте свойств.
+    pub(crate) fn ordered_player_skill_property_states(
+        &self,
+    ) -> Vec<PlayerSkillPropertyState> {
+        let mut ordered = Vec::new();
+        let mut swordship_occurrences = BTreeMap::new();
+        let mut wuxing_occurrences = BTreeMap::new();
+        let mut battle_fairy_occurrences = BTreeMap::new();
+
+        for offset in known_state_record_offsets(&self.ex_states) {
+            let Some(state_id) = read_u32(&self.ex_states, offset) else {
+                continue;
+            };
+            let state = self
+                .persistent_agility_family_state
+                .filter(|state| state.skill_id() == state_id)
+                .map(PlayerSkillPropertyState::PersistentAgility)
+                .or_else(|| {
+                    self.agility_state_2
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::Agility2)
+                })
+                .or_else(|| {
+                    self.taiji_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::TaiJi)
+                })
+                .or_else(|| {
+                    self.enlarge_max_hp_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::EnlargeMaxHp)
+                })
+                .or_else(|| {
+                    self.enlarge_max_mp_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::EnlargeMaxMp)
+                })
+                .or_else(|| {
+                    self.enlarge_full_miss_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::EnlargeFullMiss)
+                })
+                .or_else(|| {
+                    self.origin_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::Origin)
+                })
+                .or_else(|| {
+                    self.hearten_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::Hearten)
+                })
+                .or_else(|| {
+                    self.callosity_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::Callosity)
+                })
+                .or_else(|| {
+                    next_ordered_state(
+                        &self.swordship_states,
+                        state_id,
+                        &mut swordship_occurrences,
+                        SwordshipState::skill_id,
+                    )
+                    .map(PlayerSkillPropertyState::Swordship)
+                })
+                .or_else(|| {
+                    next_ordered_state(
+                        &self.wuxing_states,
+                        state_id,
+                        &mut wuxing_occurrences,
+                        WuXingState::skill_id,
+                    )
+                    .map(PlayerSkillPropertyState::WuXing)
+                })
+                .or_else(|| {
+                    next_ordered_state(
+                        &self.battle_fairy_attribute_states,
+                        state_id,
+                        &mut battle_fairy_occurrences,
+                        BattleFairyAttributeState::skill_id,
+                    )
+                    .map(PlayerSkillPropertyState::BattleFairyAttribute)
+                })
+                .or_else(|| {
+                    self.tian_shen_xia_fan_state
+                        .filter(|state| state.state_id() == state_id)
+                        .map(PlayerSkillPropertyState::TianShenXiaFan)
+                })
+                .or_else(|| {
+                    self.weak_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::Weak)
+                })
+                .or_else(|| {
+                    self.poison_fog_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::PoisonFog)
+                })
+                .or_else(|| {
+                    self.god_bless_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::GodBless)
+                })
+                .or_else(|| {
+                    self.roar_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerSkillPropertyState::Roar)
+                });
+            if let Some(state) = state {
+                ordered.push(state);
+            }
+        }
+        ordered
     }
     pub(crate) fn take_expired_god_bless_state(&mut self, now_ms: u32) -> Option<GodBlessState> {
         let state = self.god_bless_state.filter(|state| state.expired(now_ms))?;

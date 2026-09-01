@@ -5642,11 +5642,11 @@ impl CPlayer {
     }
 
     /// Применяет все уже материализованные семейства общего
-    /// `CPlayer::UpdateProperty`. Формулы остаются методами конкретных
-    /// владельцев состояний; наружу выходят только сетевые visuals. В raw
-    /// состояния лежат в одном insertion-ordered vector, тогда как безопасная
-    /// модель пока разделяет их по владельцам, поэтому cross-family порядок
-    /// остаётся точной неизвестностью этого owner-а.
+    /// `CPlayer::UpdateProperty`. Типизированные skill-state следуют byte-exact
+    /// insertion-order исходного `m_vStates`; формулы остаются методами
+    /// конкретных владельцев. Сценарные и change-body состояния пока проходят
+    /// своими цельными группами после них, поэтому их взаимное положение со
+    /// skill-state остаётся отдельной неизвестностью owner-а.
     pub(crate) fn apply_materialized_state_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
@@ -5654,57 +5654,52 @@ impl CPlayer {
         goods_factory: &CGoodsFactory,
         skill_factory: &CSkillFactory,
     ) -> PlayerStatePropertyPass {
-        if let Some(state) = self.move_shape.persistent_agility_family_state() {
-            properties = state.apply_to_player(properties);
-        }
-        if let Some(state) = self.agility_state_2() {
-            properties = state.apply_to_player(properties);
-        }
-        if let Some(state) = self.move_shape.taiji_state() {
-            properties = state.apply_to_player(properties);
-        }
-        if let Some(state) = self.move_shape.enlarge_max_hp_state() {
-            properties.maximum_hp = state.apply(properties.maximum_hp);
-        }
-        if let Some(state) = self.move_shape.enlarge_max_mp_state() {
-            properties.maximum_mp = state.apply(properties.maximum_mp);
-        }
-        if let Some(state) = self.move_shape.enlarge_full_miss_state() {
-            properties.full_miss = state.apply(properties.full_miss);
-        }
-        if let Some(state) = self.move_shape.origin_state() {
-            properties.element_modify = state.apply_to_player(properties.element_modify);
-        }
         let hearten_visual = self.move_shape.hearten_state();
-        if let Some(state) = hearten_visual {
-            properties.maximum_hp = state.apply(properties.maximum_hp);
-        }
         let callosity_visual = self.callosity_state();
-        if let Some(state) = callosity_visual {
-            properties = state.apply_to_player(properties);
-        }
-        for state in self.move_shape.swordship_states() {
-            properties = state.apply_to_player(properties);
-        }
         let occupation = usize::from(self.base_properties.occupation).min(2);
-        for state in self.move_shape.wuxing_states() {
-            properties = state.apply_to_player(properties, coefficients, occupation);
-        }
-        for state in self.move_shape.battle_fairy_attribute_states() {
-            properties = state.apply_to_player(properties);
-        }
-        if let Some(state) = self.move_shape.tian_shen_xia_fan_state() {
-            properties = state.apply_to_player(properties, skill_factory);
-        }
-        let (mut properties, script_visuals) = self.apply_script_move_state_properties(properties);
-        for state in self.move_shape.reached_property_states() {
+        for state in self.move_shape.ordered_player_skill_property_states() {
+            use super::moveshape::PlayerSkillPropertyState as State;
             properties = match state {
-                super::moveshape::ReachedPropertyState::Weak(state) => state.apply_to_player(properties),
-                super::moveshape::ReachedPropertyState::PoisonFog(state) => state.apply_to_player(self.level(), properties),
-                super::moveshape::ReachedPropertyState::GodBless(state) => state.apply_to_player(properties),
-                super::moveshape::ReachedPropertyState::Roar(state) => state.apply_to_player(properties),
+                State::PersistentAgility(state) => state.apply_to_player(properties),
+                State::Agility2(state) => state.apply_to_player(properties),
+                State::TaiJi(state) => state.apply_to_player(properties),
+                State::EnlargeMaxHp(state) => {
+                    properties.maximum_hp = state.apply(properties.maximum_hp);
+                    properties
+                }
+                State::EnlargeMaxMp(state) => {
+                    properties.maximum_mp = state.apply(properties.maximum_mp);
+                    properties
+                }
+                State::EnlargeFullMiss(state) => {
+                    properties.full_miss = state.apply(properties.full_miss);
+                    properties
+                }
+                State::Origin(state) => {
+                    properties.element_modify =
+                        state.apply_to_player(properties.element_modify);
+                    properties
+                }
+                State::Hearten(state) => {
+                    properties.maximum_hp = state.apply(properties.maximum_hp);
+                    properties
+                }
+                State::Callosity(state) => state.apply_to_player(properties),
+                State::Swordship(state) => state.apply_to_player(properties),
+                State::WuXing(state) => {
+                    state.apply_to_player(properties, coefficients, occupation)
+                }
+                State::BattleFairyAttribute(state) => state.apply_to_player(properties),
+                State::TianShenXiaFan(state) => {
+                    state.apply_to_player(properties, skill_factory)
+                }
+                State::Weak(state) => state.apply_to_player(properties),
+                State::PoisonFog(state) => state.apply_to_player(self.level(), properties),
+                State::GodBless(state) => state.apply_to_player(properties),
+                State::Roar(state) => state.apply_to_player(properties),
             };
         }
+        let (properties, script_visuals) = self.apply_script_move_state_properties(properties);
         let properties =
             self.apply_change_body_state_properties(properties, coefficients, goods_factory);
         if let Some(state) = self.move_shape.wangsheng_state()
