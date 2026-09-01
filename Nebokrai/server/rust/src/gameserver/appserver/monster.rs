@@ -961,6 +961,12 @@ impl CMonster {
         base
     }
 
+    /// Достигнутая ресурсная часть `CMonster::GetHit` (RVA `0x000E6760`):
+    /// signed DWORD не выше нуля становится единицей до сужения к `ushort`.
+    pub(crate) fn hit(&self, property: &MonsterProperties) -> u16 {
+        (property.hit as i32).max(1) as u16
+    }
+
     /// Достигнутая ресурсная часть `CMonster::GetAttackAvoid`
     /// (RVA `0x000E64F0`): неположительное signed значение становится нулём,
     /// а положительное ограничивается `99`.
@@ -1819,20 +1825,6 @@ impl CMonster {
 // PROTOTYPE: ulong __thiscall GetMaxAtk(void)
 //
 // Реализовано выше через `pet_scaled_attack` и `state_attack_bounds`.
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetHit
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1467
-// RVA: 0x000E6760
-// ADDRESS: 004e6760
-// PROTOTYPE: ushort __thiscall GetHit(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
 //
 
 // ============================================================================

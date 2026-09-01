@@ -67,7 +67,7 @@ fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Opt
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
             Some(Target {
                 identity, x: monster.move_shape().shape().get_tile_x().ok()?, y: monster.move_shape().shape().get_tile_y().ok()?,
-                level: property.level as u8, dodge: property.dodge as u16, dead: monster.hit_points() == 0,
+                level: property.level as u8, dodge: monster.dodge(property), dead: monster.hit_points() == 0,
                 cured: monster.move_shape().has_state_by_skill_id(CURE_SKILL_ID),
             })
         }
@@ -285,7 +285,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     } else {
         region.find_monster_by_id(target_identity.id).zip(target.monster_property.as_ref()).map_or(0, |(monster, property)| monster.dodge(property))
     };
-    let source_hit = (property.hit as i32).max(1) as u16;
+    let source_hit = region.find_monster_by_id(monster_id).map_or(1, |monster| monster.hit(property));
     let source_level = property.level as u8;
     let (base, magnify, level_rate) = game.globe_setup().base_attack_hit_formula();
     let chance = ((i32::from(source_hit).wrapping_sub(i32::from(target_dodge))) as f32 * magnify + base as f32 + i32::from(source_level).wrapping_sub(i32::from(target_level)) as f32 * level_rate).round_ties_even() as i32;
