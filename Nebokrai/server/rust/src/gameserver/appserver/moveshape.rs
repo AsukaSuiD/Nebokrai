@@ -197,7 +197,9 @@ use crate::gameserver::appserver::skills::soulcollectstate::{
     SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
 };
 use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
-use crate::gameserver::appserver::states::state::default_additional_data;
+use crate::gameserver::appserver::states::state::{
+    default_additional_data, default_client_state_time,
+};
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -777,9 +779,9 @@ impl CMoveShape {
         include_child: bool,
         is_dead: bool,
         now_ms: u32,
-        timed_state_now_milliseconds: impl FnMut() -> u32,
+        mut timed_state_now_milliseconds: impl FnMut() -> u32,
     ) -> Option<Vec<u8>> {
-        let states = self.serialized_ex_states(now_ms, timed_state_now_milliseconds);
+        let states = self.serialized_ex_states(now_ms, &mut timed_state_now_milliseconds);
         let declared_count = if states.is_empty() {
             0usize
         } else {
@@ -800,7 +802,13 @@ impl CMoveShape {
         for offset in offsets {
             let state_id = read_i32(&states, offset)?;
             writer.write_i32(state_id);
-            writer.write_i32(read_i32(&states, offset + 4)?);
+            writer.write_i32(self.client_state_time(
+                &states,
+                offset,
+                state_id as u32,
+                now_ms,
+                &mut timed_state_now_milliseconds,
+            )?);
             writer.write_u32(self.client_state_additional_data(state_id as u32));
         }
         for state in &self.team_recruitment_states {
@@ -812,12 +820,106 @@ impl CMoveShape {
         Some(payload)
     }
 
+    /// Exact virtual `CState::GetClientStateTime`: место persisted remaining
+    /// зависит от concrete serializer-а, а у постоянных состояний второй
+    /// DWORD вообще является игровым параметром. Особые owner-ы читаются из
+    /// канонического состояния; только записи с доказанным `remaining` сразу
+    /// после ID используют общий codec.
+    fn client_state_time(
+        &self,
+        states: &[u8],
+        offset: usize,
+        state_id: u32,
+        now_ms: u32,
+        mut now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<i32> {
+        let permanent = matches!(
+            state_id,
+            SWORDSHIP_SKILL_ID
+                | SWORDSHIP_2_SKILL_ID
+                | SWORDSHIP_3_SKILL_ID
+                | SWORDSHIP_4_SKILL_ID
+                | WUXING_METAL_SKILL_ID
+                | WUXING_WOOD_SKILL_ID
+                | WUXING_WATER_SKILL_ID
+                | WUXING_FIRE_SKILL_ID
+                | WUXING_EARTH_SKILL_ID
+                | METEOR_ARROW_MASS_SKILL_ID
+                | WEAK_STATE_ID
+                | ENERGY_HOLDING_STATE_ID
+                | CURE_STATE_SKILL_ID
+                | ENLARGE_FULL_MISS_SKILL_ID
+                | TAIJI_SKILL_ID
+                | ENLARGE_MAX_HP_SKILL_ID
+                | ENLARGE_MAX_MP_SKILL_ID
+                | ORIGIN_SKILL_ID
+                | RIDE_STATE_ID
+        ) || PersistentAgilityFamilyState::is_known_skill(state_id);
+        if permanent {
+            return Some(default_client_state_time());
+        }
+        match state_id {
+            SOUL_COLLECT_STATE_ID => Some(
+                self.soul_collect_state
+                    .map_or(default_client_state_time(), |state| state.variable_percent() as i32),
+            ),
+            CHANGE_BODY_STATE_ID => self
+                .change_body_states
+                .iter()
+                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
+                .map(|state| state.remaining_time_ms(now_ms) as i32),
+            EX_STATE_ID | EX_STATE_NEW_ID => self
+                .extended_states
+                .iter()
+                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
+                .map(|state| state.remaining_time_ms(now_ms) as i32),
+            UNDEAD_STATE_ID => self
+                .undead_states
+                .iter()
+                .find(|state| state.serialized_span().is_some_and(|(start, _)| start == offset))
+                .map(|state| state.remaining_time_ms(now_ms) as i32),
+            LEAF_CUT_STATE_ID => self
+                .leaf_cut_state
+                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
+            LEAF_CUT_2_STATE_ID => self
+                .leaf_cut_2_state
+                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
+            LEAF_CUT_3_STATE_ID => self
+                .leaf_cut_3_state
+                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
+            POISON_FOG_STATE_ID => self
+                .poison_fog_state
+                .map(|state| state.client_time(&mut now_milliseconds)),
+            id if id == super::skills::spriteburn::SPRITE_BURN_SKILL_ID => self
+                .sprite_burn_state
+                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
+            id if id == super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => self
+                .spider_poison_state
+                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
+            id if id == super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => self
+                .blood_loss_state
+                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
+            id if id == super::skills::poisonarrow::POISON_ARROW_SKILL_ID => self
+                .poison_arrow_state
+                .map(|state| state.client_state_time(&mut now_milliseconds) as i32),
+            _ => read_i32(states, offset + 4),
+        }
+    }
+
     /// Exact virtual `CState::GetAdditionalData`: persisted tail не является
-    /// client-проекцией. Из состояний общего codec собственные override-ы
-    /// имеют только запас метеорных стрел и верховая езда; остальные
-    /// используют нулевую базовую реализацию.
+    /// client-проекцией. Override-ы берутся из соответствующего typed owner-а;
+    /// остальные состояния используют нулевую базовую реализацию.
     fn client_state_additional_data(&self, state_id: u32) -> u32 {
         match state_id {
+            WEAK_STATE_ID => self
+                .weak_state
+                .map_or(default_additional_data(), WeakState::attack_loss),
+            SOUL_COLLECT_STATE_ID => self
+                .soul_collect_state
+                .map_or(default_additional_data(), |state| state.souls() as u32),
+            ENERGY_HOLDING_STATE_ID => self
+                .energy_holding_state
+                .map_or(default_additional_data(), EnergyHoldingState::parameter_percent),
             METEOR_ARROW_MASS_SKILL_ID => self
                 .meteor_arrow_state
                 .map_or(default_additional_data(), |state| state.additional_data() as u32),
@@ -825,6 +927,21 @@ impl CMoveShape {
                 .ride_state
                 .as_ref()
                 .map_or(default_additional_data(), RideState::additional_data),
+            id if matches!(
+                id,
+                super::skills::machineshield::MACHINE_SHIELD_SKILL_ID
+                    | super::skills::manashield::MANA_SHIELD_SKILL_ID
+                    | super::skills::lifeshield::LIFE_SHIELD_SKILL_ID
+            ) => self
+                .defense_shields
+                .iter()
+                .find(|state| state.skill_id() == id)
+                .map_or(default_additional_data(), |state| match state {
+                    DefenseShieldState::Life(state) => state.life() as u32,
+                    DefenseShieldState::Machine(state) => state.life() as u32,
+                    DefenseShieldState::Mana(state) => state.life() as u32,
+                    DefenseShieldState::Promotion(_) => default_additional_data(),
+                }),
             _ => default_additional_data(),
         }
     }
