@@ -117,6 +117,9 @@
 //! `MountCiQingEquip` cases `0x80..0x84` отдельно мутируют persisted
 //! `m_BaseProperty +0x12C..+0x13C`: два signed pass-а сохраняют wrapping
 //! сложение и нулевой clamp отрицательного результата до общего пересчёта.
+//! `GAP_EQUIP_ACTIVE (0x69)` использует пересобранную из живой экипировки
+//! anima-bind карту уровней и в storage order применяет процентный
+//! `ActiveEquip`; ездовой owner этого case не имеет.
 //! Periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
@@ -327,7 +330,7 @@ use super::gameeffectjournal::{GameEffect, GameEffectJournal};
 use super::goods::cbattlefairyproperty::BattleFairyCompose;
 use super::goods::cgoods::CGoods;
 use super::goods::cgoodsbaseproperties::{
-    EQUIP_PLACE_HEADGEAR, GAP_AGILITY_CORRECTION, GAP_ARMOR_CORRECTION, GAP_ATTACK_AVOID,
+    EQUIP_PLACE_HEADGEAR, GAP_AGILITY_CORRECTION, GAP_ANIMA_BIND, GAP_ARMOR_CORRECTION, GAP_ATTACK_AVOID,
     GAP_ATTACK_SPEED_CORRECTION, GAP_BF_ABRAVE_ADDON, GAP_BF_AGILITY, GAP_BF_AGILITY_ADDON,
     GAP_BF_AGILITY_BASE, GAP_BF_AGILITY_POTENTIAL, GAP_BF_ALL_SKILL, GAP_BF_ATTACK,
     GAP_BF_ATTACK_ADDON,
@@ -346,7 +349,8 @@ use super::goods::cgoodsbaseproperties::{
     GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
-    GAP_EXCEPTION_STATE, GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND,
+    GAP_EQUIP_ACTIVE, GAP_EXCEPTION_STATE, GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL,
+    GAP_GOODS_BIND,
     GAP_FAIRY_AGILITY, GAP_FAIRY_HP, GAP_FAIRY_STRENGTH, GAP_FAIRY_WAKAN,
     GAP_GOODS_EQUIMENT_FLASH, GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY,
     GAP_GOODS_PACKAGE_EXTENTION,
@@ -2069,6 +2073,7 @@ fn apply_equipment_goods_properties(
     coefficients: GlobePlayerPropertyCoefficients,
     occupation: usize,
     include_fairy_properties: bool,
+    active_level: Option<u8>,
 ) {
     fn add_u32(target: &mut u32, delta: i32) {
         *target = (i64::from(*target) + i64::from(delta)).clamp(0, i64::from(i32::MAX)) as u32;
@@ -2080,12 +2085,106 @@ fn apply_equipment_goods_properties(
     fn derived(value: i32, coefficient: f32) -> i32 {
         ((value as f32) * coefficient).round() as i32
     }
+    fn active_u32(current: u32, addition: i32, scale: f64) -> u32 {
+        let value = (f64::from(current) + f64::from(addition) * scale).round() as i64;
+        value.clamp(0, i64::from(i32::MAX)) as u32
+    }
+    fn active_signed(current: i32, addition: i32, scale: f64) -> i32 {
+        let value = (f64::from(current) + f64::from(addition) * scale).round() as i64 as u32;
+        if (value as i32) < 0 { 0 } else { value as i32 }
+    }
+    fn active_u16(current: u16, addition: i32, scale: f64) -> u16 {
+        let value = (f64::from(current) + f64::from(addition) * scale).round() as i64;
+        if value < 0 { 0 } else { value as u16 }
+    }
+
+    fn apply_active_equip(
+        properties: &mut PlayerCombatProperties,
+        goods: &CGoods,
+        factory: &CGoodsFactory,
+        selector: i32,
+        percentage: i32,
+    ) {
+        let scale = f64::from(percentage) * 0.01_f64;
+        match selector {
+            GAP_MINIMUM_ATTACK_CORRECTION
+            | GAP_MAXIMUM_ATTACK_CORRECTION
+            | GAP_ELEMENT_ATTACK_CORRECTION => {
+                properties.minimum_attack = active_u32(
+                    properties.minimum_attack,
+                    goods.addon_property_value(factory, GAP_MINIMUM_ATTACK_CORRECTION, 1),
+                    scale,
+                );
+                properties.maximum_attack = active_u32(
+                    properties.maximum_attack,
+                    goods.addon_property_value(factory, GAP_MAXIMUM_ATTACK_CORRECTION, 1),
+                    scale,
+                );
+                properties.element_modify = active_signed(
+                    properties.element_modify,
+                    goods.addon_property_value(factory, GAP_ELEMENT_ATTACK_CORRECTION, 1),
+                    scale,
+                );
+            }
+            GAP_ARMOR_CORRECTION | GAP_ELEMENT_RESISTANCE_CORRECTION => {
+                properties.defense = active_u32(
+                    properties.defense,
+                    goods.addon_property_value(factory, GAP_ARMOR_CORRECTION, 1),
+                    scale,
+                );
+                properties.element_resistance = active_u32(
+                    properties.element_resistance,
+                    goods.addon_property_value(factory, GAP_ELEMENT_RESISTANCE_CORRECTION, 1),
+                    scale,
+                );
+            }
+            GAP_HP_UPPER_LIMIT_CORRECTION => {
+                properties.maximum_hp = active_u32(
+                    properties.maximum_hp,
+                    goods.addon_property_value(factory, GAP_HP_UPPER_LIMIT_CORRECTION, 1),
+                    scale,
+                );
+            }
+            GAP_ATTACK_AVOID | GAP_ELEMENT_AVOID => {
+                properties.attack_avoid = active_u16(
+                    properties.attack_avoid,
+                    goods.addon_property_value(factory, GAP_ATTACK_AVOID, 1),
+                    scale,
+                );
+                properties.element_avoid = active_u16(
+                    properties.element_avoid,
+                    goods.addon_property_value(factory, GAP_ELEMENT_AVOID, 1),
+                    scale,
+                );
+            }
+            _ => {}
+        }
+    }
 
     let enabled = goods.enabled_addon_properties(factory);
     // Native equipment/ride owners вызывают positive, затем negative pass:
     // первый pass принимает неотрицательные addon-ы, второй — отрицательные.
     for positive_pass in [true, false] {
         for &stored_type in &enabled {
+            if stored_type == GAP_EQUIP_ACTIVE {
+                if positive_pass
+                    && goods.has_addon_property_values(factory, GAP_ANIMA_BIND)
+                    && goods.addon_property_value(factory, GAP_ANIMA_BIND, 1) != 0
+                    && active_level.is_some_and(|level| {
+                        goods.addon_property_value(factory, GAP_ROLE_MINIMUM_LEVEL_LIMIT, 1)
+                            <= i32::from(level)
+                    })
+                {
+                    apply_active_equip(
+                        properties,
+                        goods,
+                        factory,
+                        goods.addon_property_value(factory, GAP_EQUIP_ACTIVE, 1),
+                        goods.addon_property_value(factory, GAP_EQUIP_ACTIVE, 2),
+                    );
+                }
+                continue;
+            }
             let fumo = stored_type == GAP_FUMO_PROPERTY;
             let (property_type, delta) = if fumo {
                 (
@@ -5192,7 +5291,31 @@ impl CPlayer {
             battle_fairy_died: self.base_properties.battle_fairy_died,
             ..PlayerCombatProperties::default()
         };
+        let mut active_levels = BTreeMap::<i32, u8>::new();
         for (_, goods) in self.equipment.traversing_goods() {
+            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
+                && goods.addon_property_value(goods_factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
+            {
+                continue;
+            }
+            if !goods.has_addon_property_values(goods_factory, GAP_ANIMA_BIND)
+                || goods.addon_property_value(goods_factory, GAP_ANIMA_BIND, 1) == 0
+            {
+                continue;
+            }
+            let key = goods.addon_property_value(goods_factory, GAP_ANIMA_BIND, 2);
+            let mut level = goods
+                .addon_property_value(goods_factory, GAP_ROLE_MINIMUM_LEVEL_LIMIT, 1)
+                as u8;
+            if level > 99 {
+                level = level.wrapping_add(10);
+            }
+            active_levels
+                .entry(key)
+                .and_modify(|current| *current = (*current).max(level))
+                .or_insert(level);
+        }
+        for (column, goods) in self.equipment.traversing_goods() {
             apply_equipment_goods_properties(
                 &mut properties,
                 goods,
@@ -5200,6 +5323,7 @@ impl CPlayer {
                 coefficients,
                 occupation,
                 true,
+                active_levels.get(&(column.position() as i32)).copied(),
             );
         }
         if include_ci_qing {
@@ -5214,6 +5338,7 @@ impl CPlayer {
                     coefficients,
                     occupation,
                     true,
+                    active_levels.get(&(position as i32)).copied(),
                 );
             }
         }
@@ -6694,6 +6819,7 @@ impl CPlayer {
                 coefficients,
                 usize::from(self.base_properties.occupation).min(2),
                 false,
+                None,
             );
         }
         if let Some(state) = self.move_shape.rage_break_state() {
