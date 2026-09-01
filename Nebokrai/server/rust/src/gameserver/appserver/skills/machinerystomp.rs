@@ -6,11 +6,12 @@
 //! Проверка расстояния и непроходимого блока, задержка, направление, пакеты и
 //! порядок X → Y принадлежат этому модулю. Для каждой допустимой цели отдельно
 //! выполняются вызовы RNG физического урона и критического удара; формула игрока
-//! также сохраняет урон стихией и душой и износ оружия. `CGame` только разрешает
-//! независимых владельцев, применяет защиту и последствия смерти и доставляет
-//! пакеты. Координатные перегрузки `Begin` остаются ниже недостигнутыми.
-//! Player-варианты используют общий `End`: возврат движения и
-//! `CSummonSkill::End(1)` с cooldown соответствующего идентификатора.
+//! также сохраняет урон стихией и душой. `CGame` только разрешает независимых
+//! владельцев, применяет защиту и последствия смерти и доставляет пакеты.
+//! Координатные перегрузки `Begin` остаются ниже недостигнутыми. Player-варианты
+//! обоих владельцев не изнашивают оружие в `Attack` или `AI`: унаследованный
+//! `AfterUseSkill` делает это один раз через общий `End`, после возврата
+//! движения и перед cooldown соответствующего идентификатора.
 
 // ============================================================================
 // FUNCTION: CMachineryStomp::Begin
@@ -143,6 +144,7 @@ fn finish_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_wide_arc_attack_used(skill_id, now_ms);
     });
@@ -244,7 +246,6 @@ fn attack_player_cell<Runtime: GameMainLoopRuntime>(
             MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
             _ => unreachable!(),
         }
-        game.damage_player_weapon(player_id, runtime);
     }
 }
 
