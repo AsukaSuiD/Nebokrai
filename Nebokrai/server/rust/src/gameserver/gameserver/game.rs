@@ -37104,17 +37104,11 @@ impl CGame {
             let owner = self.find_region(region_id)?;
             let (security_x, security_y) = security_position.unwrap_or((attacker_x, attacker_y));
             let security = owner.get_security(security_x, security_y).ok()?;
-            let attacker_faction = attacker.faction_id();
-            let victim_faction = victim.faction_id();
             (
                 victim.is_badman(self.globe_setup.pk_count_per_kill()),
                 security,
-                attacker_faction > 0 && victim_faction > 0
-                    && (attacker.is_city_war_enemy_faction_member(victim_faction)
-                        || victim.is_city_war_enemy_faction_member(attacker_faction)),
-                attacker_faction > 0 && victim_faction > 0
-                    && (attacker.is_enemy_faction_member(victim_faction)
-                        || victim.is_enemy_faction_member(attacker_faction)),
+                CPKSys::is_city_war_state(Some(attacker), Some(victim)),
+                CPKSys::is_faction_war_state(Some(attacker), Some(victim)),
                 owner.is_gods_battle(),
                 attacker.gods_battle_faction() == victim.gods_battle_faction(),
                 attacker.country() == victim.country(),
@@ -37245,16 +37239,8 @@ impl CGame {
         let owner = self.find_region(region_id)?;
         let security = owner.get_security(security_x, security_y).ok()?;
         let gods_battle_region = owner.is_gods_battle();
-        let attacker_faction = attacker.faction_id();
-        let victim_faction = victim.faction_id();
-        let city_war_enemies = attacker_faction > 0
-            && victim_faction > 0
-            && (attacker.is_city_war_enemy_faction_member(victim_faction)
-                || victim.is_city_war_enemy_faction_member(attacker_faction));
-        let faction_war_enemies = attacker_faction > 0
-            && victim_faction > 0
-            && (attacker.is_enemy_faction_member(victim_faction)
-                || victim.is_enemy_faction_member(attacker_faction));
+        let city_war_enemies = CPKSys::is_city_war_state(Some(attacker), Some(victim));
+        let faction_war_enemies = CPKSys::is_faction_war_state(Some(attacker), Some(victim));
         let disposition = CPKSys::on_first_skill(FirstSkillPkFacts {
             victim_is_badman: victim.is_badman(self.globe_setup.pk_count_per_kill()),
             security,
@@ -41814,14 +41800,13 @@ impl CGame {
                 tracing::trace!(?delivery, "отправлено внешнее следствие убийства игрока");
             }};
         }
-        let (region_id, victim_country, victim_level, victim_badman, victim_faction) =
+        let (region_id, victim_country, victim_level, victim_badman) =
             self.find_player(blow.victim_id).and_then(|victim| {
                 Some((
                     victim.server_region_id()?,
                     victim.country(),
                     victim.level(),
                     victim.is_badman(self.globe_setup.pk_count_per_kill()),
-                    victim.faction_id(),
                 ))
             })?;
         let (region_country, no_contribute, security, gods_battle_region) = {
@@ -41866,12 +41851,11 @@ impl CGame {
             );
             return Some(());
         };
-        let (murderer_country, murderer_level, murderer_faction, murderer_team, same_gods_faction) =
+        let (murderer_country, murderer_level, murderer_team, same_gods_faction) =
             self.find_player(murderer_id).map(|murderer| {
                 (
                     murderer.country(),
                     murderer.level(),
-                    murderer.faction_id(),
                     murderer.team_id(),
                     murderer.gods_battle_faction()
                         == self
@@ -42169,22 +42153,14 @@ impl CGame {
             }
         }
 
-        let city_war_enemies = murderer_faction > 0
-            && victim_faction > 0
-            && self.find_player(blow.victim_id).is_some_and(|victim| {
-                victim.is_city_war_enemy_faction_member(murderer_faction)
-                    || self.find_player(murderer_id).is_some_and(|murderer| {
-                        murderer.is_city_war_enemy_faction_member(victim_faction)
-                    })
-            });
-        let faction_war_enemies = murderer_faction > 0
-            && victim_faction > 0
-            && self.find_player(blow.victim_id).is_some_and(|victim| {
-                victim.is_enemy_faction_member(murderer_faction)
-                    || self.find_player(murderer_id).is_some_and(|murderer| {
-                        murderer.is_enemy_faction_member(victim_faction)
-                    })
-            });
+        let city_war_enemies = CPKSys::is_city_war_state(
+            self.find_player(murderer_id),
+            self.find_player(blow.victim_id),
+        );
+        let faction_war_enemies = CPKSys::is_faction_war_state(
+            self.find_player(murderer_id),
+            self.find_player(blow.victim_id),
+        );
         let country_identity = self.player_country_identity(murderer_id);
         let attacker_kill_count = kill_count.unwrap_or_default();
         let disposition = CPKSys::on_kill(KillPkFacts {
@@ -42383,16 +42359,10 @@ impl CGame {
             let player_attacker_found =
                 blow.attacker_type != PLAYER_TYPE || self.find_player(blow.attacker_id).is_some();
             let faction_war_enemies = blow.attacker_type == PLAYER_TYPE
-                && blow.attacker_faction_id > 0
-                && victim_faction > 0
-                && self
-                    .find_player(blow.victim_id)
-                    .is_some_and(|victim| {
-                        victim.is_enemy_faction_member(blow.attacker_faction_id)
-                            || self.find_player(blow.attacker_id).is_some_and(|attacker| {
-                                attacker.is_enemy_faction_member(victim_faction)
-                            })
-                    });
+                && CPKSys::is_faction_war_state(
+                    self.find_player(blow.attacker_id),
+                    self.find_player(blow.victim_id),
+                );
             match CPKSys::died_lost_goods(
                 &self.globe_setup,
                 security,

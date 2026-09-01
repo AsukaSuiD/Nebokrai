@@ -17,6 +17,7 @@
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\pksys.cpp
 
 use crate::gameserver::appserver::region::RegionSecurity;
+use crate::gameserver::appserver::player::CPlayer;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FirstSkillPkFacts {
@@ -96,6 +97,36 @@ pub(crate) struct KillPkFacts {
 }
 
 impl CPKSys {
+    pub(crate) fn is_city_war_state(
+        first: Option<&CPlayer>,
+        second: Option<&CPlayer>,
+    ) -> bool {
+        let (Some(first), Some(second)) = (first, second) else {
+            return false;
+        };
+        let first_faction = first.faction_id();
+        let second_faction = second.faction_id();
+        first_faction > 0
+            && second_faction > 0
+            && (first.is_city_war_enemy_faction_member(second_faction)
+                || second.is_city_war_enemy_faction_member(first_faction))
+    }
+
+    pub(crate) fn is_faction_war_state(
+        first: Option<&CPlayer>,
+        second: Option<&CPlayer>,
+    ) -> bool {
+        let (Some(first), Some(second)) = (first, second) else {
+            return false;
+        };
+        let first_faction = first.faction_id();
+        let second_faction = second.faction_id();
+        first_faction > 0
+            && second_faction > 0
+            && (first.is_enemy_faction_member(second_faction)
+                || second.is_enemy_faction_member(first_faction))
+    }
+
     pub(crate) fn on_first_attack(facts: FirstAttackPkFacts) -> FirstContactPkDisposition {
         if facts.victim_is_badman {
             FirstContactPkDisposition::VictimAlreadyBadman
@@ -264,7 +295,7 @@ impl CPKSys {
 
 // ============================================================================
 // FUNCTION: CPKSys::IsCityWarState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_RAW
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\pksys.cpp:454
@@ -278,7 +309,7 @@ impl CPKSys {
 
 // ============================================================================
 // FUNCTION: CPKSys::ISFactionWarState
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_RAW
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\pksys.cpp:471

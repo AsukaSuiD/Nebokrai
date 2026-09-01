@@ -24,19 +24,11 @@ impl CGame {
         let victim_y = victim.shape().get_tile_y().ok()?;
         let owner = self.find_region(region_id)?;
         let security = owner.get_security(victim_x, victim_y).ok()?;
-        let attacker_faction = attacker.faction_id();
-        let victim_faction = victim.faction_id();
         let disposition = CPKSys::on_kill(KillPkFacts {
             victim_is_badman: victim.is_badman(self.globe_setup.pk_count_per_kill()),
             security,
-            city_war_enemies: attacker_faction > 0
-                && victim_faction > 0
-                && (attacker.is_city_war_enemy_faction_member(victim_faction)
-                    || victim.is_city_war_enemy_faction_member(attacker_faction)),
-            faction_war_enemies: attacker_faction > 0
-                && victim_faction > 0
-                && (attacker.is_enemy_faction_member(victim_faction)
-                    || victim.is_enemy_faction_member(attacker_faction)),
+            city_war_enemies: CPKSys::is_city_war_state(Some(attacker), Some(victim)),
+            faction_war_enemies: CPKSys::is_faction_war_state(Some(attacker), Some(victim)),
             gods_battle_region: owner.is_gods_battle(),
             same_gods_battle_faction: attacker.gods_battle_faction()
                 == victim.gods_battle_faction(),
