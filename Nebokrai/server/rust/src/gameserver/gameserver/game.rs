@@ -43751,12 +43751,6 @@ impl CGame {
         };
 
         if mutation.died {
-            let physical_damage = attack
-                .damages
-                .iter()
-                .find(|power| power.kind == AttackPowerType::Physical)
-                .map_or(0, |power| power.hp_damage.max(0) as u32)
-                .min(target.hp);
             if !mutation.script.is_empty() {
                 let _ = self.run_script_file(
                     &mutation.script,
@@ -43773,33 +43767,23 @@ impl CGame {
             died.add_long(player_id);
             died.add_long(identity.object_type);
             died.add_long(identity.id);
-            died.add_ulong(physical_damage);
+            // `CMoveShape::ApplyFinalDamage` для build агрегирует фактически
+            // снятый HP в единственный `tagDamage` типа `0`.
+            died.add_ulong(damage);
             died.base_mut().add_char(1);
             Self::append_base_attack_tail(&mut died, attack);
             let _ = self.send_shape_position_around(region_id, target_x, target_y, &died);
             return self.finish_stationary_build_death(region_id, identity);
         }
 
-        let records: Vec<_> = attack
-            .damages
-            .iter()
-            .filter(|power| power.hp_damage > 0)
-            .collect();
         let mut hurt = CMessage::new(0x000b_f60a);
         hurt.add_long(PLAYER_TYPE);
         hurt.add_long(player_id);
         hurt.add_long(identity.object_type);
         hurt.add_long(identity.id);
-        hurt.add_byte(records.len() as u8);
-        for power in records {
-            hurt.add_byte(match power.kind {
-                AttackPowerType::Physical => 0,
-                AttackPowerType::Element => 1,
-                AttackPowerType::Soul => 2,
-                AttackPowerType::Poison => 3,
-            });
-            hurt.add_ulong(power.hp_damage as u32);
-        }
+        hurt.add_byte(1);
+        hurt.add_byte(0);
+        hurt.add_ulong(damage);
         hurt.add_ulong(mutation.current_hp);
         Self::append_base_attack_tail(&mut hurt, attack);
         let _ = self.send_shape_position_around(region_id, target_x, target_y, &hurt);
