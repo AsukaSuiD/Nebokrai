@@ -55,6 +55,9 @@
 //! change-region очереди перед `ClearPlayerAI`. Для
 //! player-а это exact post-OnLost tail: region removal, map erase и Rust drop
 //! без повторного session/logout callback-а.
+//! Derived city/country gates и flags проходят тот же area scan через снимок
+//! canonical change-state concrete owner-а и не ошибочно удаляются как stale
+//! только потому, что базовый `CServerRegion` не владеет их картами.
 //!
 //! `BTreeMap` сохраняет наблюдаемый ordered-map lookup, owned `CPlayer`
 //! заменяет сырой pointer только в достигнутой runtime-проекции, а
@@ -3416,6 +3419,7 @@ struct GameCountryRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
     region: CServerRegion,
+    stationary_change_states: BTreeMap<ShapeIdentity, i32>,
     ai_tick: i32,
 }
 
@@ -3476,6 +3480,7 @@ impl<Runtime: GameMainLoopRuntime> CountryContendContext
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         self.game.run_server_region_base_ai(
             region,
+            &self.stationary_change_states,
             self.ai_tick,
             tick_interval_ms,
             self.runtime,
@@ -3558,6 +3563,7 @@ struct GameCityRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
     region: CServerRegion,
+    stationary_change_states: BTreeMap<ShapeIdentity, i32>,
     ai_tick: i32,
     war_number: i32,
     owner: WarRegionOwnership,
@@ -3824,6 +3830,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameCityRegionAiContext
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         let outcome = self.game.run_server_region_base_ai(
             region,
+            &self.stationary_change_states,
             self.ai_tick,
             tick_interval_ms,
             self.runtime,
@@ -3934,6 +3941,7 @@ struct GameVillageRegionAiContext<'a, Runtime> {
     game: &'a mut CGame,
     runtime: &'a mut Runtime,
     region: CServerRegion,
+    stationary_change_states: BTreeMap<ShapeIdentity, i32>,
     war_number: i32,
     ai_tick: i32,
     flag_owner_faction_id: i32,
@@ -4094,6 +4102,7 @@ impl<Runtime: GameMainLoopRuntime> WarContendContext for GameVillageRegionAiCont
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
         self.game.run_server_region_base_ai(
             region,
+            &self.stationary_change_states,
             self.ai_tick,
             tick_interval_ms,
             self.runtime,
@@ -4449,6 +4458,39 @@ impl ServerRegionOwner {
                 .filter(|view| view.identity == identity),
             _ => None,
         }
+    }
+
+    /// Проецирует change-state concrete gates/flags в унаследованный area
+    /// scan. Эти формы принадлежат derived region map, поэтому базовый
+    /// `CServerRegion` не может разрешить их через свои owned registries.
+    pub(crate) fn stationary_shape_change_states(&self) -> BTreeMap<ShapeIdentity, i32> {
+        let mut states = BTreeMap::new();
+        match self {
+            Self::City(region) => {
+                for gate in region.city_gates.values().map(|state| &state.gate) {
+                    states.insert(
+                        gate.move_shape().shape().identity(),
+                        gate.move_shape().shape().change_state(),
+                    );
+                }
+            }
+            Self::Country(region) => {
+                for gate in region.defend_gates.values().chain(region.attack_gates.values()) {
+                    states.insert(
+                        gate.move_shape().shape().identity(),
+                        gate.move_shape().shape().change_state(),
+                    );
+                }
+                for flag in region.defend_flags.values().chain(region.attack_flags.values()) {
+                    states.insert(
+                        flag.move_shape().shape().identity(),
+                        flag.move_shape().shape().change_state(),
+                    );
+                }
+            }
+            _ => {}
+        }
+        states
     }
 
     pub(crate) fn stationary_build(&self, identity: ShapeIdentity) -> Option<&CBuild> {
@@ -13019,6 +13061,7 @@ impl CGame {
         };
         match self.run_server_region_base_ai(
             &mut region.war.base,
+            &BTreeMap::new(),
             ai_tick,
             tick_interval_ms,
             runtime,
@@ -25574,6 +25617,7 @@ impl CGame {
         };
         let base_ai = match self.run_server_region_base_ai(
             &mut region.war.base,
+            &BTreeMap::new(),
             ai_tick,
             tick_interval_ms,
             runtime,
@@ -46119,6 +46163,7 @@ impl CGame {
         &mut self,
         region: &mut CServerRegion,
         identity: ShapeIdentity,
+        stationary_change_states: &BTreeMap<ShapeIdentity, i32>,
     ) -> Option<i32> {
         match identity.object_type {
             PLAYER_TYPE => self
@@ -46127,8 +46172,9 @@ impl CGame {
             MONSTER_TYPE | NPC_TYPE | GOODS_TYPE | SUMMON_SHAPE_TYPE => {
                 region.owned_shape_change_state(identity)
             }
-            // В region registry входят только пять canonical категорий выше.
-            // Неизвестный тип не имеет владельца, поэтому его membership stale.
+            kind if kind == BUILD_OBJECT_TYPE as i32 || kind == CITY_GATE_OBJECT_TYPE as i32 => {
+                stationary_change_states.get(&identity).copied()
+            }
             _ => None,
         }
     }
@@ -46178,6 +46224,7 @@ impl CGame {
     fn run_region_shape_scan<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
+        stationary_change_states: &BTreeMap<ShapeIdentity, i32>,
         runtime: &mut Runtime,
     ) -> Vec<i32> {
         let mut areas = 0usize;
@@ -46277,7 +46324,11 @@ impl CGame {
                 );
             }
             for identity in region.active_shape_candidates(area_index) {
-                let Some(change_state) = self.region_shape_change_state(region, identity)
+                let Some(change_state) = self.region_shape_change_state(
+                    region,
+                    identity,
+                    stationary_change_states,
+                )
                 else {
                     region.forget_unresolved_active_shape(area_index, identity);
                     stale_memberships = stale_memberships.wrapping_add(1);
@@ -46328,8 +46379,9 @@ impl CGame {
                             // в monster pass до region scan; отсутствие base
                             // attack tick не создаёт второго virtual вызова.
                         } else {
-                            // NPC обработан выше, ground goods достигает scan
-                            // только с CS_DELETE, иных canonical типов нет.
+                            // Stationary build/gate здесь уже разрешён concrete
+                            // owner-ом; его action callbacks остаются у war-
+                            // владельца и не требуют второго base-вызова.
                         }
                         shape_ai_calls = shape_ai_calls.wrapping_add(1);
                         false
@@ -46357,6 +46409,7 @@ impl CGame {
     fn run_server_region_base_ai<Runtime: GameMainLoopRuntime>(
         &mut self,
         region: &mut CServerRegion,
+        stationary_change_states: &BTreeMap<ShapeIdentity, i32>,
         ai_tick: i32,
         tick_interval_ms: i32,
         runtime: &mut Runtime,
@@ -46413,7 +46466,8 @@ impl CGame {
         if periodic_due {
             self.run_region_weather_tick(region);
         }
-        let removed_npcs = self.run_region_shape_scan(region, runtime);
+        let removed_npcs =
+            self.run_region_shape_scan(region, stationary_change_states, runtime);
         tracing::trace!(
             region_id = region.id,
             ai_tick,
@@ -46441,8 +46495,13 @@ impl CGame {
             return None;
         };
         let tick_interval_ms = GAME_TICK_INTERVAL_MS as i32;
-        let base_ai =
-            self.run_server_region_base_ai(&mut region, ai_tick, tick_interval_ms, runtime);
+        let base_ai = self.run_server_region_base_ai(
+            &mut region,
+            &BTreeMap::new(),
+            ai_tick,
+            tick_interval_ms,
+            runtime,
+        );
         self.restore_region_owner(ServerRegionOwner::Base(region));
         tracing::trace!(
             region_id,
@@ -46463,6 +46522,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
+        let stationary_change_states = owner.stationary_shape_change_states();
         let ServerRegionOwner::Country(mut region) = owner else {
             self.restore_region_owner(owner);
             return None;
@@ -46472,6 +46532,7 @@ impl CGame {
             game: self,
             runtime,
             region: projection,
+            stationary_change_states,
             ai_tick,
         };
         let result = region.ai(&mut context);
@@ -46495,6 +46556,7 @@ impl CGame {
         runtime: &mut Runtime,
     ) -> Option<()> {
         let owner = self.take_region_owner(region_id)?;
+        let stationary_change_states = owner.stationary_shape_change_states();
         let ServerRegionOwner::City(mut region) = owner else {
             self.restore_region_owner(owner);
             return None;
@@ -46504,6 +46566,7 @@ impl CGame {
             game: self,
             runtime,
             region: projection,
+            stationary_change_states,
             ai_tick,
             war_number: region.war.base.war_number,
             owner: WarRegionOwnership {
@@ -46557,6 +46620,7 @@ impl CGame {
             game: self,
             runtime,
             region: projection,
+            stationary_change_states: BTreeMap::new(),
             war_number: region.war.base.war_number,
             ai_tick,
             flag_owner_faction_id: region.flag_owner_faction_id,
