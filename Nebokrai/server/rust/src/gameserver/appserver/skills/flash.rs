@@ -9,8 +9,10 @@
 //! собственных RNG-вызова. `CGame` оставляет только spatial relocation,
 //! применение урона и доставку. Совпадающая с `CLittleFlash` damage-формула
 //! остаётся узким семейным helper-ом; path и lifecycle навыков различаются.
-//! `End` освобождает оба path-набора, возвращает движение и выполняет
-//! подтверждённый хвост `CSummonSkill::End(1)`.
+//! Ни `AI`, ни `Attack` не изнашивают оружие до завершения: унаследованный
+//! `AfterUseSkill` делает это один раз в подтверждённом хвосте
+//! `CSummonSkill::End(1)`, после освобождения обоих path-наборов и возврата
+//! движения.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -59,7 +61,7 @@ impl FlashExecutionState {
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 pub(crate) fn is_flash_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == FLASH_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_flash_used(now_ms); }); }
+fn finish_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } game.damage_player_weapon(player_id, runtime); finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_flash_used(now_ms); }); }
 pub(crate) fn cancel_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.flash().map(|state| state.kernel().dispatch()) else { return false }; finish_player_flash(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
 
@@ -196,7 +198,6 @@ fn attack_path<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, r
             let Some(target_level) = target_level(game, region_id, target) else { continue };
             let Some((master, attack)) = calculate_dash_attack(game, player_id, FLASH_SKILL_ID, target_level, level, hit, factor) else { continue };
             match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} }
-            game.damage_player_weapon(player_id, runtime);
         }
     }
 }
@@ -232,7 +233,6 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
         let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
         if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 { failure(game, player_id, 8, rp_loss); let _ = game.update_player_properties(player_id); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16); player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
-        game.damage_player_weapon(player_id, runtime);
         let destination = *path.last().expect("непустой путь проверен выше");
         let _ = game.relocate_player_shape(player_id, region_id, destination.0, destination.1);
         send_visual(game, player_id, level, 2, Some((destination.0, destination.1)));
