@@ -8,10 +8,11 @@
 //! временной границы. При создании допустимого снаряда канонический
 //! `CSoulCollectState` целиком потребляется, его visual завершается, а оба
 //! множителя передаются phalanx-owner-у. Обычное, отказное и клиентское
-//! завершение после
-//! `Begin` используют подтверждённый хвост `End(1)`: возврат движения,
-//! `AfterUseSkill`, очистку текущего навыка и фиксацию времени восстановления.
-//! Координатная перегрузка `Begin` остаётся ниже.
+//! завершение после `Begin` используют подтверждённый хвост `End(1)`: возврат
+//! движения, `AfterUseSkill`, очистку текущего навыка и фиксацию времени
+//! восстановления.
+//! Координатная перегрузка `Begin` разрешает первый `CMoveShape` клетки через
+//! точный `CState::GetSufferer` без fallback к заклинателю.
 
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagic::{
@@ -27,6 +28,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -122,7 +124,10 @@ pub(crate) fn cancel_player_fire_bolt<Runtime: GameMainLoopRuntime>(
 pub(crate) const fn is_fire_bolt_target(dispatch: PlayerSkillDispatch) -> bool {
     matches!(
         dispatch,
-        PlayerSkillDispatch::Object {
+        PlayerSkillDispatch::Point {
+            skill_id: FIRE_BOLT_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Object {
             skill_id: FIRE_BOLT_SKILL_ID,
             target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
         }
@@ -136,10 +141,6 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let target = match dispatch {
-        PlayerSkillDispatch::Object { skill_id: FIRE_BOLT_SKILL_ID, target } => target,
-        _ => return terminal(QueuedSkillExecutionState::Rejected),
-    };
     let Some((region_id, source_x, source_y, level, initial_mana)) =
         game.find_player(player_id).and_then(|player| {
             Some((
@@ -152,6 +153,19 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         })
     else {
         return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let target = match dispatch {
+        PlayerSkillDispatch::Object { skill_id: FIRE_BOLT_SKILL_ID, target } => target,
+        PlayerSkillDispatch::Point { skill_id: FIRE_BOLT_SKILL_ID, x, y } => {
+            let Some(target) = resolve_coordinate_sufferer(game, region_id, x, y) else {
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) {
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            target
+        }
+        _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
     let Some(properties) = game.skill_base_properties(FIRE_BOLT_SKILL_ID, level) else {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -365,26 +379,3 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     finish_player_fire_bolt(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.h
-
-// ============================================================================
-// FUNCTION: CFireBolt::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\firebolt.cpp:155
-// RVA: 0x001A11A0
-// ADDRESS: 005a11a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
