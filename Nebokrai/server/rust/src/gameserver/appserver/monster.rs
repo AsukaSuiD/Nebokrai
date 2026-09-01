@@ -1341,7 +1341,10 @@ impl CMonster {
 
     pub(crate) const fn ai_target(&self) -> Option<ShapeIdentity> {
         match self.ai_target {
-            Some(target) if target.object_type != 0 && target.id != 0 => Some(target),
+            // Exact `CBaseAI::HasTarget` принимает object target только при
+            // строго положительных ID и type; отрицательные legacy-значения
+            // могут храниться полями, но расписание целью их не считает.
+            Some(target) if target.object_type > 0 && target.id > 0 => Some(target),
             _ => None,
         }
     }
