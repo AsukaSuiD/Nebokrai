@@ -40694,7 +40694,7 @@ impl CGame {
             let concrete_archery = match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == ARCHERY_SKILL_ID
-                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                        && is_base_magic_object_target_type(target.object_type)
                 }
                 _ => false,
             };
