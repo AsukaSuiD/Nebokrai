@@ -1241,7 +1241,8 @@ use crate::gameserver::appserver::ai::baseai::{
 };
 use crate::gameserver::appserver::ai::cityguardwithsword::release_guard_sword_target_for_death;
 use crate::gameserver::appserver::ai::jiumai::{
-    retarget_jiumai_after_hurt, synchronize_jiumai_target_loss,
+    release_jiumai_target_for_death, retarget_jiumai_after_hurt,
+    synchronize_jiumai_target_loss,
 };
 use crate::gameserver::appserver::ai::pet::release_pet_target_for_death;
 use crate::gameserver::appserver::skills::monsterbaseattack::{
@@ -47282,10 +47283,15 @@ impl CGame {
                     let mut passive_death = PassiveDeathAction::None;
                     let mut passive_stiffen = PassiveStiffenAction::None;
                     let mut passive_defense_processed = false;
-                    let (death_started, guard_target_release, pet_target_release) = owner
+                    let (
+                        death_started,
+                        guard_target_release,
+                        pet_target_release,
+                        jiumai_target_release,
+                    ) = owner
                         .base_mut()
                         .find_monster_by_id_mut(monster_id)
-                        .map_or((false, false, false), |monster| {
+                        .map_or((false, false, false, false), |monster| {
                             let processed = monster.process_reached_defense_actions(|| {
                                 runtime.now_milliseconds()
                             });
@@ -47315,7 +47321,15 @@ impl CGame {
                                 );
                             let pet_target_release = death_started
                                 && monster.active_ai() == Some(ActiveMonsterAi::Pet);
-                            (death_started, guard_target_release, pet_target_release)
+                            let jiumai_target_release = death_started
+                                && monster.active_ai()
+                                    == Some(ActiveMonsterAi::Primary(MonsterAiKind::JiuMai));
+                            (
+                                death_started,
+                                guard_target_release,
+                                pet_target_release,
+                                jiumai_target_release,
+                            )
                         });
                     if death_started {
                         if guard_target_release {
@@ -47332,6 +47346,8 @@ impl CGame {
                                 stop_frame,
                                 runtime,
                             );
+                        } else if jiumai_target_release {
+                            release_jiumai_target_for_death(owner.base_mut(), monster_id);
                         } else if let Some(monster) =
                             owner.base_mut().find_monster_by_id_mut(monster_id)
                         {

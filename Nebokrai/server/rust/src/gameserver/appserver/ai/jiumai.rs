@@ -8,7 +8,8 @@
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\jiumai.cpp
-// `WhenBeenHurted` сопоставлен с RVA 0x0020A750, `OnSchedule` — с RVA 0x0020AB10.
+// `WhenBeenHurted` сопоставлен с RVA 0x0020A750, `OnLoseTarget` — с RVA 0x0020A990,
+// `OnSchedule` — с RVA 0x0020AB10.
 
 use super::archer::select_archer_enemy;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -263,6 +264,39 @@ pub(crate) fn synchronize_jiumai_target_loss(
         && twin.ai_target().is_some()
     {
         twin.clear_ai_target();
+    }
+    true
+}
+
+/// Материализует виртуальный `CJiuMai::OnLoseTarget` из death FIFO. Сначала
+/// общий monster-owner отпускает цель погибшей половины, затем тот же базовый
+/// переход получает живой сражающийся близнец. Оба перехода сохраняют уже
+/// поставленный `ASA_MOVE`, как исходный `CMonsterAI::OnLoseTarget`.
+pub(crate) fn release_jiumai_target_for_death(
+    region: &mut CServerRegion,
+    monster_id: i32,
+) -> bool {
+    let Some(twins_id) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| monster.jiu_mai_ai().map(JiuMaiAiState::twins_id))
+    else {
+        return false;
+    };
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.release_ai_target_for_death();
+        if let Some(state) = monster.jiu_mai_ai_mut() {
+            state.set_linked_target(false);
+        }
+    }
+    if twins_id > 0
+        && let Some(twin) = region.find_monster_by_id_mut(twins_id)
+        && !CMoveShape::is_died(twin.hit_points())
+        && twin.ai_target().is_some()
+    {
+        twin.release_ai_target_for_death();
+        if let Some(state) = twin.jiu_mai_ai_mut() {
+            state.set_linked_target(false);
+        }
     }
     true
 }
