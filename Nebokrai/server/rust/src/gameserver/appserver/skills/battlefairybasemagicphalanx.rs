@@ -1,4 +1,4 @@
-//! Снаряд базовой атаки боевой феи GameServer.
+//! Снаряд базовой атаки боевой феи `CBFBaseAttackPhalanx` GameServer.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/battlefairybasemagicphalanx.cpp`. Жизненный цикл и два
@@ -7,6 +7,8 @@
 //! критическую ставку игрока. Формула, wrapping и два исходных вызова RNG
 //! принадлежат этому owner-у; `CGame` передаёт снимок владельца и применяет
 //! рассчитанную атаку к независимому владельцу цели.
+//! Sprite-scale усекается через исходный 64-битный `fistp`, а критический
+//! множитель — к `int`; оба преобразования используют truncation к нулю.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
@@ -139,9 +141,8 @@ pub(crate) fn calculate_owned_battle_fairy_base_magic_attack(
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let sprite = ((war_soul.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1) as f64)
-        * 0.0001)
-        .round_ties_even() as i32;
+    let sprite = (((war_soul.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1) as f64)
+        * 0.0001) as i64) as i32;
     let combat_scales = game.globe_setup().base_combat_scales();
     calculate_battle_fairy_base_magic_attack(
         phalanx,
@@ -209,8 +210,7 @@ pub(crate) fn calculate_battle_fairy_base_magic_attack(
         attack.critical = true;
         let critical_rate = combat.critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage =
-                ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+            power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
         }
     }
     let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
