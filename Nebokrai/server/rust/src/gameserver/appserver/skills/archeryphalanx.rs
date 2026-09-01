@@ -7,6 +7,7 @@
 //! выхода здесь не отправляется. Расчёт трёх типов урона, wrapping и два
 //! исходных вызова RNG принадлежат этому owner-у; `CGame` передаёт снимок
 //! живого игрока и применяет рассчитанную атаку к независимому владельцу цели.
+//! Критический float-множитель усекается к нулю перед записью `int`.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
@@ -221,7 +222,7 @@ pub(crate) fn calculate_archery_attack(
     if random_below(100) < i32::from(combat.cch) {
         attack.critical = true;
         for power in &mut attack.damages {
-            power.hp_damage = ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+            power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
         }
     }
     let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
