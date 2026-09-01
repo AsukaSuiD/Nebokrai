@@ -1,4 +1,4 @@
-//! Быстрая атака владыки `CLordFastAttack` (`0x1f5`) для объектного пути игрока и монстра.
+//! Быстрая атака владыки `CLordFastAttack` (`0x1f5`) для игрока и монстра.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/lordfastattack.cpp`. Объектный путь сохраняет проверку
@@ -8,39 +8,12 @@
 //! после которого каждый компонент урона усекается к нулю;
 //! путь монстра использует тот же узкий двухударный механизм с отдельной формулой.
 //! `CGame` только разрешает владельцев, применяет рассчитанную атаку и доставляет
-//! пакеты. Координатные перегрузки `Begin` остаются ниже недостигнутыми.
+//! пакеты. Координатный и пустой `Begin` при null target тихо делают `End(0)`
+//! до properties/cooldown и не отправляют failure-пакет.
 //! Player `End` сбрасывает execution-флаги, возвращает движение и завершает
 //! `CAttackSkill::End(1)` после второго удара с единичным оружейным
 //! `AfterUseSkill`; сами два `Attack` оружие не изнашивают. Отмена использует
 //! `End(0)` без износа, обновления свойств и cooldown.
-
-// ============================================================================
-// FUNCTION: CLordFastAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:125
-// RVA: 0x00130410
-// ADDRESS: 00530410
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLordFastAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordfastattack.cpp:144
-// RVA: 0x001304E0
-// ADDRESS: 005304e0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -316,7 +289,13 @@ fn apply_attack<Runtime: GameMainLoopRuntime>(
 pub(crate) const fn is_lord_fast_attack_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     matches!(
         dispatch,
-        PlayerSkillDispatch::Object {
+        PlayerSkillDispatch::SelfTarget {
+            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Point {
+            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Object {
             skill_id: LORD_FAST_ATTACK_SKILL_ID,
             target: ShapeIdentity {
                 object_type: PLAYER_TYPE | MONSTER_TYPE,
@@ -334,6 +313,13 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let target = match dispatch {
+        PlayerSkillDispatch::SelfTarget {
+            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Point {
+            skill_id: LORD_FAST_ATTACK_SKILL_ID,
+            ..
+        } => return terminal(QueuedSkillExecutionState::Rejected),
         PlayerSkillDispatch::Object {
             skill_id: LORD_FAST_ATTACK_SKILL_ID,
             target,
