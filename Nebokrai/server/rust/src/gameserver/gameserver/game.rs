@@ -25893,7 +25893,8 @@ impl CGame {
             })?;
         let victim_region = victim_region?;
         let killer_region = killer_region?;
-        if !self.gods_battle_mgr.contains_region(victim_region) || killer_faction == victim_faction
+        if !self.gods_battle_mgr.is_gods_battle_region(victim_region)
+            || killer_faction == victim_faction
         {
             return None;
         }

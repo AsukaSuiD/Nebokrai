@@ -1439,11 +1439,10 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
                 script_player_id,
                 script_region_id,
             );
-            let (faction_a, faction_b) = game.gods_battle_mgr().configuration().faction_xyd();
             let value = if caller_is_live {
                 match evaluated_arguments[0] {
-                    Some(5) => faction_a as i32,
-                    Some(6) => faction_b as i32,
+                    Some(5) => game.gods_battle_mgr().get_faction_xyd(1) as i32,
+                    Some(6) => game.gods_battle_mgr().get_faction_xyd(2) as i32,
                     _ => 0,
                 }
             } else {

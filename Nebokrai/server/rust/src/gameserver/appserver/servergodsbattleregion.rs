@@ -104,7 +104,9 @@ impl CGodsBattleMgr {
         self.region_set.insert(region_id)
     }
 
-    pub(crate) fn contains_region(&self, region_id: i32) -> bool {
+    /// Exact `CGodsBattleMgr::IsGodsBattleRegion`: ordered set membership без
+    /// дополнительной проверки concrete region owner.
+    pub(crate) fn is_gods_battle_region(&self, region_id: i32) -> bool {
         self.region_set.contains(&region_id)
     }
 
@@ -137,6 +139,18 @@ impl CGodsBattleMgr {
             self.configuration.set_faction_xyd(1, faction_a),
             self.configuration.set_faction_xyd(2, faction_b),
         ]
+    }
+
+    /// Exact `CGodsBattleMgr::GetFactionXYD`: допустимы manager slots 0..2;
+    /// нулевой slot не загружается конфигурацией и сохраняет legacy zero.
+    pub(crate) fn get_faction_xyd(&self, faction_index: i32) -> u32 {
+        let (faction_a, faction_b) = self.configuration.faction_xyd();
+        match faction_index {
+            0 => 0,
+            1 => faction_a,
+            2 => faction_b,
+            _ => 0,
+        }
     }
 
     pub(crate) fn calculate_szl_gain(
@@ -576,7 +590,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::GetFactionXYD
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:932
@@ -604,7 +618,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CGodsBattleMgr::IsGodsBattleRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:1216
