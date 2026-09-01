@@ -7,9 +7,11 @@
 //! более одной клетки за проход ИИ. Первый `BLOCK_SHAPE` завершает полёт после
 //! упорядоченной атаки всех допустимых фигур клетки; end-пакет хранит последнюю
 //! такую фигуру. Формула попадания выполняет ровно два собственных RNG-вызова,
-//! защитные RNG остаются у `CGame`. `End(true)` прекращает оставшиеся клетки,
-//! обновляет свойства и cooldown; `End(false)` не откатывает уже выполненные
-//! клеточные атаки, но не допускает новых.
+//! защитные RNG остаются у `CGame`. Обе перегрузки `Attack` не изнашивают
+//! оружие на отдельных целях: унаследованный `AfterUseSkill` делает это один
+//! раз из `End(true)`, который прекращает оставшиеся клетки, обновляет свойства
+//! и cooldown. `End(false)` не откатывает уже выполненные клеточные атаки, но
+//! не допускает новых и не изнашивает оружие.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -60,6 +62,7 @@ pub(crate) fn is_poison_moth_dispatch(dispatch: PlayerSkillDispatch) -> bool { m
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_poison_moth_used(now_ms));
 }
 fn abort_player_poison_moth(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
@@ -111,7 +114,7 @@ pub(super) fn cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<
 }
 fn attack_cell<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, level: i32, target_damage_factor: u32, hit_modifier: i32, x: i32, y: i32, runtime: &mut Runtime) -> Option<ShapeIdentity> {
     if x == 0 && y == 0 { return None } let master = game.find_player(player_id).map(master_info)?; let mut last_target = None;
-    for target in cell_targets(game, region_id, x, y) { if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue } let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, target_damage_factor, hit_modifier) else { continue }; match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue } game.damage_player_weapon(player_id, runtime); last_target = Some(target); }
+    for target in cell_targets(game, region_id, x, y) { if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue } let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, target_damage_factor, hit_modifier) else { continue }; match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue } last_target = Some(target); }
     last_target
 }
 
