@@ -16,7 +16,9 @@
 //! `CS2CContainerObjectMove`; increase/create публикации остаются за своими
 //! ещё отдельными сценариями.
 //! Marker + optional full-goods persisted codec достигнут общим player
-//! GameSave owner-ом и одинаково обслуживает wallet/YuanBao/JiFen.
+//! GameSave owner-ом и одинаково обслуживает wallet/YuanBao/JiFen. Restore
+//! очищает только прежний goods: owner, mode и listener-set принадлежат
+//! container lifecycle и не освобождаются при `Unserialize`.
 
 use std::marker::PhantomData;
 
@@ -515,7 +517,7 @@ impl<K: CurrencyKind> CSingleCurrencyContainer<K> {
         OrdinaryThreshold: FnMut(u32, u32) -> u32,
         BattleThreshold: FnMut(u32, u32) -> u32,
     {
-        let _released = self.release();
+        let _cleared = self.clear_goods();
         let offset = *cursor;
         let Some(&marker) = source.get(offset) else {
             return Err(CurrencyCodecError::UnexpectedEnd {
