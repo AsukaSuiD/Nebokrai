@@ -9,6 +9,8 @@
 //! входе и удаляется вместе с каноническим однотиковым состоянием. Vtable
 //! exact EXE направляет `GetRemainedTime` на `CBlindState` (`0x005F2CD0`),
 //! а нулевая длительность задаётся конструктором самого `CCureState`.
+//! Монстровая доставка использует текущий region owner, а не повторный lookup
+//! в `CGame` во время owner-side AI-прохода.
 
 pub(crate) const CURE_STATE_SKILL_ID: u32 = 305;
 pub(crate) const CURE_STATE_BYTES: usize = 20;
@@ -17,7 +19,7 @@ use super::manashieldstate::{
     MANA_SHIELD_STATE_BEGIN_MESSAGE, MANA_SHIELD_STATE_END_MESSAGE,
 };
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
@@ -116,6 +118,17 @@ pub(crate) fn send_cure_state_visual_at(
     let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
 }
 
+pub(crate) fn send_cure_state_visual_in_region(
+    game: &CGame,
+    region: &CServerRegion,
+    shape: &CShape,
+    state: CureState,
+    begin: bool,
+) {
+    let message = cure_state_message(shape.identity(), state, begin);
+    let _ = game.send_game_shape_around(region, shape, None, &message);
+}
+
 fn cure_state_message(identity: ShapeIdentity, state: CureState, begin: bool) -> CMessage {
     let mut message = CMessage::new(if begin {
         MANA_SHIELD_STATE_BEGIN_MESSAGE
@@ -139,19 +152,12 @@ pub(crate) fn expire_monster_cure_state(
 ) -> bool {
     let expired = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
         let state = monster.move_shape_mut().take_cure_state_for_ai()?;
-        Some((
-            state,
-            monster.move_shape().shape().identity(),
-            monster.move_shape().shape().get_tile_x().unwrap_or_default(),
-            monster.move_shape().shape().get_tile_y().unwrap_or_default(),
-        ))
+        Some((state, monster.move_shape().shape().clone()))
     });
-    let Some((state, identity, tile_x, tile_y)) = expired else {
+    let Some((state, shape)) = expired else {
         return false;
     };
-    send_cure_state_visual_at(
-        game, region.id, identity, tile_x, tile_y, state, false,
-    );
+    send_cure_state_visual_in_region(game, region, &shape, state, false);
     true
 }
 

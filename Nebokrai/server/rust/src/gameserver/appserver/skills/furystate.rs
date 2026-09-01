@@ -10,10 +10,11 @@
 //! положительный остаток вычисляется после отдельного второго чтения часов.
 //! Serializer `0x005E7330` и exact `Unserialize` `0x005FD660` задают
 //! 12-байтовую запись `ID + remaining time + attack gain`; несколько записей
-//! сохраняют исходный порядок наложения.
+//! сохраняют исходный порядок наложения. Монстровая доставка использует
+//! переданный region owner, пока он вынут из глобальной карты `CGame`.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -116,6 +117,28 @@ pub(crate) fn send_fury_state_visual(
     begin: bool,
     now_ms: u32,
 ) {
+    let message = fury_state_message(identity, state, begin, now_ms);
+    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+}
+
+pub(crate) fn send_fury_state_visual_in_region(
+    game: &CGame,
+    region: &CServerRegion,
+    shape: &CShape,
+    state: FuryState,
+    begin: bool,
+    now_ms: u32,
+) {
+    let message = fury_state_message(shape.identity(), state, begin, now_ms);
+    let _ = game.send_game_shape_around(region, shape, None, &message);
+}
+
+fn fury_state_message(
+    identity: ShapeIdentity,
+    state: FuryState,
+    begin: bool,
+    now_ms: u32,
+) -> CMessage {
     let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
@@ -124,7 +147,7 @@ pub(crate) fn send_fury_state_visual(
         message.add_long(state.client_time(|| now_ms));
         message.add_long(0);
     }
-    let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message);
+    message
 }
 
 pub(crate) fn expire_monster_fury_states(
@@ -134,30 +157,18 @@ pub(crate) fn expire_monster_fury_states(
     now_ms: u32,
 ) -> usize {
     let expired = region.find_monster_by_id_mut(monster_id).map(|monster| {
-        let identity = monster.move_shape().shape().identity();
-        let tile_x = monster
-            .move_shape()
-            .shape()
-            .get_tile_x()
-            .unwrap_or_default();
-        let tile_y = monster
-            .move_shape()
-            .shape()
-            .get_tile_y()
-            .unwrap_or_default();
+        let shape = monster.move_shape().shape().clone();
         let states = monster
             .move_shape_mut()
             .take_expired_fury_states(now_ms);
-        (identity, tile_x, tile_y, states)
+        (shape, states)
     });
-    let Some((identity, tile_x, tile_y, states)) = expired else {
+    let Some((shape, states)) = expired else {
         return 0;
     };
     let count = states.len();
     for state in states {
-        send_fury_state_visual(
-            game, region.id, identity, tile_x, tile_y, state, false, now_ms,
-        );
+        send_fury_state_visual_in_region(game, region, &shape, state, false, now_ms);
     }
     count
 }

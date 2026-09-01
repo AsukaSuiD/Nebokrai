@@ -7,18 +7,17 @@
 //! пакетами. `CGame` предоставляет владельцев, доставку и общий пересчёт
 //! свойств. Особая ветвь игрока снимает `CRageBreakState` и завершается без
 //! создания `CFuryState`; обычная ветвь сохраняет накопление состояний.
+//! Монстровая ветвь снимает доступные typed-состояния exact conflict-набора
+//! через текущий region owner и публикует их завершение до `CCureState`.
 //! Игровая ветвь игрока завершается общим `CSummonSkill::End(1)`; монстровый
 //! lifecycle остаётся отдельным и не использует этот хвост.
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::cure::finish_curable_state;
-use super::curestate::{CureState, send_cure_state_visual_at};
-use super::furystate::{FuryState, send_fury_state_visual};
+use super::curestate::{CureState, send_cure_state_visual_in_region};
+use super::furystate::{FuryState, send_fury_state_visual, send_fury_state_visual_in_region};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderpoisonstate::send_spider_poison_state_visual;
-use super::spiderwebstate::send_spider_web_state_visual;
-use super::sealstate::send_seal_state_visual;
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, schedule_attack_interval,
 };
@@ -100,45 +99,63 @@ fn remove_reached_conflict_states(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
-    now_ms: u32,
 ) {
     let order = region
         .find_monster_by_id(monster_id)
         .map(|monster| monster.move_shape().curable_state_ids())
         .unwrap_or_default();
     for state_id in order {
-        if state_id == super::sealstate::SEAL_STATE_ID {
-            let removed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-                let state = monster.move_shape_mut().take_seal_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().unwrap_or_default(), monster.move_shape().shape().get_tile_y().unwrap_or_default()))
-            });
-            if let Some((state, identity, tile_x, tile_y)) = removed {
-                send_seal_state_visual(
-                    game, region.id, identity, tile_x, tile_y, state, false, || now_ms,
-                );
+        if !CONFLICTING_STATES.contains(&state_id) {
+            continue;
+        }
+        let removed_shape = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
+            match state_id {
+                super::sealstate::SEAL_STATE_ID => {
+                    monster.move_shape_mut().take_seal_state()?;
+                    monster.move_shape_mut().set_moveable(true);
+                    monster.move_shape_mut().set_fightable(true);
+                }
+                super::boalockstate::BOA_LOCK_STATE_ID => {
+                    monster.move_shape_mut().take_boa_lock_state()?;
+                    monster.move_shape_mut().set_moveable(true);
+                }
+                super::poisonfogstate::POISON_FOG_STATE_ID => {
+                    monster.move_shape_mut().take_poison_fog_state()?;
+                }
+                super::knightcutstate::KNIGHT_CUT_STATE_ID => {
+                    monster.move_shape_mut().take_knight_cut_state()?;
+                    monster.move_shape_mut().set_moveable(true);
+                    monster.move_shape_mut().set_fightable(true);
+                }
+                super::bossbluequakestate::BOSS_BLUE_QUAKE_STATE_ID => {
+                    monster.move_shape_mut().take_boss_blue_quake_state()?;
+                    monster.move_shape_mut().set_moveable(true);
+                    monster.move_shape_mut().set_fightable(true);
+                }
+                super::spiderweb::SPIDER_WEB_SKILL_ID => {
+                    monster.move_shape_mut().take_spider_web_state()?;
+                    monster.move_shape_mut().set_moveable(true);
+                    monster.move_shape_mut().set_fightable(true);
+                }
+                super::spiderpoison::SPIDER_POISON_SKILL_ID => {
+                    monster.move_shape_mut().take_spider_poison_state()?;
+                }
+                super::spriteburn::SPRITE_BURN_SKILL_ID => {
+                    monster.move_shape_mut().take_sprite_burn_state()?;
+                }
+                // `0x198` присутствует в native conflict-list, но отдельный
+                // typed state owner пока не материализован.
+                _ => return None,
             }
-        } else if state_id == super::spiderpoison::SPIDER_POISON_SKILL_ID {
-            let removed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-                let state = monster.move_shape_mut().take_spider_poison_state()?;
-                Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().unwrap_or_default(), monster.move_shape().shape().get_tile_y().unwrap_or_default()))
-            });
-            if let Some((state, identity, tile_x, tile_y)) = removed {
-                send_spider_poison_state_visual(game, region.id, identity, tile_x, tile_y, state, false, now_ms);
-            }
-        } else if state_id == super::spiderweb::SPIDER_WEB_SKILL_ID {
-            let removed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-                let state = monster.move_shape_mut().take_spider_web_state()?;
-                monster.move_shape_mut().set_moveable(true);
-                monster.move_shape_mut().set_fightable(true);
-                Some((state, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().unwrap_or_default(), monster.move_shape().shape().get_tile_y().unwrap_or_default()))
-            });
-            if let Some((state, identity, tile_x, tile_y)) = removed {
-                send_spider_web_state_visual(
-                    game, region.id, identity, tile_x, tile_y, state, false, || now_ms,
-                );
-            }
+            Some(monster.move_shape().shape().clone())
+        });
+        if let Some(shape) = removed_shape {
+            let identity = shape.identity();
+            let mut message = CMessage::new(0x000b_fe04);
+            message.add_long(identity.object_type);
+            message.add_long(identity.id);
+            message.add_long(state_id as i32);
+            let _ = game.send_game_shape_around(region, &shape, None, &message);
         }
     }
 }
@@ -249,33 +266,27 @@ pub(crate) fn execute_owned_fury(
     }
 
     let identity = source.identity();
-    let tile_x = source.get_tile_x().unwrap_or_default();
-    let tile_y = source.get_tile_y().unwrap_or_default();
     let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
     let fury = FuryState::new(
         now_ms,
         keep_time_ms,
         properties.query_property(SKILL_USAGE_TARGET_ATK_GAIN) as i32,
     );
-    send_fury_state_visual(
-        game, region.id, identity, tile_x, tile_y, fury, true, now_ms,
-    );
+    send_fury_state_visual_in_region(game, region, &source, fury, true, now_ms);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().push_fury_state(fury);
     }
 
-    remove_reached_conflict_states(game, region, monster_id, now_ms);
+    remove_reached_conflict_states(game, region, monster_id);
 
     let cure = CureState::new(identity, identity).begin_now();
     let previous_cure = region
         .find_monster_by_id_mut(monster_id)
         .and_then(|monster| monster.move_shape_mut().replace_cure_state(cure));
     if let Some(previous) = previous_cure {
-        send_cure_state_visual_at(
-            game, region.id, identity, tile_x, tile_y, previous, false,
-        );
+        send_cure_state_visual_in_region(game, region, &source, previous, false);
     }
-    send_cure_state_visual_at(game, region.id, identity, tile_x, tile_y, cure, true);
+    send_cure_state_visual_in_region(game, region, &source, cure, true);
 
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
