@@ -45104,6 +45104,36 @@ impl CGame {
         }
     }
 
+    /// Exact `ReplacePlayerData` применяется только вокруг defense-pass и
+    /// только к skill-id диапазону боевого духа. Возврат scale выполняется
+    /// caller-ом сразу после защиты, как парный `RestorePlayerData`.
+    fn war_soul_defense_projection(
+        &self,
+        player_id: i32,
+        skill_id: u32,
+    ) -> Option<(PlayerCombatProperties, u8, [f32; 3])> {
+        if !CSkillFactory::is_war_soul_skill(skill_id) {
+            return None;
+        }
+        let [_, blast_defense, _, _, full_miss] = self.globe_setup.base_combat_scales();
+        self.find_player(player_id)?.war_soul_defense_projection(
+            &self.goods_factory,
+            full_miss,
+            self.globe_setup.critical_rate(),
+            blast_defense,
+        )
+    }
+
+    fn restore_war_soul_defense_projection(
+        &mut self,
+        player_id: i32,
+        restored: Option<[f32; 3]>,
+    ) {
+        if let (Some(player), Some(restored)) = (self.find_player_mut(player_id), restored) {
+            player.restore_war_soul_defense_projection(restored);
+        }
+    }
+
     fn apply_summoned_skill_to_player<Runtime: GameMainLoopRuntime>(
         &mut self,
         phalanx: &SummonedSkillShape,
@@ -45147,11 +45177,18 @@ impl CGame {
                 runtime.now_milliseconds(),
             );
         }
-        let Some((mut attack, attacker_properties, attacker_occupation, _)) =
+        let Some((mut attack, mut attacker_properties, attacker_occupation, _)) =
             self.calculate_summoned_skill_attack(phalanx, target_level)
         else {
             return true;
         };
+        let mut restored_war_soul_scales = None;
+        if let Some((properties, _, restored)) =
+            self.war_soul_defense_projection(master.master_id, attack.skill_id)
+        {
+            attacker_properties = properties;
+            restored_war_soul_scales = Some(restored);
+        }
         if war_soul_hit {
             let raw_damage = attack.damages.iter().fold(0i32, |total, power| total.wrapping_add(power.hp_damage));
             let da_kong_key = self.globe_setup.da_kong_key();
@@ -45197,6 +45234,10 @@ impl CGame {
             if let Some(target) = self.find_player_mut(target_id) {
                 target.restore_defense_shields(defense_shields);
             }
+            self.restore_war_soul_defense_projection(
+                master.master_id,
+                restored_war_soul_scales,
+            );
         }
         let (damage, mana_damage) =
             Self::applied_attack_damage(&attack, target_health, target_mana);
@@ -45350,6 +45391,14 @@ impl CGame {
         else {
             return true;
         };
+        let (attacker_properties, attacker_level, restored_war_soul_scales) =
+            if let Some((properties, level, restored)) =
+                self.war_soul_defense_projection(master.master_id, attack.skill_id)
+            {
+                (properties, level, Some(restored))
+            } else {
+                (attacker_properties, attacker_level, None)
+            };
         let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
         defend_monster_base_attack(
             &mut attack,
@@ -45360,6 +45409,7 @@ impl CGame {
             &self.globe_setup,
             &mut random,
         );
+        self.restore_war_soul_defense_projection(master.master_id, restored_war_soul_scales);
         let damage = attack.hp_damage().min(target_health);
         let current_health = target_health - damage;
         let lord_hurt_plan = (property.ai == 19

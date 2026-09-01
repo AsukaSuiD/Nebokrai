@@ -154,6 +154,10 @@
 //! enum без выдуманного `repr`.
 //! Exact `GetWarSoulGoods` читает headgear cell 10 и признаёт её боевой феей
 //! только при addon `GAP_BF_BATTLE_FAIRY` value-id 1, равном единице.
+//! `ReplacePlayerData/RestorePlayerData` выражены временной typed-проекцией
+//! только для defense-pass навыков боевого духа: blast/level берутся из
+//! headgear, три setup scale действуют во время защиты, а затем прежние scale
+//! возвращаются с исходным целочисленным округлением и minimum clamp.
 //! `BatllteFairyCombine` соединяет container inputs, global BattleFairy gate,
 //! fetch power, shared Game RNG/factory, `CMoveShape::AddSkill` и ordered
 //! адресные object/skill/goods/audit effects. `BTreeMap` skill storage в
@@ -10320,6 +10324,41 @@ impl CPlayer {
             .map(|goods| goods.addon_property_value(factory, GAP_BF_ATTACK, 1))
     }
 
+    /// Временная проекция `ReplacePlayerData` для единственного вызова
+    /// base-defense. Возвращаемые scale — уже точный результат последующего
+    /// `RestorePlayerData`, включая legacy ROUND через signed DWORD.
+    pub(crate) fn war_soul_defense_projection(
+        &self,
+        factory: &CGoodsFactory,
+        full_miss_scale: f32,
+        critical_rate: f32,
+        blast_defense_scale: f32,
+    ) -> Option<(PlayerCombatProperties, u8, [f32; 3])> {
+        let goods = self.war_soul_goods(factory)?;
+        let restored_scale = |value: f32, minimum: f32| {
+            let rounded = value.round_ties_even() as i32 as u32;
+            (rounded as f32).max(minimum)
+        };
+        let restored = [
+            restored_scale(self.combat_properties.full_miss_scale(), 0.01),
+            restored_scale(self.combat_properties.critical_rate(), 1.0),
+            restored_scale(self.combat_properties.blast_defense_scale(), 0.01),
+        ];
+        let mut properties = self.combat_properties;
+        properties.full_miss_scale_bits = full_miss_scale.max(0.01).to_bits();
+        properties.critical_rate_bits = critical_rate.max(1.0).to_bits();
+        properties.blast_defense_scale_bits = blast_defense_scale.max(0.01).to_bits();
+        properties.blast_attack = goods.addon_property_value(factory, GAP_BF_BLAST, 1) as u16;
+        let level = goods.addon_property_value(factory, GAP_BF_LEVEL, 1) as u8;
+        Some((properties, level, restored))
+    }
+
+    pub(crate) fn restore_war_soul_defense_projection(&mut self, restored: [f32; 3]) {
+        self.combat_properties.full_miss_scale_bits = restored[0].to_bits();
+        self.combat_properties.critical_rate_bits = restored[1].to_bits();
+        self.combat_properties.blast_defense_scale_bits = restored[2].to_bits();
+    }
+
     /// Специальная ветвь `OnBeenAttacked(..., true)` сферы хаоса: урон
     /// сначала уменьшает `GAP_BF_HP` с точной wrapping-арифметикой, разрушение
     /// сбрасывает состояние, после чего формируется полный снимок старого клиента.
@@ -15992,33 +16031,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::ReplacePlayerData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13276
-// RVA: 0x0002E260
-// ADDRESS: 0042e260
-// PROTOTYPE: void __thiscall ReplacePlayerData(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::RestorePlayerData
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13300
-// RVA: 0x0002E400
-// ADDRESS: 0042e400
-// PROTOTYPE: void __thiscall RestorePlayerData(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_PSEUDOCODE: парный `ReplacePlayerData/RestorePlayerData`
+// достигнут defense caller-ами выше; покрытый RAW удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::TellClientMove

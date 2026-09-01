@@ -213,7 +213,7 @@ impl CGame {
         if !self.owned_skill_player_attackable(master, target_id, region_id) {
             return;
         }
-        let Some((attacker_properties, attacker_occupation, target_properties, target_health, target_mana, target_war_soul_mana)) =
+        let Some((mut attacker_properties, attacker_occupation, target_properties, target_health, target_mana, target_war_soul_mana)) =
             self.find_player(master.master_id).and_then(|attacker| {
                 let target = self.find_player(target_id)?;
                 Some((
@@ -228,6 +228,14 @@ impl CGame {
         else {
             return;
         };
+        let mut restored_war_soul_scales = None;
+        if !war_soul_hit
+            && let Some((properties, _, restored)) =
+                self.war_soul_defense_projection(master.master_id, attack.skill_id)
+        {
+            attacker_properties = properties;
+            restored_war_soul_scales = Some(restored);
+        }
         if !war_soul_hit {
             let _ = self.player_on_owned_skill_attack(
                 master.master_id,
@@ -283,6 +291,10 @@ impl CGame {
             if let Some(target) = self.find_player_mut(target_id) {
                 target.restore_defense_shields(defense_shields);
             }
+            self.restore_war_soul_defense_projection(
+                master.master_id,
+                restored_war_soul_scales,
+            );
         }
         let (damage, mana_damage) =
             Self::applied_attack_damage(&attack, target_health, target_mana);
@@ -522,6 +534,14 @@ impl CGame {
         else {
             return;
         };
+        let (attacker_properties, attacker_level, restored_war_soul_scales) =
+            if let Some((properties, level, restored)) =
+                self.war_soul_defense_projection(master.master_id, attack.skill_id)
+            {
+                (properties, level, Some(restored))
+            } else {
+                (attacker_properties, attacker_level, None)
+            };
         let now_ms = runtime.now_milliseconds();
         self.apply_guard_monster_first_attack(master.master_id, region_id, &property, now_ms);
         let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
@@ -534,6 +554,7 @@ impl CGame {
             &self.globe_setup,
             &mut random,
         );
+        self.restore_war_soul_defense_projection(master.master_id, restored_war_soul_scales);
         let damage = attack.hp_damage().min(target_health);
         let current_health = target_health - damage;
         let lord_hurt_plan = (property.ai == 19
