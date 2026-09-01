@@ -347,21 +347,27 @@ fn calculate_player_projectile_attack(
     hit_modifier: i32,
     souls: i32,
 ) -> Option<(MasterInfo, AttackInformation)> {
-    let (combat, master, weapon_level) = {
+    let weapon_target_level = if spec.uses_weapon_factor() {
+        Some(target_level(game, region_id, target)?)
+    } else {
+        None
+    };
+    let (combat, master, damage_factor) = {
         let player = game.find_player(player_id)?;
+        let damage_factor = weapon_target_level.map_or(1.0, |target_level| {
+            let (divisor, floor) = game.globe_setup().weapon_damage_factors();
+            player.weapon_modifier(
+                game.goods_factory(),
+                i32::from(target_level),
+                divisor,
+                floor,
+            )
+        });
         (
             player.combat_properties(),
             master_info(player),
-            player.weapon_damage_level(game.goods_factory()),
+            damage_factor,
         )
-    };
-    let damage_factor = if spec.uses_weapon_factor() {
-        let target_level = target_level(game, region_id, target)?;
-        let (divisor, floor) = game.globe_setup().weapon_damage_factors();
-        let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-        (if divisor == 0.0 { 1.0 } else { delta as f32 / divisor }).min(1.0).max(floor)
-    } else {
-        1.0
     };
     let span = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
     let random_damage = game.skill_random_below(span);

@@ -20,7 +20,6 @@ use super::basemagic::{
 };
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -197,16 +196,13 @@ fn calculate_attack(
     let player = game.find_player(player_id)?;
     let combat = player.combat_properties();
     let master = master_info(player);
-    let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
-        goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)
-    });
     let (weapon_divisor, weapon_minimum) = game.globe_setup().weapon_damage_factors();
-    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let damage_factor = if weapon_divisor == 0.0 {
-        1.0
-    } else {
-        (delta as f32 / weapon_divisor).min(1.0).max(weapon_minimum)
-    };
+    let damage_factor = player.weapon_modifier(
+        game.goods_factory(),
+        i32::from(target_level),
+        weapon_divisor,
+        weapon_minimum,
+    );
     let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
     let random_damage = game.skill_random_below(width);
     let element_bonus =

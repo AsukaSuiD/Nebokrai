@@ -26,9 +26,7 @@ use super::poisonmoth::{cell_targets, master_info, target_level, target_position
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
-    GAP_WEAPON_CATEGORY, GAP_WEAPON_DAMAGE_LEVEL,
-};
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -277,18 +275,13 @@ fn calculate_player_attack(
     let player = game.find_player(player_id)?;
     let combat = player.combat_properties();
     let master = master_info(player);
-    let weapon_level = player.equipment().get_goods(2).map_or(0, |weapon| {
-        weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)
-    });
     let (divisor, floor) = game.globe_setup().weapon_damage_factors();
-    let level_delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let weapon_factor = (if divisor == 0.0 {
-        1.0
-    } else {
-        level_delta as f32 / divisor
-    })
-    .min(1.0)
-    .max(floor);
+    let weapon_factor = player.weapon_modifier(
+        game.goods_factory(),
+        i32::from(target_level),
+        divisor,
+        floor,
+    );
     let minimum = combat.minimum_attack as i32;
     let maximum = combat.maximum_attack as i32;
     let width = maximum.wrapping_sub(minimum).wrapping_add(1);
