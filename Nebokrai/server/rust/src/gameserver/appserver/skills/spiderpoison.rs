@@ -10,44 +10,9 @@
 //! monster-вызов сохраняет RNG, но его виртуальный critical chance равен нулю.
 //! Состояние заменяется после удара и только при отсутствии `Cure`;
 //! `CGame` координирует владельцев и применение рассчитанных последствий.
-//! Две координатные перегрузки `Begin` сохранены ниже как RAW, поскольку
-//! реальный вызывающий путь и отличия их последующего исполнения пока не подтверждены.
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoison.cpp
-
-// ============================================================================
-// FUNCTION: CSpiderPoison::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoison.cpp:109
-// RVA: 0x001853E0
-// ADDRESS: 005853e0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSpiderPoison::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderpoison.cpp:126
-// RVA: 0x001854B0
-// ADDRESS: 005854b0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
+//! Координатный `Begin` по точному EXE использует общий
+//! `CState::GetSufferer`: выбирает первый `CMoveShape` клетки и продолжает
+//! через тот же объектный pipeline.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
@@ -92,10 +57,36 @@ fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutc
 }
 
 pub(crate) const fn is_player_spider_poison_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch, PlayerSkillDispatch::Object {
-        skill_id: SPIDER_POISON_SKILL_ID,
-        target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
-    })
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::Point { skill_id: SPIDER_POISON_SKILL_ID, .. }
+            | PlayerSkillDispatch::Object {
+                skill_id: SPIDER_POISON_SKILL_ID,
+                target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+            }
+    )
+}
+
+fn player_target(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
+    match dispatch {
+        PlayerSkillDispatch::Object { target, .. } => Some(target),
+        PlayerSkillDispatch::Point { skill_id, x, y } if skill_id == SPIDER_POISON_SKILL_ID => {
+            if x == 0 && y == 0 {
+                return None;
+            }
+            let region = game.find_region(region_id)?.base();
+            let (area_width, area_height) = game.area_dimensions();
+            let mut shapes = Vec::new();
+            region
+                .get_shapes(x, y, area_width, area_height, game, &mut shapes)
+                .ok()?;
+            shapes
+                .into_iter()
+                .map(|shape| shape.identity)
+                .find(|identity| matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE))
+        }
+        _ => None,
+    }
 }
 
 fn player_master(player: &CPlayer) -> MasterInfo {
@@ -209,15 +200,15 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let PlayerSkillDispatch::Object { target, .. } = dispatch else {
-        return player_terminal(QueuedSkillExecutionState::Rejected);
-    };
     if !is_player_spider_poison_dispatch(dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
     let Some((region_id, source_x, source_y, skill_level)) = game.find_player(player_id).and_then(|player| {
         Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(SPIDER_POISON_SKILL_ID)))
     }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(target) = player_target(game, region_id, dispatch) else {
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
     let Some(properties) = game.skill_base_properties(SPIDER_POISON_SKILL_ID, skill_level).cloned() else {
         if player_ai.spider_poison().is_some() { finish_player_spider_poison(game, player_id, player_ai, runtime, false); }
         return player_terminal(QueuedSkillExecutionState::Rejected);
