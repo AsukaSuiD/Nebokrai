@@ -10,6 +10,8 @@
 //! и `AI` не изнашивают оружие на каждой цели двух проходов: унаследованный
 //! `AfterUseSkill` делает это один раз в подтверждённом `End(1)`, после сброса
 //! сохранённого направления и возврата движения.
+//! Критический множитель переводится в `int` с подтверждённым x87 усечением
+//! к нулю отдельно для каждого боевого компонента.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -78,7 +80,7 @@ fn target_level(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<u
 fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i32, hit: i32, factor: u32) -> Option<(MasterInfo, AttackInformation)> {
     let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let weapon_level = player.equipment().get_goods(2).map_or(0, |weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)); let (divisor, floor) = game.globe_setup().weapon_damage_factors(); let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0); let weapon_factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(floor) }; let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
     let mut attack = AttackInformation { skill_id: SWALLOW_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
-    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } } Some((master, attack))
+    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate) as i32; } } Some((master, attack))
 }
 fn cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<ShapeIdentity> { let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() }; let (width, height) = game.area_dimensions(); let mut shapes = Vec::new(); if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new() } shapes.into_iter().map(|shape| shape.identity).collect() }
 fn attack_scope<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, direction: i32, level: i32, hit: i32, factor: u32, runtime: &mut Runtime) {
