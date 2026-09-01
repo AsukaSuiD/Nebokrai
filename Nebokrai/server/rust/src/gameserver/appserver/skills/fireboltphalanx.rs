@@ -6,7 +6,8 @@
 //! жизни, второе — строгую границу атаки; после единственной попытки объект
 //! удаляется. Формула сохраняет два вызова генератора MSVCRT: диапазон урона,
 //! затем критический удар. Снимок `CSoulCollectState`, потреблённый владельцем
-//! навыка при создании снаряда, применяется здесь без обращения к live state.
+//! навыка при создании снаряда, применяется здесь без обращения к live state;
+//! результаты усиления душами и критического множителя усекаются к нулю.
 
 use super::firebolt::FIRE_BOLT_SKILL_ID;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
@@ -162,7 +163,7 @@ pub(crate) fn calculate_owned_fire_bolt_attack(
     if phalanx.soul_count != 0 && phalanx.soul_variable != 0 {
         damage = ((phalanx.soul_variable as f32 * phalanx.soul_count as f32 * 0.01 + 1.0)
             * damage as f32)
-            .round_ties_even() as i32;
+            as i32;
     }
     damage = damage.max(0);
     let mut attack = AttackInformation {
@@ -189,7 +190,7 @@ pub(crate) fn calculate_owned_fire_bolt_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
 
