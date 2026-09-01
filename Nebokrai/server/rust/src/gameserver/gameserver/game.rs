@@ -16212,14 +16212,7 @@ impl CGame {
                     let _ = self.send_player_packet_consumption(&consumption);
                 }
             }
-            if let Some(current) = self.find_player(player_id).map(CPlayer::money) {
-                let requested = pending.required_money as u32;
-                if let Some(change) =
-                    self.decrease_player_money(player_id, requested.min(current))
-                {
-                    let _ = self.send_player_money_decrease(player_id, &change.outcome);
-                }
-            }
+            let _ = self.apply_legacy_money_debit(player_id, pending.required_money);
         }
         if let Some(player) = self.find_player_mut(player_id) {
             player.set_create_faction_operator(false);
@@ -16505,10 +16498,8 @@ impl CGame {
         }
         pending.declaration_pending = false;
         if money > 0 {
-            let current = self.find_player(player_id)?.money();
-            if let Some(change) = self.decrease_player_money(player_id, money.min(current)) {
-                let _ = self.send_player_money_decrease(player_id, &change.outcome);
-            }
+            self.apply_legacy_money_debit(player_id, money as i32)
+                .then_some(())?;
         }
         let mut response = CMessage::new(0x000b_ff31);
         response.add_long(i32::from(money > 0));
@@ -16560,11 +16551,8 @@ impl CGame {
         money: u32,
         goods_name: &[u8],
     ) -> bool {
-        let Some(current) = self.find_player(player_id).map(CPlayer::money) else {
+        if !self.apply_legacy_money_debit(player_id, money as i32) {
             return false;
-        };
-        if let Some(change) = self.decrease_player_money(player_id, money.min(current)) {
-            let _ = self.send_player_money_decrease(player_id, &change.outcome);
         }
         let base_index = self
             .goods_factory
@@ -35719,7 +35707,7 @@ impl CGame {
         )
     }
 
-    /// Exact `CPlayer::SetMoney` boundary для script family `3011..3016`:
+    /// Exact `CPlayer::SetMoney` boundary:
     /// wallet остаётся canonical state owner-ом, а CGame публикует соответствующий
     /// create/amount/delete packet с extend ID 4. Как и оригинал, caller считает
     /// найденного игрока успехом даже при отказе wallet создать currency object.
@@ -35751,6 +35739,17 @@ impl CGame {
         true
     }
 
+    /// Общий legacy-порядок callback-ов фракций: unsigned wallet вычитает
+    /// signed fee с wrapping, после чего отрицательный `long` clamp-ится в ноль.
+    fn apply_legacy_money_debit(&mut self, player_id: i32, fee: i32) -> bool {
+        let Some(previous) = self.find_player(player_id).map(CPlayer::money) else {
+            return false;
+        };
+        let wrapped = previous.wrapping_sub(fee as u32);
+        let requested = if (wrapped as i32) < 0 { 0 } else { wrapped };
+        self.set_script_player_money(player_id, requested)
+    }
+
     /// World `0x7FE34/0x7FE37` повторяет старый `GetMoney - signed fee`, затем
     /// `SetMoney(max(signed(result), 0))`. Обычная положительная плата идёт
     /// через тот же wallet/container wire, что остальные gameplay debits;
@@ -35761,22 +35760,7 @@ impl CGame {
         fee: i32,
     ) -> Option<()> {
         let previous = self.find_player(player_id)?.money();
-        let wrapped = previous.wrapping_sub(fee as u32);
-        let resulting = if (wrapped as i32) < 0 { 0 } else { wrapped };
-        if resulting < previous {
-            let change = self.decrease_player_money(player_id, previous - resulting)?;
-            self.send_player_money_decrease(player_id, &change.outcome);
-        } else if resulting > previous {
-            let amount = resulting - previous;
-            let created = self.create_goods_batch(self.goods_factory.get_gold_coin_index(), amount);
-            let outcome = {
-                let (players, goods_factory) = (&mut self.players, &self.goods_factory);
-                players
-                    .get_mut(&player_id)?
-                    .increase_money(amount, goods_factory, created)
-            };
-            self.send_player_money_increase(player_id, &outcome);
-        }
+        self.apply_legacy_money_debit(player_id, fee).then_some(())?;
         let current = self.find_player(player_id)?.money();
         tracing::trace!(
             player_id,
