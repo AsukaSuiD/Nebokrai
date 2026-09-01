@@ -24,7 +24,6 @@ use crate::gameserver::appserver::ai::fixedpositionarcher::{
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::appserver::skills::monsterattack::monster_attackable_by_monster;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
@@ -69,12 +68,7 @@ pub(crate) fn select_guard_with_bow_target(
             selected,
             FixedArcherTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    monster_view.tile_x,
-                    monster_view.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: monster_view.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
@@ -134,12 +128,7 @@ pub(crate) fn select_guard_monster_target(
             selected,
             FixedArcherTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    monster_view.tile_x,
-                    monster_view.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: monster_view.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,

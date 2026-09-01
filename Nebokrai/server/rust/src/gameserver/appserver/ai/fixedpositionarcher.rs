@@ -26,9 +26,7 @@ use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::ai::baseai::AiShapeAction;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::{
-    SKILL_USAGE_REUSE_DELAY_TIME, real_distance,
-};
+use crate::gameserver::appserver::skills::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use crate::gameserver::appserver::skills::kernel::skill_is_restored;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::setup::monsterlist::MonsterProperties;
@@ -169,12 +167,7 @@ pub(crate) fn select_fixed_archer_enemy(
             selected,
             FixedArcherTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
@@ -196,12 +189,7 @@ pub(crate) fn select_fixed_archer_enemy(
             selected,
             FixedArcherTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
