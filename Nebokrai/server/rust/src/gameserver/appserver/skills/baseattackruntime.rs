@@ -6,6 +6,8 @@
 //! и фактического применения урона.
 //! Общая формула для player/monster/build усекает критический float-множитель
 //! к нулю перед записью каждого компонента в `int`.
+//! Maximum-distance gate использует `RealDistance(CShape*)` для разрешённой
+//! объектной цели и координатный overload только для point-target без формы.
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
@@ -124,19 +126,20 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             let _ = game.send_base_attack_failure(player_id, 2);
             return rejected();
         }
-        let (source_x, source_y) =
-            match (player.shape().get_tile_x(), player.shape().get_tile_y()) {
-                (Ok(x), Ok(y)) => (x, y),
-                _ => return rejected(),
-            };
+        let Some(source_view) = player.shape_view() else {
+            return rejected();
+        };
+        let (source_x, source_y) = (source_view.tile_x, source_view.tile_y);
         let (target_x, target_y) = match (dispatch, target) {
             (_, Some((_, view))) => (view.tile_x, view.tile_y),
             (PlayerSkillDispatch::Point { x, y, .. }, None) => (x, y),
             _ => (source_x, source_y),
         };
-        if maximum_distance != 0
-            && (maximum_distance as i32) < real_distance(source_x, source_y, target_x, target_y)
-        {
+        let target_distance = target.map_or_else(
+            || real_distance(source_x, source_y, target_x, target_y),
+            |(_, target_view)| source_view.real_distance(Some(target_view)),
+        );
+        if maximum_distance != 0 && (maximum_distance as i32) < target_distance {
             let _ = game.send_base_attack_failure(player_id, 0x0b);
             return rejected();
         }
