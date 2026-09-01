@@ -16212,10 +16212,9 @@ impl CGame {
                     let _ = self.send_player_packet_consumption(&consumption);
                 }
             }
-            if let Some(change) =
-                self.decrease_player_money(player_id, pending.required_money as u32)
-            {
-                let _ = self.send_player_money_decrease(player_id, &change.outcome);
+            if let Some(current) = self.find_player(player_id).map(CPlayer::money) {
+                let requested = pending.required_money as u32;
+                let _ = self.decrease_player_money(player_id, requested.min(current));
             }
         }
         if let Some(player) = self.find_player_mut(player_id) {
