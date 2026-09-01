@@ -1546,11 +1546,8 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if tamed && cast.is_none() && pet_action == 0 {
         let (anchor_x, anchor_y) = pet_combat_master_anchor(game, region, attacker_master)
             .unwrap_or((monster_x, monster_y));
-        let anchor_distance = target_x
-            .wrapping_sub(anchor_x)
-            .unsigned_abs()
-            .max(target_y.wrapping_sub(anchor_y).unsigned_abs());
-        if anchor_distance >= game.globe_setup().maximum_pet_tracing_distance() {
+        let anchor_distance = target_shape.distance_to_point(anchor_x, anchor_y);
+        if game.globe_setup().maximum_pet_tracing_distance() as i32 <= anchor_distance {
             lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
             return true;
         }
