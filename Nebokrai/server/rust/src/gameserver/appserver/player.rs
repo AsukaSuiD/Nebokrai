@@ -214,7 +214,8 @@
 //! переполнением. Снимок другого игрока читает это состояние и те же
 //! восемь принадлежащих `CiQing` ячеек без копий. `MountAllEquip` вычисляет
 //! два снимка одной формулой оборудования — до и после CiQing — затем
-//! `CGame` сохраняет насыщенную разницу и запускает тот же `DoneTaoZhuang`.
+//! сохраняет насыщенную разницу; единый результат проводит обязательный
+//! `SendResultToClient` через обычный, equipment и специальный CiQing caller.
 //! TaoZhuang теперь сохраняет constructor flags, unique original-name set,
 //! ordered set counts/threshold-prefix, max-level skills и раздельные обычные/
 //! CiQing property maps. `CGame` исполняет полный `DoneTaoZhuang`, поэтому эти
@@ -698,6 +699,7 @@ pub(crate) enum PlayerEquipmentRemoveEffect {
     PropertiesChangedWithoutRemovedSlot {
         column: EquipmentColumn,
         combat_properties: PlayerCombatProperties,
+        ci_qing_result_values: BTreeMap<u32, u32>,
     },
     VitalsClamped {
         previous_health: u32,
@@ -732,6 +734,7 @@ pub(crate) enum PlayerEquipmentAddEffect {
     SkillAdded(BattleFairySkillAdded),
     PropertiesChanged {
         combat_properties: PlayerCombatProperties,
+        ci_qing_result_values: BTreeMap<u32, u32>,
     },
     AroundUpdate(EquipmentAroundUpdate),
     PackageExtensionLogged {
@@ -1525,6 +1528,12 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) battle_fairy_summoned: bool,
     pub(crate) battle_fairy_recall: bool,
     pub(crate) battle_fairy_died: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayerPropertyRecompute {
+    pub(crate) properties: PlayerCombatProperties,
+    pub(crate) ci_qing_result_values: BTreeMap<u32, u32>,
 }
 
 pub(crate) struct PlayerStatePropertyPass {
@@ -5585,6 +5594,48 @@ impl CPlayer {
             factory,
         );
         (previous, current)
+    }
+
+    /// Полный `MountAllEquip` строит два снимка из одного BF goods state,
+    /// заменяет `m_mapCiQingAddValue` разностью и передаёт caller-у итог для
+    /// обязательного `SendResultToClient` до `OnChangeProperties`.
+    pub(crate) fn recompute_update_property(
+        &mut self,
+        coefficients: GlobePlayerPropertyCoefficients,
+        base_combat_scales: [f32; 5],
+        critical_rate: f32,
+        factory: &CGoodsFactory,
+    ) -> PlayerPropertyRecompute {
+        self.refresh_battle_fairy_equipment_properties(factory);
+        self.apply_ci_qing_base_properties(factory);
+        let previous = self.recompute_without_ci_qing_properties(
+            coefficients,
+            base_combat_scales,
+            critical_rate,
+            factory,
+        );
+        let current = self.recompute_base_and_equipment_properties(
+            coefficients,
+            base_combat_scales,
+            critical_rate,
+            factory,
+        );
+        let (previous, current) = self.apply_battle_fairy_equipment_property_pair(
+            previous,
+            current,
+            coefficients,
+            factory,
+        );
+        if let Some(values) = Self::update_ci_qing_property_difference(
+            &Self::combat_type_values_from(previous),
+            &Self::combat_type_values_from(current),
+        ) {
+            self.ci_qing_add_values = values;
+        }
+        PlayerPropertyRecompute {
+            properties: current,
+            ci_qing_result_values: self.ci_qing_property_result(),
+        }
     }
 
     /// Применяет все уже материализованные семейства общего
@@ -11058,7 +11109,7 @@ impl CPlayer {
         factory: &CGoodsFactory,
         skill_factory: &CSkillFactory,
         runtime: PlayerEquipmentRemoveRuntimeFacts,
-        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerPropertyRecompute,
     ) -> PlayerEquipmentRemoveReport {
         let player_id = self.player_id();
         let mut outcome = self.equipment.remove(
@@ -11107,12 +11158,13 @@ impl CPlayer {
                 }
             }
             if player_effects.recompute_without_removed_slot {
-                let properties = recompute_properties(self);
-                self.apply_recomputed_combat_properties(properties, factory);
+                let recompute = recompute_properties(self);
+                self.apply_recomputed_combat_properties(recompute.properties, factory);
                 effects.push(
                     PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot {
                         column: removed.event.column,
                         combat_properties: self.combat_properties,
+                        ci_qing_result_values: recompute.ci_qing_result_values,
                     },
                 );
             }
@@ -11150,7 +11202,7 @@ impl CPlayer {
         skill_factory: &CSkillFactory,
         runtime: PlayerEquipmentAddRuntimeFacts,
         register_with_goods_ai: &mut dyn FnMut(&CGoods),
-        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerPropertyRecompute,
     ) -> PlayerEquipmentAddReport {
         let player_id = self.player_id();
         let previous_expanded_package_num = self.equipment.expanded_package_num();
@@ -11215,10 +11267,11 @@ impl CPlayer {
                 }
             }
             if player_effects.recompute_properties {
-                let properties = recompute_properties(self);
-                self.apply_recomputed_combat_properties(properties, factory);
+                let recompute = recompute_properties(self);
+                self.apply_recomputed_combat_properties(recompute.properties, factory);
                 effects.push(PlayerEquipmentAddEffect::PropertiesChanged {
                     combat_properties: self.combat_properties,
+                    ci_qing_result_values: recompute.ci_qing_result_values,
                 });
             }
             effects.push(PlayerEquipmentAddEffect::AroundUpdate(

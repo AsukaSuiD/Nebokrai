@@ -273,13 +273,14 @@
 //! failure destruction и success Clone→hand delete→CiQing add с hand/packet/
 //! CiQing `0xC0101/02`. Native Clone замкнут через точную persisted-codec пару
 //! `CGoods`; обязательной runtime-границей остаётся только полный equipment/
-//! addon property recompute, owner которого ещё не материализован полностью.
+//! addon property recompute.
 //! Other-person `0x8FC35` объединяет ordered CiQing/TaoZhuang property maps,
 //! сериализует target identity, values-only sequence, owned CiQing goods и
 //! TaoZhuang ID в адресный `0xC010F`. Delete/mount property tail получает от
 //! обязательного runtime-а полные combat snapshots до/после универсальных
-//! equipment/addon формул, а `CPlayer` сам вычисляет и сохраняет CiQing delta,
-//! объединяет TaoZhuang values и при изменении шлёт values-only `0xC0110`.
+//! equipment/addon формул, а `CPlayer` сам вычисляет и сохраняет CiQing delta.
+//! Общий result-owner объединяет TaoZhuang values и всегда шлёт values-only
+//! `0xC0110` до последующего `0xBF721`, как native `MountAllEquip`.
 //! Обычный skill request `0x90001` проходит через owned learned skills и
 //! emotion state: optional `GS0090`, concrete around `0xBF611`, self/point/
 //! object resolution и `0xBFE01` сохраняют native order до owned очереди
@@ -569,17 +570,10 @@ macro_rules! player_property_recompute {
         let critical_rate = $game.globe_setup.critical_rate();
         let goods_factory = $game.goods_factory.clone();
         move |player: &mut CPlayer| {
-            player.refresh_battle_fairy_equipment_properties(&goods_factory);
-            player.apply_ci_qing_base_properties(&goods_factory);
-            let properties = player.recompute_base_and_equipment_properties(
+            player.recompute_update_property(
                 coefficients,
                 base_combat_scales,
                 critical_rate,
-                &goods_factory,
-            );
-            player.apply_battle_fairy_equipment_properties(
-                properties,
-                coefficients,
                 &goods_factory,
             )
         }
@@ -764,6 +758,7 @@ use crate::gameserver::appserver::player::{
     PlayerEquipmentAddEffect, PlayerEquipmentAddReport, PlayerEquipmentAddRuntimeFacts,
     PlayerEquipmentRemoveEffect, PlayerEquipmentRemoveReport, PlayerEquipmentRemoveRuntimeFacts,
     PlayerFightStateTransition, PlayerGameSaveCodecError, PlayerGoodsAiDeletion,
+    PlayerPropertyRecompute,
     PlayerLoginGoodsLocation, PlayerPacketAddOutcome, PlayerProgress, PlayerSkillDispatch,
     PlayerSkillRequest, PlayerSkillRequestFacts, PlayerTalkChannel, PlayerUncreatedCarriage,
     PlayerUncreatedPet, PlayerYuanBaoChange,
@@ -2485,14 +2480,6 @@ pub(crate) struct CiQingLog {
     pub(crate) operation: u32,
     pub(crate) base_index: u32,
     pub(crate) amount: u32,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CiQingPropertyRuntimeSnapshot {
-    pub(crate) previous_type_values: BTreeMap<u32, u32>,
-    pub(crate) current_type_values: BTreeMap<u32, u32>,
-    pub(crate) tao_zhuang_add_values: BTreeMap<u32, u32>,
-    pub(crate) tao_zhuang_id: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6021,23 +6008,16 @@ impl CGame {
     pub(crate) fn recompute_player_properties_for_update(
         &mut self,
         player_id: i32,
-    ) -> Option<PlayerCombatProperties> {
+    ) -> Option<PlayerPropertyRecompute> {
         let coefficients = self.globe_setup.player_property_coefficients();
         let base_combat_scales = self.globe_setup.base_combat_scales();
         let critical_rate = self.globe_setup.critical_rate();
         let goods_factory = self.goods_factory.clone();
         let player = self.players.get_mut(&player_id)?;
-        player.refresh_battle_fairy_equipment_properties(&goods_factory);
-        player.apply_ci_qing_base_properties(&goods_factory);
-        let properties = player.recompute_base_and_equipment_properties(
+        Some(player.recompute_update_property(
             coefficients,
             base_combat_scales,
             critical_rate,
-            &goods_factory,
-        );
-        Some(player.apply_battle_fairy_equipment_properties(
-            properties,
-            coefficients,
             &goods_factory,
         ))
     }
@@ -6045,9 +6025,37 @@ impl CGame {
     pub(crate) fn apply_recomputed_player_properties(
         &mut self,
         player_id: i32,
-        properties: PlayerCombatProperties,
+        recompute: PlayerPropertyRecompute,
     ) -> bool {
-        self.commit_recomputed_player_properties(player_id, properties, true)
+        self.commit_player_property_recompute(player_id, recompute, true)
+    }
+
+    fn commit_player_property_recompute(
+        &mut self,
+        player_id: i32,
+        recompute: PlayerPropertyRecompute,
+        publish_state_visuals: bool,
+    ) -> bool {
+        let _ = self.send_ci_qing_property_result(player_id, &recompute.ci_qing_result_values);
+        self.commit_recomputed_player_properties(
+            player_id,
+            recompute.properties,
+            publish_state_visuals,
+        )
+    }
+
+    fn send_ci_qing_property_result(
+        &self,
+        player_id: i32,
+        result_values: &BTreeMap<u32, u32>,
+    ) -> i32 {
+        let mut message = CMessage::new(0x0c_0110);
+        message.add_long(player_id);
+        message.add_long(player_id);
+        for value in result_values.values() {
+            message.add_ulong(*value);
+        }
+        message.send_to_player(self.net_server(), player_id)
     }
 
     fn commit_recomputed_player_properties(
@@ -17437,11 +17445,12 @@ impl CGame {
             let current_properties = self
                 .recompute_player_properties_for_update(target_id)
                 .expect("realm skill mutation сохраняет canonical player");
+            let current_combat_properties = current_properties.properties;
             let _ = self.apply_recomputed_player_properties(target_id, current_properties);
             let applied_properties = self
                 .find_player(target_id)
                 .map(CPlayer::combat_properties)
-                .unwrap_or(current_properties);
+                .unwrap_or(current_combat_properties);
             if previous_properties != applied_properties {
                 if let Some(player) = self.find_player(target_id) {
                     let _ = self.send_player_properties_changed(player);
@@ -24413,83 +24422,10 @@ impl CGame {
     }
 
     fn refresh_ci_qing_player_property(&mut self, player_id: i32) {
-        let coefficients = self.globe_setup.player_property_coefficients();
-        let base_combat_scales = self.globe_setup.base_combat_scales();
-        let critical_rate = self.globe_setup.critical_rate();
-        let goods_factory = self.goods_factory.clone();
-        let (snapshot, current_properties) = {
-            let player = self
-                .find_player_mut(player_id)
-                .expect("CiQing refresh получает canonical player");
-            player.refresh_battle_fairy_equipment_properties(&goods_factory);
-            player.apply_ci_qing_base_properties(&goods_factory);
-            let previous = player.recompute_without_ci_qing_properties(
-                coefficients,
-                base_combat_scales,
-                critical_rate,
-                &goods_factory,
-            );
-            let current = player.recompute_base_and_equipment_properties(
-                coefficients,
-                base_combat_scales,
-                critical_rate,
-                &goods_factory,
-            );
-            let (previous, current) = player.apply_battle_fairy_equipment_property_pair(
-                previous,
-                current,
-                coefficients,
-                &goods_factory,
-            );
-            let (_, tao_zhuang_add_values, tao_zhuang_id) =
-                player.ci_qing_property_snapshot();
-            (
-                CiQingPropertyRuntimeSnapshot {
-                    previous_type_values: CPlayer::combat_type_values_from(previous),
-                    current_type_values: CPlayer::combat_type_values_from(current),
-                    tao_zhuang_add_values: tao_zhuang_add_values.clone(),
-                    tao_zhuang_id,
-                },
-                current,
-            )
-        };
-        let _ = self.commit_recomputed_player_properties(player_id, current_properties, false);
-        let add_values = CPlayer::update_ci_qing_property_difference(
-            &snapshot.previous_type_values,
-            &snapshot.current_type_values,
-        );
-        let (changed, result_values) = {
-            let player = self
-                .players
-                .get_mut(&player_id)
-                .expect("property runtime получает canonical player");
-            let previous_add_values = player.ci_qing_property_snapshot().0;
-            let changed = add_values
-                .as_ref()
-                .is_some_and(|add_values| previous_add_values != add_values);
-            let stored_add_values =
-                add_values.unwrap_or_else(|| player.ci_qing_property_snapshot().0.clone());
-            player.apply_ci_qing_property_snapshot(
-                stored_add_values,
-                snapshot.tao_zhuang_add_values,
-                snapshot.tao_zhuang_id,
-            );
-            (changed, player.ci_qing_property_result())
-        };
-        if changed {
-            let mut message = CMessage::new(0x0c_0110);
-            message.add_long(player_id);
-            message.add_long(player_id);
-            for value in result_values.values() {
-                message.add_ulong(*value);
-            }
-            let delivery = message.send_to_player(self.net_server(), player_id);
-            tracing::trace!(
-                player_id,
-                delivery,
-                "изменение свойств CiQing отправлено игроку"
-            );
-        }
+        let recompute = self
+            .recompute_player_properties_for_update(player_id)
+            .expect("CiQing refresh получает canonical player");
+        let _ = self.commit_player_property_recompute(player_id, recompute, false);
         self.players
             .get_mut(&player_id)
             .expect("CiQing result сохраняет canonical player")
@@ -28524,9 +28460,9 @@ impl CGame {
     pub(crate) fn apply_player_state_properties(
         &mut self,
         player_id: i32,
-        properties: PlayerCombatProperties,
+        recompute: PlayerPropertyRecompute,
     ) {
-        if !self.commit_recomputed_player_properties(player_id, properties, false) {
+        if !self.commit_player_property_recompute(player_id, recompute, false) {
             return;
         }
         if let Some(player) = self.find_player(player_id) {
@@ -29190,11 +29126,12 @@ impl CGame {
         let current_properties = self
             .recompute_player_properties_for_update(player_id)
             .expect("realm mutation сохраняет canonical player");
+        let current_combat_properties = current_properties.properties;
         let _ = self.apply_recomputed_player_properties(player_id, current_properties);
         let applied_properties = self
             .find_player(player_id)
             .map(CPlayer::combat_properties)
-            .unwrap_or(current_properties);
+            .unwrap_or(current_combat_properties);
         if mutation.previous_properties != applied_properties {
             if let Some(player) = self.find_player(player_id) {
                 let _ = self.send_player_properties_changed(player);
@@ -31337,7 +31274,7 @@ impl CGame {
         let recomputed = self
             .recompute_player_properties_for_update(expected_player_id)
             .expect("login script не удаляет player owner");
-        let _ = self.commit_recomputed_player_properties(expected_player_id, recomputed, false);
+        let _ = self.commit_player_property_recompute(expected_player_id, recomputed, false);
         let country_identity = self.player_country_identity(expected_player_id);
         let level_experience = self.player_list.level_experience(
             self.players
@@ -35333,7 +35270,7 @@ impl CGame {
         player_id: i32,
         ex_id: CGuid,
         runtime: PlayerEquipmentRemoveRuntimeFacts,
-        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerPropertyRecompute,
     ) -> Option<PlayerEquipmentRemoveReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
@@ -35387,7 +35324,14 @@ impl CGame {
                         "изменение статуса боевой феи опубликовано вокруг игрока"
                     );
                 }
-                PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot { .. } => {
+                PlayerEquipmentRemoveEffect::PropertiesChangedWithoutRemovedSlot {
+                    ci_qing_result_values,
+                    ..
+                } => {
+                    let _ = self.send_ci_qing_property_result(
+                        report.player_id,
+                        &ci_qing_result_values,
+                    );
                     let deliveries = self
                         .find_player(report.player_id)
                         .map(|player| vec![self.send_player_properties_changed(player)])
@@ -35420,7 +35364,7 @@ impl CGame {
         incoming: &mut Option<CGoods>,
         runtime: PlayerEquipmentAddRuntimeFacts,
         register_with_goods_ai: &mut dyn FnMut(&CGoods),
-        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerCombatProperties,
+        recompute_properties: &mut dyn FnMut(&mut CPlayer) -> PlayerPropertyRecompute,
     ) -> Option<PlayerEquipmentAddReport> {
         let (players, goods_factory, skill_factory) =
             (&mut self.players, &self.goods_factory, &self.skill_factory);
@@ -35490,7 +35434,14 @@ impl CGame {
                         );
                     }
                 }
-                PlayerEquipmentAddEffect::PropertiesChanged { .. } => {
+                PlayerEquipmentAddEffect::PropertiesChanged {
+                    ci_qing_result_values,
+                    ..
+                } => {
+                    let _ = self.send_ci_qing_property_result(
+                        report.player_id,
+                        &ci_qing_result_values,
+                    );
                     let deliveries = self
                         .find_player(report.player_id)
                         .map(|player| vec![self.send_player_properties_changed(player)])
