@@ -24,7 +24,8 @@ use crate::gameserver::appserver::ai::monsterai::{
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
+use crate::gameserver::appserver::states::state::send_owned_state_visual;
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
@@ -221,16 +222,22 @@ fn install_monster_promotion_target(
     region: &mut CServerRegion,
     target: ShapeIdentity,
     state: PromotionState,
-) -> Option<bool> {
+) -> Option<(bool, CShape)> {
     match target.object_type {
         PLAYER_TYPE => {
             let player = game.find_player_mut(target.id)?;
             (player.server_region_id() == Some(region.id))
-                .then(|| player.begin_promotion_state(state))
+                .then(|| {
+                    let shape = player.shape().clone();
+                    (player.begin_promotion_state(state), shape)
+                })
         }
         MONSTER_TYPE => region
             .find_monster_by_id_mut(target.id)
-            .map(|monster| monster.move_shape_mut().begin_promotion_state(state)),
+            .map(|monster| {
+                let shape = monster.move_shape().shape().clone();
+                (monster.move_shape_mut().begin_promotion_state(state), shape)
+            }),
         _ => None,
     }
 }
@@ -367,15 +374,20 @@ pub(crate) fn execute_owned_monster_promotion(
         properties.query_property(SKILL_USAGE_EM_MODIFIER) as u16,
         properties.query_property(SKILL_USAGE_HEAL_RECOVER_COEFFICIENT) as u16,
     );
-    if install_monster_promotion_target(game, region, target_identity, state) == Some(true) {
-        send_promotion_state_begin(
+    if let Some((true, shape)) = install_monster_promotion_target(
+        game,
+        region,
+        target_identity,
+        state,
+    ) {
+        send_owned_state_visual(
             game,
-            region.id,
-            target_identity,
-            target_x,
-            target_y,
-            state,
-            || now_ms,
+            region,
+            &shape,
+            state.skill_id(),
+            true,
+            state.client_time(|| now_ms),
+            0,
         );
     }
     let _ = game.publish_owned_monster_states(region, monster_id);
