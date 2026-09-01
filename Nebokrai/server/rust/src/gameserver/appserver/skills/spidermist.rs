@@ -174,6 +174,7 @@ fn send_player_visual(
 fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
+        player.finish_curable_skill_state(SPIDER_MIST_SKILL_ID);
     }
 }
 
@@ -274,6 +275,10 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SPIDER_MIST_SKILL_ID));
+            // `CSpiderMist` является `CStateSkill`: native owner помещает
+            // активный cast в общий ordered `m_vStates`, откуда его может
+            // снять `CCure` до создания phalanx.
+            player.register_curable_skill_state(SPIDER_MIST_SKILL_ID);
         }
         player_ai.begin_spider_mist(PlayerSpiderMistExecutionState::begin(
             dispatch,

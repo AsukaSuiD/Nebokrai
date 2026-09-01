@@ -143,8 +143,9 @@ fn remove_reached_conflict_states(
                 super::spriteburn::SPRITE_BURN_SKILL_ID => {
                     monster.move_shape_mut().take_sprite_burn_state()?;
                 }
-                // `0x198` присутствует в native conflict-list, но отдельный
-                // typed state owner пока не материализован.
+                // `0x198` — активный `CSpiderMist`, а не отдельный эффект.
+                // Monster-owner не может одновременно хранить его и текущий
+                // Fury cast в единственном execution slot.
                 _ => return None,
             }
             Some(monster.move_shape().shape().clone())

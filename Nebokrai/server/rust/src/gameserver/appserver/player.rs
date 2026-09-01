@@ -5322,6 +5322,14 @@ impl CPlayer {
         self.move_shape.curable_state_ids()
     }
 
+    pub(crate) fn register_curable_skill_state(&mut self, skill_id: u32) {
+        self.move_shape.register_curable_skill_state(skill_id);
+    }
+
+    pub(crate) fn finish_curable_skill_state(&mut self, skill_id: u32) {
+        self.move_shape.finish_curable_skill_state(skill_id);
+    }
+
     pub(crate) fn replace_poison_arrow_state(
         &mut self,
         state: super::skills::poisonarrowstate::PoisonArrowState,

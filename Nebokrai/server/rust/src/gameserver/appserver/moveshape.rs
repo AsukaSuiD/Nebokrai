@@ -3733,6 +3733,15 @@ impl CMoveShape {
         self.curable_state_order.iter().copied().collect()
     }
 
+    pub(crate) fn register_curable_skill_state(&mut self, skill_id: u32) {
+        self.curable_state_order.shift_remove(&skill_id);
+        self.curable_state_order.insert(skill_id);
+    }
+
+    pub(crate) fn finish_curable_skill_state(&mut self, skill_id: u32) {
+        self.curable_state_order.shift_remove(&skill_id);
+    }
+
     pub(crate) fn replace_poison_fog_state(&mut self, mut state: PoisonFogState, now_ms: u32) -> Option<PoisonFogState> {
         let previous = self.poison_fog_state.take();
         let replaced = previous.and_then(PoisonFogState::serialized_span).is_some_and(|(offset, amount)| amount == POISON_FOG_STATE_BYTES && state.write_serialized_at(&mut self.ex_states, offset, now_ms));

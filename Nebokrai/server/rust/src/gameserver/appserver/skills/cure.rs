@@ -6,7 +6,8 @@
 //! вероятность и один вызов генератора MSVCRT на каждое подходящее состояние
 //! в порядке исходного вектора состояний. Из уже типизированных состояний
 //! достигнуты `0x67`, `0x73`, `0x7C`, `0xC9`, `0xD2`, `0x138`, `0x191`,
-//! `0x192`, `0x199`, `0x1A6` и `0x1F8`; неизвестные старые записи
+//! `0x192`, активный `CStateSkill` `0x198`, эффекты `0x199`, `0x1A6` и
+//! `0x1F8`; неизвестные старые записи
 //! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
 //! доставку. Координатная перегрузка
 //! `Begin` остаётся ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -31,6 +32,7 @@ use super::knightcutstate::{
     send_knight_cut_state_visual,
 };
 use super::spiderpoison::SPIDER_POISON_SKILL_ID;
+use super::spidermist::{SPIDER_MIST_SKILL_ID, cancel_player_spider_mist};
 use super::spiderpoisonstate::{
     SpiderPoisonState, finish_player_spider_poison_state_on_cure,
     send_spider_poison_state_visual,
@@ -195,6 +197,21 @@ fn curable_state_ids(game: &CGame, region_id: i32, target: ShapeIdentity) -> Vec
         MONSTER_TYPE => game.find_region(region_id).and_then(|owner| owner.base().find_monster_by_id(target.id)).map(|monster| monster.move_shape().curable_state_ids()).unwrap_or_default(),
         _ => Vec::new(),
     }
+}
+
+fn finish_active_spider_mist_on_cure<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(mut player_ai) = game.find_player_mut(player_id).map(CPlayer::take_player_ai) else {
+        return false;
+    };
+    let finished = cancel_player_spider_mist(game, player_id, &mut player_ai, runtime);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.restore_player_ai(player_ai);
+    }
+    finished
 }
 
 enum RemovedMonsterCurableState {
@@ -493,7 +510,14 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         if game.skill_random_below(100) < threshold {
             // Пакеты завершения этих состояний не содержат время; дополнительное
             // чтение часов между вызовами генератора MSVCRT исходный `CastCure` не делал.
-            properties_changed |= finish_curable_state(game, region_id, target.identity, state_id, 0);
+            properties_changed |= if state_id == SPIDER_MIST_SKILL_ID
+                && target.identity.object_type == PLAYER_TYPE
+                && target.identity.id != player_id
+            {
+                finish_active_spider_mist_on_cure(game, target.identity.id, runtime)
+            } else {
+                finish_curable_state(game, region_id, target.identity, state_id, 0)
+            };
         }
     }
     if properties_changed && target.identity.object_type == PLAYER_TYPE { let _ = game.update_player_properties(target.identity.id); }
