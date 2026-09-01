@@ -6,7 +6,8 @@
 //! одним `ForceMove` направляется в конец пути, а серверный центр поражения
 //! продвигается по одной клетке за speed-интервал. Обход клеток идёт X→Y;
 //! цели боевого духа предшествуют обычным фигурам каждой клетки. Формула сохраняет
-//! ровно два вызова legacy RNG на каждую рассчитанную атаку.
+//! ровно два вызова legacy RNG на каждую рассчитанную атаку и усекает
+//! критический элементальный урон к нулю.
 
 use super::chaossphere::CHAOS_SPHERE_SKILL_ID;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
@@ -199,7 +200,7 @@ pub(crate) fn calculate_owned_chaos_sphere_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
     Some((attack, combat, occupation, attacker_level))
