@@ -41227,7 +41227,13 @@ impl CGame {
                 execute_battle_fairy_thunder(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
-                BattleFairySkillDispatch::Object {
+                BattleFairySkillDispatch::SelfTarget {
+                    skill_id: POISON_ARROW_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Point {
+                    skill_id: POISON_ARROW_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Object {
                     skill_id: POISON_ARROW_SKILL_ID,
                     target: ShapeIdentity {
                         object_type: PLAYER_TYPE | MONSTER_TYPE,
@@ -41239,7 +41245,13 @@ impl CGame {
                 execute_battle_fairy_poison_arrow(self, player_id, dispatch, player_ai, runtime)
             } else if matches!(
                 dispatch,
-                BattleFairySkillDispatch::Object {
+                BattleFairySkillDispatch::SelfTarget {
+                    skill_id: BLOOD_LOSS_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Point {
+                    skill_id: BLOOD_LOSS_SKILL_ID,
+                    ..
+                } | BattleFairySkillDispatch::Object {
                     skill_id: BLOOD_LOSS_SKILL_ID,
                     target: ShapeIdentity {
                         object_type: PLAYER_TYPE | MONSTER_TYPE,

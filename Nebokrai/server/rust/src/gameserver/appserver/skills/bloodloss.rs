@@ -5,8 +5,8 @@
 //! расход MP боевого духа, задержку, пакеты и замену периодического состояния.
 //! `CGame` предоставляет владельцев, регион и атомарную установку состояния
 //! игрока или монстра; последующие периодические удары принадлежат
-//! `bloodlossstate.rs`. Координатные перегрузки `Begin` не подключены к
-//! исполняющему владельцу и сохранены ниже как RAW без параллельного пути.
+//! `bloodlossstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
+//! object-target он проходит точный отказ `10 → ZHGS0045 → 2 → End`.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -102,11 +102,23 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let (skill_level, target) = match dispatch {
+        BattleFairySkillDispatch::SelfTarget {
+            skill_id: BLOOD_LOSS_SKILL_ID,
+            skill_level,
+            ..
+        }
+        | BattleFairySkillDispatch::Point {
+            skill_id: BLOOD_LOSS_SKILL_ID,
+            skill_level,
+            ..
+        } => (skill_level, None),
         BattleFairySkillDispatch::Object {
             skill_id: BLOOD_LOSS_SKILL_ID,
             skill_level,
             target,
-        } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => (skill_level, target),
+        } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => {
+            (skill_level, Some(target))
+        }
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
     let Some(player) = game.find_player(player_id) else {
@@ -116,6 +128,13 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(BLOOD_LOSS_SKILL_ID, skill_level) else {
+        send_failure(game, player_id, 2);
+        send_cast(game, player_id, skill_level, 3, None);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(target) = target else {
+        send_failure(game, player_id, 10);
+        game.send_skill_system_info(player_id, b"ZHGS0045");
         send_failure(game, player_id, 2);
         send_cast(game, player_id, skill_level, 3, None);
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -366,7 +385,8 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     terminal(QueuedSkillExecutionState::Completed)
 }
 
-// Остаются недостигнутыми координатные перегрузки запуска навыка.
+// Ниже сохранены точные координатные перегрузки как локальное доказательство
+// отсутствующей object-target и обязательного failure-tail.
 // ============================================================================
 // FUNCTION: CBloodLoss::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
