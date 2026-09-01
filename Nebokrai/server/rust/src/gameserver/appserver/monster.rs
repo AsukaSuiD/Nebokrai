@@ -1335,7 +1335,10 @@ impl CMonster {
         let pet_search = self.tamed
             && alive
             && self.move_shape.current_skill_id().is_none();
-        if (alive && ai_type == 4) || matches!(ai_type, 10 | 12 | 16) || pet_search {
+        // `CGuardWithSword::OnMoving` RVA `0x0020E260` добавляет SearchEnemy
+        // после успешного общего OnMoving и наследуется AI10/12/16; базовый
+        // factory type AI9 обязан проходить тот же путь.
+        if (alive && ai_type == 4) || matches!(ai_type, 9 | 10 | 12 | 16) || pet_search {
             self.base_ai.begin_active_search_enemy(now_ms);
         }
     }
