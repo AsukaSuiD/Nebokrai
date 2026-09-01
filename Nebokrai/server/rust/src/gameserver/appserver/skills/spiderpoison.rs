@@ -480,7 +480,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         let (minimum, maximum) = monster.state_attack_bounds(property.minimum_attack, property.maximum_attack);
         let minimum = pet_attack.map_or(minimum, |pet| pet.minimum_attack);
         let maximum = pet_attack.map_or(maximum, |pet| pet.maximum_attack);
-        (minimum as i32, maximum as i32, monster.battle_fairy_element_modify(0))
+        (minimum as i32, maximum as i32, monster.element_modifier(0) as i32)
     }).unwrap_or((property.minimum_attack as i32, property.maximum_attack as i32, 0));
     let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
     let physical = minimum.wrapping_add(game.skill_random_below(span));

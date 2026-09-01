@@ -70,8 +70,9 @@
 //! остаются у регионального runtime-владельца.
 //! City/country guard refresh восстанавливает HP, очищает существующий
 //! `CBaseAI` и оставляет формирование `0xBF60F` координирующему `CGame`.
-//! Pet attack/speed/timing getters применяют факторы только при валидной
-//! player-owner связи; целочисленные результаты сохраняют x87 truncation.
+//! Pet attack/speed/timing и elemental modifier getters применяют факторы
+//! только при валидной player-owner связи; целочисленные результаты сохраняют
+//! x87 truncation.
 //! Два направления virtual `IsAttackAble` разведены явно: этот owner
 //! проверяет monster-target относительно player/monster attacker-а, а
 //! обратную player-target политику хранит `CPlayer` и координирует `CGame`.
@@ -1090,7 +1091,10 @@ impl CMonster {
         (minimum, maximum)
     }
 
-    pub(crate) fn battle_fairy_element_modify(&self, mut value: i32) -> i32 {
+    /// Exact `CMonster::GetElementModify` (RVA `0x000E6900`): накопленный
+    /// runtime modifier сначала ограничивается нулём, затем pet factor `2`
+    /// умножается в x87 и усекается к signed DWORD.
+    pub(crate) fn element_modifier(&self, mut value: i32) -> u32 {
         if let Some(state) = self.move_shape.origin_state() {
             value = state.apply_to_monster(value);
         }
@@ -1109,15 +1113,12 @@ impl CMonster {
         for state in self.move_shape.battle_fairy_attribute_states() {
             value = state.apply_to_monster_element(value);
         }
-        let mut value = value.max(0) as u32;
-        if self.tamed
-            && self.master_info.master_type == 400
-            && self.master_info.master_id != 0
-        {
-            value = ((value as f32) * f32::from_bits(self.factors[2]))
-                .round_ties_even() as u32;
+        let base = value.max(0) as u32;
+        if !self.has_player_pet_master() {
+            return base;
         }
-        value as i32
+        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[2]));
+        scaled.trunc() as i32 as u32
     }
 
     /// Точная завершающая часть владельца защиты `CMonster::OnBeenHurted`.
@@ -1877,20 +1878,6 @@ impl CMonster {
 // PROTOTYPE: ulong __thiscall GetElementResistant(void)
 //
 // Реализовано выше как `element_resistance`.
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetElementModify
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1535
-// RVA: 0x000E6900
-// ADDRESS: 004e6900
-// PROTOTYPE: ulong __thiscall GetElementModify(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
 //
 
 // ============================================================================
