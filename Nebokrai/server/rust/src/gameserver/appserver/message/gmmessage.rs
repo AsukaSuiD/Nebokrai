@@ -61,6 +61,9 @@
 //! `ParseGMCommand` сохраняет двухуровневую авторизацию, legacy-разбор четырёх
 //! параметров, upsert сценарных переменных и отложенный запуск
 //! `scripts/gm/{command}.script` через канонический script owner.
+//! Для `0x7FC0F` длина `-64` даёт нулевое выделение: exact `GetStr` всё равно
+//! потребляет один байт, после чего нативный `strcat` мог читать за буфером.
+//! Rust сохраняет cursor, нормализует UB-префикс к пустому и публикует suffix/IP.
 
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::{
@@ -147,7 +150,6 @@ pub(crate) enum GmMessageError {
     MissingBroadcastSecondField,
     MissingBroadcastMode,
     MissingPrivateNoticeLength,
-    ZeroPrivateNoticeBufferContractUnknown { declared_length: i32 },
     DeclaredLengthOutsideLegacyRange { required: usize },
 }
 
@@ -588,11 +590,6 @@ pub(crate) fn dispatch_gm_message<Runtime: GameClockContext + ScriptRegionChange
             return Some(Ok(()));
         }
         let buffer_length = (declared_length as u32).wrapping_add(GM_PRIVATE_NOTICE_SLACK) as usize;
-        if buffer_length == 0 {
-            return Some(Err(
-                GmMessageError::ZeroPrivateNoticeBufferContractUnknown { declared_length },
-            ));
-        }
         let mut published_text = Vec::new();
         let allocation_failed = published_text.try_reserve_exact(buffer_length).is_err();
         if allocation_failed {

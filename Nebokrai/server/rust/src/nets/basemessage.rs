@@ -2,9 +2,8 @@
 //! `nets/basemessage.h` и `nets/basemessage.cpp`.
 //!
 //! Статус функций layout, курсора, `Update`, числовых и сырых `Add/Get`,
-//! `AddEx`, строкового `Add`, `CGUID Add/Get` и корректных RLE-потоков:
-//! `IMPLEMENTED`. Безразмерный Auth-вариант `GetStr` также реализован;
-//! ограниченный buffer-вариант `GetStr`, `GetEx` и повреждённый RLE-marker
+//! `AddEx`, строкового `Add`, обоих вариантов `GetStr`, `CGUID Add/Get` и
+//! корректных RLE-потоков: `IMPLEMENTED`. `GetEx` и повреждённый RLE-marker
 //! имеют локальные статусы `UNKNOWN` (исследовательский декомпилят хранится локально) либо `BLOCKED_MISSING_FACT` ниже.
 //!
 //! Точные варианты корпуса:
@@ -382,10 +381,13 @@ impl CBaseMessage {
     /// При NUL до границы возвращает bytes перед ним. Если граница достигнута
     /// без NUL, возвращает пустой результат, но сохраняет уже сдвинутый курсор:
     /// старый код в этом случае занулял первый байт выходного массива.
+    /// При нулевой границе exact GameServer `GetStr` всё равно потребляет один
+    /// байт. Ненулевой байт оставлял C-строку без терминатора и приводил к UB у
+    /// caller-а; Rust сохраняет cursor и безопасно нормализует результат к пустому.
     pub(crate) fn get_str_bytes(&mut self, maximum: usize) -> Option<Vec<u8>> {
         if maximum == 0 {
-            // BLOCKED_MISSING_FACT: исходный GetStr обращался к out[-1].
-            return None;
+            let _ = self.get_byte();
+            return Some(Vec::new());
         }
 
         let mut value = Vec::new();
