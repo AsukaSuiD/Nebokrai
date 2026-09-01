@@ -17,7 +17,7 @@
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
-    SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, real_distance, time_reached,
+    SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -367,12 +367,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if maximum_distance != 0
-            && real_distance(
-                source_view.tile_x,
-                source_view.tile_y,
-                target_view.tile_x,
-                target_view.tile_y,
-            ) > maximum_distance as i32
+            && source_view.real_distance(Some(target_view)) > maximum_distance as i32
         {
             send_failure(game, player_id, 0x0b);
             send_failure(game, player_id, 2);
