@@ -11,8 +11,10 @@
 //! exact position selection, inactive-anchor и expansion partial effects.
 //! Достигнутый `0x90301` move/stack caller сохраняет запрет извлечения anchor,
 //! kind-1 activation, GoodsAI/listener effects и rollback. Hand-owned
-//! `OT_SWITCH_OBJECT` проходит через depot guard и общий volume swap;
-//! вне-клиентский extension-remove callback и codec restore остаются RAW.
+//! `OT_SWITCH_OBJECT` проходит через depot guard и общий volume swap. Persisted
+//! restore временно снимает lock только для внутреннего positional decode и
+//! возвращает его при любом результате; вне-клиентский extension-remove
+//! callback остаётся RAW.
 
 use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
 use super::cvolumelimitgoodscontainer::{
@@ -484,13 +486,15 @@ impl CDepot {
         BattleThreshold: FnMut(u32, u32) -> u32,
     {
         self.locked = false;
-        self.base.unserialize(
+        let result = self.base.unserialize(
             source,
             cursor,
             factory,
             ordinary_threshold,
             battle_threshold,
-        )
+        );
+        self.locked = true;
+        result
     }
 }
 
