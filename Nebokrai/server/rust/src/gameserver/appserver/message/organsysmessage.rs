@@ -59,7 +59,7 @@ use std::ffi::CString;
 use thiserror::Error;
 
 use super::super::organizingsystem::attackcitysys::{
-    AttackCityDecodeError, AttackCityMembershipBlock, AttackCityPhaseContext, CAttackCitySys,
+    AttackCityDecodeError, AttackCityPhaseContext, CAttackCitySys,
 };
 use super::super::organizingsystem::fournationwarsys::FourNationPhaseContext;
 use super::super::organizingsystem::villagewarsys::{
@@ -1636,10 +1636,6 @@ enum ContendSchedule<'a> {
     Village(&'a CVillageWarSys),
 }
 
-enum ContendProjectionError {
-    Schedule(AttackCityMembershipBlock),
-}
-
 struct ContendProjectionContext<'a> {
     game: &'a mut CGame,
     schedule: ContendSchedule<'a>,
@@ -1647,7 +1643,7 @@ struct ContendProjectionContext<'a> {
 }
 
 impl WarRegionContext for ContendProjectionContext<'_> {
-    type MembershipError = ContendProjectionError;
+    type MembershipError = std::convert::Infallible;
 
     fn player_faction_id(&mut self, player_id: i32) -> Option<i32> {
         self.game.find_player(player_id).map(|player| player.faction_id())
@@ -1655,9 +1651,9 @@ impl WarRegionContext for ContendProjectionContext<'_> {
 
     fn is_apply_war_faction(&mut self, faction_id: i32) -> Result<bool, Self::MembershipError> {
         match self.schedule {
-            ContendSchedule::AttackCity(schedule) => schedule
-                .is_already_declar_for_war(self.war_number, faction_id)
-                .map_err(ContendProjectionError::Schedule),
+            ContendSchedule::AttackCity(schedule) => Ok(
+                schedule.is_already_declar_for_war(self.war_number, faction_id),
+            ),
             ContendSchedule::Village(schedule) => {
                 Ok(schedule.is_already_declar_for_war(self.war_number, faction_id))
             }

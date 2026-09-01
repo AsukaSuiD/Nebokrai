@@ -423,7 +423,6 @@
 use crate::gameserver::appserver::exstate::ExtendedStateKind;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::message::gmmessage::publish_local_online_gm_list;
-use crate::gameserver::appserver::organizingsystem::attackcitysys::AttackCityMembershipBlock;
 use crate::gameserver::appserver::player::{
     CPlayer, PlayerLeiTingThingCountOutcome, PlayerProgress,
 };
@@ -895,7 +894,7 @@ enum WarContendScriptDisposition {
         symbol_id: i32,
         duration_ms: i32,
         required_goods: [String; 4],
-        result: Result<(), AttackCityMembershipBlock>,
+        result: Result<(), std::convert::Infallible>,
     },
 }
 
@@ -922,7 +921,7 @@ struct GameWarContendEntryContext<'a, Runtime> {
 }
 
 impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
-    type MembershipError = AttackCityMembershipBlock;
+    type MembershipError = std::convert::Infallible;
 
     fn player_faction_id(&mut self, player_id: i32) -> Option<i32> {
         self.game
@@ -932,10 +931,10 @@ impl<Runtime> WarRegionContext for GameWarContendEntryContext<'_, Runtime> {
 
     fn is_apply_war_faction(&mut self, faction_id: i32) -> Result<bool, Self::MembershipError> {
         match self.schedule {
-            ContendEntrySchedule::City => self
+            ContendEntrySchedule::City => Ok(self
                 .game
                 .attack_city_sys()
-                .is_already_declar_for_war(self.war_number, faction_id),
+                .is_already_declar_for_war(self.war_number, faction_id)),
             ContendEntrySchedule::Village => Ok(self
                 .game
                 .village_war_sys()

@@ -68,7 +68,7 @@ use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
 use super::monster::CMonster;
 use super::npc::CNpc;
-use super::organizingsystem::attackcitysys::{AttackCityMembershipBlock, CAttackCitySys};
+use super::organizingsystem::attackcitysys::CAttackCitySys;
 use super::region::{
     RegionCellAccessBlock, RegionRandomContext, RegionRandomPosition, RegionReturnPoint,
     RegionSecurity,
@@ -455,7 +455,7 @@ impl CServerCityRegion {
         &self,
         schedules: &CAttackCitySys,
         faction_id: i32,
-    ) -> Result<bool, AttackCityMembershipBlock> {
+    ) -> bool {
         schedules.is_already_declar_for_war(self.war.base.war_number, faction_id)
     }
 
@@ -1046,15 +1046,15 @@ fn city_i32_at<const N: usize>(bytes: &[u8; N], offset: usize) -> i32 {
 
 // ============================================================================
 // FUNCTION: CServerCityRegion::IsApplyWarFacsMem
-// STATUS: IMPLEMENTED / BLOCKED_MISSING_FACT
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servercityregion.cpp:638
 // RVA: 0x001CEDC0
 //
 // IMPLEMENTED выше: текущий war number делегируется CAttackCitySys вместе с
-// faction ID. Недоставленный bIsEveryWeek распространяется как локальная
-// ошибка, а не превращается в выбранный агентом membership-результат.
+// faction ID. Его безопасная Rust-граница использует переданный WorldServer
+// faction-list и не воспроизводит нативное чтение неинициализированного DWORD.
 //
 
 // ============================================================================

@@ -725,9 +725,7 @@ use crate::gameserver::appserver::particularstate::{
 use crate::gameserver::appserver::scriptstate::{
     ScriptMoveState, script_state_visual_message,
 };
-use crate::gameserver::appserver::organizingsystem::attackcitysys::{
-    AttackCityMembershipBlock, CAttackCitySys,
-};
+use crate::gameserver::appserver::organizingsystem::attackcitysys::CAttackCitySys;
 use crate::gameserver::appserver::organizingsystem::fournationwarsys::{
     CFourNationWarSys, FourNationRect,
 };
@@ -3693,16 +3691,16 @@ impl ServerRegionNpcContext for GameNationNpcRefreshContext<'_> {
 }
 
 impl<Runtime: GameMainLoopRuntime> WarRegionContext for GameCityRegionAiContext<'_, Runtime> {
-    type MembershipError = AttackCityMembershipBlock;
+    type MembershipError = Infallible;
 
     fn player_faction_id(&mut self, player_id: i32) -> Option<i32> {
         self.game.find_player(player_id).map(CPlayer::faction_id)
     }
 
     fn is_apply_war_faction(&mut self, faction_id: i32) -> Result<bool, Self::MembershipError> {
-        self.game
+        Ok(self.game
             .attack_city_sys()
-            .is_already_declar_for_war(self.war_number, faction_id)
+            .is_already_declar_for_war(self.war_number, faction_id))
     }
 
     fn send_contend_time(&mut self, player_id: i32, time: i32) {

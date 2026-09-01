@@ -49,10 +49,11 @@
 //!
 //! Query-поверхность сохраняет map-order, strict `now < end`, старую packed
 //! minute-формулу с x86 wrapping и main-then-proxy lookup имени. Выходной
-//! `std::string& + bool` представлен `Option<String>`. Membership города
-//! дополнительно требует `bIsEveryWeek != 0`; snapshot не доставляет этот
-//! DWORD, поэтому hit с `None` возвращает локальный `BLOCKED_MISSING_FACT`, а
-//! не выдуманный `false` либо `true`.
+//! `std::string& + bool` представлен `Option<String>`. Оба нативных membership
+//! query проверяли `bIsEveryWeek`, но setup-кодирует только `0xB0`-префикс и
+//! ordered faction-list: конструктор не задаёт DWORD `+0xB8`, а assignment
+//! копирует туда неинициализированный stack. Без доказанного внешнего эффекта
+//! этот UB не воспроизводится: оба query используют переданный список фракций.
 
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -69,13 +70,6 @@ pub(crate) enum AttackCityDecodeError {
         needed: usize,
         available: usize,
     },
-}
-
-/// Граница единственного недоставленного поля city-membership запроса.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("для городской войны {war_number} отсутствует bIsEveryWeek")]
-pub(crate) struct AttackCityMembershipBlock {
-    pub(crate) war_number: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -100,7 +94,6 @@ pub(crate) struct AttackCityTime {
     pub(crate) refresh_region_time: TagTime,
     pub(crate) region_state: i32,
     pub(crate) declaring_factions: Vec<i32>,
-    pub(crate) is_every_week: Option<i32>,
 }
 
 #[derive(Default)]
@@ -214,24 +207,12 @@ impl CAttackCitySys {
         Ok(Some(setup.city_region_id))
     }
 
-    /// Проверяет ordered faction-list, сохраняя обязательный weekly gate.
-    pub(crate) fn is_already_declar_for_war(
-        &self,
-        war_number: i32,
-        faction_id: i32,
-    ) -> Result<bool, AttackCityMembershipBlock> {
+    /// Проверяет authoritative ordered faction-list текущего schedule.
+    pub(crate) fn is_already_declar_for_war(&self, war_number: i32, faction_id: i32) -> bool {
         let Some(setup) = self.attacks.get(&war_number) else {
-            return Ok(false);
+            return false;
         };
-        let Some(is_every_week) = setup.is_every_week else {
-            // BLOCKED_MISSING_FACT: что инициализирует либо передаёт GameServer
-            // DWORD `tagAttackCityTime::bIsEveryWeek` по offset `+0xB8`?
-            return Err(AttackCityMembershipBlock { war_number });
-        };
-        if is_every_week == 0 {
-            return Ok(false);
-        }
-        Ok(setup.declaring_factions.contains(&faction_id))
+        setup.declaring_factions.contains(&faction_id)
     }
 
     /// Возвращает legacy packed start-time первого ещё не завершённого schedule.
@@ -246,14 +227,14 @@ impl CAttackCitySys {
             .map_or(0, |setup| legacy_packed_war_start(setup.start_time))
     }
 
-    /// Возвращает имя первого active schedule, содержащего faction ID.
+    /// Возвращает имя первого schedule, содержащего faction ID.
     pub(crate) fn get_war_name_for_declar<Context: AttackCityNameContext>(
         &self,
         faction_id: i32,
         context: &mut Context,
     ) -> Option<String> {
         self.attacks.values().find_map(|setup| {
-            if setup.region_state == 0 || !setup.declaring_factions.contains(&faction_id) {
+            if !setup.declaring_factions.contains(&faction_id) {
                 return None;
             }
             context.region_name_then_proxy(setup.city_region_id)
@@ -448,7 +429,6 @@ fn decode_setup(
         refresh_region_time,
         region_state,
         declaring_factions,
-        is_every_week: None,
     })
 }
 
@@ -564,16 +544,17 @@ fn attack_city_error(field: &'static str, block: crate::gameserver::appserver::l
 
 // ============================================================================
 // FUNCTION: CAttackCitySys::IsAlreadyDeclarForWar
-// STATUS: IMPLEMENTED / BLOCKED_MISSING_FACT
+// STATUS: IMPLEMENTED / VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\attackcitysys.cpp:233
 // RVA: 0x0005FAD0
 //
-// IMPLEMENTED выше: exact map lookup, обязательный weekly gate и ordered
-// membership-list. BLOCKED_MISSING_FACT: GameServer snapshot заканчивается до
-// bIsEveryWeek +0xB8; неизвестно, кто инициализирует либо передаёт этот DWORD.
-// Минимальный существенный фрагмент: miss || bIsEveryWeek == 0 -> false.
+// IMPLEMENTED выше: exact map lookup и ordered membership-list. Нативный gate
+// читает неинициализированный `bIsEveryWeek +0xB8`: DecordFromByteArray
+// принимает только `0xB0` prefix, ctor поле не задаёт, operator= лишь копирует
+// stack-мусор. Rust безопасно не воспроизводит этот внутренний UB и использует
+// authoritative список, который WorldServer передаёт startup/update путями.
 //
 
 // ============================================================================
@@ -632,9 +613,11 @@ fn attack_city_error(field: &'static str, block: crate::gameserver::appserver::l
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\organizingsystem\attackcitysys.cpp:247
 // RVA: 0x000603C0
 //
-// IMPLEMENTED выше: active-state и faction gates в map-order, main-then-proxy
-// lookup city-region и продолжение после miss. bool + output string заменены
-// на Option<String>; STL string/tree/list cleanup удалён как технический шум.
+// IMPLEMENTED выше: faction gate в map-order, main-then-proxy lookup
+// city-region и продолжение после miss. Нативный `bIsEveryWeek` gate здесь
+// читает тот же недоставленный неинициализированный DWORD и безопасно заменён
+// authoritative faction-list; state gate в точном EXE отсутствует. bool +
+// output string заменены на Option<String>.
 //
 
 // ============================================================================
