@@ -1955,6 +1955,11 @@ impl CServerRegion {
             now_ms,
             context,
         )?;
+        for existing in self.owned_skill_phalanxes.values_mut() {
+            if let SummonedSkillShape::Leiming2(existing) = existing {
+                existing.replace_affect_region(phalanx.skill_level(), tile_x, tile_y);
+            }
+        }
         let id = phalanx.shape().identity().id;
         self.owned_skill_phalanxes
             .insert(id, SummonedSkillShape::Leiming2(phalanx));

@@ -6,9 +6,9 @@
 //! эту ячейку, поражает каждую найденную цель один раз и удаляется. Формула
 //! урона делает ровно один вызов legacy RNG. Поиск целей и применение атаки
 //! к независимым владельцам остаются у `CGame`. Виртуальный
-//! `ReplaceAffectRegion` имеет подтверждённую формулу взаимного вычитания
-//! областей, но его реальный вызывающий владелец пока не достигнут, поэтому
-//! этот неподключённый путь здесь не подменён придуманным вызовом.
+//! `ReplaceAffectRegion` вызывается региональным owner-ом после успешного
+//! добавления новой формы и до её публикации: поскольку все level-маски 1×1,
+//! совпавшая клетка старой области становится неактивной.
 
 use super::thunder2::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
@@ -57,9 +57,11 @@ pub(crate) struct CLeimingPhalanx2 {
     maximum_attack: i32,
     _element_modifier: i32,
     _cch: i32,
+    scope_active: bool,
 }
 
 pub(crate) fn leiming2_targets(game: &CGame, region_id: i32, phalanx: &CLeimingPhalanx2) -> Vec<ShapeIdentity> {
+    if !phalanx.scope_active() { return Vec::new() }
     let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() };
     let (Ok(tile_x), Ok(tile_y)) = (phalanx.shape().get_tile_x(), phalanx.shape().get_tile_y()) else { return Vec::new() };
     let (area_width, area_height) = game.area_dimensions();
@@ -118,6 +120,7 @@ impl CLeimingPhalanx2 {
             maximum_attack,
             _element_modifier: element_modifier,
             _cch: cch,
+            scope_active: true,
         }
     }
 
@@ -125,6 +128,14 @@ impl CLeimingPhalanx2 {
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
     pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
+
+    pub(crate) fn replace_affect_region(&mut self, _level: i32, tile_x: i32, tile_y: i32) {
+        if self.shape.get_tile_x() == Ok(tile_x) && self.shape.get_tile_y() == Ok(tile_y) {
+            self.scope_active = false;
+        }
+    }
+
+    pub(crate) const fn scope_active(&self) -> bool { self.scope_active }
 
     pub(crate) fn tick(&mut self, now_ms: u32) -> Leiming2PhalanxTick {
         if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms {
