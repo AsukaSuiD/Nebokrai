@@ -330,12 +330,7 @@ pub(crate) fn execute_owned_pet_active_search(
         else {
             continue;
         };
-        let distance = real_distance(
-            master_view.tile_x,
-            master_view.tile_y,
-            candidate.tile_x,
-            candidate.tile_y,
-        );
+        let distance = master_view.real_distance(Some(candidate));
         if distance <= 10 && distance <= selected_distance {
             selected = Some(candidate.identity);
             selected_distance = distance;
