@@ -5,10 +5,11 @@
 //! лицевой клетки в региональном порядке. Накопленная энергия потребляется
 //! при расчёте первой атаки, усиливает только её, а при отсутствии цели всё
 //! равно снимается после обхода. Формулы и RNG остаются у владельца навыка;
-//! `CGame` связывает независимых владельцев цели, боя и доставки. Успех,
-//! отказ после `Begin` и клиентская отмена проходят через подтверждённый
-//! `CSummonSkill::End(1)`: возврат движения, обновление свойств, очистку и
-//! фиксацию времени восстановления.
+//! `CGame` связывает независимых владельцев цели, боя и доставки. `Attack` и
+//! `AI` не изнашивают оружие на отдельных целях: унаследованный
+//! `AfterUseSkill` делает это один раз в подтверждённом
+//! `CSummonSkill::End(1)`, через который проходят успех, отказ после `Begin`
+//! и клиентская отмена.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -37,6 +38,7 @@ fn finish_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game: &mut CGame,
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_inverse_chopped_used(now_ms);
     });
@@ -102,7 +104,6 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
             MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
             _ => unreachable!("тип цели проверен выше"),
         }
-        game.damage_player_weapon(player_id, runtime);
     }
     let _ = take_player_energy_holding(game, player_id);
     if let Some(execution) = ai.inverse_chopped_mut() { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
