@@ -302,7 +302,8 @@
 //! удаляется его RemoveObject/DelObj-tail, не при восстановлении snapshot-а.
 //! `UpdateSZL` проходит через `CGame`: player property/notice предшествуют
 //! decrease-only appellation check и script-effect-у `RequestChangeAppellation`.
-//! Симметричный `OnObjectAdded` сохраняет late-block partial mutations, после
+//! Симметричный `OnObjectAdded` создаёт particular state только при ненулевом
+//! inherited `m_pFather`; затем сохраняет late-block partial mutations, после
 //! commit добавляет девять war-soul skills, пересчитывает свойства, публикует
 //! `0xBF720` с исключением owner-а и отражает даже zero-delta `PackExpand` log.
 
@@ -8714,8 +8715,8 @@ impl CPlayer {
         let outcome =
             self.packet
                 .add_goods_at(position, incoming, factory, owner_progress_allows);
-        let particular_state = match &outcome {
-            VolumeGoodsAddOutcome::Added(added) => self
+        let particular_state = match (self.entered_region, &outcome) {
+            (true, VolumeGoodsAddOutcome::Added(added)) => self
                 .packet
                 .base()
                 .find(added.identity.ex_id)
@@ -8738,8 +8739,8 @@ impl CPlayer {
         let outcome = self
             .packet
             .add_goods(incoming, factory, owner_progress_allows);
-        let particular_state = match &outcome {
-            VolumeGoodsAddOutcome::Added(added) => self
+        let particular_state = match (self.entered_region, &outcome) {
+            (true, VolumeGoodsAddOutcome::Added(added)) => self
                 .packet
                 .base()
                 .find(added.identity.ex_id)
@@ -11294,7 +11295,7 @@ impl CPlayer {
         if matches!(&outcome, EquipmentAddOutcome::Added(_)) {
             self.equipment_changed = true;
         }
-        if let EquipmentAddOutcome::Added(added) = &outcome {
+        if self.entered_region && let EquipmentAddOutcome::Added(added) = &outcome {
             let state = self
                 .equipment
                 .get_goods(added.column.position())
@@ -17151,19 +17152,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::OnObjectAdded
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11095
-// RVA: 0x000451A0
-// ADDRESS: 004451a0
-// PROTOTYPE: int __thiscall OnObjectAdded(CContainer * param_1, CBaseObject * param_2, ulong param_3, void * param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::OnObjectAdded` связан с packet/equipment add и
+// particular-state owner-ом; покрытый raw-блок удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::DecordQuestDataFromByteArray
