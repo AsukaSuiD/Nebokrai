@@ -22,8 +22,10 @@
 //! Virtual `GetDiedStateTime` замкнут тем же `CGame` death caller-ом через
 //! signed GlobeSetup field: wrapping seconds→milliseconds и деление пополам.
 //! PDB дополнительно подтверждает пять `m_pShenShou` и пять
-//! `m_bShenShouDie`; их создание и death-семантика пока не материализованы,
-//! но не выносятся в process runtime.
+//! `m_bShenShouDie`. Exact constructor, `OnWarDeclare` и `OnRefreshRegion`
+//! обнуляют death flags, тогда как `OnWarEnd` намеренно их не трогает; этот
+//! достигнутый lifecycle хранится у owner-а. Pointer/spawn и death-writer
+//! нигде в достигнутом графе не вызываются и не выносятся в process runtime.
 
 use super::organizingsystem::fournationwarsys::FourNationRect;
 use super::serverregion::ServerRegionDecodeError;
@@ -46,6 +48,7 @@ pub(crate) struct ServerNationRegion {
     jin_wei_jun_attacked: [bool; 5],
     guard_attacked: [bool; 5],
     guard_first_die: [bool; 5],
+    _shen_shou_died: [bool; 5],
     stone_guard_died: [u32; 5],
     yu_ying_shi_added: [bool; 5],
     da_jiang_jun_died: [bool; 5],
@@ -68,6 +71,7 @@ impl Default for ServerNationRegion {
             jin_wei_jun_attacked: [false; 5],
             guard_attacked: [false; 5],
             guard_first_die: [false; 5],
+            _shen_shou_died: [false; 5],
             stone_guard_died: [0; 5],
             yu_ying_shi_added: [false; 5],
             da_jiang_jun_died: [false; 5],
@@ -316,6 +320,7 @@ impl ServerNationRegion {
         self.jin_wei_jun_attacked.fill(false);
         self.guard_attacked.fill(false);
         self.guard_first_die.fill(false);
+        self._shen_shou_died.fill(false);
         self.stone_guard_died.fill(0);
         self.yu_ying_shi_added.fill(false);
         self.da_jiang_jun_died.fill(false);
@@ -334,6 +339,7 @@ impl ServerNationRegion {
         self.jin_wei_jun_attacked.fill(false);
         self.guard_attacked.fill(false);
         self.guard_first_die.fill(false);
+        self._shen_shou_died.fill(false);
         self.stone_guard_died.fill(0);
         self.yu_ying_shi_added.fill(false);
         self.da_jiang_jun_died.fill(false);
