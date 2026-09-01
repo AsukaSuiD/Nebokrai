@@ -2155,6 +2155,14 @@ impl CMoveShape {
             .iter()
             .filter(|state| state.skill_id() as i32 == state_id)
             .count();
+        let tian_shen_xia_fan = usize::from(
+            self.tian_shen_xia_fan_state
+                .is_some_and(|state| state.state_id() as i32 == state_id),
+        );
+        let wangsheng = usize::from(
+            self.wangsheng_state
+                .is_some_and(|state| state.state_id() as i32 == state_id),
+        );
         let shields = self
             .defense_shields
             .iter()
@@ -2205,6 +2213,8 @@ impl CMoveShape {
             .saturating_add(swordship)
             .saturating_add(wuxing)
             .saturating_add(battle_fairy_attributes)
+            .saturating_add(tian_shen_xia_fan)
+            .saturating_add(wangsheng)
             .saturating_add(shields)
             .saturating_add(automatic_restore)
             .saturating_add(particular)
@@ -2334,6 +2344,12 @@ impl CMoveShape {
                 .battle_fairy_attribute_states
                 .iter()
                 .any(|state| state.skill_id() == state_id)
+            || self
+                .tian_shen_xia_fan_state
+                .is_some_and(|state| state.state_id() == state_id)
+            || self
+                .wangsheng_state
+                .is_some_and(|state| state.state_id() == state_id)
             || self
                 .defense_shields
                 .iter()
