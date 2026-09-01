@@ -812,6 +812,7 @@ impl CMoveShape {
             return None;
         }
         let total_count = declared_count
+            .checked_add(self.consumable_restore_states.len())?
             .checked_add(self.particular_states.len())?
             .checked_add(self.team_recruitment_states.len())?;
         let mut payload = Vec::new();
@@ -832,6 +833,14 @@ impl CMoveShape {
                 &mut timed_state_now_milliseconds,
             )?);
             writer.write_u32(self.client_state_additional_data(state_id as u32));
+        }
+        for index in 0..self.consumable_restore_states.len() {
+            let (state_id, client_time) = self
+                .consumable_restore_states
+                .client_snapshot_record(index, &mut timed_state_now_milliseconds)?;
+            writer.write_i32(state_id);
+            writer.write_i32(client_time);
+            writer.write_u32(default_additional_data());
         }
         for state in &self.particular_states {
             writer.write_i32(state.state_id());

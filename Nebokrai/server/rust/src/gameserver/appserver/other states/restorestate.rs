@@ -4,7 +4,8 @@
 //! созданные `CRestoreHpState/CRestoreMpState` входят в один живой список
 //! `CMoveShape`. Здесь сохранены общий порядок вставки и отдельные отметки
 //! задержки повторного использования; сами формулы и сроки делегируются
-//! исходным владельцам состояний.
+//! исходным владельцам состояний. Полный клиентский снимок обходит тот же
+//! список и вычисляет remaining-time отдельными исходными чтениями часов.
 
 use super::restorehpstate::RestoreHpState;
 use super::restorempstate::RestoreMpState;
@@ -140,15 +141,16 @@ impl ConsumableRestoreStateStorage {
         self.states.get(index).copied().map(ConsumableRestoreState::is_health)
     }
 
-    pub(crate) fn client_state_time(
+    pub(crate) fn client_snapshot_record(
         &self,
         index: usize,
         now_milliseconds: impl FnMut() -> u32,
-    ) -> Option<i32> {
-        self.states
-            .get(index)
-            .copied()
-            .map(|state| state.client_state_time(now_milliseconds))
+    ) -> Option<(i32, i32)> {
+        let state = self.states.get(index).copied()?;
+        Some((
+            state.state_id(),
+            state.client_state_time(now_milliseconds),
+        ))
     }
 
     pub(crate) fn tick(
