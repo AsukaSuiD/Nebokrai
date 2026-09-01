@@ -1,9 +1,12 @@
 //! Общая подтверждённая часть фронтальных ударов мечом.
 //!
-//! `CJuCut` и `CLightningSword` совпадают в выборе первой `CMoveShape`
-//! лицевой клетки, packet layout и физико-элементно-духовной формуле. Этот
-//! owner не хранит execution-state и не выбирает момент списания ресурсов:
-//! различающиеся lifecycle и ошибки остаются в конкретных skill-owner-ах.
+//! `CJuCut`, четыре варианта `CLightningSword` и `CInverseChopped` совпадают
+//! в packet layout и физико-элементно-духовной формуле. Обратный рубящий удар
+//! отдельно умножает каждый компонент на накопленную энергию: оригинал усекает
+//! `double` в 64-битное целое и сохраняет младшие 32 бита. Все варианты также
+//! усекают результат критического множителя `float` к `i32`. Этот owner не
+//! хранит execution-state и не выбирает момент списания ресурсов: различающиеся
+//! lifecycle, выбор целей и ошибки остаются в конкретных skill-owner-ах.
 //! Общий `End` возвращает движение, один раз выполняет унаследованный
 //! `AfterUseSkill` с износом оружия и затем `CSummonSkill::End(1)`.
 
@@ -221,7 +224,7 @@ pub(crate) fn calculate_attack_with_multiplier(
         .wrapping_add(game.skill_random_below(width))
         .wrapping_add(combat.dexterity as i32)
         .max(0);
-    let scale = |damage: i32| ((f64::from(damage) * damage_multiplier).round_ties_even()) as i32;
+    let scale = |damage: i32| (f64::from(damage) * damage_multiplier) as i64 as i32;
     let mut attack = AttackInformation {
         skill_id: definition.skill_id,
         skill_level: level as u8,
@@ -258,7 +261,7 @@ pub(crate) fn calculate_attack_with_multiplier(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
     Some((master, attack))
