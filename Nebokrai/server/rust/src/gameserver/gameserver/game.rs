@@ -364,8 +364,9 @@
 //! notice. Старый donor округлял team share; EXE `0x44DC3F..0x44DC57` явно
 //! переключает x87 на truncation. Missing `%s` argument region notice-а был
 //! legacy UB и безопасно заменён буквальным bounded template text.
-//! GodsBattle NPC-contend продолжает тот же owner: Add/Remove NPC поддерживает
-//! faction sets, guard spawn меняет global monster race после создания,
+//! GodsBattle NPC-contend продолжает тот же owner: точный script case `11130`
+//! входит через текущий регион игрока, Add/Remove NPC поддерживает faction
+//! sets, guard spawn меняет global monster race после создания,
 //! AI-type `0x17` death ведёт per-NPC counter, а manager gate замыкается в
 //! contender timer. Успешный timeout меняет faction, публикует World subtype
 //! `2`, исполняет `#fengyinNpc` award-script и рассылает region/top-info wire.
@@ -25385,13 +25386,9 @@ impl CGame {
         max_time: i32,
         context: &mut Context,
     ) -> Option<()> {
-        let player_facts = self.find_player(player_id).map(|player| {
-            (
-                player.can_enter_gods_battle_contend(),
-                player.faction_id(),
-                player.gods_battle_faction(),
-            )
-        });
+        let player_facts = self
+            .find_player(player_id)
+            .map(|player| (player.faction_id(), player.gods_battle_faction()));
         let owner = self.take_region_owner(region_id)?;
         let ServerRegionOwner::GodsBattle(mut region) = owner else {
             self.restore_region_owner(owner);
@@ -25405,14 +25402,7 @@ impl CGame {
         let outcome = match (player_facts, npc_name) {
             (None, _) => "игрок не найден",
             (_, None) => "NPC не найден",
-            (Some((false, _, _)), Some(_)) => "игрок недоступен",
-            (Some((_, _, gods_faction)), Some(_)) if !matches!(gods_faction, 5 | 6) => {
-                "недопустимая сторона игрока"
-            }
-            (Some((_, _, _)), Some(_)) if region.npc_faction(npc_id).is_none() => {
-                "недопустимая сторона NPC"
-            }
-            (Some((_, normal_faction, gods_faction)), Some(npc_name)) => {
+            (Some((normal_faction, gods_faction)), Some(npc_name)) => {
                 let total = self.gods_battle_mgr.npc_monster_count(&npc_name);
                 let killed = self.gods_battle_mgr.npc_killed_monster_count(&npc_name);
                 if killed != total {

@@ -44,9 +44,10 @@
 //! последующей очистки после победы. Имя фракции и сведения о союзе для снимка
 //! участника берутся из того же авторитетного World `0x7FE06`.
 //! Достигнутые GodsBattle scripts связывают `5413 / GetAreaID` с настоящим
-//! login-server ID, а `11124/11128` — с persisted player SZL и уже существующим
-//! `CGame::UpdateSZL` effect-проходом: property/notice, merit-level downgrade
-//! и appellation callback выполняются одним owner-ом.
+//! login-server ID, `11124/11128` — с persisted player SZL и уже существующим
+//! `CGame::UpdateSZL` effect-проходом, а точный case `11130` — с NPC-contend
+//! текущего GodsBattle-региона игрока. Последний принимает неотрицательные
+//! секунды, сохраняет 32-битное умножение на `1000` и проходит до region AI.
 //! `2570 / AddIncrementLog` проводит item-script audit в существующий World
 //! `0x6020D` owner: limits, defaults, byte-narrowed type и conditional
 //! item-tail сохраняются до DB FIFO/live publication; tail вычисляется только
@@ -779,6 +780,7 @@ pub(crate) const SCRIPT_FUNCTION_IS_REGIONAL_PROTECTED: i32 = 9303;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER_SZL: i32 = 11128;
+pub(crate) const SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND: i32 = 11130;
 pub(crate) const SCRIPT_FUNCTION_DECLARE_COUNTRY_WAR: i32 = 9100;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR_DECLARE: i32 = 9101;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_DECLARED: i32 = 9102;
@@ -1192,14 +1194,15 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum GodsBattleScalarScriptKind {
+enum GodsBattleScriptKind {
     AreaId,
     PlayerSzl,
     ChangePlayerSzl,
+    EnterContend,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum GodsBattleScalarScriptDisposition {
+enum GodsBattleScriptDisposition {
     Scalar {
         player_id: Option<i32>,
         value: i32,
@@ -1210,68 +1213,135 @@ enum GodsBattleScalarScriptDisposition {
         requested: i32,
         update: Option<()>,
     },
+    ContendArgumentRejected {
+        seconds: Option<i32>,
+    },
+    ContendCallerMissing {
+        player_id: Option<i32>,
+        npc_id: Option<i32>,
+    },
+    ContendInvoked {
+        player_id: i32,
+        npc_id: i32,
+        region_id: i32,
+        duration_ms: i32,
+        result: Option<()>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GodsBattleScalarScriptFunctionOutcome {
+pub(crate) enum GodsBattleScriptFunctionOutcome {
     DifferentFunction,
     Handled { legacy_return: i32 },
 }
 
-pub(crate) fn run_gods_battle_scalar_script_function<Runtime: ScriptFunctionRuntime>(
+pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
     game: &mut CGame,
     runtime: &mut Runtime,
     script_player_id: Option<i32>,
+    script_npc_id: Option<i32>,
     function_id: i32,
     evaluated_argument: Option<i32>,
-) -> GodsBattleScalarScriptFunctionOutcome {
+) -> GodsBattleScriptFunctionOutcome {
     let kind = match function_id {
-        SCRIPT_FUNCTION_GET_AREA_ID => GodsBattleScalarScriptKind::AreaId,
-        SCRIPT_FUNCTION_GET_PLAYER_SZL => GodsBattleScalarScriptKind::PlayerSzl,
-        SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => GodsBattleScalarScriptKind::ChangePlayerSzl,
-        _ => return GodsBattleScalarScriptFunctionOutcome::DifferentFunction,
+        SCRIPT_FUNCTION_GET_AREA_ID => GodsBattleScriptKind::AreaId,
+        SCRIPT_FUNCTION_GET_PLAYER_SZL => GodsBattleScriptKind::PlayerSzl,
+        SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => GodsBattleScriptKind::ChangePlayerSzl,
+        SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND => GodsBattleScriptKind::EnterContend,
+        _ => return GodsBattleScriptFunctionOutcome::DifferentFunction,
     };
     let handled = |legacy_return, disposition| {
         tracing::debug!(function_id, ?kind, ?disposition, legacy_return, "обработана сценарная функция битвы богов");
-        GodsBattleScalarScriptFunctionOutcome::Handled { legacy_return }
+        GodsBattleScriptFunctionOutcome::Handled { legacy_return }
     };
     match kind {
-        GodsBattleScalarScriptKind::AreaId => {
+        GodsBattleScriptKind::AreaId => {
             let value = game.area_id();
             handled(
                 value,
-                GodsBattleScalarScriptDisposition::Scalar {
+                GodsBattleScriptDisposition::Scalar {
                     player_id: script_player_id,
                     value,
                 },
             )
         }
-        GodsBattleScalarScriptKind::PlayerSzl => {
+        GodsBattleScriptKind::PlayerSzl => {
             let value = script_player_id
                 .and_then(|player_id| game.find_player(player_id))
                 .map_or(0, |player| player.szl() as i32);
             handled(
                 value,
-                GodsBattleScalarScriptDisposition::Scalar {
+                GodsBattleScriptDisposition::Scalar {
                     player_id: script_player_id,
                     value,
                 },
             )
         }
-        GodsBattleScalarScriptKind::ChangePlayerSzl => {
+        GodsBattleScriptKind::ChangePlayerSzl => {
             let Some(requested) =
                 evaluated_argument.filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR)
             else {
-                return handled(0, GodsBattleScalarScriptDisposition::ArgumentMissing);
+                return handled(0, GodsBattleScriptDisposition::ArgumentMissing);
             };
             let update = script_player_id
                 .and_then(|player_id| game.script_change_player_szl(player_id, requested, runtime));
             handled(
                 0,
-                GodsBattleScalarScriptDisposition::Changed {
+                GodsBattleScriptDisposition::Changed {
                     player_id: script_player_id,
                     requested,
                     update,
+                },
+            )
+        }
+        GodsBattleScriptKind::EnterContend => {
+            let Some(seconds) = evaluated_argument
+                .filter(|value| *value != SCRIPT_INT_PARAMETER_ERROR && *value >= 0)
+            else {
+                return handled(
+                    0,
+                    GodsBattleScriptDisposition::ContendArgumentRejected {
+                        seconds: evaluated_argument,
+                    },
+                );
+            };
+            let (Some(player_id), Some(npc_id)) = (script_player_id, script_npc_id) else {
+                return handled(
+                    0,
+                    GodsBattleScriptDisposition::ContendCallerMissing {
+                        player_id: script_player_id,
+                        npc_id: script_npc_id,
+                    },
+                );
+            };
+            let Some(region_id) = game
+                .find_player(player_id)
+                .and_then(CPlayer::server_region_id)
+            else {
+                return handled(
+                    0,
+                    GodsBattleScriptDisposition::ContendCallerMissing {
+                        player_id: script_player_id,
+                        npc_id: script_npc_id,
+                    },
+                );
+            };
+            let duration_ms = seconds.wrapping_mul(1000);
+            let result = game.enter_gods_battle_contend(
+                region_id,
+                player_id,
+                npc_id,
+                duration_ms,
+                runtime,
+            );
+            handled(
+                0,
+                GodsBattleScriptDisposition::ContendInvoked {
+                    player_id,
+                    npc_id,
+                    region_id,
+                    duration_ms,
+                    result,
                 },
             )
         }
@@ -3606,6 +3676,10 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_RESIDENT_MODE
         | SCRIPT_FUNCTION_GM_MODE => Unused,
         SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND => match index {
             0 => Integer,
             _ => Unused,
         },
@@ -8555,14 +8629,15 @@ pub(crate) fn dispatch_script_function<Runtime: ScriptFunctionRuntime>(
     }
 
     handled!(
-        run_gods_battle_scalar_script_function(
+        run_gods_battle_script_function(
             game,
             runtime,
             script_player_id,
+            script_npc_id,
             function_id,
             integer_arguments[0],
         ),
-        GodsBattleScalarScriptFunctionOutcome::Handled
+        GodsBattleScriptFunctionOutcome::Handled
     );
     handled!(
         run_war_contend_script_function(

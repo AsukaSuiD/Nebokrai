@@ -16,7 +16,8 @@
 //! terminal-marker decoder; client publication выполняет dispatcher-owner.
 //! XYD round-trip использует configuration-owned slots, ordered region set и
 //! faction player/NPC sets. NPC guard/counter lifecycle и GodsBattle-contend
-//! исполняет `CGame`; byte-owned имя contender сохраняет исходную GBK.
+//! исполняет `CGame`; точный script case `11130` является живым caller-ом, а
+//! byte-owned имя contender сохраняет исходную GBK.
 //! Проверка first-contender намеренно сравнивает normal `m_lFactionID` с
 //! сохранённым GodsBattle faction: это несовпадение подтверждено RVA
 //! `0x000A9270`, а не исправлено по более позднему C++-донору. Найденный
@@ -476,15 +477,6 @@ impl CServerGodsBattleRegion {
             self.faction_npcs[target].insert(npc_id);
         }
         true
-    }
-
-    pub(crate) fn npc_faction(&self, npc_id: i32) -> Option<i32> {
-        match self.npc_faction_index(npc_id)? {
-            0 => Some(7),
-            1 => Some(5),
-            2 => Some(6),
-            _ => None,
-        }
     }
 
     pub(crate) fn is_player_contending_symbol(&self, player_id: i32, symbol_id: i32) -> bool {

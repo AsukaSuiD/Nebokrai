@@ -26,6 +26,8 @@
 //! монстров. Группа `5411/5412/5414/5420` читает единый загруженный
 //! `CPlayerList`, текущий опыт игрока и начальные идентификаторы; виртуальная
 //! машина не вычисляет аргументы, которых не касается точный selector.
+//! GodsBattle `11130` проверяет наличие script NPC до вычисления секунд, после
+//! чего общий dispatcher связывает вызов с текущим регионом игрока.
 //!
 //! `wait 6` и `RunTime 22` хранят срок ожидания в том же `ActiveScript`.
 //! Первый продолжает выполнение с сохранённой позиции, второй раз в секунду
@@ -50,7 +52,8 @@ use super::function::{
     SCRIPT_FUNCTION_ADD_TIME_GOODS, SCRIPT_FUNCTION_APPLY_FOR_VILLAGE_WAR,
     SCRIPT_FUNCTION_ARGUMENT_CAPACITY, SCRIPT_FUNCTION_CITY_WAR_DECLARE,
     SCRIPT_FUNCTION_DEL_APPELLATION_STATE, SCRIPT_FUNCTION_GET_APPELLATION_STATE,
-    SCRIPT_FUNCTION_GET_COPY_NUMBER, SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE,
+    SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND, SCRIPT_FUNCTION_GET_COPY_NUMBER,
+    SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE,
     SCRIPT_FUNCTION_GET_NAME, SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID,
     SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
     SCRIPT_FUNCTION_GET_TEAMER_NAME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
@@ -655,6 +658,14 @@ impl<'a> CScript<'a> {
                 last_update_ms: now,
                 completion,
             });
+            return ScriptCommandOutcome::Handled {
+                function_id,
+                legacy_return: 0,
+            };
+        }
+        if function_id == SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND
+            && self.context.npc_id.is_none()
+        {
             return ScriptCommandOutcome::Handled {
                 function_id,
                 legacy_return: 0,

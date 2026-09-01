@@ -6806,10 +6806,6 @@ impl CPlayer {
         self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
     }
 
-    pub(crate) fn can_enter_gods_battle_contend(&self) -> bool {
-        self.shape().get_action() != 6 && !CMoveShape::is_died(self.base_properties.health)
-    }
-
     /// Focused same-region branch `ChangeRegion`, которую вызывает
     /// `ServerNationRegion::KickOutAllPlayerToReturnPoint`.
     pub(crate) fn prepare_nation_relive(&mut self) {
