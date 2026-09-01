@@ -138,6 +138,12 @@ impl CAmountLimitGoodsContainer {
         self.goods.values()
     }
 
+    pub(crate) fn traversing_goods_mut(
+        &mut self,
+    ) -> impl ExactSizeIterator<Item = &mut CGoods> {
+        self.goods.values_mut()
+    }
+
     pub(crate) const fn set_owner(&mut self, owner_type: i32, owner_id: i32) {
         self.base.set_owner(owner_type, owner_id);
     }

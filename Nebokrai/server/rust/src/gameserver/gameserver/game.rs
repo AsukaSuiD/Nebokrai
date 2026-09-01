@@ -32968,6 +32968,16 @@ impl CGame {
         self.players.get_mut(&player_id)
     }
 
+    pub(crate) fn take_player_auction_scale_goods_ids(
+        &mut self,
+        player_id: i32,
+    ) -> Option<Vec<CGuid>> {
+        let goods_factory = &self.goods_factory;
+        self.players
+            .get_mut(&player_id)?
+            .auction_scale_goods_ids(goods_factory)
+    }
+
     pub(crate) fn skill_base_properties(
         &self,
         skill_id: u32,

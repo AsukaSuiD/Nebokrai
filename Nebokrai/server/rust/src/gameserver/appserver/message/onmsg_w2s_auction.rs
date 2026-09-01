@@ -421,10 +421,7 @@ where
                     }
                 }
 
-                if let Some(goods_ids) = game
-                    .find_player(player_id)
-                    .and_then(|player| player.auction_scale_goods_ids())
-                {
+                if let Some(goods_ids) = game.take_player_auction_scale_goods_ids(player_id) {
                     let mut scale = CMessage::new(CLIENT_AUCTION_SCALE_MESSAGE);
                     scale.base_mut().add_ulong(goods_ids.len() as u32);
                     for goods_id in goods_ids {
@@ -721,14 +718,13 @@ where
 
             let delivery = Some(response.send_to_player(game.net_server(), player_id));
             let scale_delivery = if selector == WORLD_AUCTION_SELF_LIST_MESSAGE {
-                game.find_player(player_id).and_then(|player| {
-                    let goods_ids = player.auction_scale_goods_ids()?;
+                game.take_player_auction_scale_goods_ids(player_id).map(|goods_ids| {
                     let mut scale = CMessage::new(CLIENT_AUCTION_SCALE_MESSAGE);
                     scale.base_mut().add_ulong(goods_ids.len() as u32);
                     for goods_id in goods_ids {
                         scale.base_mut().add_guid(goods_id);
                     }
-                    Some(scale.send_to_player(game.net_server(), player_id))
+                    scale.send_to_player(game.net_server(), player_id)
                 })
             } else {
                 None

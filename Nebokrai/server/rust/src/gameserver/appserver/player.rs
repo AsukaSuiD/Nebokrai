@@ -10050,15 +10050,14 @@ impl CPlayer {
     }
 
     /// State/container часть exact `TellClientScale`; закрытый аукцион не
-    /// создаёт client-effect, открытый сохраняет container traversal order.
-    pub(crate) fn auction_scale_goods_ids(&self) -> Option<Vec<CGuid>> {
-        self.auction_open.then(|| {
-            self.auction_goods
-                .base()
-                .traversing_goods()
-                .map(|goods| goods.identity().ex_id)
-                .collect()
-        })
+    /// создаёт client-effect, открытый уменьшает положительные scale-счётчики
+    /// и сохраняет container traversal order.
+    pub(crate) fn auction_scale_goods_ids(
+        &mut self,
+        factory: &CGoodsFactory,
+    ) -> Option<Vec<CGuid>> {
+        self.auction_open
+            .then(|| self.auction_goods.get_scale_goods(factory))
     }
 
     pub(crate) fn auction_goods_identity_at(&self, position: u32) -> Option<ShapeIdentity> {

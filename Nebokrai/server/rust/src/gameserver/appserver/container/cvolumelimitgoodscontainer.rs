@@ -23,7 +23,9 @@ use super::camountlimitgoodscontainer::{
 };
 use super::cgoodscontainer::GoodsStackMergeOutcome;
 use crate::gameserver::appserver::goods::cgoods::CGoods;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_PARTICULAR_ATTRIBUTE;
+use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
+    GAP_GOODS_AUCTION_SCALE, GAP_PARTICULAR_ATTRIBUTE,
+};
 use crate::gameserver::appserver::goods::cgoodsfactory::CGoodsFactory;
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::public::guid::CGuid;
@@ -261,6 +263,24 @@ impl CVolumeLimitGoodsContainer {
                     && self.query_goods_position(goods.identity().ex_id).is_some(),
             ))
         })
+    }
+
+    /// Exact `GetScaleGoods`: только положительные auction-scale значения
+    /// уменьшаются на единицу и попадают в GUID-вектор в insertion order.
+    pub(crate) fn get_scale_goods(&mut self, factory: &CGoodsFactory) -> Vec<CGuid> {
+        let mut goods_ids = Vec::new();
+        for goods in self.base.traversing_goods_mut() {
+            let scale = goods.addon_property_value(factory, GAP_GOODS_AUCTION_SCALE, 1);
+            if 0 < scale {
+                let _legacy_ignored = goods.set_addon_property_value_core(
+                    GAP_GOODS_AUCTION_SCALE,
+                    1,
+                    scale.wrapping_sub(1),
+                );
+                goods_ids.push(goods.identity().ex_id);
+            }
+        }
+        goods_ids
     }
 
     pub(crate) fn is_full(&self, factory: &CGoodsFactory) -> bool {
