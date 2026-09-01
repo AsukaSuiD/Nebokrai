@@ -6,9 +6,10 @@
 //! `delay + action interval`, региональный порядок целей и отдельную
 //! дедупликацию каждого прохода. Восемь матриц `3×3` восстановлены из `.data`;
 //! уровни `1`, `2` и остальные используют одинаковые байты. `CGame` только
-//! разрешает цели, применяет рассчитанный урон и выполняет доставку. `End`
-//! сбрасывает сохранённое направление, возвращает движение и выполняет
-//! подтверждённый хвост `CSummonSkill::End(1)`.
+//! разрешает цели, применяет рассчитанный урон и выполняет доставку. `Attack`
+//! и `AI` не изнашивают оружие на каждой цели двух проходов: унаследованный
+//! `AfterUseSkill` делает это один раз в подтверждённом `End(1)`, после сброса
+//! сохранённого направления и возврата движения.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -56,7 +57,7 @@ impl SwallowExecutionState {
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 pub(crate) fn is_swallow_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == SWALLOW_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish_player_swallow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_swallow_used(now_ms); }); }
+fn finish_player_swallow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } game.damage_player_weapon(player_id, runtime); finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_swallow_used(now_ms); }); }
 pub(crate) fn cancel_player_swallow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.swallow().map(|state| state.kernel().dispatch()) else { return false }; finish_player_swallow(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
 fn send_failure(game: &CGame, player_id: i32, code: u8, mp_loss: u32) {
@@ -82,7 +83,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i
 fn cell_targets(game: &CGame, region_id: i32, x: i32, y: i32) -> Vec<ShapeIdentity> { let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else { return Vec::new() }; let (width, height) = game.area_dimensions(); let mut shapes = Vec::new(); if region.get_shapes(x, y, width, height, game, &mut shapes).is_err() { return Vec::new() } shapes.into_iter().map(|shape| shape.identity).collect() }
 fn attack_scope<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, direction: i32, level: i32, hit: i32, factor: u32, runtime: &mut Runtime) {
     let Some((source_x, source_y, master)) = game.find_player(player_id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, master_info(player)))) else { return }; let Some(scope) = usize::try_from(direction).ok().and_then(|index| DIRECTIONAL_SCOPE.get(index)) else { return }; let mut attacked = Vec::new();
-    for x_offset in 0..3usize { for y_offset in 0..3usize { if scope[x_offset + 3 * y_offset] == 0 { continue } let x = source_x.wrapping_sub(1).wrapping_add(x_offset as i32); let y = source_y.wrapping_sub(1).wrapping_add(y_offset as i32); for target in cell_targets(game, region_id, x, y) { if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || attacked.contains(&target) { continue } attacked.push(target); if !game.owned_player_skill_target_attackable(master, target, region_id) { continue } let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, hit, factor) else { continue }; match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue } game.damage_player_weapon(player_id, runtime); } } }
+    for x_offset in 0..3usize { for y_offset in 0..3usize { if scope[x_offset + 3 * y_offset] == 0 { continue } let x = source_x.wrapping_sub(1).wrapping_add(x_offset as i32); let y = source_y.wrapping_sub(1).wrapping_add(y_offset as i32); for target in cell_targets(game, region_id, x, y) { if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || attacked.contains(&target) { continue } attacked.push(target); if !game.owned_player_skill_target_attackable(master, target, region_id) { continue } let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, hit, factor) else { continue }; match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue } } } }
 }
 
 pub(crate) fn execute_player_swallow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
