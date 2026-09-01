@@ -26,7 +26,9 @@
 //! Точный vtable показывает, что все три action-callback `CBuild::AI` сведены
 //! к общему нулевому no-op. `OnDied` не завершает country-war напрямую:
 //! region-slot `+0x68` у `ServerCountryRegion` также остаётся базовым no-op;
-//! победная цепочка принадлежит отдельному сообщению `CountryWarSys`.
+//! победная цепочка принадлежит отдельному сообщению `CountryWarSys`. Derived
+//! `CCityGate` заменяет сам `OnDied` пустым virtual slot-ом, поэтому script
+//! обычной постройки для ворот при смерти не запускается.
 
 use super::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::moveshape::CMoveShape;

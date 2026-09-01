@@ -14,7 +14,9 @@
 //! client serializer и damage принадлежат `CBuild`; достигнутая базовая атака
 //! сохраняет derived attackability и hurt callback. Все три action-ветви
 //! `CCityGate::AI` вызывают один `AI_BeAttack`, который в точном EXE является
-//! нулевым no-op; отдельный runtime ворот не требуется.
+//! нулевым no-op; отдельный runtime ворот не требуется. Vtable slot `+0x178`
+//! также заменяет inherited `CBuild::OnDied` точным no-op `0x00485540`, так
+//! что сохранённое script-поле ворот не исполняется из death pipeline.
 
 use super::build::{BuildBlockUpdate, BuildInit, CBuild};
 use super::moveshape::CMoveShape;

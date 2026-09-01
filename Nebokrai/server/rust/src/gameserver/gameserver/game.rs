@@ -43686,7 +43686,13 @@ impl CGame {
         self.find_player(player_id)?;
         let mut owner = self.take_region_owner(region_id)?;
         let mutation = owner.stationary_build_mut(identity).map(|build| {
-            let script = build.script.clone();
+            // `CCityGate` заменяет inherited `CBuild::OnDied` пустым virtual
+            // slot-ом; script запускается только для обычного `CBuild`.
+            let script = if identity.object_type == BUILD_OBJECT_TYPE as i32 {
+                build.script.clone()
+            } else {
+                Vec::new()
+            };
             build.apply_combat_damage(damage);
             (build.hp(), build.hp() == 0, script)
         });
