@@ -6,6 +6,9 @@
 //! задержки он целиком снимает `CSoulCollectState`, публикует его завершение и
 //! только затем создаёт региональный `CFireBallPhalanx`. `CGame` выполняет
 //! лишь доступ к независимым владельцам, регистрацию в пространстве и доставку.
+//! Object-target перегрузка использует общий `CState::GetSufferer` и точку
+//! ближайшей клетки footprint для `CBuild/CCityGate`; NPC разрешается owner-ом
+//! и затем отклоняется как мёртвый.
 //! Обычное, отказное и клиентское завершение после `Begin` проходят через
 //! подтверждённый общий хвост `End(1)` с возвратом движения, `AfterUseSkill`
 //! и временем восстановления.
@@ -15,7 +18,7 @@ use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
     SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED,
-    SKILL_USAGE_TARGET_MAX_DISTANCE,
+    SKILL_USAGE_TARGET_MAX_DISTANCE, is_base_magic_object_target_type,
 };
 use super::fireballphalanx::CFireBallPhalanx;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -34,7 +37,6 @@ use crate::public::tools::get_line_direction;
 pub(crate) const FIRE_BALL_SKILL_ID: u32 = 0x13d;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
-const MONSTER_TYPE: i32 = 600;
 const USER_MP_LOSE: u32 = 2;
 
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
@@ -99,27 +101,24 @@ pub(crate) fn cancel_player_fire_ball<Runtime: GameMainLoopRuntime>(
 fn destination(
     game: &CGame,
     region_id: i32,
+    source_x: i32,
+    source_y: i32,
     dispatch: PlayerSkillDispatch,
 ) -> Option<(i32, i32, Option<ShapeIdentity>)> {
     match dispatch {
         PlayerSkillDispatch::Point { x, y, .. } => Some((x, y, None)),
         PlayerSkillDispatch::Object { target, .. }
-            if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => {
-                let view = game.base_magic_target_view(region_id, target)?;
-                Some((view.tile_x, view.tile_y, Some(target)))
+            if is_base_magic_object_target_type(target.object_type) => {
+                let (target_x, target_y) =
+                    game.base_magic_target_point(region_id, source_x, source_y, target)?;
+                Some((target_x, target_y, Some(target)))
             }
         _ => None,
     }
 }
 
 fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-        MONSTER_TYPE => game.find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target.id))
-            .is_none_or(|monster| monster.hit_points() == 0),
-        _ => true,
-    }
+    game.base_magic_target_dead(region_id, target)
 }
 
 fn send_visual(
@@ -147,13 +146,13 @@ fn send_visual(
 }
 
 pub(crate) const fn is_fire_ball_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch,
-        PlayerSkillDispatch::Point { skill_id: FIRE_BALL_SKILL_ID, .. }
-        | PlayerSkillDispatch::Object {
-            skill_id: FIRE_BALL_SKILL_ID,
-            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+    match dispatch {
+        PlayerSkillDispatch::Point { skill_id: FIRE_BALL_SKILL_ID, .. } => true,
+        PlayerSkillDispatch::Object { skill_id: FIRE_BALL_SKILL_ID, target } => {
+            is_base_magic_object_target_type(target.object_type)
         }
-    )
+        _ => false,
+    }
 }
 
 pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
@@ -203,7 +202,9 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let Some((target_x, target_y, target)) = destination(game, region_id, dispatch) else {
+        let Some((target_x, target_y, target)) =
+            destination(game, region_id, source_x, source_y, dispatch)
+        else {
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         if target.is_some_and(|identity| target_dead(game, region_id, identity)) {
@@ -228,7 +229,9 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    let Some((target_x, target_y, target)) = destination(game, region_id, dispatch) else {
+    let Some((target_x, target_y, target)) =
+        destination(game, region_id, source_x, source_y, dispatch)
+    else {
         finish_player_fire_ball(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };

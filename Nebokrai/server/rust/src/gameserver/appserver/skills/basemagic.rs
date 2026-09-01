@@ -23,6 +23,8 @@ use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached}
 use super::basemagicphalanx::CBaseMagicPhalanx;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::build::BUILD_OBJECT_TYPE;
+use crate::gameserver::appserver::citygate::CITY_GATE_OBJECT_TYPE;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -33,6 +35,8 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const PLAYER_TYPE: i32 = 400;
+const NPC_TYPE: i32 = 500;
+const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const BASE_MAGIC_SKILL_ID: u32 = 3;
 pub(crate) const BASE_MAGIC_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -45,6 +49,15 @@ pub(crate) const SKILL_USAGE_MAX_ATTACK: u32 = 20_009;
 pub(crate) const SKILL_USAGE_ELEMENT_MODIFIER: u32 = 20_015;
 pub(crate) const SKILL_USAGE_SUMMONED_LIFETIME: u32 = 30_001;
 pub(crate) const SKILL_USAGE_SUMMONED_SPEED: u32 = 30_002;
+
+/// Типы, которые исходный `CState::GetSufferer` разрешает в object-target
+/// перегрузках семейства базовой магии. NPC доходит до owner-а и уже там
+/// отклоняется как мёртвый; постройки продолжают region-owned combat path.
+pub(crate) const fn is_base_magic_object_target_type(object_type: i32) -> bool {
+    matches!(object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE)
+        || object_type == BUILD_OBJECT_TYPE as i32
+        || object_type == CITY_GATE_OBJECT_TYPE as i32
+}
 
 impl CGame {
     /// Общий legacy failure-пакет базовой магии и стрельбы остаётся рядом с

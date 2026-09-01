@@ -941,7 +941,8 @@ use crate::gameserver::appserver::skills::archeryphalanx::{
     calculate_owned_archery_attack, ArcheryPhalanxTick, CArcheryPhalanx,
 };
 use crate::gameserver::appserver::skills::basemagic::{
-    cancel_player_base_magic, execute_player_base_magic, BASE_MAGIC_SKILL_ID,
+    cancel_player_base_magic, execute_player_base_magic, is_base_magic_object_target_type,
+    BASE_MAGIC_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::basemagicphalanx::{
     calculate_owned_base_magic_attack, BaseMagicPhalanxTick, CBaseMagicPhalanx,
@@ -40628,7 +40629,7 @@ impl CGame {
             let concrete_base_magic = match dispatch {
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == BASE_MAGIC_SKILL_ID
-                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                        && is_base_magic_object_target_type(target.object_type)
                 }
                 _ => false,
             };
