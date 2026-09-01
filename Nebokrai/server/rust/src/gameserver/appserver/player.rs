@@ -103,6 +103,10 @@
 //! enable/vigour/experience; persisted battle-fairy enable декодируется из
 //! World base-property offset `0x128`, а `CanMountEquip` использует оба enable
 //! flag-а, headgear addon и live requirements без внешнего result snapshot.
+//! `MountEquip` cases `0x75..0x78` применяют четыре ordinary-fairy addon-а к
+//! player combat state через setup scales `+0x8AC..+0x8B8`, затем повторно
+//! используют occupation-derived STR/DEX/INT формулы; signed pass и clamp
+//! совпадают с остальными equipment addon-ами.
 //! Periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
@@ -332,6 +336,7 @@ use super::goods::cgoodsbaseproperties::{
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
     GAP_EXCEPTION_STATE, GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND,
+    GAP_FAIRY_AGILITY, GAP_FAIRY_HP, GAP_FAIRY_STRENGTH, GAP_FAIRY_WAKAN,
     GAP_GOODS_EQUIMENT_FLASH, GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY,
     GAP_GOODS_PACKAGE_EXTENTION,
     GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION,
@@ -2155,6 +2160,53 @@ fn apply_equipment_goods_properties(
                     add_u16(&mut value, delta);
                     properties.blast_element_attack = value;
                 }
+                GAP_FAIRY_STRENGTH => {
+                    let player_delta = derived(delta, coefficients.fairy_strength_to_player);
+                    add_u32(&mut properties.strength, player_delta);
+                    add_u32(
+                        &mut properties.maximum_attack,
+                        derived(player_delta, coefficients.str_to_max_attack[occupation]),
+                    );
+                    add_u16(
+                        &mut properties.burden,
+                        derived(player_delta, coefficients.str_to_burden[occupation]),
+                    );
+                }
+                GAP_FAIRY_AGILITY => {
+                    let player_delta = derived(delta, coefficients.fairy_agility_to_player);
+                    add_u32(&mut properties.dexterity, player_delta);
+                    add_u32(
+                        &mut properties.minimum_attack,
+                        derived(player_delta, coefficients.dex_to_min_attack[occupation]),
+                    );
+                    add_u16(
+                        &mut properties.reank,
+                        derived(player_delta, coefficients.dex_to_stiff[occupation]),
+                    );
+                }
+                GAP_FAIRY_WAKAN => {
+                    let player_delta = derived(delta, coefficients.fairy_wakan_to_player);
+                    add_u32(&mut properties.intelligence, player_delta);
+                    properties.element_modify = properties.element_modify.wrapping_add(derived(
+                        player_delta,
+                        coefficients.int_to_element[occupation],
+                    ));
+                    if player_delta < 0 && properties.element_modify < 0 {
+                        properties.element_modify = 0;
+                    }
+                    add_u32(
+                        &mut properties.maximum_mp,
+                        derived(player_delta, coefficients.int_to_max_mp[occupation]),
+                    );
+                    add_u32(
+                        &mut properties.element_resistance,
+                        derived(player_delta, coefficients.int_to_resistant[occupation]),
+                    );
+                }
+                GAP_FAIRY_HP => add_u32(
+                    &mut properties.maximum_hp,
+                    derived(delta, coefficients.fairy_hp_to_player),
+                ),
                 _ => {}
             }
         }

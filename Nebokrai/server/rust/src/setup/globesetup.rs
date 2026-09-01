@@ -9,8 +9,10 @@
 //! Typed loaders/accessors накладываются только на подтверждённые offsets:
 //! create-role limit остаётся signed `i16`, country names/identities и special
 //! string — fixed C-строки, auction/JJC/DbMisc поля читаются из общего snapshot.
-//! BattleFairy и CiQing feature gates, а также полный ordinary-fairy setup
-//! `+0x85C..+0x8A8` читаются из подтверждённых byte offsets.
+//! BattleFairy и CiQing feature gates, а также ordinary-fairy setup
+//! `+0x85C..+0x8B8` читаются из подтверждённых byte offsets. Exact
+//! `CPlayer::MountEquip` VA `0x443CB6/0x443E5C/0x444002/0x44426B`
+//! подтверждают четыре player-scale коэффициента `+0x8AC..+0x8B8`.
 //! Public-talk projection читает оба fixed goods-name, stack-count/money и
 //! chat intervals, включая team `+0x850`, прямо из тех же setup-полей. Абсолютные
 //! reads `0xEF4528/68/6C/70/B0/B4` и `0xEF4604/08` в `OnOtherMessage`
@@ -248,6 +250,10 @@ pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) int_to_element: [f32; 3],
     pub(crate) int_to_max_mp: [f32; 3],
     pub(crate) int_to_resistant: [f32; 3],
+    pub(crate) fairy_strength_to_player: f32,
+    pub(crate) fairy_agility_to_player: f32,
+    pub(crate) fairy_wakan_to_player: f32,
+    pub(crate) fairy_hp_to_player: f32,
     pub(crate) resume_hp_peace: i32,
     pub(crate) resume_mp_peace: i32,
     pub(crate) resume_hp_fight: i32,
@@ -1045,6 +1051,10 @@ impl GlobeSetupSnapshot {
             int_to_element: triplet(76),
             int_to_max_mp: triplet(88),
             int_to_resistant: triplet(100),
+            fairy_strength_to_player: self.read_f32(0x8AC),
+            fairy_agility_to_player: self.read_f32(0x8B0),
+            fairy_wakan_to_player: self.read_f32(0x8B4),
+            fairy_hp_to_player: self.read_f32(0x8B8),
             resume_hp_peace: self.read_i32(RESUME_HP_PEACE_OFFSET),
             resume_mp_peace: self.read_i32(RESUME_MP_PEACE_OFFSET),
             resume_hp_fight: self.read_i32(RESUME_HP_FIGHT_OFFSET),
