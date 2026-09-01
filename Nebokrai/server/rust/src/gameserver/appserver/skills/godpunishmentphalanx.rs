@@ -7,7 +7,6 @@
 //! вызова legacy RNG. Не достигнут только DB/wire decoder восстановленной формы.
 
 use super::godpunishment::GOD_PUNISHMENT_SKILL_ID;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -41,10 +40,8 @@ pub(crate) fn calculate_owned_god_punishment_attack(game: &mut CGame, phalanx: &
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let level = player.level();
-    let weapon = player.equipment().get_goods(2).map_or(0, |goods| goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1));
     let (divisor, minimum) = game.globe_setup().weapon_damage_factors();
-    let delta = weapon.wrapping_sub(i32::from(target_level)).max(0);
-    let factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(minimum) };
+    let factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum);
     let critical = game.globe_setup().critical_rate();
     Some(phalanx.calculate_attack(factor, combat, occupation, level, critical, &mut |maximum| game.skill_random_below(maximum)))
 }
