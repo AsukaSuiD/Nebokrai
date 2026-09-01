@@ -9,8 +9,10 @@
 //! Формулы, два RNG-вызова на каждое фактическое попадание и пакеты остаются у
 //! владельца семейства; `CGame` только разрешает владельцев, применяет готовую
 //! атаку, перемещает стрелка и выполняет доставку.
-//! `End(true)` прекращает оставшийся полёт, обновляет свойства и cooldown;
-//! `End(false)` только освобождает runtime-состояние и не откатывает попадания.
+//! Ни одна из шести перегрузок `Attack` не изнашивает оружие на отдельных
+//! целях: общий унаследованный `AfterUseSkill` делает это один раз из
+//! `End(true)`, после чего обновляются свойства и cooldown. `End(false)` только
+//! освобождает runtime-состояние и не откатывает попадания.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -69,6 +71,7 @@ pub(crate) const fn explosive_arrow_variant(dispatch: PlayerSkillDispatch) -> Op
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_explosive_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, variant: ExplosiveArrowVariant, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_explosive_arrow_used(variant, now_ms));
 }
 fn abort_player_explosive_arrow(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
@@ -96,7 +99,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, skill_id
 
 #[allow(clippy::too_many_arguments, reason = "граница буквально сохраняет параметры одного попадания EXE")]
 fn apply_target<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity, war_soul: bool, skill_id: u32, level: i32, factor: u32, hit: i32, element_addition: u32, runtime: &mut Runtime) {
-    let Some(target_level) = target_level(game, region_id, target) else { return }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, skill_id, level, factor, hit, element_addition) else { return }; match target.object_type { PLAYER_TYPE if war_soul => game.apply_owned_skill_attack_to_war_soul(master, target.id, region_id, attack, runtime), PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => return } game.damage_player_weapon(player_id, runtime);
+    let Some(target_level) = target_level(game, region_id, target) else { return }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, skill_id, level, factor, hit, element_addition) else { return }; match target.object_type { PLAYER_TYPE if war_soul => game.apply_owned_skill_attack_to_war_soul(master, target.id, region_id, attack, runtime), PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => return }
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет порядок маски, прохода боевых душ и обычных целей")]
