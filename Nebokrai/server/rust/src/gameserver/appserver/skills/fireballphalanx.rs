@@ -5,7 +5,8 @@
 //! проходит путь по одной клетке через заданный интервал и в каждой достигнутой
 //! клетке с блоком `3` обходит подтверждённую маску 3×3 в порядке X→Y.
 //! Боевой дух клетки обрабатывается перед обычными фигурами. Формула хранится
-//! здесь и сохраняет два вызова генератора MSVCRT на каждую рассчитанную атаку.
+//! здесь и сохраняет два вызова генератора MSVCRT на каждую рассчитанную атаку;
+//! усиление душами и критический множитель усекаются к нулю.
 
 use super::fireball::FIRE_BALL_SKILL_ID;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
@@ -170,7 +171,7 @@ pub(crate) fn calculate_owned_fire_ball_attack(
         .wrapping_add(phalanx.minimum_attack);
     if phalanx.soul_count != 0 && phalanx.soul_variable != 0 {
         damage = ((phalanx.soul_variable as f32 * phalanx.soul_count as f32 * 0.01 + 1.0)
-            * damage as f32).round_ties_even() as i32;
+            * damage as f32) as i32;
     }
     damage = damage.max(0);
     let mut attack = AttackInformation {
@@ -193,7 +194,7 @@ pub(crate) fn calculate_owned_fire_ball_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
     let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] = game.globe_setup().base_combat_scales();
