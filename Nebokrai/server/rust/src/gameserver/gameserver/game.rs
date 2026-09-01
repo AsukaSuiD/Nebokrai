@@ -16560,10 +16560,10 @@ impl CGame {
         money: u32,
         goods_name: &[u8],
     ) -> bool {
-        if self.find_player(player_id).is_none() {
+        let Some(current) = self.find_player(player_id).map(CPlayer::money) else {
             return false;
-        }
-        if let Some(change) = self.decrease_player_money(player_id, money) {
+        };
+        if let Some(change) = self.decrease_player_money(player_id, money.min(current)) {
             let _ = self.send_player_money_decrease(player_id, &change.outcome);
         }
         let base_index = self
