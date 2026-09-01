@@ -6,7 +6,8 @@
 //! один и отсутствие коэффициента оружия в формуле игрока. Проверка, MP, задержка,
 //! потребление `CSoulCollectState`, единственный вызов RNG и сетевые стадии
 //! исполняются общим механизмом `energybolt`; эта обёртка задаёт только
-//! различающийся контракт когтя зомби.
+//! различающийся контракт когтя зомби. Унаследованный
+//! `CAttackSkill::AfterUseSkill` изнашивает оружие один раз при `End(true)`.
 
 use super::energybolt::{
     PathProjectileSpec, execute_owned_path_projectile, execute_player_path_projectile,

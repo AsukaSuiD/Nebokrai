@@ -6,7 +6,8 @@
 //! ноль и коэффициент оружия для игрока. Проверка, MP, задержка, потребление
 //! `CSoulCollectState`, единственный вызов RNG и сетевые стадии исполняются общим
 //! механизмом `energybolt`; эта обёртка задаёт только различающийся контракт
-//! змеиного снаряда.
+//! змеиного снаряда. Унаследованный `CAttackSkill::AfterUseSkill` изнашивает
+//! оружие один раз при `End(true)`.
 
 use super::energybolt::{
     PathProjectileSpec, execute_owned_path_projectile, execute_player_path_projectile,

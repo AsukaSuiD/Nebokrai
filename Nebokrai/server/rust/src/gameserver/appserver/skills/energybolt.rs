@@ -12,7 +12,9 @@
 //! монстра недостигнутые добавки игрока не выдумываются. `CGame` только разрешает
 //! владельцев, применяет защиту и смерть и доставляет уже построенные пакеты.
 //! Три player-варианта используют общий `End`: очистку progress, возврат
-//! движения и `CAttackSkill::End(1)` с cooldown конкретного идентификатора.
+//! движения и `CAttackSkill::End(1)` с единичным `AfterUseSkill ->
+//! CPlayer::OnWeaponDamaged`, обновлением свойств и cooldown конкретного
+//! идентификатора.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
@@ -309,6 +311,7 @@ fn finish_player_projectile<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_path_projectile_used(skill_id, now_ms);
     });
