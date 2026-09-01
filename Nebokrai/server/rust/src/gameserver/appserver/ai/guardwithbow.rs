@@ -6,13 +6,15 @@
 //! минимальной дистанции навыка разделяется с неподвижным лучником. Немедленная
 //! реакция на урон вызывает того же владельца до продолжения обработки попадания.
 //! Общий сон включается только при отсутствии подключённых игроков во всех
-//! девяти областях.
+//! девяти областях; при наличии игроков `OnIdle` ставит стационарную очередь
+//! `ChangeSkill → Stand → SearchEnemy`.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
 // SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
 // Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\guardwithbow.cpp
+// `OnIdle` сопоставлен с RVA 0x0020EE60.
 
 // COMPONENT_VARIANT_END: GameServer
 
