@@ -70,6 +70,8 @@
 //! остаются у регионального runtime-владельца.
 //! City/country guard refresh восстанавливает HP, очищает существующий
 //! `CBaseAI` и оставляет формирование `0xBF60F` координирующему `CGame`.
+//! Pet attack/speed/timing getters применяют факторы только при валидной
+//! player-owner связи; целочисленные результаты сохраняют x87 truncation.
 //! Два направления virtual `IsAttackAble` разведены явно: этот owner
 //! проверяет monster-target относительно player/monster attacker-а, а
 //! обратную player-target политику хранит `CPlayer` и координирует `CGame`.
@@ -979,10 +981,7 @@ impl CMonster {
     /// монстр с живой player-owner связью применяет pet factor `9`. Оригинал
     /// умножает signed DWORD на f32 в x87 и временно включает truncation.
     pub(crate) fn stop_frame(&self, property: &MonsterProperties) -> u32 {
-        if self.tamed
-            && self.master_info.master_type == 400
-            && self.master_info.master_id != 0
-        {
+        if self.has_player_pet_master() {
             let scaled = f64::from(property.stop_frame as i32)
                 * f64::from(f32::from_bits(self.factors[9]));
             return scaled.trunc() as i32 as u32;
@@ -990,29 +989,57 @@ impl CMonster {
         property.stop_frame
     }
 
+    fn has_player_pet_master(&self) -> bool {
+        self.tamed && self.master_info.master_type == 400 && self.master_info.master_id != 0
+    }
+
+    fn pet_scaled_attack(&self, value: u32, factor_index: usize) -> u32 {
+        let base = (value as i32).max(1) as u32;
+        if !self.has_player_pet_master() {
+            return base;
+        }
+        let scaled = f64::from(base)
+            * f64::from(f32::from_bits(self.factors[factor_index]));
+        let scaled = scaled.trunc() as i32;
+        if scaled > 0 { scaled as u32 } else { base }
+    }
+
+    /// Exact `CMonster::GetAtcInterval` (RVA `0x000E69F0`): базовый virtual
+    /// сначала сужает интервал к WORD, pet factor `7` затем усекается `__ftol2`.
+    pub(crate) fn attack_interval(&self, property: &MonsterProperties) -> u32 {
+        let base = property.attack_speed as u16;
+        if !self.has_player_pet_master() {
+            return u32::from(base);
+        }
+        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[7]));
+        u32::from(scaled.trunc() as i32 as u16)
+    }
+
+    /// Exact `CMonster::GetSpeed` (RVA `0x000E79B0`): x87 умножает два f32
+    /// только для валидной player-owner связи; Rust округляет результат при
+    /// сохранении canonical f32 скорости.
+    pub(crate) fn speed(&self) -> f32 {
+        let base = self.move_shape.shape().get_speed();
+        if !self.has_player_pet_master() {
+            return base;
+        }
+        (f64::from(base) * f64::from(f32::from_bits(self.factors[8]))) as f32
+    }
+
     pub(crate) fn pet_attack_properties(
         &self,
         property: &MonsterProperties,
     ) -> PetAttackProperties {
-        let factor = |index: usize| f32::from_bits(self.factors[index]);
-        let scaled = |value: u32, index: usize| {
-            ((value as f32) * factor(index)).round_ties_even().max(0.0) as u32
-        };
-        let scaled_attack = |value: u32, index: usize| {
-            let value = value.max(1);
-            let adjusted = scaled(value, index);
-            if adjusted == 0 { value } else { adjusted }
-        };
         let (minimum_attack, maximum_attack) = self.state_attack_bounds(
-            scaled_attack(property.minimum_attack, 1),
-            scaled_attack(property.maximum_attack, 0),
+            self.pet_scaled_attack(property.minimum_attack, 1),
+            self.pet_scaled_attack(property.maximum_attack, 0),
         );
         PetAttackProperties {
             minimum_attack,
             maximum_attack,
-            attack_interval: scaled(property.attack_speed, 7),
+            attack_interval: self.attack_interval(property),
             stop_frame: self.stop_frame(property),
-            speed_bits: ((self.move_shape.shape().get_speed() * factor(8)).max(0.0)).to_bits(),
+            speed_bits: self.speed().to_bits(),
         }
     }
 
@@ -1751,7 +1778,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetMinAtk
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1401
@@ -1759,13 +1786,12 @@ impl CMonster {
 // ADDRESS: 004e6620
 // PROTOTYPE: ulong __thiscall GetMinAtk(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше через `pet_scaled_attack` и `state_attack_bounds`.
 //
 
 // ============================================================================
 // FUNCTION: CMonster::GetMaxAtk
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1433
@@ -1773,8 +1799,7 @@ impl CMonster {
 // ADDRESS: 004e66c0
 // PROTOTYPE: ulong __thiscall GetMaxAtk(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше через `pet_scaled_attack` и `state_attack_bounds`.
 //
 
 // ============================================================================
@@ -1933,7 +1958,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetAtcInterval
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1581
@@ -1941,8 +1966,7 @@ impl CMonster {
 // ADDRESS: 004e69f0
 // PROTOTYPE: ushort __thiscall GetAtcInterval(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `attack_interval`.
 //
 
 // ============================================================================
@@ -2147,7 +2171,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetSpeed
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1591
@@ -2155,8 +2179,7 @@ impl CMonster {
 // ADDRESS: 004e79b0
 // PROTOTYPE: float __thiscall GetSpeed(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `speed`.
 //
 
 // ============================================================================
