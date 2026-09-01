@@ -114,6 +114,9 @@
 //! Durability gate в `MountAllEquip` ограничивает только Flash/TaoZhuang scan:
 //! последующие `MountEquip/MountCiQingEquip` применяют addon-ы всех занятых
 //! слотов, включая предметы с нулевой прочностью.
+//! `MountCiQingEquip` cases `0x80..0x84` отдельно мутируют persisted
+//! `m_BaseProperty +0x12C..+0x13C`: два signed pass-а сохраняют wrapping
+//! сложение и нулевой clamp отрицательного результата до общего пересчёта.
 //! Periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
@@ -339,20 +342,23 @@ use super::goods::cgoodsbaseproperties::{
     GAP_BF_SPRITUALISM, GAP_BF_SPRITUALISM_BASE, GAP_BF_SPRITUALISM_POTENTIAL,
     GAP_BF_STRENGH, GAP_BF_STRENGH_ADDON, GAP_BF_STRENGH_BASE, GAP_BF_STRENGH_POTENTIAL,
     GAP_BF_WEAPON_LEVEL, GAP_BLAST_ATTACK, GAP_BLAST_ELEMENT_ATTACK,
-    GAP_BURDEN_UPPER_LIMIT_CORRECTION, GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
+    GAP_BREAK_ARMOUR, GAP_BREAK_BOUND, GAP_BREAK_ELEMENT, GAP_BURDEN_UPPER_LIMIT_CORRECTION,
+    GAP_CIQING_PROPERTY1, GAP_CIQING_PROPERTY2,
     GAP_CONSTITUTION_CORRECTION, GAP_DODGE_CORRECTION, GAP_ELEMENT_ATTACK_CORRECTION,
     GAP_ELEMENT_AVOID, GAP_ELEMENT_RESISTANCE_CORRECTION, GAP_FATAL_BLOW_RATE_CORRECTION,
     GAP_EXCEPTION_STATE, GAP_FULL_MISS, GAP_FUMO_PROPERTY, GAP_GEM_LEVEL, GAP_GOODS_BIND,
     GAP_FAIRY_AGILITY, GAP_FAIRY_HP, GAP_FAIRY_STRENGTH, GAP_FAIRY_WAKAN,
     GAP_GOODS_EQUIMENT_FLASH, GAP_GOODS_LIFE_TYPE, GAP_GOODS_MAXIMUM_DURABILITY,
     GAP_GOODS_PACKAGE_EXTENTION,
-    GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION, GAP_HP_UPPER_LIMIT_CORRECTION,
+    GAP_GOLD_POWER, GAP_HIT_RATE_CORRECTION, GAP_HP_RESTORE_SPEED_CORRECTION,
+    GAP_HP_UPPER_LIMIT_CORRECTION,
     GAP_MAXIMUM_ATTACK_CORRECTION, GAP_MINIMUM_ATTACK_CORRECTION, GAP_MOUNT_LEVEL, GAP_MOUNT_TYPE,
     GAP_MP_RESTORE_SPEED_CORRECTION, GAP_MP_UPPER_LIMIT_CORRECTION, GAP_PARTICULAR_ATTRIBUTE,
     GAP_REQUIRE_GENDER, GAP_REQUIRE_OCCUPATION, GAP_ROLE_MINIMUM_AGILITY_LIMIT,
     GAP_ROLE_MINIMUM_CONSTITUTION_LIMIT, GAP_ROLE_MINIMUM_LEVEL_LIMIT,
     GAP_ROLE_MINIMUM_STRENGTH_LIMIT, GAP_ROLE_MINIMUM_WAKAN_LIMIT,
-    GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION, GAP_WAKAN_CORRECTION,
+    GAP_PUNCTURE, GAP_STIFFEN_PROBABILITY_CORRECTION, GAP_STRENGTH_CORRECTION,
+    GAP_WAKAN_CORRECTION,
     GAP_WEAPON_CATEGORY, GAP_WEAPON_LEVEL, GOODS_TYPE_CONSUMABLE, GOODS_TYPE_EQUIPMENT,
 };
 use super::goods::cgoodsfactory::CGoodsFactory;
@@ -444,6 +450,11 @@ const BASE_QUEST_ENABLED_OFFSET: usize = 0x110;
 const BASE_EXPLOIT_OFFSET: usize = 0x114;
 const BASE_FAIRY_CONTAINER_ENABLED_OFFSET: usize = 0x11c;
 const BASE_BATTLE_FAIRY_ENABLED_OFFSET: usize = 0x128;
+const BASE_BREAK_ARMOUR_OFFSET: usize = 0x12c;
+const BASE_PUNCTURE_OFFSET: usize = 0x130;
+const BASE_BREAK_ELEMENT_OFFSET: usize = 0x134;
+const BASE_BREAK_BOUND_OFFSET: usize = 0x138;
+const BASE_POWER_OF_GOLD_OFFSET: usize = 0x13c;
 const BASE_DAYS_HONOR_OFFSET: usize = 0x140;
 const BASE_WEEKS_HONOR_OFFSET: usize = 0x144;
 const BASE_MONTHS_HONOR_OFFSET: usize = 0x148;
@@ -1173,6 +1184,11 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) charged: bool,
     pub(crate) fairy_container_enabled: bool,
     pub(crate) battle_fairy_enabled: bool,
+    pub(crate) break_armour: u32,
+    pub(crate) puncture: u32,
+    pub(crate) break_element: u32,
+    pub(crate) break_bound: u32,
+    pub(crate) power_of_gold: u32,
     pub(crate) hotkeys: [u32; 24],
     pub(crate) mode: u32,
     pub(crate) display_head_piece: bool,
@@ -3044,6 +3060,11 @@ impl CPlayer {
                 self.base_properties.quest_time_limit as u32,
             ),
             (BASE_EXPLOIT_OFFSET, self.base_properties.exploit),
+            (BASE_BREAK_ARMOUR_OFFSET, self.base_properties.break_armour),
+            (BASE_PUNCTURE_OFFSET, self.base_properties.puncture),
+            (BASE_BREAK_ELEMENT_OFFSET, self.base_properties.break_element),
+            (BASE_BREAK_BOUND_OFFSET, self.base_properties.break_bound),
+            (BASE_POWER_OF_GOLD_OFFSET, self.base_properties.power_of_gold),
             (
                 BASE_DAYS_HONOR_OFFSET,
                 self.base_properties.days_honor_eliminate,
@@ -3192,6 +3213,11 @@ impl CPlayer {
         self.base_properties.fairy_container_enabled =
             wire[BASE_FAIRY_CONTAINER_ENABLED_OFFSET] != 0;
         self.base_properties.battle_fairy_enabled = wire[BASE_BATTLE_FAIRY_ENABLED_OFFSET] != 0;
+        self.base_properties.break_armour = read_player_wire_u32(wire, BASE_BREAK_ARMOUR_OFFSET);
+        self.base_properties.puncture = read_player_wire_u32(wire, BASE_PUNCTURE_OFFSET);
+        self.base_properties.break_element = read_player_wire_u32(wire, BASE_BREAK_ELEMENT_OFFSET);
+        self.base_properties.break_bound = read_player_wire_u32(wire, BASE_BREAK_BOUND_OFFSET);
+        self.base_properties.power_of_gold = read_player_wire_u32(wire, BASE_POWER_OF_GOLD_OFFSET);
         self.base_properties.days_honor_eliminate =
             read_player_wire_u32(wire, BASE_DAYS_HONOR_OFFSET);
         self.base_properties.weeks_honor_eliminate =
@@ -4999,6 +5025,62 @@ impl CPlayer {
             goods_factory,
             true,
         )
+    }
+
+    /// Базовые cases `0x80..0x84` исходного `MountCiQingEquip`. Они не входят
+    /// в combat snapshot: owner меняет сохранённый `tagBaseProperty` в порядке
+    /// восьми ячеек, сперва для неотрицательных, затем для отрицательных
+    /// addon-ов каждого предмета. Durability здесь намеренно не проверяется.
+    pub(crate) fn apply_ci_qing_base_properties(&mut self, factory: &CGoodsFactory) {
+        fn add_property(target: &mut u32, delta: i32) {
+            let next = target.wrapping_add(delta as u32);
+            *target = if delta < 0 && (next as i32) < 0 {
+                0
+            } else {
+                next
+            };
+        }
+
+        for position in 0..self.ci_qing.size() {
+            let additions = {
+                let Some(goods) = self.ci_qing.get_goods(position) else {
+                    continue;
+                };
+                goods
+                    .enabled_addon_properties(factory)
+                    .into_iter()
+                    .map(|property_type| {
+                        (
+                            property_type,
+                            goods.addon_property_value(factory, property_type, 1),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for positive_pass in [true, false] {
+                for &(property_type, delta) in &additions {
+                    if (delta >= 0) != positive_pass {
+                        continue;
+                    }
+                    match property_type {
+                        GAP_BREAK_ARMOUR => {
+                            add_property(&mut self.base_properties.break_armour, delta)
+                        }
+                        GAP_PUNCTURE => add_property(&mut self.base_properties.puncture, delta),
+                        GAP_BREAK_ELEMENT => {
+                            add_property(&mut self.base_properties.break_element, delta)
+                        }
+                        GAP_BREAK_BOUND => {
+                            add_property(&mut self.base_properties.break_bound, delta)
+                        }
+                        GAP_GOLD_POWER => {
+                            add_property(&mut self.base_properties.power_of_gold, delta)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     /// Первый снимок `MountAllEquip`: обычная экипировка уже применена, а

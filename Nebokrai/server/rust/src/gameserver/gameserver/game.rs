@@ -570,6 +570,7 @@ macro_rules! player_property_recompute {
         let goods_factory = $game.goods_factory.clone();
         move |player: &mut CPlayer| {
             player.refresh_battle_fairy_equipment_properties(&goods_factory);
+            player.apply_ci_qing_base_properties(&goods_factory);
             let properties = player.recompute_base_and_equipment_properties(
                 coefficients,
                 base_combat_scales,
@@ -6027,6 +6028,7 @@ impl CGame {
         let goods_factory = self.goods_factory.clone();
         let player = self.players.get_mut(&player_id)?;
         player.refresh_battle_fairy_equipment_properties(&goods_factory);
+        player.apply_ci_qing_base_properties(&goods_factory);
         let properties = player.recompute_base_and_equipment_properties(
             coefficients,
             base_combat_scales,
@@ -24420,6 +24422,7 @@ impl CGame {
                 .find_player_mut(player_id)
                 .expect("CiQing refresh получает canonical player");
             player.refresh_battle_fairy_equipment_properties(&goods_factory);
+            player.apply_ci_qing_base_properties(&goods_factory);
             let previous = player.recompute_without_ci_qing_properties(
                 coefficients,
                 base_combat_scales,
