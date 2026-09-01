@@ -7,7 +7,6 @@
 //! два вызова генератора MSVCRT: диапазон урона, затем критический удар.
 
 use super::thunderblow::THUNDER_BLOW_SKILL_ID;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -102,12 +101,8 @@ pub(crate) fn calculate_owned_thunder_blow_attack(
     let mut combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
-        goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)
-    });
     let (divisor, floor) = game.globe_setup().weapon_damage_factors();
-    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let damage_factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(floor) };
+    let damage_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, floor);
     let width_delta = phalanx.maximum_attack.wrapping_sub(phalanx.minimum_attack);
     let width = if width_delta < 0 { width_delta.wrapping_neg() } else { width_delta }.wrapping_add(1);
     let damage = phalanx.element_modifier

@@ -10,7 +10,6 @@
 //! Критический float-множитель усекается к нулю перед записью `int`.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{
@@ -129,22 +128,23 @@ pub(crate) fn calculate_owned_archery_attack(
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
-        goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)
-    });
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let weapon_damage_factors = game.globe_setup().weapon_damage_factors();
+    let (weapon_divisor, weapon_minimum) = game.globe_setup().weapon_damage_factors();
+    let damage_factor = player.weapon_modifier(
+        game.goods_factory(),
+        i32::from(target_level),
+        weapon_divisor,
+        weapon_minimum,
+    );
     let critical_rate = game.globe_setup().critical_rate();
     let combat_scales = game.globe_setup().base_combat_scales();
     calculate_archery_attack(
         phalanx,
-        target_level,
         combat,
         occupation,
         attacker_level,
-        weapon_level,
+        damage_factor,
         hit_modifier,
-        weapon_damage_factors,
         critical_rate,
         combat_scales,
         |maximum| game.skill_random_below(maximum),
@@ -154,13 +154,11 @@ pub(crate) fn calculate_owned_archery_attack(
 #[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной формулы")]
 pub(crate) fn calculate_archery_attack(
     phalanx: &CArcheryPhalanx,
-    target_level: u8,
     mut combat: PlayerCombatProperties,
     occupation: u8,
     attacker_level: u8,
-    weapon_level: i32,
+    damage_factor: f32,
     hit_modifier: i32,
-    weapon_damage_factors: (f32, f32),
     critical_rate: f32,
     combat_scales: [f32; 5],
     mut random_below: impl FnMut(i32) -> i32,
@@ -169,14 +167,6 @@ pub(crate) fn calculate_archery_attack(
     if master.master_type != 400 || master.master_id == 0 {
         return None;
     }
-    let (weapon_divisor, weapon_minimum) = weapon_damage_factors;
-    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let mut damage_factor = if weapon_divisor == 0.0 {
-        1.0
-    } else {
-        delta as f32 / weapon_divisor
-    };
-    damage_factor = damage_factor.min(1.0).max(weapon_minimum);
     let minimum = combat.minimum_attack as i32;
     let maximum = combat.maximum_attack as i32;
     let width_delta = maximum.wrapping_sub(minimum);

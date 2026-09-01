@@ -11,7 +11,6 @@
 //! Критический float-множитель усекается к нулю перед записью `int`.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{
     CShape, SHAPE_CHANGE_DELETE, ShapeIdentity,
@@ -162,20 +161,21 @@ pub(crate) fn calculate_owned_base_magic_attack(
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| {
-        goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1)
-    });
-    let weapon_damage_factors = game.globe_setup().weapon_damage_factors();
+    let (weapon_divisor, weapon_minimum) = game.globe_setup().weapon_damage_factors();
+    let damage_factor = player.weapon_modifier(
+        game.goods_factory(),
+        i32::from(target_level),
+        weapon_divisor,
+        weapon_minimum,
+    );
     let critical_rate = game.globe_setup().critical_rate();
     let combat_scales = game.globe_setup().base_combat_scales();
     calculate_base_magic_attack(
         phalanx,
-        target_level,
         combat,
         occupation,
         attacker_level,
-        weapon_level,
-        weapon_damage_factors,
+        damage_factor,
         critical_rate,
         combat_scales,
         |maximum| game.skill_random_below(maximum),
@@ -185,12 +185,10 @@ pub(crate) fn calculate_owned_base_magic_attack(
 #[allow(clippy::too_many_arguments, reason = "параметры сохраняют входы исходной формулы")]
 pub(crate) fn calculate_base_magic_attack(
     phalanx: &CBaseMagicPhalanx,
-    target_level: u8,
     mut combat: PlayerCombatProperties,
     occupation: u8,
     attacker_level: u8,
-    weapon_level: i32,
-    weapon_damage_factors: (f32, f32),
+    damage_factor: f32,
     critical_rate: f32,
     combat_scales: [f32; 5],
     mut random_below: impl FnMut(i32) -> i32,
@@ -199,14 +197,6 @@ pub(crate) fn calculate_base_magic_attack(
     if master.master_type != 400 || master.master_id == 0 {
         return None;
     }
-    let (weapon_divisor, weapon_minimum) = weapon_damage_factors;
-    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let mut damage_factor = if weapon_divisor == 0.0 {
-        1.0
-    } else {
-        delta as f32 / weapon_divisor
-    };
-    damage_factor = damage_factor.min(1.0).max(weapon_minimum);
     let width_delta = phalanx
         .maximum_attack()
         .wrapping_sub(phalanx.minimum_attack());
