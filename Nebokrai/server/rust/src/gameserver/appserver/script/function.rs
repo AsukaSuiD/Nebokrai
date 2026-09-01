@@ -45,9 +45,10 @@
 //! участника берутся из того же авторитетного World `0x7FE06`.
 //! Достигнутые GodsBattle scripts связывают `5413 / GetAreaID` с настоящим
 //! login-server ID, `11124/11128` — с persisted player SZL и уже существующим
-//! `CGame::UpdateSZL` effect-проходом, а точный case `11130` — с NPC-contend
-//! текущего GodsBattle-региона игрока. Последний принимает неотрицательные
-//! секунды, сохраняет 32-битное умножение на `1000` и проходит до region AI.
+//! `CGame::UpdateSZL` effect-проходом, `11129` — с single-requester top-ten
+//! World round-trip, а точный case `11130` — с NPC-contend текущего
+//! GodsBattle-региона игрока. Последний принимает неотрицательные секунды,
+//! сохраняет 32-битное умножение на `1000` и проходит до region AI.
 //! `2570 / AddIncrementLog` проводит item-script audit в существующий World
 //! `0x6020D` owner: limits, defaults, byte-narrowed type и conditional
 //! item-tail сохраняются до DB FIFO/live publication; tail вычисляется только
@@ -780,6 +781,7 @@ pub(crate) const SCRIPT_FUNCTION_IS_REGIONAL_PROTECTED: i32 = 9303;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER_SZL: i32 = 11128;
+pub(crate) const SCRIPT_FUNCTION_GET_GODS_BATTLE_TOP_TEN: i32 = 11129;
 pub(crate) const SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND: i32 = 11130;
 pub(crate) const SCRIPT_FUNCTION_DECLARE_COUNTRY_WAR: i32 = 9100;
 pub(crate) const SCRIPT_FUNCTION_IS_COUNTRY_WAR_DECLARE: i32 = 9101;
@@ -1198,6 +1200,7 @@ enum GodsBattleScriptKind {
     AreaId,
     PlayerSzl,
     ChangePlayerSzl,
+    TopTen,
     EnterContend,
 }
 
@@ -1212,6 +1215,9 @@ enum GodsBattleScriptDisposition {
         player_id: Option<i32>,
         requested: i32,
         update: Option<()>,
+    },
+    TopTenRequested {
+        player_id: Option<i32>,
     },
     ContendArgumentRejected {
         seconds: Option<i32>,
@@ -1247,6 +1253,7 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
         SCRIPT_FUNCTION_GET_AREA_ID => GodsBattleScriptKind::AreaId,
         SCRIPT_FUNCTION_GET_PLAYER_SZL => GodsBattleScriptKind::PlayerSzl,
         SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => GodsBattleScriptKind::ChangePlayerSzl,
+        SCRIPT_FUNCTION_GET_GODS_BATTLE_TOP_TEN => GodsBattleScriptKind::TopTen,
         SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND => GodsBattleScriptKind::EnterContend,
         _ => return GodsBattleScriptFunctionOutcome::DifferentFunction,
     };
@@ -1292,6 +1299,17 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
                     requested,
                     update,
                 },
+            )
+        }
+        GodsBattleScriptKind::TopTen => {
+            let player_id = script_player_id
+                .filter(|player_id| game.find_player(*player_id).is_some());
+            if let Some(player_id) = player_id {
+                game.request_gods_battle_top_ten(player_id);
+            }
+            handled(
+                0,
+                GodsBattleScriptDisposition::TopTenRequested { player_id },
             )
         }
         GodsBattleScriptKind::EnterContend => {
@@ -3679,6 +3697,7 @@ pub(crate) fn script_function_parameter_kind(
             0 => Integer,
             _ => Unused,
         },
+        SCRIPT_FUNCTION_GET_GODS_BATTLE_TOP_TEN => Unused,
         SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND => match index {
             0 => Integer,
             _ => Unused,
