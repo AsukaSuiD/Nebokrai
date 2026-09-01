@@ -47,8 +47,8 @@
 //! SZL и contribution из canonical storage. Пересчёт и
 //! `0xBF721` остаются у вызывающего `CGame`.
 //! Total honor-rank startup материализует days/weeks/months counters и
-//! nobility rank: reset меняет owned state, а пока RAW `PlayerRunScript`
-//! выражен точным typed AdjustHonorRank script-effect-ом.
+//! nobility rank: reset меняет owned state и возвращает точный признак
+//! `AdjustHonorRank`, который `CGame` связывает с общим script scheduler.
 //! Silence-timeout, как и оригинал, проверяется лениво при query по
 //! инъецируемому wrapping `timeGetTime`-значению; reached `OnExit` отдельно
 //! сохраняет исходные один либо три clock-read и пересчитывает остаток перед
@@ -3862,9 +3862,9 @@ impl CPlayer {
         );
     }
 
-    /// Сбрасывает подтверждённые счётчики чести; путь корректировки ранга в
-    /// достигнутом caller-графе был только диагностикой и не запускал сценарий.
-    pub(crate) fn reset_total_honor_eliminate(&mut self, reset_mask: u32) {
+    /// Сбрасывает подтверждённые счётчики чести и возвращает exact условие
+    /// `AdjustHonorRank`: ненулевой nobility rank требует запуска сценария.
+    pub(crate) fn reset_total_honor_eliminate(&mut self, reset_mask: u32) -> bool {
         let player_id = self.player_id();
         let previous_days = self.base_properties.days_honor_eliminate;
         let previous_weeks = self.base_properties.weeks_honor_eliminate;
@@ -3886,6 +3886,7 @@ impl CPlayer {
             adjust_honor_rank,
             "счётчики чести игрока сброшены"
         );
+        adjust_honor_rank
     }
 
     pub(crate) const fn server_region_id(&self) -> Option<i32> {
@@ -17177,34 +17178,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x00058390
 // ADDRESS: 00458390
 // PROTOTYPE: void __thiscall IncreaseContinuousKill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::PlayerRunScript
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11397
-// RVA: 0x000584E0
-// ADDRESS: 004584e0
-// PROTOTYPE: long __thiscall PlayerRunScript(char * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AdjustHonorRank
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15201
-// RVA: 0x000585B0
-// ADDRESS: 004585b0
-// PROTOTYPE: bool __thiscall AdjustHonorRank(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

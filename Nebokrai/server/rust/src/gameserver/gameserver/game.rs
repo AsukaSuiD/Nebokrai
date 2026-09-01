@@ -177,8 +177,8 @@
 //! Leiting/GodsBattle `0x36/0x39` проходят общий world-event FIFO pass с
 //! dynamic/internal/final logs и typed file-audit effects в исходном порядке.
 //! Honor configuration/ranks `0x26..0x2A` проходят полный FIFO pass; total
-//! snapshot сбрасывает counters canonical player map и возвращает точные
-//! AdjustHonorRank script-effects для внешнего script runtime.
+//! snapshot сбрасывает counters canonical player map и ставит точные
+//! AdjustHonorRank script-effects в общий scheduler.
 //! Function/variable/general/script-file resources `0x0A..0x0D` публикуются из
 //! живого FIFO с duplicate-owner семантикой; function map и variable snapshot
 //! декодируются concrete owner-ами `CGame`, а general cursor остаётся внешне
@@ -31375,10 +31375,32 @@ impl CGame {
         self.players.keys().copied().collect()
     }
 
-    pub(crate) fn reset_total_honor_eliminate(&mut self, reset_mask: u32) {
-        for player in self.players.values_mut() {
-            player.reset_total_honor_eliminate(reset_mask);
+    pub(crate) fn reset_total_honor_eliminate(&mut self, reset_mask: u32) -> usize {
+        let player_ids = self.ordered_player_ids();
+        let mut queued_scripts = 0usize;
+        for player_id in player_ids {
+            let adjust_honor_rank = self
+                .players
+                .get_mut(&player_id)
+                .is_some_and(|player| player.reset_total_honor_eliminate(reset_mask));
+            let script_id = adjust_honor_rank
+                .then(|| {
+                    self.queue_player_script(
+                        player_id,
+                        b"scripts/circle/honorrank/adjusthonorrank.script",
+                    )
+                })
+                .flatten();
+            queued_scripts += usize::from(script_id.is_some());
+            tracing::trace!(
+                player_id,
+                reset_mask,
+                adjust_honor_rank,
+                ?script_id,
+                "сброс чести игрока связан с корректировкой ранга"
+            );
         }
+        queued_scripts
     }
 
     pub(crate) fn register_team_session(&mut self, team_id: u32, session_id: i32) -> Option<i32> {

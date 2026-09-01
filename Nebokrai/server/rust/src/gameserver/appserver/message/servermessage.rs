@@ -1679,7 +1679,12 @@ fn decode_honor_startup(
         }
     }
     if let Some(mask) = reset_mask {
-        game.reset_total_honor_eliminate(mask);
+        let queued_adjustments = game.reset_total_honor_eliminate(mask);
+        tracing::trace!(
+            mask,
+            queued_adjustments,
+            "корректировки ранга после сброса чести поставлены в очередь"
+        );
     }
     put_string_to_file("HonorRanksLog", log_text);
     tracing::trace!(rank_type, ?reset_mask, "рейтинг чести загружен");
