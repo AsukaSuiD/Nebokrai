@@ -8,9 +8,11 @@
 //! достигнутый владелец навыка не использует произвольный порядок хранилища
 //! сущностей. `OnIdle` ставит строгую очередь
 //! `ChangeSkill → Stand → SearchEnemy`, а завершённая атака сохраняет навык и
-//! снова ставит поиск. `OnChangeSkill` проверяет `CSkill::IsRestored` и только
-//! для ещё не восстановленного навыка дописывает полный `GetRestoreTime` в
-//! хвост FIFO.
+//! снова ставит поиск. PDB содержит единственное concrete-определение
+//! `CFixedPositionArcher::OnChangeSkill`; стационарные guard-классы не
+//! переопределяют его. Унаследованный метод проверяет `CSkill::IsRestored` и
+//! только для ещё не восстановленного навыка дописывает полный
+//! `GetRestoreTime` в хвост FIFO.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -47,6 +49,10 @@ pub(crate) const fn attack_completion_action(ai_type: u32) -> AiShapeAction {
     }
 }
 
+pub(crate) const fn inherits_fixed_archer_change_skill(ai_type: u32) -> bool {
+    matches!(ai_type, 5 | 8 | 11 | 13 | 17 | 100 | 101 | 103)
+}
+
 /// Ставит общую точную очередь стационарного `OnIdle`. Каждый исходный
 /// `AddAIEvent` получает отдельный замер часов.
 pub(crate) fn queue_stationary_guard_idle<Runtime: GameMainLoopRuntime>(
@@ -64,7 +70,8 @@ pub(crate) fn queue_stationary_guard_idle<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Выполняет производный хвост `OnChangeSkill` AI5 и наследующего его AI103.
+/// Выполняет унаследованный хвост `OnChangeSkill` стационарных лучников и
+/// guard-вариантов.
 /// `false` означает, что выбранный concrete skill не разрешился и общий owner
 /// обязан назначить default skill. Разрешённый выбор сохраняется; для ещё не
 /// восстановленного навыка полный `GetRestoreTime` дописывается в FIFO.
@@ -77,7 +84,7 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
     selected_skill_id: u16,
     runtime: &mut Runtime,
 ) -> bool {
-    if !matches!(property.ai, 5 | 103) {
+    if !inherits_fixed_archer_change_skill(property.ai) {
         return false;
     }
     let Some(skill) = property

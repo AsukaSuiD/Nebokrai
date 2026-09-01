@@ -130,7 +130,8 @@ use crate::gameserver::appserver::ai::cityguardwithsword::{
 use crate::gameserver::appserver::ai::cityguardwithbow::stationary_bow_target_ready;
 use crate::gameserver::appserver::ai::fixedpositionarcher::select_fixed_archer_enemy;
 use crate::gameserver::appserver::ai::fixedpositionarcher::{
-    queue_fixed_archer_skill_delay, queue_stationary_guard_idle,
+    inherits_fixed_archer_change_skill, queue_fixed_archer_skill_delay,
+    queue_stationary_guard_idle,
 };
 use crate::gameserver::appserver::ai::gladiator::select_gladiator_enemy;
 use crate::gameserver::appserver::ai::godsbattlemonster::select_gods_battle_enemy;
@@ -395,9 +396,10 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 /// Выполняет точный `CMonsterAI::OnChangeSkill` отдельным FIFO-тактом. После
 /// единственного weighted RNG выбранный concrete skill проверяется через
 /// `CSkill::IsRestored`; отсутствующий или ещё не восстановленный навык общего
-/// monster AI заменяется `GetDefaultAttackSkillID`. Производные AI5/AI103
-/// сохраняют существующий навык на cooldown и ставят полный restore delay в
-/// хвост FIFO. Boss-specific пороги остаются в своих selector-owner-ах.
+/// monster AI заменяется `GetDefaultAttackSkillID`. Стационарная guard-ветвь,
+/// наследующая `CFixedPositionArcher::OnChangeSkill`, сохраняет существующий
+/// навык на cooldown и ставит полный restore delay в хвост FIFO. Boss-specific
+/// пороги остаются в своих selector-owner-ах.
 pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
@@ -430,7 +432,7 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     let Some(selected_skill_id) = selected else {
         return false;
     };
-    if matches!(property.ai, 5 | 103) {
+    if inherits_fixed_archer_change_skill(property.ai) {
         if queue_fixed_archer_skill_delay(
             game,
             region,
