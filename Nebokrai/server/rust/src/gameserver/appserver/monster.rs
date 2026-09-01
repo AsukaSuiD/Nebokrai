@@ -547,8 +547,17 @@ impl CMonster {
         true
     }
 
+    /// Соответствует `dynamic_cast<CCarriage *>(GetAI())`: до назначения
+    /// player-master учитывается первичный AI24, после назначения — отдельный
+    /// auxiliary `CCarriage`, созданный для tamable-свойства с нулём попыток.
     pub(crate) fn is_carriage(&self, _property: &MonsterProperties) -> bool {
-        !self.tamed && self.ai_binding.is_some_and(MonsterAiBinding::has_carriage)
+        matches!(
+            self.active_ai(),
+            Some(
+                ActiveMonsterAi::Carriage
+                    | ActiveMonsterAi::Primary(MonsterAiKind::Carriage)
+            )
+        )
     }
 
     pub(crate) const fn active_ai(&self) -> Option<ActiveMonsterAi> {
