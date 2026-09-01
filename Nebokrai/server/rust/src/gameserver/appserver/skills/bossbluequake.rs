@@ -18,7 +18,7 @@ use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
 };
-use super::bossbluequakestate::{BossBlueQuakeState, send_boss_blue_quake_state_visual};
+use super::bossbluequakestate::BossBlueQuakeState;
 use super::flash::cell_views;
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
@@ -37,6 +37,7 @@ use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::states::state::send_owned_state_visual;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -610,34 +611,23 @@ pub(crate) fn replace_quake_state(
     region: &mut CServerRegion,
     identity: ShapeIdentity,
     state: BossBlueQuakeState,
-    mut now_milliseconds: impl FnMut() -> u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
-    let Some((tile_x, tile_y, previous)) = (if identity.object_type == PLAYER_TYPE {
+    let Some((shape, previous)) = (if identity.object_type == PLAYER_TYPE {
         game.find_player_mut(identity.id).and_then(|target| {
-            let tile_x = target.shape().get_tile_x().ok()?;
-            let tile_y = target.shape().get_tile_y().ok()?;
+            let shape = target.shape().clone();
             let previous = target.take_boss_blue_quake_state();
-            Some((tile_x, tile_y, previous))
+            Some((shape, previous))
         })
     } else {
         region.find_monster_by_id_mut(identity.id).and_then(|target| {
-            let tile_x = target.move_shape().shape().get_tile_x().ok()?;
-            let tile_y = target.move_shape().shape().get_tile_y().ok()?;
+            let shape = target.move_shape().shape().clone();
             let previous = target.move_shape_mut().take_boss_blue_quake_state();
-            Some((tile_x, tile_y, previous))
+            Some((shape, previous))
         })
     }) else { return };
     if let Some(previous) = previous {
-        send_boss_blue_quake_state_visual(
-            game,
-            region.id,
-            identity,
-            tile_x,
-            tile_y,
-            previous,
-            false,
-            || now_milliseconds(),
-        );
+        send_owned_state_visual(game, region, &shape, previous.skill_id(), false, 0, 0);
     }
     if identity.object_type == PLAYER_TYPE {
         if let Some(target) = game.find_player_mut(identity.id) {
@@ -660,15 +650,14 @@ pub(crate) fn replace_quake_state(
         target.move_shape_mut().set_moveable(false);
         target.move_shape_mut().set_fightable(false);
     }
-    send_boss_blue_quake_state_visual(
+    send_owned_state_visual(
         game,
-        region.id,
-        identity,
-        tile_x,
-        tile_y,
-        state,
+        region,
+        &shape,
+        state.skill_id(),
         true,
-        now_milliseconds,
+        state.client_time(now_milliseconds),
+        0,
     );
 }
 

@@ -13,7 +13,9 @@ use super::spiderweb::SPIDER_WEB_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    send_owned_state_visual, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -138,17 +140,13 @@ fn finish_monster_state(
         monster.move_shape_mut().set_fightable(true);
         Some((
             state,
-            monster.move_shape().shape().identity(),
-            monster.move_shape().shape().get_tile_x().ok()?,
-            monster.move_shape().shape().get_tile_y().ok()?,
+            monster.move_shape().shape().clone(),
         ))
     });
-    let Some((state, identity, tile_x, tile_y)) = finished else {
+    let Some((state, shape)) = finished else {
         return false;
     };
-    send_spider_web_state_visual(
-        game, region.id, identity, tile_x, tile_y, state, false, || now_ms,
-    );
+    send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
     true
 }
 

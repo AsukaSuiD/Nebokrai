@@ -13,7 +13,9 @@
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    send_owned_state_visual, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
@@ -71,12 +73,10 @@ pub(crate) fn replace_monster_seal_state(
     region: &mut CServerRegion,
     monster_id: i32,
     state: SealState,
-    now_ms: u32,
+    _now_ms: u32,
 ) -> bool {
     let installed = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let identity = monster.move_shape().shape().identity();
-        let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
-        let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
+        let shape = monster.move_shape().shape().clone();
         let previous = monster.move_shape_mut().replace_seal_state(state);
         if previous.is_some() {
             monster.move_shape_mut().set_moveable(true);
@@ -84,18 +84,22 @@ pub(crate) fn replace_monster_seal_state(
         }
         monster.move_shape_mut().set_moveable(false);
         monster.move_shape_mut().set_fightable(false);
-        Some((previous, identity, tile_x, tile_y))
+        Some((previous, shape))
     });
-    let Some((previous, identity, tile_x, tile_y)) = installed else {
+    let Some((previous, shape)) = installed else {
         return false;
     };
     if let Some(previous) = previous {
-        send_seal_state_visual(
-            game, region.id, identity, tile_x, tile_y, previous, false, || now_ms,
-        );
+        send_owned_state_visual(game, region, &shape, previous.skill_id(), false, 0, 0);
     }
-    send_seal_state_visual(
-        game, region.id, identity, tile_x, tile_y, state, true, game_tick_milliseconds,
+    send_owned_state_visual(
+        game,
+        region,
+        &shape,
+        state.skill_id(),
+        true,
+        state.client_time(game_tick_milliseconds),
+        0,
     );
     true
 }
@@ -112,15 +116,13 @@ pub(crate) fn expire_monster_seal_state(
         monster.move_shape_mut().set_fightable(true);
         Some((
             state,
-            monster.move_shape().shape().identity(),
-            monster.move_shape().shape().get_tile_x().ok()?,
-            monster.move_shape().shape().get_tile_y().ok()?,
+            monster.move_shape().shape().clone(),
         ))
     });
-    let Some((state, identity, tile_x, tile_y)) = finished else {
+    let Some((state, shape)) = finished else {
         return false;
     };
-    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, || now_ms);
+    send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
     true
 }
 
@@ -128,7 +130,7 @@ pub(crate) fn finish_monster_seal_state_on_defense(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
-    now_ms: u32,
+    _now_ms: u32,
 ) -> bool {
     let finished = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
         let state = monster.move_shape_mut().take_seal_state()?;
@@ -136,15 +138,13 @@ pub(crate) fn finish_monster_seal_state_on_defense(
         monster.move_shape_mut().set_fightable(true);
         Some((
             state,
-            monster.move_shape().shape().identity(),
-            monster.move_shape().shape().get_tile_x().ok()?,
-            monster.move_shape().shape().get_tile_y().ok()?,
+            monster.move_shape().shape().clone(),
         ))
     });
-    let Some((state, identity, tile_x, tile_y)) = finished else {
+    let Some((state, shape)) = finished else {
         return false;
     };
-    send_seal_state_visual(game, region.id, identity, tile_x, tile_y, state, false, || now_ms);
+    send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
     true
 }
 

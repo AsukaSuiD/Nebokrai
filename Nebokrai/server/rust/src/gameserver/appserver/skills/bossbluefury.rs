@@ -26,6 +26,7 @@ use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
+use crate::gameserver::appserver::states::state::send_owned_state_visual;
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
@@ -411,9 +412,6 @@ pub(crate) fn execute_owned_boss_blue_fury(
         let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
     }
 
-    let identity = source.identity();
-    let tile_x = source.get_tile_x().unwrap_or_default();
-    let tile_y = source.get_tile_y().unwrap_or_default();
     let state = BossBlueFuryState::new(
         now_ms,
         properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME),
@@ -429,17 +427,21 @@ pub(crate) fn execute_owned_boss_blue_fury(
         previous
     });
     if let Some(previous) = previous {
-        send_boss_blue_fury_state_visual(
-            game, region.id, identity, tile_x, tile_y, previous, false, now_ms,
-        );
+        send_owned_state_visual(game, region, &source, previous.skill_id(), false, 0, 0);
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.move_shape_mut().set_moveable(false);
         monster.move_shape_mut().set_fightable(false);
         monster.move_shape_mut().begin_boss_blue_fury_state(state);
     }
-    send_boss_blue_fury_state_visual(
-        game, region.id, identity, tile_x, tile_y, state, true, now_ms,
+    send_owned_state_visual(
+        game,
+        region,
+        &source,
+        state.skill_id(),
+        true,
+        state.client_time(|| now_ms),
+        0,
     );
 
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {

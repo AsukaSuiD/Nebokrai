@@ -27,13 +27,14 @@ use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::monsterattack::{owned_monster_attackable, resolve_owned_monster_attack_target};
 use super::skillbaseproperties::CSkillBaseProperties;
-use super::spiderwebstate::{SpiderWebState, send_spider_web_state_visual};
+use super::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::{
     approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::states::state::send_owned_state_visual;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::abort_skill;
@@ -159,7 +160,7 @@ fn install_state(
     region: &mut CServerRegion,
     target: ShapeIdentity,
     state: SpiderWebState,
-    mut now_milliseconds: impl FnMut() -> u32,
+    now_milliseconds: impl FnMut() -> u32,
 ) {
     let installed = match target.object_type {
         PLAYER_TYPE => game.find_player_mut(target.id).and_then(|player| {
@@ -172,9 +173,7 @@ fn install_state(
             player.set_skill_fightable(false);
             Some((
                 previous,
-                player.shape().identity(),
-                player.shape().get_tile_x().ok()?,
-                player.shape().get_tile_y().ok()?,
+                player.shape().clone(),
             ))
         }),
         MONSTER_TYPE => region.find_monster_by_id_mut(target.id).and_then(|monster| {
@@ -187,23 +186,25 @@ fn install_state(
             monster.move_shape_mut().set_fightable(false);
             Some((
                 previous,
-                monster.move_shape().shape().identity(),
-                monster.move_shape().shape().get_tile_x().ok()?,
-                monster.move_shape().shape().get_tile_y().ok()?,
+                monster.move_shape().shape().clone(),
             ))
         }),
         _ => None,
     };
-    let Some((previous, identity, tile_x, tile_y)) = installed else {
+    let Some((previous, shape)) = installed else {
         return;
     };
     if let Some(previous) = previous {
-        send_spider_web_state_visual(
-            game, region.id, identity, tile_x, tile_y, previous, false, || now_milliseconds(),
-        );
+        send_owned_state_visual(game, region, &shape, previous.skill_id(), false, 0, 0);
     }
-    send_spider_web_state_visual(
-        game, region.id, identity, tile_x, tile_y, state, true, now_milliseconds,
+    send_owned_state_visual(
+        game,
+        region,
+        &shape,
+        state.skill_id(),
+        true,
+        state.client_time(now_milliseconds),
+        0,
     );
 }
 

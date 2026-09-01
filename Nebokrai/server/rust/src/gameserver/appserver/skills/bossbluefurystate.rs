@@ -190,7 +190,9 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    send_owned_state_visual, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -318,26 +320,22 @@ pub(crate) fn expire_monster_boss_blue_fury_state(
     monster_id: i32,
     now_ms: u32,
 ) -> bool {
-    let Some((identity, tile_x, tile_y, state, tick)) = region
+    let Some((shape, state, tick)) = region
         .find_monster_by_id_mut(monster_id)
         .and_then(|monster| {
-            let identity = monster.move_shape().shape().identity();
-            let tile_x = monster.move_shape().shape().get_tile_x().unwrap_or_default();
-            let tile_y = monster.move_shape().shape().get_tile_y().unwrap_or_default();
+            let shape = monster.move_shape().shape().clone();
             let (state, tick) = monster.move_shape_mut().tick_boss_blue_fury_state(now_ms)?;
             if tick.release_control {
                 monster.move_shape_mut().set_moveable(true);
                 monster.move_shape_mut().set_fightable(true);
             }
-            Some((identity, tile_x, tile_y, state, tick))
+            Some((shape, state, tick))
         })
     else {
         return false;
     };
     if tick.expired {
-        send_boss_blue_fury_state_visual(
-            game, region.id, identity, tile_x, tile_y, state, false, now_ms,
-        );
+        send_owned_state_visual(game, region, &shape, state.skill_id(), false, 0, 0);
     }
     true
 }

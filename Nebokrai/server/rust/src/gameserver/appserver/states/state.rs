@@ -6,7 +6,36 @@
 //! функцию RVA `0x00201200`, возвращающую ноль. Конкретные state-классы могут
 //! переопределять каждый getter; поэтому здесь закреплены только базовые
 //! значения, а динамический remaining-time и additional-data остаются у
-//! конкретных владельцев. Остальной корпус сохранён ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! конкретных владельцев. Стандартные визуальные пакеты состояния отправляются
+//! через уже заимствованного владельца региона, чтобы owner-проход не зависел от
+//! повторного поиска временно вынутого региона. Остальной корпус сохранён ниже
+//! как `UNKNOWN` (исследовательский декомпилят хранится локально).
+
+use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::shape::CShape;
+use crate::gameserver::gameserver::game::CGame;
+use crate::nets::netserver::message::CMessage;
+
+pub(crate) fn send_owned_state_visual(
+    game: &CGame,
+    region: &CServerRegion,
+    shape: &CShape,
+    state_id: u32,
+    begin: bool,
+    client_time: i32,
+    additional_data: u32,
+) {
+    let identity = shape.identity();
+    let mut message = CMessage::new(if begin { 0x000b_fe03 } else { 0x000b_fe04 });
+    message.add_long(identity.object_type);
+    message.add_long(identity.id);
+    message.add_long(state_id as i32);
+    if begin {
+        message.add_long(client_time);
+        message.add_long(additional_data as i32);
+    }
+    let _ = game.send_game_shape_around(region, shape, None, &message);
+}
 
 /// Exact базовый `CState::GetClientStateTime` для классов без override-а.
 pub(crate) const fn default_client_state_time() -> i32 {
