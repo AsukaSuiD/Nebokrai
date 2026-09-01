@@ -8,6 +8,10 @@
 //! игрока; skill-specific состояние и движение остаются у конкретного owner-а.
 //! При `End(0)` обновление свойств и cooldown не выполняются: общий хвост
 //! только очищает текущий навык, а конкретный owner завершает свои флаги.
+//! Конструктор исходного класса менял лишь vtable и техническую категорию `3`;
+//! в Rust категория читается из `CSkillBaseProperties`, а общий lifecycle
+//! принадлежит `skills/kernel.rs` и `CPlayerAI`. Неизвестных частей в
+//! достигнутом хвосте нет.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -34,40 +38,3 @@ pub(crate) fn finish_summon_skill<Runtime, MarkUsed>(
     }
     mark_used(player_ai, runtime.now_milliseconds());
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\summonskill.h
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\summonskill.cpp
-
-// ============================================================================
-// FUNCTION: CSummonSkill::CSummonSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\summonskill.cpp:22
-// RVA: 0x001E0EC0
-// ADDRESS: 005e0ec0
-// PROTOTYPE: undefined __thiscall CSummonSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CSummonSkill::~CSummonSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\summonskill.cpp:30
-// RVA: 0x001E0F20
-// ADDRESS: 005e0f20
-// PROTOTYPE: void __thiscall ~CSummonSkill(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer
