@@ -13,9 +13,9 @@
 //! последовательной stack/cell simulation без изменения живого owner-а.
 //! Базовый expansion получает setup-policy явно и сохраняет
 //! exact release→resize→restore-owner order. Persisted codec и player
-//! packet expansion достигнуты общим GameSave owner-ом; listener messages,
-//! clone и auction-scale mutation ниже остаются RAW до замыкания
-//! соответствующих player/message/goods owners.
+//! packet expansion достигнуты общим GameSave owner-ом. Auction-scale mutation
+//! связана с `CPlayer::TellClientScale`; listener messages и clone ниже
+//! остаются RAW до замыкания соответствующих owners.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsCodecError,

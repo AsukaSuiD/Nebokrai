@@ -25,7 +25,9 @@ use crate::gameserver::appserver::cs2ccontainerobjectmove::{
 };
 use crate::gameserver::appserver::goods::cgoods::GoodsDecodeError;
 use crate::gameserver::appserver::message::unibillmessage::auction_billing_local_system_time;
-use crate::gameserver::appserver::player::AuctionSelfGoodsRefresh;
+use crate::gameserver::appserver::player::{
+    AuctionSelfGoodsRefresh, PlayerAuctionMoneyChangeOutcome,
+};
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, colored_player_notice_message, game_wall_time_seconds,
 };
@@ -296,16 +298,19 @@ where
                     .find_player(player_id)
                     .expect("auction return player проверен")
                     .auction_money();
+                let current = previous.wrapping_add(incoming_amount);
                 let created_currency = if previous == 0 {
-                    game.create_goods_batch(incoming_index, incoming_amount)
+                    game.create_goods_batch(incoming_index, current)
                 } else {
                     Vec::new()
                 };
                 let money_change = game
-                    .increase_player_auction_money(player_id, incoming_amount, created_currency)
+                    .set_player_auction_money(player_id, current, created_currency)
                     .expect("auction return player проверен перед wallet mutation");
                 match &money_change.outcome {
-                    CurrencyIncreaseOutcome::Created(added) => {
+                    PlayerAuctionMoneyChangeOutcome::Increased(
+                        CurrencyIncreaseOutcome::Created(added),
+                    ) => {
                         let stored = game
                             .find_player(player_id)
                             .and_then(|player| player.auction_money_goods())
@@ -326,7 +331,12 @@ where
                         move_message.set_object_stream(game.encode_goods_for_old_client(stored));
                         let _ = move_message.send_to_player(game, player_id);
                     }
-                    CurrencyIncreaseOutcome::Increased(change) => {
+                    PlayerAuctionMoneyChangeOutcome::Increased(
+                        CurrencyIncreaseOutcome::Increased(change),
+                    )
+                    | PlayerAuctionMoneyChangeOutcome::Decreased(
+                        CurrencyDecreaseOutcome::Decreased(change),
+                    ) => {
                         let mut amount = CS2CContainerObjectAmountChange::default();
                         amount.set_source_container(
                             change.owner_type,
@@ -338,10 +348,36 @@ where
                         amount.set_object_amount(change.new_amount);
                         let _ = amount.send_to_player(game, player_id);
                     }
-                    CurrencyIncreaseOutcome::NoChange
-                    | CurrencyIncreaseOutcome::InvalidStoredCurrency { .. }
-                    | CurrencyIncreaseOutcome::CapacityExceeded { .. }
-                    | CurrencyIncreaseOutcome::CreationFailed => {}
+                    PlayerAuctionMoneyChangeOutcome::Decreased(
+                        CurrencyDecreaseOutcome::Removed(removed),
+                    ) => {
+                        let identity = removed.goods.identity();
+                        let mut move_message = CS2CContainerObjectMove::default();
+                        move_message.set_operation(ContainerObjectMoveOperation::DeleteObject);
+                        move_message.set_source_container(
+                            removed.owner_type,
+                            removed.owner_id,
+                            removed.position,
+                        );
+                        move_message.set_source_container_extend_id(AUCTION_MONEY_EXTEND_ID);
+                        move_message.set_source_object(
+                            identity.object_type,
+                            identity.ex_id,
+                            removed.amount,
+                        );
+                        let _ = move_message.send_to_player(game, player_id);
+                    }
+                    PlayerAuctionMoneyChangeOutcome::Unchanged
+                    | PlayerAuctionMoneyChangeOutcome::Increased(
+                        CurrencyIncreaseOutcome::NoChange
+                        | CurrencyIncreaseOutcome::InvalidStoredCurrency { .. }
+                        | CurrencyIncreaseOutcome::CapacityExceeded { .. }
+                        | CurrencyIncreaseOutcome::CreationFailed,
+                    )
+                    | PlayerAuctionMoneyChangeOutcome::Decreased(
+                        CurrencyDecreaseOutcome::NoChange
+                        | CurrencyDecreaseOutcome::InvalidStoredCurrency { .. },
+                    ) => {}
                 }
                 let notice_delivery = colored_player_notice_message(
                     0xffff_ffff,

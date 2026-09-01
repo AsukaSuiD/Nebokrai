@@ -1663,7 +1663,14 @@ pub(crate) struct PlayerAuctionMoneyChange {
     pub(crate) player_id: i32,
     pub(crate) previous: u32,
     pub(crate) current: u32,
-    pub(crate) outcome: CurrencyIncreaseOutcome,
+    pub(crate) outcome: PlayerAuctionMoneyChangeOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerAuctionMoneyChangeOutcome {
+    Unchanged,
+    Increased(CurrencyIncreaseOutcome),
+    Decreased(CurrencyDecreaseOutcome),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10022,21 +10029,32 @@ impl CPlayer {
         self.auction_wallet.get_goods(0)
     }
 
-    /// State-часть exact `SetAuctionMoney`; caller создаёт недостающий MONEY
-    /// через общий factory и публикует extend-id 15.
-    pub(crate) fn increase_auction_money(
+    /// State-часть exact `SetAuctionMoney`; аргумент является новым абсолютным
+    /// балансом, а caller создаёт недостающий MONEY и публикует extend-id 15.
+    pub(crate) fn set_auction_money(
         &mut self,
-        requested: u32,
+        current: u32,
         factory: &CGoodsFactory,
         created_currency: Vec<CGoods>,
     ) -> PlayerAuctionMoneyChange {
         let previous = self.auction_wallet.currency_amount();
-        let mut created_currency = Some(created_currency);
-        let outcome = self
-            .auction_wallet
-            .increase_currency(requested, factory, move |_, _| {
-                created_currency.take().unwrap_or_default()
-            });
+        let outcome = if previous < current {
+            let mut created_currency = Some(created_currency);
+            PlayerAuctionMoneyChangeOutcome::Increased(
+                self.auction_wallet.increase_currency(
+                    current.wrapping_sub(previous),
+                    factory,
+                    move |_, _| created_currency.take().unwrap_or_default(),
+                ),
+            )
+        } else if current < previous {
+            PlayerAuctionMoneyChangeOutcome::Decreased(
+                self.auction_wallet
+                    .decrease_currency(previous.wrapping_sub(current), factory),
+            )
+        } else {
+            PlayerAuctionMoneyChangeOutcome::Unchanged
+        };
         PlayerAuctionMoneyChange {
             player_id: self.player_id(),
             previous,

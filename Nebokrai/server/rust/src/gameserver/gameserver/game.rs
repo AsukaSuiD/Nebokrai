@@ -33109,16 +33109,16 @@ impl CGame {
         }
     }
 
-    pub(crate) fn increase_player_auction_money(
+    pub(crate) fn set_player_auction_money(
         &mut self,
         player_id: i32,
-        requested: u32,
+        current: u32,
         created_currency: Vec<CGoods>,
     ) -> Option<PlayerAuctionMoneyChange> {
         let (players, goods_factory) = (&mut self.players, &self.goods_factory);
         players
             .get_mut(&player_id)
-            .map(|player| player.increase_auction_money(requested, goods_factory, created_currency))
+            .map(|player| player.set_auction_money(current, goods_factory, created_currency))
     }
 
     pub(crate) fn return_player_auction_goods(
