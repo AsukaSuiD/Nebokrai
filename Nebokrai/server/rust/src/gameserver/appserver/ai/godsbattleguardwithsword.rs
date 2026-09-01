@@ -1,7 +1,7 @@
 //! Выбор цели охранника битвы богов `CGBGuardWithSward`.
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
-//! подтверждает тип ИИ `23`: допустим игрок другой фракции либо преступник
+//! подтверждает тип ИИ `103`: допустим игрок другой фракции либо преступник
 //! своей фракции. Выбор сохраняет дальность охраны, минимальную дистанцию
 //! текущего навыка и исходный порядок подключённых игроков. Унаследованные от
 //! неподвижного лучника idle, задержка смены навыка, поиск и post-attack
@@ -19,7 +19,6 @@ use crate::gameserver::appserver::ai::fixedpositionarcher::{
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 
 /// Применяет фракционный фильтр охраны перед подтверждённым выбором цели.
@@ -70,12 +69,7 @@ pub(crate) fn select_gods_battle_guard_enemy(
             selected,
             FixedArcherTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
