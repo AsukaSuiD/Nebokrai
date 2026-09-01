@@ -37990,27 +37990,22 @@ impl CGame {
             let Some(goods) = player.equipment_mut().get_goods_mut(position) else {
                 return;
             };
-            let maximum = goods.addon_property_value(
-                factory,
-                crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY,
-                1,
-            );
             let old = goods.addon_property_value(
                 factory,
                 crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY,
                 2,
             );
-            if maximum <= 0 || old == 0 {
+            if old == 0 {
                 return;
             }
-            let current = old.wrapping_sub(fray);
-            if !goods.set_addon_property_value_first_core(
+            if !factory.equipment_waste(goods, fray) {
+                return;
+            }
+            let current = goods.addon_property_value(
+                factory,
                 crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY,
                 2,
-                current,
-            ) {
-                return;
-            }
+            );
             let mut payload = Vec::new();
             if !goods.serialize_for_old_client(
                 &mut payload,

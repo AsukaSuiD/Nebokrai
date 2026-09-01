@@ -1039,6 +1039,31 @@ impl CGoods {
         true
     }
 
+    /// Exact `SetAddonPropertyBaseValues`: меняет `base_value` первой пары,
+    /// не поглощая её modifier в записанное значение.
+    pub(crate) fn set_addon_property_base_value_first_core(
+        &mut self,
+        property_type: i32,
+        value_id: u32,
+        value: i32,
+    ) -> bool {
+        let Some(found) = self
+            .addon_properties
+            .iter_mut()
+            .find(|property| property.property_type == property_type)
+            .and_then(|property| {
+                property
+                    .values
+                    .iter_mut()
+                    .find(|candidate| candidate.id == value_id)
+            })
+        else {
+            return false;
+        };
+        found.base_value = value;
+        true
+    }
+
     /// Safe replacement pointer-а `lCurrentExp`: первый instance value
     /// возвращает именно modifier, не сумму base+modifier.
     pub(crate) fn instance_addon_modifier(&self, property_type: i32, value_id: u32) -> Option<i32> {

@@ -18,6 +18,8 @@
 //! сохраняется как RAW. Магазин NPC замыкает формулы ремонта и продажи с
 //! коэффициентами настройки; целочисленное отношение долговечности при продаже
 //! сохранено как наблюдаемая семантика x86.
+//! `EquipmentWaste` RVA `0x00063E50` сохраняет отдельные base/modifier:
+//! вычитает fray из итоговой прочности, но записывает результат в `base_value`.
 //! `ReCreateBattleFairyAttributes` сохраняет странный повтор полного набора
 //! бросков RNG по числу дополнений экземпляра; однопроходная оптимизация донора
 //! не переносится, потому что меняла итоговое состояние игрового RNG.
@@ -167,6 +169,22 @@ impl CGoodsFactory {
 
     pub(crate) fn repair_equipment(&self, goods: &mut CGoods) -> bool {
         goods.repair_durability(self)
+    }
+
+    /// Exact scalar `EquipmentWaste`: проверяет итоговый maximum, вычитает
+    /// fray из текущего итогового durability, но записывает результат именно
+    /// в instance `base_value`, сохраняя отдельный modifier.
+    pub(crate) fn equipment_waste(&self, goods: &mut CGoods, fray: i32) -> bool {
+        if goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 1) <= 0 {
+            return false;
+        }
+        let current = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 2);
+        let _ = goods.set_addon_property_base_value_first_core(
+            GAP_GOODS_MAXIMUM_DURABILITY,
+            2,
+            current.wrapping_sub(fray),
+        );
+        true
     }
 
     /// Exact `ReCreateBattleFairyAttributes`: исходный owner повторяет весь
