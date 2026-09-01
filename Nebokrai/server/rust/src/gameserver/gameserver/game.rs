@@ -38724,7 +38724,11 @@ impl CGame {
                 carriage_id.is_some_and(|carriage_id| carriage_id != 0 && carriage_id != monster_id)
             });
 
-        let mut vanish_reason = CMoveShape::is_died(health).then_some(3);
+        // `CCarriage::OnSchedule` проверяет virtual `CShape::GetState`
+        // (vtable slot `+0x74`), а не собственный follow/stay action: смерть
+        // удаляет повозку только вне боевого shape-state `1`.
+        let mut vanish_reason =
+            (CMoveShape::is_died(health) && carriage_shape.get_state() != 1).then_some(3);
         let mut vanish = vanish_reason.is_some();
         if !vanish {
             let movement = plan_carriage_movement(
@@ -38841,7 +38845,9 @@ impl CGame {
                 );
             }
             if master_owns {
-                if !CMoveShape::is_died(health) {
+                // `GS0007` находится только в timeout-ветке reason `4`;
+                // duplicate eviction `5` удаляет повозку без этого notice.
+                if vanish_reason == Some(4) {
                     let _ = colored_player_notice_message(
                         0xffff_ffff,
                         0,
