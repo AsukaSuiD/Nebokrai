@@ -8,8 +8,9 @@
 //! `SpiderPoisonState` цели. `CGame` разрешает независимых владельцев,
 //! применяет рассчитанную атаку и выполняет доставку.
 //! Клиентский `End(true)` во время удержания только выпускает стрелу; после
-//! выпуска он завершает `CAttackSkill::End(1)`. Внутреннее прерывание всегда
-//! использует `End(0)` без cooldown и не применяет отложенную атаку.
+//! выпуска он завершает `CAttackSkill::End(1)` с единичным оружейным
+//! `AfterUseSkill`. Внутреннее прерывание всегда использует `End(0)` без износа,
+//! cooldown и применения отложенной атаки.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
@@ -73,6 +74,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_heartless_arrow_used(now_ms));
 }
 

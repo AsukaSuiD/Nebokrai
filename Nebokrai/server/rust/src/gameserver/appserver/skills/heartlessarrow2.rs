@@ -7,8 +7,8 @@
 //! Вариант `0xE5` разблокирует движение перед повторной проверкой пути, тогда
 //! как `0xE6` делает это только в общем `End`; эта наблюдаемая разница не
 //! сглаживается. Общий `End` возвращает движение при любом исходе, но только
-//! `End(true)` обновляет свойства и фиксирует cooldown. `CGame` остаётся
-//! владельцем региона и доставки.
+//! `End(true)` один раз выполняет оружейный `AfterUseSkill`, обновляет свойства
+//! и фиксирует cooldown. `CGame` остаётся владельцем региона и доставки.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -162,6 +162,7 @@ fn finish_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
         return;
     };
     restore_player_movement(game, player_id);
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_heartless_arrow_area_used(id, now_ms);
     });
