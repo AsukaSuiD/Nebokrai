@@ -6,8 +6,9 @@
 //! `monsterprojectile`. Оба пути сохраняют повторный расчёт траектории перед
 //! выстрелом, первую преграду, время полёта и живой порядок целей клетки.
 //! Формулы, RNG и packet payload принадлежат skill-owner-ам; `CGame` только
-//! разрешает владельцев, применяет удар и выполняет доставку. Недостигнутый
-//! автоматический повтор сохранён ниже без выдуманной runtime-семантики.
+//! разрешает владельцев, применяет удар и выполняет доставку. Конструктор
+//! обнуляет `m_bAutoRestart`, `Begin` его не меняет, а виртуальный `Restart`
+//! наследует пустой `CState::Restart`, поэтому отдельного runtime-пути нет.
 
 use super::directprojectile::execute_player_direct_projectile;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -25,7 +26,3 @@ pub(crate) fn execute_player_skeleton_archery<Runtime: GameMainLoopRuntime>(
 ) -> QueuedSkillExecutionOutcome {
     execute_player_direct_projectile(game, player_id, dispatch, player_ai, runtime)
 }
-
-// Недостигнутая ветвь `CSkeletonArchery::AI` после удара:
-// При ненулевом m_bAutoRestart вызывается виртуальный метод со смещением
-// 0x20, затем функция завершается. Основание: локальный декомпилят; INFERRED.

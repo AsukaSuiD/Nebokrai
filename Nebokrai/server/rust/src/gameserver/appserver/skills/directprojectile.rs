@@ -4,6 +4,10 @@
 //! цикл: проверку лука или арбалета, задержку с запретом движения, повторный
 //! расчёт пути перед выстрелом, остановку на первой непролётной либо занятой
 //! клетке и удар по всем допустимым целям этой клетки в живом порядке региона.
+//! Cell-impact делает RTTI-переход `CShape -> CMoveShape`: для каждого игрока,
+//! NPC или монстра, кроме стрелка, сначала рассчитывается собственная атака и
+//! только затем вызывается `Defense`. Поэтому даже отклонённая защита сохраняет
+//! RNG-порядок; у NPC `GetHP == 0`, и `CFightDefense` завершает вызов без урона.
 //! Конкретные владельцы задают только идентификатор навыка. `CGame` разрешает
 //! владельцев, применяет рассчитанные удары и доставляет готовые пакеты.
 
@@ -29,6 +33,7 @@ const TARGET_MIN_DISTANCE: u32 = 5_004;
 const MISSILE_FLYING_TIME: u32 = 10_008;
 const BLOCK_UNFLY: u8 = 2;
 const BLOCK_SHAPE: u8 = 3;
+const NPC_TYPE: i32 = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerDirectProjectileExecutionState {
@@ -171,17 +176,18 @@ fn calculate_attack(game: &mut CGame, player_id: i32, skill_id: u32, level: i32,
 
 fn attack_impact<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, skill_id: u32, level: i32, hit_modifier: i32, impact: (i32, i32), runtime: &mut Runtime) {
     if impact == (0, 0) { return }
-    let Some(master) = game.find_player(player_id).map(master_info) else { return };
     for view in cell_views(game, region_id, impact.0, impact.1) {
         let target = view.identity;
         if (target.object_type == PLAYER_TYPE && target.id == player_id)
-            || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
-            || !game.owned_player_skill_target_attackable(master, target, region_id)
+            || !matches!(target.object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE)
         { continue }
         let Some((master, attack)) = calculate_attack(game, player_id, skill_id, level, hit_modifier) else { continue };
         match target.object_type {
             PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime),
             MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
+            // Точный `CNpc::GetHP == 0` завершает `CFightDefense::Defense`
+            // сразу после уже выполненного CalculateAttackPower.
+            NPC_TYPE => {}
             _ => {}
         }
     }
