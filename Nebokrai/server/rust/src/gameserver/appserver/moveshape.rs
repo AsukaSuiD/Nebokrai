@@ -711,6 +711,7 @@ pub(crate) enum PlayerPropertyState {
     Ride(RideState),
     RageBreak(RageBreakState),
     Fury(FuryState),
+    Wangsheng(WangshengState),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3719,6 +3720,11 @@ impl CMoveShape {
                         FuryState::skill_id,
                     )
                     .map(PlayerPropertyState::Fury)
+                })
+                .or_else(|| {
+                    self.wangsheng_state
+                        .filter(|state| state.state_id() == state_id)
+                        .map(PlayerPropertyState::Wangsheng)
                 });
             if let Some(state) = state {
                 ordered.push(state);

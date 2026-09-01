@@ -5724,14 +5724,17 @@ impl CPlayer {
                         state.apply_to_player_maximum_attack(properties.maximum_attack);
                     properties
                 }
+                State::Wangsheng(state) => {
+                    if let Some(health) =
+                        state.capped_health(self.health(), properties.maximum_hp)
+                    {
+                        self.base_properties.health = health;
+                    }
+                    properties
+                }
             };
         }
         let script_visuals = self.move_shape.take_pending_script_state_visuals();
-        if let Some(state) = self.move_shape.wangsheng_state()
-            && let Some(health) = state.capped_health(self.health(), properties.maximum_hp)
-        {
-            self.base_properties.health = health;
-        }
         PlayerStatePropertyPass {
             properties,
             callosity_visual,
