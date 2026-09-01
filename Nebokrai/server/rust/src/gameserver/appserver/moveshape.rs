@@ -812,6 +812,7 @@ impl CMoveShape {
             return None;
         }
         let total_count = declared_count
+            .checked_add(self.automatic_restore_states.len())?
             .checked_add(self.consumable_restore_states.len())?
             .checked_add(self.particular_states.len())?
             .checked_add(self.team_recruitment_states.len())?;
@@ -833,6 +834,11 @@ impl CMoveShape {
                 &mut timed_state_now_milliseconds,
             )?);
             writer.write_u32(self.client_state_additional_data(state_id as u32));
+        }
+        for state in &self.automatic_restore_states {
+            writer.write_u32(state.state_id());
+            writer.write_i32(state.client_state_time());
+            writer.write_u32(default_additional_data());
         }
         for index in 0..self.consumable_restore_states.len() {
             let (state_id, client_time) = self

@@ -6,9 +6,12 @@
 //! `CAutomaticRestoreMpStateFight`. Сохранены порядок `HP peace → HP fight →
 //! MP peace → MP fight`, строгое wrapping-сравнение таймера и второй вызов
 //! часов, которым фиксируется момент срабатывания. Объём восстановления
-//! читается из живого `PlayerCombatProperties`, как в исходных `AI`.
+//! читается из живого `PlayerCombatProperties`, как в исходных `AI`. Все
+//! четыре бессрочных состояния входят в полный клиентский снимок с базовым
+//! нулевым client-time.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
+use crate::gameserver::appserver::states::state::default_client_state_time;
 
 pub(crate) const AUTOMATIC_RESTORE_HP_PEACE_STATE_ID: u32 = 0x186a2;
 pub(crate) const AUTOMATIC_RESTORE_MP_PEACE_STATE_ID: u32 = 0x186a3;
@@ -61,6 +64,10 @@ impl AutomaticRestoreState {
             AutomaticRestoreKind::ManaPeace => AUTOMATIC_RESTORE_MP_PEACE_STATE_ID,
             AutomaticRestoreKind::ManaFight => AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID,
         }
+    }
+
+    pub(crate) const fn client_state_time(self) -> i32 {
+        default_client_state_time()
     }
 
     pub(crate) const fn should_check(
