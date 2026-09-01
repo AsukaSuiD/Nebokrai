@@ -5,9 +5,10 @@
 //! навык атакует все допустимые фигуры лицевой клетки в порядке регионального
 //! индекса. На каждую цель сохраняются два RNG-вызова формулы, затем отдельный
 //! бросок оглушения, проверка уровня и `Cure`, replacement состояния `0x192`
-//! и отбрасывание. `CGame` оставляет только межвладельческую доставку, защиту,
-//! износ оружия и пространственное применение уже рассчитанного результата.
-//! Завершение использует подтверждённый общий хвост `CSummonSkill::End(1)`.
+//! и отбрасывание. `CGame` оставляет только межвладельческую доставку, защиту
+//! и пространственное применение уже рассчитанного результата. `Attack` и
+//! `AI` не изнашивают оружие на отдельных целях: унаследованный
+//! `AfterUseSkill` делает это один раз через подтверждённый общий `End(1)`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -46,6 +47,7 @@ fn finish_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_mosou_used(now_ms);
     });
@@ -284,7 +286,6 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
             MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
             _ => continue,
         }
-        game.damage_player_weapon(player_id, runtime);
         let Some((target_level, attack_avoid)) = target_level_avoid(game, region_id, target) else { continue };
         if game.skill_random_below(100) >= probability.wrapping_sub(i32::from(attack_avoid))
             || target_level > source_level || target_dead(game, region_id, target)
