@@ -509,8 +509,10 @@ impl CMonster {
         self.tamed = tamed;
     }
 
+    /// Точный `CMonster::DoesCreatureBeenTamed` (RVA `0x000E6460`): одного
+    /// внутреннего знака недостаточно, требуется живой identity хозяина-игрока.
     pub(crate) const fn is_tamed(&self) -> bool {
-        self.tamed
+        self.has_player_pet_master()
     }
 
     pub(crate) const fn is_tamable(&self, property: &MonsterProperties) -> bool {
@@ -531,9 +533,7 @@ impl CMonster {
     ) -> bool {
         if property.tamable != 1
             || self.tame_attempt_count >= property.maximum_tame_attempt_count
-            || (self.tamed
-                && self.master_info.master_type == 400
-                && self.master_info.master_id != 0)
+            || self.is_tamed()
         {
             return false;
         }
@@ -1043,7 +1043,7 @@ impl CMonster {
         property.stop_frame
     }
 
-    fn has_player_pet_master(&self) -> bool {
+    const fn has_player_pet_master(&self) -> bool {
         self.tamed && self.master_info.master_type == 400 && self.master_info.master_id != 0
     }
 
