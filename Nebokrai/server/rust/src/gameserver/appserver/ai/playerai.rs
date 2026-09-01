@@ -53,7 +53,10 @@
 //! Общий passive-проход теперь также предшествует movement/skill/destination:
 //! `Defense` занимает отдельный такт, `Stiffen` прерывает materialized skill и
 //! удерживает расписание до deadline, не останавливая собственный auto-inc
-//! хвост `CPlayerAI::Run`.
+//! хвост `CPlayerAI::Run`. Достигнутые reciprocal/death `OnLoseTarget` всегда
+//! возвращают player-а к вычисленному default attack; death-tail делает это и
+//! без активного skill, а разорванный concrete owner больше не оставляет
+//! current-skill и запрет движения.
 //! Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а

@@ -37786,7 +37786,8 @@ impl CGame {
 
     /// Материализует `OnBeenKilled → OnLoseTarget` перед уже достигнутым
     /// синхронным `CPlayer::OnDied`. Начатый обычный навык получает исходный
-    /// `End(1)`; ожидающая команда остаётся в FIFO до оживления, а независимая
+    /// `End(1)`; без активного навыка ожидающая команда остаётся в FIFO до
+    /// оживления, но default attack назначается в обоих случаях. Независимая
     /// очередь боевой феи принадлежит отдельной war-soul ветви ИИ.
     fn interrupt_active_player_skill_after_death<Runtime: GameMainLoopRuntime>(
         &mut self,
@@ -37795,40 +37796,42 @@ impl CGame {
     ) -> bool {
         let Some((current_skill_id, default_attack_skill_id)) = self
             .find_player(player_id)
-            .and_then(|player| {
-                player.current_skill_id().map(|current_skill_id| {
-                    (
-                        current_skill_id,
-                        player.default_attack_skill_id(self.goods_factory()),
-                    )
-                })
+            .map(|player| {
+                (
+                    player.current_skill_id(),
+                    player.default_attack_skill_id(self.goods_factory()),
+                )
             })
         else {
             return false;
         };
-        let materialized_end = self.end_materialized_player_skill(
-            player_id,
-            current_skill_id,
-            MaterializedSkillEndCause::ClientRequest,
-            runtime,
-        );
-        let interrupted = if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
-            true
-        } else {
+        let materialized_end = current_skill_id.and_then(|current_skill_id| {
+            self.end_materialized_player_skill(
+                player_id,
+                current_skill_id,
+                MaterializedSkillEndCause::ClientRequest,
+                runtime,
+            )
+        });
+        let interrupted = current_skill_id.is_some_and(|current_skill_id| {
+            if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
+                return true;
+            }
             self.find_player_mut(player_id).is_some_and(|player| {
-                let Some(dispatch) = player.player_ai().next_player_skill() else {
-                    return false;
-                };
-                let interrupted = player
-                    .player_ai_mut()
-                    .finish_player_skill(dispatch, SkillTermination::Cancelled);
-                if interrupted {
+                let dispatch = player.player_ai().next_player_skill();
+                let released = dispatch.is_some_and(|dispatch| {
+                    player
+                        .player_ai_mut()
+                        .finish_player_skill(dispatch, SkillTermination::Cancelled)
+                });
+                if released || player.current_skill_id() == Some(current_skill_id) {
                     player.set_skill_moveable(true);
                     player.set_current_skill_id(None);
+                    return true;
                 }
-                interrupted
+                false
             })
-        };
+        });
         if interrupted {
             let _ = self.send_base_attack_failure(player_id, 2);
         }
