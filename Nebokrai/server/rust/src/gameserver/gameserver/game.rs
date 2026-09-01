@@ -16502,9 +16502,8 @@ impl CGame {
         }
         pending.declaration_pending = false;
         if money > 0 {
-            if let Some(change) = self.decrease_player_money(player_id, money) {
-                let _ = self.send_player_money_decrease(player_id, &change.outcome);
-            }
+            let current = self.find_player(player_id)?.money();
+            let _ = self.decrease_player_money(player_id, money.min(current));
         }
         let mut response = CMessage::new(0x000b_ff31);
         response.add_long(i32::from(money > 0));
