@@ -19,7 +19,9 @@
 //! `BTreeMap/BTreeSet/Vec` сохраняют STL order. Decoder принимает byte-exact
 //! World snapshot: `0x20` defence, signed count, `0x2C` gate scalars и две
 //! C-строки в старых `char[256]`; missing NUL/overflow остаются локальными
-//! safe-блоками. Exact EXE подтвердил normal `true`, layout gate-полей и
+//! safe-блоками. Обязательный defence-return block хранится с нейтральным
+//! zero-default до decode без недостижимой Option-границы. Exact EXE подтвердил
+//! normal `true`, layout gate-полей и
 //! pointer-return factory. Gate map хранит logical/runtime IDs, имя и concrete
 //! `CCityGate`; safe owner сам выдаёт legacy child-ID и регистрирует тот же
 //! gate в base region/area. Initial и action-dependent block сразу меняет
@@ -223,7 +225,6 @@ pub(crate) trait CityEntryContext: CityReturnPointContext + RegionRandomContext 
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CityReturnPointError {
-    DefenceSetup,
     Base(ServerReturnSetupBlock),
 }
 
@@ -272,7 +273,7 @@ pub(crate) struct CityGuardRefreshTargets {
 pub(crate) struct CServerCityRegion {
     pub(crate) war: CServerWarRegion,
     pub(crate) city_gates: BTreeMap<i32, CityGateState>,
-    pub(crate) defence_side_return: Option<CityDefenceReturnState>,
+    pub(crate) defence_side_return: CityDefenceReturnState,
     pub(crate) guard_monsters: BTreeSet<i32>,
     pub(crate) guard_indices: Vec<i32>,
     pub(crate) last_gate_attacker_type: i32,
@@ -299,9 +300,7 @@ impl CServerCityRegion {
             && player.faction_id != 0
             && player.faction_id == self.defence_side_faction_id
         {
-            let setup = self
-                .defence_side_return
-                .ok_or(CityReturnPointError::DefenceSetup)?;
+            let setup = self.defence_side_return;
             return Ok(RegionReturnPoint {
                 region_id: setup.region_id,
                 left: setup.left,
@@ -384,7 +383,7 @@ impl CServerCityRegion {
 
         let defence = read_region_array::<0x20>(source, cursor, "m_DefenceSideRS")
             .map_err(CityRegionDecodeError::Input)?;
-        self.defence_side_return = Some(decode_defence_return(defence));
+        self.defence_side_return = decode_defence_return(defence);
 
         let gate_count = read_city_i32(source, cursor, "m_CityGates count")
             .map_err(CityRegionDecodeError::Input)?;
