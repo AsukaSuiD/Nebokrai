@@ -5,8 +5,10 @@
 //! сохраняет необратимое списание MP перед повторной проверкой RP и оружия,
 //! направление, задержку и упорядоченное поражение передней клетки. Каждая цель
 //! проходит исходную RNG-формулу, защиту и урон; цель ниже уровнем затем получает
-//! `BossBlueQuakeState`, повторный износ оружия и `ForceMove`. Для источника-игрока
-//! длительность состояния уменьшается на `reank` источника с насыщением до нуля.
+//! `BossBlueQuakeState` и `ForceMove`. `Attack` и `AI` не изнашивают оружие на
+//! отдельных целях: унаследованный `AfterUseSkill` делает это один раз при
+//! успешном `End`. Для источника-игрока длительность состояния уменьшается на
+//! `reank` источника с насыщением до нуля.
 //! Путь монстра сохраняет собственную формулу и тот же порядок состояния и `ForceMove`;
 //! `CGame` только координирует временное владение регионом и доставку.
 
@@ -195,6 +197,7 @@ fn finish_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         player.set_current_skill_id(None);
     }
     if successful {
+        game.damage_player_weapon(player_id, runtime);
         player_ai.mark_boss_blue_quake_used(runtime.now_milliseconds());
     }
 }
@@ -521,8 +524,6 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
             ),
             _ => continue,
         }
-        game.damage_player_weapon(player_id, runtime);
-
         if game.periodic_state_target_dead(region_id, target)
             || !game.owned_player_skill_target_attackable(owner, target, region_id)
         {
