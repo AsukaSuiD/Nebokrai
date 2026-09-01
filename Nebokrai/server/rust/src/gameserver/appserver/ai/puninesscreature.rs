@@ -19,7 +19,6 @@ use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -110,12 +109,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
             }
             return true;
         };
-        let distance = real_distance(
-            source_view.tile_x,
-            source_view.tile_y,
-            target_view.tile_x,
-            target_view.tile_y,
-        );
+        let distance = source_view.real_distance(Some(target_view));
         if distance > property.guard_range as i32 {
             if distance > property.chase_range as i32
                 && let Some(monster) = region.find_monster_by_id_mut(monster_id)
@@ -196,12 +190,7 @@ pub(crate) fn search_puniness_enemy(
             selected,
             PuninessTarget {
                 identity,
-                distance: real_distance(
-                    source_view.tile_x,
-                    source_view.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: source_view.real_distance(Some(candidate)),
             },
             property.guard_range as i32,
         );
@@ -226,12 +215,7 @@ pub(crate) fn search_puniness_enemy(
             selected,
             PuninessTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    source_view.tile_x,
-                    source_view.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: source_view.real_distance(Some(candidate)),
             },
             property.guard_range as i32,
         );
