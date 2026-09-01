@@ -6,10 +6,11 @@
 //! не более одной клетки за проход ИИ. Живой блок читается заново, а цели
 //! сохраняют региональный порядок и могут быть поражены только один раз за
 //! полёт. Первый вариант перед обычными фигурами отдельно проводит
-//! упорядоченную ветвь боевой феи без износа оружия. Формула каждого попадания выполняет ровно
-//! два собственных RNG-вызова; защитные RNG остаются у `CGame`. Все три
-//! варианта имеют общий подтверждённый `End`: освобождение пути, возврат
-//! движения и хвост `CSummonSkill::End(1)`.
+//! упорядоченную ветвь боевой феи. Формула каждого попадания выполняет ровно
+//! два собственных RNG-вызова; защитные RNG остаются у `CGame`. Ни одна из
+//! перегрузок `Attack` не изнашивает оружие на отдельных целях: все три
+//! варианта делают это один раз через унаследованный `AfterUseSkill` в общем
+//! подтверждённом `End`, после освобождения пути и возврата движения.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -61,6 +62,7 @@ pub(crate) fn is_ghost_cut_dispatch(dispatch: PlayerSkillDispatch) -> bool { fam
 
 fn finish_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, skill_id: u32, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_ghost_cut_used(skill_id, now_ms);
     });
@@ -142,7 +144,6 @@ fn attack_cell<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, r
         if (target.id == player_id && target.object_type == PLAYER_TYPE) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || attacked.contains(&target) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue }
         attacked.push(target); let Some(level_of_target) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, level_of_target, skill_id, level, hit_modifier, target_damage_factor) else { continue };
         match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue }
-        game.damage_player_weapon(player_id, runtime);
     }
 }
 
