@@ -37,8 +37,9 @@
 //! обрывая следующий record. Четыре 12-байтных автоматических записи при
 //! `RestoreHpMp` атомарно заменяются значениями актуальных свойств игрока.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
-//! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
-//! остаются у этого владельца.
+//! общие `LegacyReader` и `LegacyWriter`; доказанные границы записей теперь
+//! предоставляет достигнутый `CStateFactory`, а применение состояний остаётся
+//! у этого владельца.
 //!
 //! Реализованные `AddSkill`, `DelSkill`, `ClearSkills`, `AddState`, `GetStatesNum` и
 //! `UpdateAbnormality` используют это же хранилище. Ещё не восстановленные
@@ -97,7 +98,7 @@ use crate::gameserver::appserver::skills::enlargemaxmpstate::{ENLARGE_MAX_MP_STA
 use crate::gameserver::appserver::skills::heartenstate::{
     HeartenState, HEARTEN_STATE_BYTES,
 };
-use crate::gameserver::appserver::skills::heal::{HEAL_SKILL_ID, is_heal_skill};
+use crate::gameserver::appserver::skills::heal::is_heal_skill;
 use crate::gameserver::appserver::skills::healstate::{
     HEAL_STATE_BYTES, HealState,
 };
@@ -152,7 +153,7 @@ use crate::gameserver::appserver::skills::poisonarrowstate::{
     PoisonArrowState, POISON_ARROW_STATE_BYTES,
 };
 use crate::gameserver::appserver::skills::poisonfogstate::{PoisonFogState, POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
-use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
+use crate::gameserver::appserver::skills::meteorarrowstate::{MeteorArrowState, METEOR_ARROW_MASS_SKILL_ID};
 use crate::gameserver::appserver::skills::spiderpoisonstate::{SPIDER_POISON_STATE_BYTES, SpiderPoisonState};
 use crate::gameserver::appserver::skills::spriteburnstate::{
     SPRITE_BURN_STATE_BYTES, SpriteBurnState,
@@ -184,6 +185,7 @@ use crate::gameserver::appserver::skills::bossbluequakestate::{
     BossBlueQuakeState, BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID,
 };
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
+use crate::gameserver::appserver::skills::statefactory::known_state_record_offsets;
 use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::skills::taijistate::{TAIJI_STATE_BYTES, TaiJiState};
 use crate::gameserver::appserver::skills::tianshenxiafanstate::{
@@ -5403,117 +5405,6 @@ fn clamp_force_y(destination: i32, width: i32, height: i32) -> i32 {
     } else {
         destination
     }
-}
-
-/// Возвращает только подтверждённые начала известных записей. Размер
-/// неизвестного класса из wire не выводится, поэтому после него типизация
-/// прекращается, а исходный хвост остаётся в `LegacyStateCodec` без изменений.
-fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
-    let Some(declared_count) = read_u32(payload, 0) else {
-        return Vec::new();
-    };
-    let mut offsets = Vec::new();
-    let mut cursor = 4usize;
-    for _ in 0..declared_count {
-        let Some(state_id) = read_u32(payload, cursor) else {
-            break;
-        };
-        let size = match state_id {
-            CHANGE_BODY_STATE_ID => 124,
-            EX_STATE_ID => 44,
-            EX_STATE_NEW_ID => 56,
-            UNDEAD_STATE_ID => 76,
-            LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
-            LEAF_CUT_2_STATE_ID => LEAF_CUT_2_STATE_BYTES,
-            LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
-            KEROSENE_STATE_ID => KEROSENE_STATE_BYTES,
-            SWORDSHIP_SKILL_ID
-            | SWORDSHIP_2_SKILL_ID
-            | SWORDSHIP_3_SKILL_ID
-            | SWORDSHIP_4_SKILL_ID => SWORDSHIP_STATE_BYTES,
-            STRIKE_STATE_ID => STRIKE_STATE_BYTES,
-            0x353..=0x357 => WUXING_STATE_BYTES,
-            POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
-            METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
-            BLIND_STATE_ID => BLIND_STATE_BYTES,
-            KNOCK_OUT_STATE_ID => KNOCK_OUT_STATE_BYTES,
-            super::skills::spiderweb::SPIDER_WEB_SKILL_ID => SPIDER_WEB_STATE_BYTES,
-            SEAL_STATE_ID => SEAL_STATE_BYTES,
-            GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => GOD_BLESS_STATE_BYTES,
-            WEAK_STATE_ID => WEAK_STATE_BYTES,
-            SOUL_COLLECT_STATE_ID => SOUL_COLLECT_STATE_BYTES,
-            super::skills::spriteburn::SPRITE_BURN_SKILL_ID => SPRITE_BURN_STATE_BYTES,
-            super::skills::spiderpoison::SPIDER_POISON_SKILL_ID => SPIDER_POISON_STATE_BYTES,
-            DAUB_POISON_STATE_ID => DAUB_POISON_STATE_BYTES,
-            BOSS_BLUE_QUAKE_STATE_ID => BOSS_BLUE_QUAKE_STATE_BYTES,
-            KNIGHT_CUT_STATE_ID => KNIGHT_CUT_STATE_BYTES,
-            BOA_LOCK_STATE_ID => BOA_LOCK_STATE_BYTES,
-            RUSH_STATE_ID => RUSH_STATE_BYTES,
-            RUSH_2_STATE_ID => RUSH_2_STATE_BYTES,
-            ROAR_STATE_ID => ROAR_STATE_BYTES,
-            PILLAR_STATE_ID => PILLAR_STATE_BYTES,
-            RAGE_BREAK_STATE_ID => RAGE_BREAK_STATE_BYTES,
-            FURY_STATE_SKILL_ID => FURY_STATE_BYTES,
-            HEAL_SKILL_ID
-            | super::skills::heal2::HEAL_2_SKILL_ID
-            | super::skills::superheal::SUPER_HEAL_SKILL_ID
-            | super::skills::superheal2::SUPER_HEAL_2_SKILL_ID => HEAL_STATE_BYTES,
-            state_id if state_id == RESTORE_HP_STATE_ID as u32 => RESTORE_HP_STATE_BYTES,
-            state_id if state_id == RESTORE_MP_STATE_ID as u32 => RESTORE_MP_STATE_BYTES,
-            state_id if is_automatic_restore_state_id(state_id) => AUTOMATIC_RESTORE_STATE_BYTES,
-            PARTICULAR_STATE_ID => PARTICULAR_STATE_BYTES,
-            state_id if state_id == TEAM_STATE_ID as u32 => {
-                let Some(size) = CTeamState::serialized_size(payload, cursor) else {
-                    break;
-                };
-                size
-            }
-            CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
-            super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
-            TAIJI_SKILL_ID => TAIJI_STATE_BYTES,
-            ENLARGE_MAX_HP_SKILL_ID => ENLARGE_MAX_HP_STATE_BYTES,
-            ENLARGE_MAX_MP_SKILL_ID => ENLARGE_MAX_MP_STATE_BYTES,
-            ORIGIN_SKILL_ID => ORIGIN_STATE_BYTES,
-            super::skills::machineshield::MACHINE_SHIELD_SKILL_ID => MACHINE_SHIELD_STATE_BYTES,
-            super::skills::manashield::MANA_SHIELD_SKILL_ID => MANA_SHIELD_STATE_BYTES,
-            super::skills::lifeshield::LIFE_SHIELD_SKILL_ID => LIFE_SHIELD_STATE_BYTES,
-            super::skills::promotion::PROMOTION_SKILL_ID => PROMOTION_STATE_BYTES,
-            super::skills::hearten::HEARTEN_SKILL_ID => HEARTEN_STATE_BYTES,
-            super::skills::agility::AGILITY_SKILL_ID
-            | super::skills::natural::NATURAL_SKILL_ID
-            | super::skills::rapture::RAPTURE_SKILL_ID => PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
-            super::skills::agility2::AGILITY_2_SKILL_ID => AGILITY_STATE_2_BYTES,
-            CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => CALLOSITY_STATE_BYTES,
-            super::skills::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
-            ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
-            BOSS_BLUE_FURY_STATE_ID => BOSS_BLUE_FURY_STATE_BYTES,
-            0x212..=0x219 => BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES,
-            TIAN_SHEN_XIA_FAN_STATE_ID => TIAN_SHEN_XIA_FAN_STATE_BYTES,
-            WANGSHENG_STATE_ID => WANGSHENG_STATE_BYTES,
-            super::skills::poisonarrow::POISON_ARROW_SKILL_ID => POISON_ARROW_STATE_BYTES,
-            state_id if ScriptMoveState::serialized_size(state_id as i32).is_some() => {
-                ScriptMoveState::serialized_size(state_id as i32)
-                    .expect("проверенный script-state ID")
-            }
-            RIDE_STATE_ID => {
-                let name_start = cursor.saturating_add(16);
-                let Some(name) = payload.get(name_start..) else {
-                    break;
-                };
-                let Some(length) = name.iter().take(256).position(|byte| *byte == 0) else {
-                    break;
-                };
-                16 + length + 1
-            }
-            _ => break,
-        };
-        let Some(end) = cursor.checked_add(size).filter(|end| *end <= payload.len()) else {
-            break;
-        };
-        offsets.push(cursor);
-        cursor = end;
-    }
-    offsets
 }
 
 fn update_known_state_record(payload: &mut [u8], state_id: u32, record: &[u8]) {

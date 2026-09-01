@@ -357,6 +357,7 @@ pub(crate) mod appserver {
         pub(crate) mod summonspore;
         pub(crate) mod skillbaseproperties;
         pub(crate) mod skillfactory;
+        pub(crate) mod statefactory;
         pub(crate) mod shieldstate;
         pub(crate) mod selfshield;
         pub(crate) mod stateskill;

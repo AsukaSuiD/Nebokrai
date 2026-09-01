@@ -1,36 +1,195 @@
-//! Метаданные исследования оригинала; сами по себе не доказывают совместимость.
-//! Декомпилятор: Ghidra 12.1.2
-//! Полный декомпилят хранится локально и не входит в распространяемый код.
+//! Безопасная Rust-проекция `CStateFactory::Unserialize` GameServer.
+//!
+//! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
+//! `appserver/skills/statefactory.cpp`, RVA `0x001D7D00`. Native factory читает
+//! ID, создаёт concrete state и поручает ему потребить запись. Rust хранит
+//! concrete состояния у `CMoveShape`; этот owner сохраняет switch ID→layout и
+//! последовательное продвижение по GameSave wire. Неизвестный ID, переменная
+//! запись без терминатора и усечённый payload останавливают типизацию до
+//! спорной записи: исходный хвост остаётся в `LegacyStateCodec`.
+//!
+//! CRT allocation, RTTI, vtable и exception plumbing не воспроизводятся.
 
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\statefactory.cpp
+use crate::gameserver::appserver::chbystate::CHANGE_BODY_STATE_ID;
+use crate::gameserver::appserver::exstate::{EX_STATE_ID, EX_STATE_NEW_ID};
+use crate::gameserver::appserver::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID};
+use crate::gameserver::appserver::ridestate::RIDE_STATE_ID;
+use crate::gameserver::appserver::restorehpstate::{RESTORE_HP_STATE_BYTES, RESTORE_HP_STATE_ID};
+use crate::gameserver::appserver::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
+use crate::gameserver::appserver::scriptstate::ScriptMoveState;
+use crate::gameserver::appserver::states::automaticrestore::{
+    AUTOMATIC_RESTORE_STATE_BYTES, is_automatic_restore_state_id,
+};
+use crate::gameserver::appserver::teamstate::{CTeamState, TEAM_STATE_ID};
 
-// ============================================================================
-// FUNCTION: CStateFactory::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\statefactory.cpp:119
-// RVA: 0x001D7D00
-// ADDRESS: 005d7d00
-// PROTOTYPE: CState * __cdecl Unserialize(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+use super::agilitystate::PERSISTENT_AGILITY_FAMILY_STATE_BYTES;
+use super::agilitystate2::AGILITY_STATE_2_BYTES;
+use super::battlefairyattributestate::BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES;
+use super::blindstate::{BLIND_STATE_BYTES, BLIND_STATE_ID};
+use super::bloodlossstate::BLOOD_LOSS_STATE_BYTES;
+use super::boalockstate::{BOA_LOCK_STATE_BYTES, BOA_LOCK_STATE_ID};
+use super::bossbluefurystate::{BOSS_BLUE_FURY_STATE_BYTES, BOSS_BLUE_FURY_STATE_ID};
+use super::bossbluequakestate::{BOSS_BLUE_QUAKE_STATE_BYTES, BOSS_BLUE_QUAKE_STATE_ID};
+use super::callosity::{CALLOSITY_2_SKILL_ID, CALLOSITY_SKILL_ID};
+use super::callositystate::CALLOSITY_STATE_BYTES;
+use super::curestate::{CURE_STATE_BYTES, CURE_STATE_SKILL_ID};
+use super::daubpoisonstate::{DAUB_POISON_STATE_BYTES, DAUB_POISON_STATE_ID};
+use super::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
+use super::enlargefullmissstate::ENLARGE_FULL_MISS_STATE_BYTES;
+use super::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
+use super::enlargemaxhpstate::ENLARGE_MAX_HP_STATE_BYTES;
+use super::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
+use super::enlargemaxmpstate::ENLARGE_MAX_MP_STATE_BYTES;
+use super::energyholdingstate::{ENERGY_HOLDING_STATE_BYTES, ENERGY_HOLDING_STATE_ID};
+use super::furystate::{FURY_STATE_BYTES, FURY_STATE_SKILL_ID};
+use super::godblessstate::{GOD_BLESS_STATE_BYTES, GOD_BLESS_STATE_ID};
+use super::godblessstate2::GOD_BLESS_STATE_2_ID;
+use super::hearten::HEARTEN_SKILL_ID;
+use super::heartenstate::HEARTEN_STATE_BYTES;
+use super::heal::HEAL_SKILL_ID;
+use super::heal2::HEAL_2_SKILL_ID;
+use super::healstate::HEAL_STATE_BYTES;
+use super::kerosenestate::{KEROSENE_STATE_BYTES, KEROSENE_STATE_ID};
+use super::knightcutstate::{KNIGHT_CUT_STATE_BYTES, KNIGHT_CUT_STATE_ID};
+use super::knockoutstate::{KNOCK_OUT_STATE_BYTES, KNOCK_OUT_STATE_ID};
+use super::leafcutstate::{LEAF_CUT_STATE_BYTES, LEAF_CUT_STATE_ID};
+use super::leafcutstate2::{LEAF_CUT_2_STATE_BYTES, LEAF_CUT_2_STATE_ID};
+use super::leafcutstate3::{LEAF_CUT_3_STATE_BYTES, LEAF_CUT_3_STATE_ID};
+use super::lifeshield::LIFE_SHIELD_SKILL_ID;
+use super::lifeshieldstate::LIFE_SHIELD_STATE_BYTES;
+use super::machineshield::MACHINE_SHIELD_SKILL_ID;
+use super::machineshieldstate::MACHINE_SHIELD_STATE_BYTES;
+use super::manashield::MANA_SHIELD_SKILL_ID;
+use super::manashieldstate::MANA_SHIELD_STATE_BYTES;
+use super::meteorarrowstate::{METEOR_ARROW_MASS_SKILL_ID, METEOR_ARROW_STATE_BYTES};
+use super::origin::ORIGIN_SKILL_ID;
+use super::originstate::ORIGIN_STATE_BYTES;
+use super::pillarstate::{PILLAR_STATE_BYTES, PILLAR_STATE_ID};
+use super::poisonarrow::POISON_ARROW_SKILL_ID;
+use super::poisonarrowstate::POISON_ARROW_STATE_BYTES;
+use super::poisonfogstate::{POISON_FOG_STATE_BYTES, POISON_FOG_STATE_ID};
+use super::promotion::PROMOTION_SKILL_ID;
+use super::promotionstate::PROMOTION_STATE_BYTES;
+use super::ragebreakstate::{RAGE_BREAK_STATE_BYTES, RAGE_BREAK_STATE_ID};
+use super::roarstate::{ROAR_STATE_BYTES, ROAR_STATE_ID};
+use super::rushstate::{RUSH_STATE_BYTES, RUSH_STATE_ID};
+use super::rushstate2::{RUSH_2_STATE_BYTES, RUSH_2_STATE_ID};
+use super::sealstate::{SEAL_STATE_BYTES, SEAL_STATE_ID};
+use super::soulcollectstate::{SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID};
+use super::spiderpoison::SPIDER_POISON_SKILL_ID;
+use super::spiderpoisonstate::SPIDER_POISON_STATE_BYTES;
+use super::spiderweb::SPIDER_WEB_SKILL_ID;
+use super::spiderwebstate::SPIDER_WEB_STATE_BYTES;
+use super::spriteburn::SPRITE_BURN_SKILL_ID;
+use super::spriteburnstate::SPRITE_BURN_STATE_BYTES;
+use super::strikestate::{STRIKE_STATE_BYTES, STRIKE_STATE_ID};
+use super::superheal::SUPER_HEAL_SKILL_ID;
+use super::superheal2::SUPER_HEAL_2_SKILL_ID;
+use super::swordship::{
+    SWORDSHIP_2_SKILL_ID, SWORDSHIP_3_SKILL_ID, SWORDSHIP_4_SKILL_ID,
+    SWORDSHIP_SKILL_ID,
+};
+use super::swordshipstate::SWORDSHIP_STATE_BYTES;
+use super::taiji::TAIJI_SKILL_ID;
+use super::taijistate::TAIJI_STATE_BYTES;
+use super::tianshenxiafanstate::{TIAN_SHEN_XIA_FAN_STATE_BYTES, TIAN_SHEN_XIA_FAN_STATE_ID};
+use super::wangshengstate::{WANGSHENG_STATE_BYTES, WANGSHENG_STATE_ID};
+use super::weakstate::{WEAK_STATE_BYTES, WEAK_STATE_ID};
+use super::wuxingstate::WUXING_STATE_BYTES;
 
+const UNDEAD_STATE_ID: u32 = 0x38;
+fn read_u32(payload: &[u8], offset: usize) -> Option<u32> {
+    let bytes = payload.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_le_bytes(bytes.try_into().ok()?))
+}
 
+fn record_size(payload: &[u8], cursor: usize, state_id: u32) -> Option<usize> {
+    Some(match state_id {
+        CHANGE_BODY_STATE_ID => 124,
+        EX_STATE_ID => 44,
+        EX_STATE_NEW_ID => 56,
+        UNDEAD_STATE_ID => 76,
+        LEAF_CUT_STATE_ID => LEAF_CUT_STATE_BYTES,
+        LEAF_CUT_2_STATE_ID => LEAF_CUT_2_STATE_BYTES,
+        LEAF_CUT_3_STATE_ID => LEAF_CUT_3_STATE_BYTES,
+        KEROSENE_STATE_ID => KEROSENE_STATE_BYTES,
+        SWORDSHIP_SKILL_ID | SWORDSHIP_2_SKILL_ID | SWORDSHIP_3_SKILL_ID
+        | SWORDSHIP_4_SKILL_ID => SWORDSHIP_STATE_BYTES,
+        STRIKE_STATE_ID => STRIKE_STATE_BYTES,
+        0x353..=0x357 => WUXING_STATE_BYTES,
+        POISON_FOG_STATE_ID => POISON_FOG_STATE_BYTES,
+        METEOR_ARROW_MASS_SKILL_ID => METEOR_ARROW_STATE_BYTES,
+        BLIND_STATE_ID => BLIND_STATE_BYTES,
+        KNOCK_OUT_STATE_ID => KNOCK_OUT_STATE_BYTES,
+        SPIDER_WEB_SKILL_ID => SPIDER_WEB_STATE_BYTES,
+        SEAL_STATE_ID => SEAL_STATE_BYTES,
+        GOD_BLESS_STATE_ID | GOD_BLESS_STATE_2_ID => GOD_BLESS_STATE_BYTES,
+        WEAK_STATE_ID => WEAK_STATE_BYTES,
+        SOUL_COLLECT_STATE_ID => SOUL_COLLECT_STATE_BYTES,
+        SPRITE_BURN_SKILL_ID => SPRITE_BURN_STATE_BYTES,
+        SPIDER_POISON_SKILL_ID => SPIDER_POISON_STATE_BYTES,
+        DAUB_POISON_STATE_ID => DAUB_POISON_STATE_BYTES,
+        BOSS_BLUE_QUAKE_STATE_ID => BOSS_BLUE_QUAKE_STATE_BYTES,
+        KNIGHT_CUT_STATE_ID => KNIGHT_CUT_STATE_BYTES,
+        BOA_LOCK_STATE_ID => BOA_LOCK_STATE_BYTES,
+        RUSH_STATE_ID => RUSH_STATE_BYTES,
+        RUSH_2_STATE_ID => RUSH_2_STATE_BYTES,
+        ROAR_STATE_ID => ROAR_STATE_BYTES,
+        PILLAR_STATE_ID => PILLAR_STATE_BYTES,
+        RAGE_BREAK_STATE_ID => RAGE_BREAK_STATE_BYTES,
+        FURY_STATE_SKILL_ID => FURY_STATE_BYTES,
+        HEAL_SKILL_ID | HEAL_2_SKILL_ID | SUPER_HEAL_SKILL_ID | SUPER_HEAL_2_SKILL_ID => HEAL_STATE_BYTES,
+        state_id if state_id == RESTORE_HP_STATE_ID as u32 => RESTORE_HP_STATE_BYTES,
+        state_id if state_id == RESTORE_MP_STATE_ID as u32 => RESTORE_MP_STATE_BYTES,
+        state_id if is_automatic_restore_state_id(state_id) => AUTOMATIC_RESTORE_STATE_BYTES,
+        PARTICULAR_STATE_ID => PARTICULAR_STATE_BYTES,
+        state_id if state_id == TEAM_STATE_ID as u32 => CTeamState::serialized_size(payload, cursor)?,
+        CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
+        ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
+        TAIJI_SKILL_ID => TAIJI_STATE_BYTES,
+        ENLARGE_MAX_HP_SKILL_ID => ENLARGE_MAX_HP_STATE_BYTES,
+        ENLARGE_MAX_MP_SKILL_ID => ENLARGE_MAX_MP_STATE_BYTES,
+        ORIGIN_SKILL_ID => ORIGIN_STATE_BYTES,
+        MACHINE_SHIELD_SKILL_ID => MACHINE_SHIELD_STATE_BYTES,
+        MANA_SHIELD_SKILL_ID => MANA_SHIELD_STATE_BYTES,
+        LIFE_SHIELD_SKILL_ID => LIFE_SHIELD_STATE_BYTES,
+        PROMOTION_SKILL_ID => PROMOTION_STATE_BYTES,
+        HEARTEN_SKILL_ID => HEARTEN_STATE_BYTES,
+        super::agility::AGILITY_SKILL_ID | super::natural::NATURAL_SKILL_ID
+        | super::rapture::RAPTURE_SKILL_ID => PERSISTENT_AGILITY_FAMILY_STATE_BYTES,
+        super::agility2::AGILITY_2_SKILL_ID => AGILITY_STATE_2_BYTES,
+        CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => CALLOSITY_STATE_BYTES,
+        super::bloodloss::BLOOD_LOSS_SKILL_ID => BLOOD_LOSS_STATE_BYTES,
+        ENERGY_HOLDING_STATE_ID => ENERGY_HOLDING_STATE_BYTES,
+        BOSS_BLUE_FURY_STATE_ID => BOSS_BLUE_FURY_STATE_BYTES,
+        0x212..=0x219 => BATTLE_FAIRY_ATTRIBUTE_STATE_BYTES,
+        TIAN_SHEN_XIA_FAN_STATE_ID => TIAN_SHEN_XIA_FAN_STATE_BYTES,
+        WANGSHENG_STATE_ID => WANGSHENG_STATE_BYTES,
+        POISON_ARROW_SKILL_ID => POISON_ARROW_STATE_BYTES,
+        state_id if ScriptMoveState::serialized_size(state_id as i32).is_some() => {
+            ScriptMoveState::serialized_size(state_id as i32)?
+        }
+        RIDE_STATE_ID => {
+            let name = payload.get(cursor.checked_add(16)?..)?;
+            16 + name.iter().take(256).position(|byte| *byte == 0)? + 1
+        }
+        _ => return None,
+    })
+}
 
-
-
-
-
-
-
-
-
-
-// COMPONENT_VARIANT_END: GameServer
+/// Возвращает только доказанные начала записей в исходном порядке.
+pub(crate) fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
+    let Some(declared_count) = read_u32(payload, 0) else {
+        return Vec::new();
+    };
+    let mut offsets = Vec::new();
+    let mut cursor = 4usize;
+    for _ in 0..declared_count {
+        let Some(state_id) = read_u32(payload, cursor) else { break };
+        let Some(size) = record_size(payload, cursor, state_id) else { break };
+        let Some(end) = cursor.checked_add(size).filter(|end| *end <= payload.len()) else { break };
+        offsets.push(cursor);
+        cursor = end;
+    }
+    offsets
+}
