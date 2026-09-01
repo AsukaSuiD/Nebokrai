@@ -6,6 +6,8 @@
 //! урон типа `Poison` без RNG. DB-запись длиной 56 байт принадлежит этому типу;
 //! `CanonicalStateStorage` атомарно поддерживает её смещение и жизненный цикл,
 //! включая извлечение и возврат перед межвладельческим применением удара.
+//! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
+//! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
 //! Клиентский срок разделяет точное тело `0x00606320` с остальными
 //! периодическими состояниями и использует два чтения wrapping clock.
 
@@ -21,6 +23,7 @@ pub(crate) const KEROSENE_STATE_ID: u32 = 0xf1;
 pub(crate) const KEROSENE_STATE_BYTES: usize = 56;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
+const DEFAULT_PERIODIC_SKILL_ID: u32 = i32::MAX as u32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum KeroseneStateTick { Pending, Attack(AttackInformation), Ended }
@@ -51,7 +54,7 @@ impl KeroseneState {
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
     fn remaining_time(self, now_ms: u32) -> u32 { let elapsed = now_ms.wrapping_sub(self.started_at_ms); if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) } }
     pub(crate) fn ended(self, lifetime_now_ms: u32, target_dead: bool) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < lifetime_now_ms || target_dead }
-    pub(crate) fn tick(&mut self, frequency_now_ms: u32) -> KeroseneStateTick { if self.started_at_ms.wrapping_add(self.frequency_ms.wrapping_mul(self.attack_count)) >= frequency_now_ms { return KeroseneStateTick::Pending; } self.attack_count = self.attack_count.wrapping_add(1); KeroseneStateTick::Attack(AttackInformation { skill_id: 0, skill_level: 0, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Poison, hp_damage: self.hp_loss as i32, mp_damage: 0 }] }) }
+    pub(crate) fn tick(&mut self, frequency_now_ms: u32) -> KeroseneStateTick { if self.started_at_ms.wrapping_add(self.frequency_ms.wrapping_mul(self.attack_count)) >= frequency_now_ms { return KeroseneStateTick::Pending; } self.attack_count = self.attack_count.wrapping_add(1); KeroseneStateTick::Attack(AttackInformation { skill_id: DEFAULT_PERIODIC_SKILL_ID, skill_level: 1, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Poison, hp_damage: self.hp_loss as i32, mp_damage: 0 }] }) }
 }
 
 pub(crate) fn send_kerosene_state_visual(game: &mut CGame, region_id: i32, identity: ShapeIdentity, tile_x: i32, tile_y: i32, state: KeroseneState, begin: bool, now_ms: u32) { let mut message = CMessage::new(if begin { STATE_BEGIN_MESSAGE } else { STATE_END_MESSAGE }); message.add_long(identity.object_type); message.add_long(identity.id); message.add_long(KEROSENE_STATE_ID as i32); if begin { message.add_ulong(state.client_state_time(|| now_ms)); message.add_long(0); } let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &message); }
