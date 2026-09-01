@@ -16,6 +16,7 @@
 
 use super::archeryphalanx::CArcheryPhalanx;
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
+use super::basemagicphalanx::CBaseMagicPhalanx;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::{
@@ -31,8 +32,9 @@ use crate::gameserver::appserver::skills::monsterattack::{
 };
 use crate::gameserver::appserver::skills::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
-    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME,
-    SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
+    SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
+    SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED,
+    SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
@@ -45,17 +47,33 @@ const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const ARCHERY_SKILL_ID: u32 = 2;
 
-fn send_monster_archery_visual(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonsterBaseProjectileKind {
+    Archery,
+    Magic,
+}
+
+impl MonsterBaseProjectileKind {
+    pub(crate) const fn skill_id(self) -> u32 {
+        match self {
+            Self::Archery => ARCHERY_SKILL_ID,
+            Self::Magic => super::basemagic::BASE_MAGIC_SKILL_ID,
+        }
+    }
+}
+
+fn send_monster_base_projectile_visual(
     game: &CGame,
     region: &CServerRegion,
     source: &crate::gameserver::appserver::shape::CShape,
+    kind: MonsterBaseProjectileKind,
     skill_level: u16,
     action: u8,
     target: Option<(ShapeIdentity, i32, i32, i32)>,
 ) {
     let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
     message.add_byte(action);
-    message.add_long(ARCHERY_SKILL_ID as i32);
+    message.add_long(kind.skill_id() as i32);
     message.add_short(skill_level as i16);
     message.add_long(MONSTER_TYPE);
     message.add_long(source.identity().id);
@@ -74,16 +92,18 @@ fn send_monster_archery_visual(
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет monster AI, skill и region owners")]
-pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
+pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
     target_identity: ShapeIdentity,
     skill_level: u16,
+    kind: MonsterBaseProjectileKind,
     runtime: &mut Runtime,
 ) -> bool {
+    let skill_id = kind.skill_id();
     let Some(properties) = game
-        .skill_base_properties(ARCHERY_SKILL_ID, i32::from(skill_level))
+        .skill_base_properties(skill_id, i32::from(skill_level))
         .cloned()
     else {
         return false;
@@ -98,14 +118,14 @@ pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
                 monster.master_info(),
                 monster.is_tamed(),
                 monster.base_attack_cast(),
-                monster.skill_last_used_ms(ARCHERY_SKILL_ID),
+                monster.skill_last_used_ms(skill_id),
             ))
         })
     else {
         return false;
     };
     if cast.is_some_and(|cast| {
-        cast.dispatch().skill_id != ARCHERY_SKILL_ID
+        cast.dispatch().skill_id != skill_id
             || cast.dispatch().target != target_identity
     }) {
         return false;
@@ -190,10 +210,15 @@ pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
             return true;
         }
         let path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);
-        if maximum_distance != 0 && path.len() > maximum_distance.wrapping_add(1) as usize {
+        let maximum_distance_allowance = usize::from(matches!(kind, MonsterBaseProjectileKind::Archery));
+        if maximum_distance != 0
+            && path.len() > maximum_distance as usize + maximum_distance_allowance
+        {
             return true;
         }
-        if path.iter().any(|cell| cell.2 == 2) {
+        if matches!(kind, MonsterBaseProjectileKind::Archery)
+            && path.iter().any(|cell| cell.2 == 2)
+        {
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
@@ -202,7 +227,7 @@ pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
             monster.move_shape_mut().set_moveable(false);
             monster.begin_base_attack_cast(
                 target_identity,
-                ARCHERY_SKILL_ID,
+                skill_id,
                 skill_level,
                 now_ms,
             );
@@ -211,10 +236,10 @@ pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
             .find_monster_by_id(monster_id)
             .map(|monster| monster.move_shape().shape())
             .unwrap_or(&source);
-        send_monster_archery_visual(game, region, source, skill_level, 1, None);
+        send_monster_base_projectile_visual(game, region, source, kind, skill_level, 1, None);
         return true;
     }
-    let cast = cast.expect("monster archery cast проверен выше");
+    let cast = cast.expect("monster base projectile cast проверен выше");
     if !time_reached(
         now_ms,
         cast.started_at_ms(),
@@ -227,10 +252,11 @@ pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
     }
     let attack_time = real_distance(source_x, source_y, target_x, target_y)
         .wrapping_mul(properties.query_property(SKILL_USAGE_SUMMONED_SPEED) as i32);
-    send_monster_archery_visual(
+    send_monster_base_projectile_visual(
         game,
         region,
         &source,
+        kind,
         skill_level,
         2,
         Some((target_identity, target_x, target_y, attack_time)),
@@ -246,31 +272,60 @@ pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
     if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {
         let summon_id = game.allocate_summon_shape_id();
         let started_at_ms = runtime.now_milliseconds();
-        let mut phalanx = CArcheryPhalanx::new(
-            summon_id,
-            MasterInfo {
-                master_type: MONSTER_TYPE,
-                master_id: monster_id,
-                ..MasterInfo::default()
-            },
-            started_at_ms,
-            properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME),
-            i32::from(skill_level),
-            attack_time as u32,
-            target_identity,
-        );
-        phalanx.shape_mut().set_region_id(region.id);
+        let master = MasterInfo {
+            master_type: MONSTER_TYPE,
+            master_id: monster_id,
+            ..MasterInfo::default()
+        };
         let (tile_x, tile_y, _) = path[0];
         let (area_width, area_height) = game.area_dimensions();
-        let _ = region.add_archery_phalanx(
-            phalanx,
-            tile_x,
-            tile_y,
-            area_width,
-            area_height,
-            started_at_ms,
-            runtime,
-        );
+        match kind {
+            MonsterBaseProjectileKind::Archery => {
+                let mut phalanx = CArcheryPhalanx::new(
+                    summon_id,
+                    master,
+                    started_at_ms,
+                    properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME),
+                    i32::from(skill_level),
+                    attack_time as u32,
+                    target_identity,
+                );
+                phalanx.shape_mut().set_region_id(region.id);
+                let _ = region.add_archery_phalanx(
+                    phalanx,
+                    tile_x,
+                    tile_y,
+                    area_width,
+                    area_height,
+                    started_at_ms,
+                    runtime,
+                );
+            }
+            MonsterBaseProjectileKind::Magic => {
+                let mut phalanx = CBaseMagicPhalanx::new(
+                    summon_id,
+                    master,
+                    started_at_ms,
+                    properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME),
+                    i32::from(skill_level),
+                    properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32,
+                    properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32,
+                    properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32,
+                    attack_time as u32,
+                    target_identity,
+                );
+                phalanx.shape_mut().set_region_id(region.id);
+                let _ = region.add_base_magic_phalanx(
+                    phalanx,
+                    tile_x,
+                    tile_y,
+                    area_width,
+                    area_height,
+                    started_at_ms,
+                    runtime,
+                );
+            }
+        }
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);

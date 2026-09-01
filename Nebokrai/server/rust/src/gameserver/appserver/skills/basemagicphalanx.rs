@@ -8,7 +8,10 @@
 //! `SHAPE_CHANGE_DELETE`; цель может исчезнуть без побочного эффекта. Формула,
 //! wrapping и два исходных вызова RNG принадлежат этому owner-у; `CGame`
 //! передаёт только снимки владельцев и применяет рассчитанную атаку к цели.
-//! Критический float-множитель усекается к нулю перед записью `int`.
+//! Exact `CalculateAttackPower` безусловно ищет attacker ID в player-map;
+//! созданный монстром снаряд поэтому остаётся визуальным без отдельной
+//! monster-формулы. Критический float-множитель усекается к нулю перед
+//! записью `int`.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;

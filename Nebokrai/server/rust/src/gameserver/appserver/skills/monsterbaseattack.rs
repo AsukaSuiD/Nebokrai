@@ -71,7 +71,10 @@ use super::monsterrangeattack::{
     prepare_owned_monster_range_cast,
 };
 use super::chuckstone::CHUCK_STONE_SKILL_ID;
-use super::archery::{ARCHERY_SKILL_ID, execute_owned_monster_archery};
+use super::archery::{
+    ARCHERY_SKILL_ID, MonsterBaseProjectileKind, execute_owned_monster_base_projectile,
+};
+use super::basemagic::BASE_MAGIC_SKILL_ID as BASE_MAGIC_PROJECTILE_SKILL_ID;
 use super::bossbluefury::{BOSS_BLUE_FURY_SKILL_ID, execute_owned_boss_blue_fury};
 use super::bossbluequake::{BOSS_BLUE_QUAKE_SKILL_ID, execute_owned_boss_blue_quake};
 use super::bossfiendsummon::BOSS_FIEND_SUMMON_SKILL_ID;
@@ -188,6 +191,7 @@ fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
     matches!(
         skill_id,
         ARCHERY_SKILL_ID
+            | BASE_MAGIC_PROJECTILE_SKILL_ID
             | MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_FAST_ATTACK_SKILL_ID
             | LORD_FAST_ATTACK_SKILL_ID
@@ -1134,13 +1138,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let skill_properties = skill_properties.clone();
         return execute_owned_monster_snow_storm(game, region, monster_id, target, skill.level, &skill_properties, &property, now_ms, runtime, snow_storm_entry);
     }
-    if skill_id == ARCHERY_SKILL_ID {
-        return execute_owned_monster_archery(
+    if matches!(skill_id, ARCHERY_SKILL_ID | BASE_MAGIC_PROJECTILE_SKILL_ID) {
+        return execute_owned_monster_base_projectile(
             game,
             region,
             monster_id,
             target,
             skill.level,
+            if skill_id == ARCHERY_SKILL_ID {
+                MonsterBaseProjectileKind::Archery
+            } else {
+                MonsterBaseProjectileKind::Magic
+            },
             runtime,
         );
     }
