@@ -65,6 +65,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -493,7 +494,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
         damages: vec![
             AttackPower { kind: AttackPowerType::Physical, hp_damage: physical.max(0), mp_damage: 0 },
             AttackPower { kind: AttackPowerType::Element, hp_damage: element.max(0), mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: (property.yao_attack & 0xffff) as i32, mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(CMonster::resource_soul_attack(&property)), mp_damage: 0 },
         ],
     };
     let attack = defend_owned_monster_attack(game, target_identity, target.mana, target.war_soul_mana, target.player_properties, target.monster_properties, attack);

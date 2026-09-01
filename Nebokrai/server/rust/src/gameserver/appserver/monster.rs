@@ -1003,6 +1003,14 @@ impl CMonster {
         (property.hp_recover_speed as i32).max(1) as u16
     }
 
+    /// Достигнутая ресурсная часть `CMonster::GetAddSoulAtk`
+    /// (RVA `0x000E69D0`): signed DWORD не выше нуля даёт `0`, положительное
+    /// значение сужается к младшим шестнадцати битам.
+    pub(crate) fn resource_soul_attack(property: &MonsterProperties) -> u16 {
+        let value = property.yao_attack as i32;
+        if value > 0 { value as u16 } else { 0 }
+    }
+
     /// Exact `CMonster::GetStopFrame` (RVA `0x000E6A40`): только приручённый
     /// монстр с живой player-owner связью применяет pet factor `9`. Оригинал
     /// умножает signed DWORD на f32 в x87 и временно включает truncation.
@@ -1917,20 +1925,6 @@ impl CMonster {
 // RVA: 0x000E69C0
 // ADDRESS: 004e69c0
 // PROTOTYPE: uchar __thiscall GetLevel(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetAddSoulAtk
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1574
-// RVA: 0x000E69D0
-// ADDRESS: 004e69d0
-// PROTOTYPE: ushort __thiscall GetAddSoulAtk(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

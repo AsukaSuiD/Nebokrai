@@ -827,7 +827,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
             },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: (attacker_property.yao_attack & 0xffff) as i32,
+                hp_damage: i32::from(CMonster::resource_soul_attack(attacker_property)),
                 mp_damage: 0,
             },
         ],

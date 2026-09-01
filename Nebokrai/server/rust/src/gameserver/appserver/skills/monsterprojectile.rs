@@ -17,6 +17,7 @@ use super::monsterattack::{
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::SkillStage;
@@ -466,7 +467,7 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
             },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: (dispatch.property.yao_attack & 0xffff) as i32,
+                hp_damage: i32::from(CMonster::resource_soul_attack(&dispatch.property)),
                 mp_damage: 0,
             },
         ],

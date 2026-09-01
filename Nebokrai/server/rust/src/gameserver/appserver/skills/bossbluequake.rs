@@ -29,6 +29,7 @@ use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
@@ -736,7 +737,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
         damages: vec![
             AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 },
             AttackPower { kind: AttackPowerType::Element, hp_damage: element, mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: (attacker_property.yao_attack & 0xffff) as i32, mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(CMonster::resource_soul_attack(attacker_property)), mp_damage: 0 },
         ],
     };
     let attack = defend_owned_monster_attack(game, identity, target.mana, target.war_soul_mana,

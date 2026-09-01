@@ -1762,7 +1762,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     },
                     AttackPower {
                         kind: AttackPowerType::Soul,
-                        hp_damage: (property.yao_attack & 0xffff) as i32,
+                        hp_damage: i32::from(CMonster::resource_soul_attack(&property)),
                         mp_damage: 0,
                     },
                 ],

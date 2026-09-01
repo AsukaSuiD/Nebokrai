@@ -59,7 +59,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::monster::PetAttackProperties;
+use crate::gameserver::appserver::monster::{CMonster, PetAttackProperties};
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -741,7 +741,7 @@ fn wide_arc_attack(
             AttackPower { kind: AttackPowerType::Element, hp_damage: 0, mp_damage: 0 },
             AttackPower {
                 kind: AttackPowerType::Soul,
-                hp_damage: (dispatch.property.yao_attack & 0xffff) as i32,
+                hp_damage: i32::from(CMonster::resource_soul_attack(&dispatch.property)),
                 mp_damage: 0,
             },
         ],

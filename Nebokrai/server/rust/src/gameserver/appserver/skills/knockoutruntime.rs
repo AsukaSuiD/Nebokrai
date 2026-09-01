@@ -24,6 +24,7 @@ use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -189,7 +190,7 @@ fn monster_attack(
             // возвращает ноль; GetAddSoulAtk оставляет младшие 16 бит только
             // положительного `dwYaoAtk`.
             AttackPower { kind: AttackPowerType::Element, hp_damage: 0, mp_damage: 0 },
-            AttackPower { kind: AttackPowerType::Soul, hp_damage: if property.yao_attack == 0 { 0 } else { (property.yao_attack & 0xffff) as i32 }, mp_damage: 0 },
+            AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(CMonster::resource_soul_attack(property)), mp_damage: 0 },
         ],
     };
     // `CMoveShape::GetCCH` для монстра равен нулю, но исходный owner всё
