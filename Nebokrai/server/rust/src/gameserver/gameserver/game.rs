@@ -38006,17 +38006,23 @@ impl CGame {
                 crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_MAXIMUM_DURABILITY,
                 2,
             );
-            let mut payload = Vec::new();
-            if !goods.serialize_for_old_client(
-                &mut payload,
-                factory,
-                self.globe_setup.da_kong_key(),
-            ) {
-                return;
-            }
+            let payload = if current < 1 {
+                let mut payload = Vec::new();
+                if !goods.serialize_for_old_client(
+                    &mut payload,
+                    factory,
+                    self.globe_setup.da_kong_key(),
+                ) {
+                    return;
+                }
+                Some(payload)
+            } else {
+                None
+            };
             (old, current, goods.identity().ex_id, payload)
         };
         if current < 1 {
+            let Some(payload) = payload else { return };
             let mut update = CMessage::new(0x000b_f918);
             update.add_long(player_id);
             update.base_mut().add_guid(identity);
