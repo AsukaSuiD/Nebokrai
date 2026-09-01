@@ -6,36 +6,8 @@
 //! маску 5×5 и две дуги по три клетки. Проверка, порядок стадий, формула,
 //! два вызова RNG на допустимую цель и сетевой контракт совпадают с
 //! `CMachineryStomp`, кроме ID и таблицы свойств, поэтому объектный путь игрока
-//! и монстра использует один узкий семейный владелец. Координатные перегрузки
-//! `Begin` остаются ниже недостигнутыми.
-
-// ============================================================================
-// FUNCTION: CLordWiderangingAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:141
-// RVA: 0x0012EE70
-// ADDRESS: 0052ee70
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CLordWiderangingAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lordwiderangingattack.cpp:161
-// RVA: 0x0012EF50
-// ADDRESS: 0052ef50
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+//! и монстра использует один узкий семейный владелец. Координатный и пустой
+//! `Begin` завершаются исходным failure `2` и `End(0)`.
 
 use super::machinerystomp::{
     WideArcAttackDispatch, execute_player_wide_arc_attack, prepare_owned_wide_arc_attack,
@@ -54,7 +26,9 @@ pub(crate) const LORD_WIDERANGING_ATTACK_SKILL_ID: u32 = 0x1f6;
 pub(crate) const fn is_lord_wideranging_attack_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     matches!(
         dispatch,
-        PlayerSkillDispatch::Object {
+        PlayerSkillDispatch::SelfTarget { skill_id: LORD_WIDERANGING_ATTACK_SKILL_ID, .. }
+            | PlayerSkillDispatch::Point { skill_id: LORD_WIDERANGING_ATTACK_SKILL_ID, .. }
+            | PlayerSkillDispatch::Object {
             skill_id: LORD_WIDERANGING_ATTACK_SKILL_ID,
             target: ShapeIdentity { object_type: 400 | 600, .. },
         }

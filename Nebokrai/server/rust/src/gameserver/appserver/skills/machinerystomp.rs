@@ -8,39 +8,12 @@
 //! выполняются вызовы RNG физического урона и критического удара; формула игрока
 //! также сохраняет урон стихией и душой. `CGame` только разрешает независимых
 //! владельцев, применяет защиту и последствия смерти и доставляет пакеты.
-//! Координатные перегрузки `Begin` остаются ниже недостигнутыми. Player-варианты
-//! обоих владельцев не изнашивают оружие в `Attack` или `AI`: унаследованный
+//! Координатный и пустой `Begin` завершаются исходным failure `2` и `End(0)`.
+//! Player-варианты обоих владельцев не изнашивают оружие в `Attack` или `AI`:
+//! унаследованный
 //! `AfterUseSkill` делает это один раз через общий `End`, после возврата
 //! движения и перед cooldown соответствующего идентификатора.
 //! Критический float-множитель усекается к нулю перед записью `int`.
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:141
-// RVA: 0x00131340
-// ADDRESS: 00531340
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMachineryStomp::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\machinerystomp.cpp:161
-// RVA: 0x00131420
-// ADDRESS: 00531420
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -92,7 +65,9 @@ fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutc
 pub(crate) const fn is_machinery_stomp_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     matches!(
         dispatch,
-        PlayerSkillDispatch::Object {
+        PlayerSkillDispatch::SelfTarget { skill_id: MACHINERY_STOMP_SKILL_ID, .. }
+            | PlayerSkillDispatch::Point { skill_id: MACHINERY_STOMP_SKILL_ID, .. }
+            | PlayerSkillDispatch::Object {
             skill_id: MACHINERY_STOMP_SKILL_ID,
             target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
         }
@@ -259,6 +234,12 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     let target = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id: dispatch_skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id: dispatch_skill_id, .. }
+            if dispatch_skill_id == skill_id => {
+                send_player_failure(game, player_id, 2);
+                return player_terminal(QueuedSkillExecutionState::Rejected);
+            }
         PlayerSkillDispatch::Object { skill_id: dispatch_skill_id, target }
             if dispatch_skill_id == skill_id
                 && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
