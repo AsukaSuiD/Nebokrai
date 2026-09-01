@@ -424,7 +424,7 @@ impl CMonster {
         master_name: &[u8],
     ) {
         let mut writer = LegacyWriter::new(payload);
-        writer.write_u32(property.maximum_hp);
+        writer.write_u32(self.maximum_hp(property));
         writer.write_u32(self.hit_points);
         writer.write_u8(property.kind as u8);
         writer.write_u8(property.figure as u8);
@@ -625,7 +625,7 @@ impl CMonster {
     ) -> Option<PetExperienceUpdate> {
         self.pet_experience = self.pet_experience.wrapping_add(experience);
         if self.pet_level < 10 {
-            let threshold = self.pet_maximum_hp(property) as f32 * experience_factor;
+            let threshold = self.maximum_hp(property) as f32 * experience_factor;
             if self.pet_experience as f32 <= threshold {
                 if self.pet_level == 0 && self.pet_experience == 0 {
                     if let Some(factors) = current_factors {
@@ -638,13 +638,13 @@ impl CMonster {
                 if let Some(factors) = next_factors {
                     self.adjust_pet_factors(factors);
                 }
-                self.hit_points = self.pet_maximum_hp(property);
+                self.hit_points = self.maximum_hp(property);
             }
         }
         (experience != 0).then(|| PetExperienceUpdate {
             level: self.pet_level,
             experience: self.pet_experience,
-            maximum_hp: self.pet_maximum_hp(property),
+            maximum_hp: self.maximum_hp(property),
             hit_points: self.hit_points,
         })
     }
@@ -653,8 +653,15 @@ impl CMonster {
         self.factors = factors.map(f32::to_bits);
     }
 
-    pub(crate) fn pet_maximum_hp(&self, property: &MonsterProperties) -> u32 {
-        (property.maximum_hp as f32 * f32::from_bits(self.factors[6])).round_ties_even() as u32
+    /// Exact `CMonster::GetMaxHP` (RVA `0x000E65A0`): factor `6` действует
+    /// только при валидной player-owner связи, а x87 результат усекается.
+    pub(crate) fn maximum_hp(&self, property: &MonsterProperties) -> u32 {
+        if !self.has_player_pet_master() {
+            return property.maximum_hp;
+        }
+        let scaled = f64::from(property.maximum_hp)
+            * f64::from(f32::from_bits(self.factors[6]));
+        scaled.trunc() as i32 as u32
     }
 
     pub(crate) const fn set_pet_mode(&mut self, mode: i32) {
@@ -820,11 +827,7 @@ impl CMonster {
         property: &MonsterProperties,
     ) -> MonsterWakeMutation {
         let dormancy_interval_ms = self.base_ai.wake_up(now_ms);
-        let maximum_hp = if self.tamed {
-            self.pet_maximum_hp(property)
-        } else {
-            property.maximum_hp
-        };
+        let maximum_hp = self.maximum_hp(property);
         let publish_states = self.hit_points != maximum_hp;
         if publish_states {
             if resume_timer_ms == 0 {
@@ -1772,7 +1775,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetMaxHP
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1389
@@ -1780,8 +1783,7 @@ impl CMonster {
 // ADDRESS: 004e65a0
 // PROTOTYPE: ulong __thiscall GetMaxHP(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `maximum_hp`.
 //
 
 // ============================================================================

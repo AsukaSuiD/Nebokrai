@@ -140,7 +140,11 @@ pub(crate) fn select_smart_gladiator_enemy(
             .and_then(|pet| {
                 let property =
                     game.find_monster_property_by_origin_name(pet.base_property_key()?)?;
-                Some((pet.shape_view(property)?, pet.hit_points(), property.maximum_hp))
+                Some((
+                    pet.shape_view(property)?,
+                    pet.hit_points(),
+                    pet.maximum_hp(property),
+                ))
             })
         else {
             continue;

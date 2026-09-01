@@ -476,7 +476,7 @@ impl CGame {
                     (
                         monster_id,
                         pet.move_shape().shape().clone(),
-                        pet.pet_maximum_hp(property),
+                        pet.maximum_hp(property),
                     )
                 });
             if let ServerRegionOwner::City(region) = &mut owner {

@@ -47948,15 +47948,17 @@ impl CGame {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return;
         };
-        let (identity, action, hit_points) = {
+        let (identity, action, maximum_hp, hit_points) = {
             let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) else {
                 self.restore_region_owner(owner);
                 return;
             };
-            monster.refresh_war_guard(property.maximum_hp);
+            let maximum_hp = monster.maximum_hp(&property);
+            monster.refresh_war_guard(maximum_hp);
             (
                 monster.move_shape().shape().identity(),
                 monster.move_shape().shape().get_action(),
+                maximum_hp,
                 monster.hit_points(),
             )
         };
@@ -47964,7 +47966,7 @@ impl CGame {
         update.add_long(identity.object_type);
         update.add_long(identity.id);
         update.add_short(action as i16);
-        update.add_ulong(property.maximum_hp);
+        update.add_ulong(maximum_hp);
         update.add_ulong(hit_points);
         let base = owner.base();
         let shape = base

@@ -293,11 +293,7 @@ fn advance_effect(
                 .and_then(|monster| {
                     let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
                     let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
-                    let maximum_health = if monster.is_tamed() {
-                        monster.pet_maximum_hp(&property)
-                    } else {
-                        property.maximum_hp
-                    };
+                    let maximum_health = monster.maximum_hp(&property);
                     let health = monster.hit_points();
                     let promotion = monster.move_shape().promotion_heal_recover_factor();
                     let pass = state.advance(

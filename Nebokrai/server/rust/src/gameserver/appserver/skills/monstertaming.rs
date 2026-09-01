@@ -159,7 +159,7 @@ fn apply_success(
                 level,
                 experience,
                 monster.hit_points(),
-                monster.pet_maximum_hp(property),
+                monster.maximum_hp(property),
             )
         })
     });
