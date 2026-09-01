@@ -652,7 +652,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         first_contact = true;
         let damage = attack.hp_damage().min(monster_health);
         let current_health = monster_health - damage;
-        let lord_hurt_plan = (monster_property.ai == 100
+        let lord_hurt_plan = (monster_property.ai == 19
             && attack.full_miss == 0
             && damage != 0
             && current_health != 0)
@@ -689,19 +689,19 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 } else if monster_property.ai == 2 {
                     // Владелец AI2 применит реакцию после освобождения
                     // изменяемого заимствования монстра.
-                } else if monster_property.ai == 16 {
-                    // Поиск AI16 выполняется после освобождения изменяемого
+                } else if monster_property.ai == 13 {
+                    // Поиск AI13 выполняется после освобождения изменяемого
                     // заимствования монстра.
                 } else if monster_property.ai == 11 {
                     // Поиск AI11 выполняется после освобождения изменяемого
                     // заимствования монстра.
-                } else if monster_property.ai == 0x65 {
-                    // AI101 разрешает игрока и связывает близнеца после
+                } else if monster_property.ai == 20 {
+                    // AI20 разрешает игрока и связывает близнеца после
                     // освобождения изменяемого заимствования монстра.
-                } else if monster_property.ai == 100 {
-                    // AI100 применяет Defense, spatial-step и выбор цели
+                } else if monster_property.ai == 19 {
+                    // AI19 применяет Defense, spatial-step и выбор цели
                     // после освобождения заимствования монстра.
-                } else if matches!(monster_property.ai, 8 | 13 | 14 | 20) {
+                } else if matches!(monster_property.ai, 8 | 17 | 100 | 101) {
                     monster.when_been_hurted(now_ms);
                 } else {
                     monster.when_been_hurted_by(
@@ -756,7 +756,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         if attack.full_miss == 0
             && damage != 0
             && current_health != 0
-            && monster_property.ai == 16
+            && monster_property.ai == 13
         {
             crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt(
                 game,
@@ -769,7 +769,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         if attack.full_miss == 0
             && damage != 0
             && current_health != 0
-            && monster_property.ai == 0x65
+            && monster_property.ai == 20
         {
             let _ = retarget_jiumai_after_hurt(
                 game,
@@ -801,7 +801,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         if attack.full_miss == 0
             && damage != 0
             && current_health != 0
-            && matches!(monster_property.ai, 8 | 13 | 14 | 20)
+            && matches!(monster_property.ai, 8 | 17 | 100 | 101)
         {
             crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt(
                 game,

@@ -88,7 +88,7 @@ pub(crate) fn select_country_guard_target(
     if let Some(selected) = selected {
         return Some(selected.identity);
     }
-    if matches!(property.ai, 13 | 20) {
+    if matches!(property.ai, 17 | 100) {
         select_guard_with_bow_target(
             game,
             region,
@@ -115,7 +115,7 @@ pub(crate) fn retarget_special_guard_after_hurt(
     monster_id: i32,
     property: &MonsterProperties,
 ) {
-    if !matches!(property.ai, 8 | 13 | 14 | 20)
+    if !matches!(property.ai, 8 | 17 | 100 | 101)
         || region
             .find_monster_by_id(monster_id)
             .is_none_or(|monster| monster.ai_target().is_some())

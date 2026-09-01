@@ -232,13 +232,13 @@ fn owns_complete_skill_selection(skills: &[MonsterSkill], ai_type: u32) -> bool 
     !skills.is_empty()
         && skills.iter().all(|skill| {
             is_owned_monster_attack_skill(u32::from(skill.id))
-                || (ai_type == 0x67 && skill.id == BASE_ARCHERY_SKILL_ID)
-                || (ai_type == 0x68
+                || (ai_type == 21 && skill.id == BASE_ARCHERY_SKILL_ID)
+                || (ai_type == 23
                     && matches!(
                         skill.id,
                         BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
                     ))
-                || (ai_type == 100
+                || (ai_type == 19
                     && matches!(
                         skill.id,
                         BASE_ATTACK_SKILL_ID | BASE_ARCHERY_SKILL_ID
@@ -296,7 +296,7 @@ fn release_reciprocal_monster_target<Runtime: GameMainLoopRuntime>(
         if pet_action == 0 {
             let _ = queue_pet_idle(region, target_id, stop_frame, runtime);
         }
-    } else if matches!(ai_type, 10 | 15 | 19) {
+    } else if matches!(ai_type, 10 | 12 | 16) {
         release_guard_sword_target(game, region, target_id, runtime);
     } else if let Some(target) = region.find_monster_by_id_mut(target_id) {
         target.clear_ai_target();
@@ -349,7 +349,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 ) -> Option<u16> {
     let default_skill_id = default_monster_attack_skill_id(game, &property.skills);
     let roll = game.skill_random_below(10_000);
-    let selected = if property.ai == 0x67 {
+    let selected = if property.ai == 21 {
         choose_boss_blue_attack_skill(
             region,
             monster_id,
@@ -358,7 +358,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
             roll,
             default_skill_id,
         )
-    } else if property.ai == 0x68 {
+    } else if property.ai == 23 {
         choose_boss_fiend_attack_skill(
             game,
             region,
@@ -368,7 +368,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
             roll,
             runtime,
         )
-    } else if property.ai == 100 {
+    } else if property.ai == 19 {
         Some(select_lord_attack_skill(
             monster_health,
             property.maximum_hp,
@@ -395,7 +395,7 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 /// Выполняет точный `CMonsterAI::OnChangeSkill` отдельным FIFO-тактом. После
 /// единственного weighted RNG выбранный concrete skill проверяется через
 /// `CSkill::IsRestored`; отсутствующий или ещё не восстановленный навык общего
-/// monster AI заменяется `GetDefaultAttackSkillID`. Производные AI5/AI23
+/// monster AI заменяется `GetDefaultAttackSkillID`. Производные AI5/AI103
 /// сохраняют существующий навык на cooldown и ставят полный restore delay в
 /// хвост FIFO. Boss-specific пороги остаются в своих selector-owner-ах.
 pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
@@ -430,7 +430,7 @@ pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     let Some(selected_skill_id) = selected else {
         return false;
     };
-    if matches!(property.ai, 5 | 23) {
+    if matches!(property.ai, 5 | 103) {
         if queue_fixed_archer_skill_delay(
             game,
             region,
@@ -554,7 +554,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    if property.ai == 0x65 {
+    if property.ai == 20 {
         if let Some(selected) = select_jiumai_enemy(
             game,
             region,
@@ -660,7 +660,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
             .map(|selected| selected.identity)
         }
-        13 | 14 | 20 => {
+        17 | 100 | 101 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
                 .map_or(0, |properties| properties.query_property(5_004) as i32);
@@ -672,7 +672,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 minimum_skill_distance,
             )
         }
-        17 | 18 => select_country_war_enemy(
+        14 | 15 => select_country_war_enemy(
             game,
             region,
             owner,
@@ -680,7 +680,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.ai,
             property.guard_range as i32,
         ),
-        15 | 16 => {
+        12 | 13 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
                 .map_or(0, |properties| properties.query_property(5_004) as i32);
@@ -694,7 +694,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
             .map(|selected| selected.identity)
         }
-        19 => {
+        16 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
                 .map_or(0, |properties| properties.query_property(5_004) as i32);
@@ -709,7 +709,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             )
             .map(|selected| selected.identity)
         }
-        21 => select_nation_gladiator_enemy(
+        18 => select_nation_gladiator_enemy(
             game,
             region,
             owner,
@@ -717,7 +717,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
             property.race,
         ),
-        23 => {
+        103 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
                 .map_or(0, |properties| properties.query_property(5_004) as i32);
@@ -731,7 +731,7 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
                 property.race,
             )
         }
-        24 => select_gods_battle_enemy(
+        104 => select_gods_battle_enemy(
             game,
             region,
             owner,
@@ -739,21 +739,21 @@ pub(crate) fn search_owned_monster_enemy<Runtime: GameMainLoopRuntime>(
             property.guard_range as i32,
             property.race,
         ),
-        100 => select_lord_enemy(
+        19 => select_lord_enemy(
             game,
             region,
             owner,
             area_index,
             property.guard_range as i32,
         ),
-        0x67 => select_boss_blue_enemy(
+        21 => select_boss_blue_enemy(
             game,
             region,
             owner,
             area_index,
             property.guard_range as i32,
         ),
-        0x68 => {
+        23 => {
             let minimum_skill_distance = game
                 .skill_base_properties(skill_id, i32::from(skill_level))
                 .map_or(0, |properties| properties.query_property(5_004) as i32);
@@ -836,12 +836,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if CMoveShape::is_died(monster_health) {
         return false;
     }
-    if property.ai == 0x65
+    if property.ai == 20
         && !ensure_jiumai_twin(game, region, monster_id, &property)
     {
         return false;
     }
-    if property.ai == 0x65
+    if property.ai == 20
         && !maintain_jiumai_twin(game, region, monster_id, &property, runtime)
     {
         return false;
@@ -849,7 +849,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if !owns_complete_skill_selection(&property.skills, property.ai) {
         return false;
     }
-    if matches!(property.ai, 10 | 15 | 19) {
+    if matches!(property.ai, 10 | 12 | 16) {
         let left_chase_range = region
             .find_monster_by_id_mut(monster_id)
             .and_then(|monster| {
@@ -921,7 +921,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 5 | 11 | 16 | 23)
+        && matches!(property.ai, 5 | 11 | 13 | 103)
     {
         return queue_stationary_guard_idle(
             region,
@@ -933,7 +933,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 13 | 14 | 15 | 17 | 18 | 19 | 20 | 21 | 24 | 100 | 0x65)
+        && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 12 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 100 | 101 | 104)
             || MonsterAiKind::is_generic_ai_type(property.ai))
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
@@ -977,7 +977,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 0x67 | 0x68)
+        && matches!(property.ai, 21 | 23)
         && queue_boss_idle(game, region, monster_id, &property, runtime)
     {
         return true;
@@ -998,7 +998,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     stop_frame,
                     runtime,
                 );
-            } else if matches!(property.ai, 10 | 15 | 19) {
+            } else if matches!(property.ai, 10 | 12 | 16) {
                 lose_guard_sword_target(game, region, monster_id, runtime);
             } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if has_owned_search_enemy(property.ai, tamed) {
@@ -1048,7 +1048,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                     stop_frame,
                     runtime,
                 );
-            } else if matches!(property.ai, 10 | 15 | 19) {
+            } else if matches!(property.ai, 10 | 12 | 16) {
                 lose_guard_sword_target(game, region, monster_id, runtime);
             } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 if has_owned_search_enemy(property.ai, tamed) {
@@ -1595,7 +1595,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    if matches!(property.ai, 10 | 15 | 19)
+    if matches!(property.ai, 10 | 12 | 16)
         && cast.is_none()
         && trace_city_sword_target(
             game,

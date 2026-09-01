@@ -44,7 +44,7 @@ pub(crate) fn consider_gods_battle_guard_target(
     }
 }
 
-/// Выполняет достигнутый player-поиск AI23 с фракционным исключением и
+/// Выполняет достигнутый player-поиск AI103 с фракционным исключением и
 /// правилом преступника своей фракции.
 pub(crate) fn select_gods_battle_guard_enemy(
     game: &CGame,

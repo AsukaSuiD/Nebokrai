@@ -1388,7 +1388,7 @@ impl CServerRegion {
         monster.initialize_skills(property, skill_factory, &mut |bound| {
             context.random_below(bound)
         });
-        let special_ai_started_at_ms = if property.ai == 0x68 {
+        let special_ai_started_at_ms = if property.ai == 23 {
             now_ms(context)
         } else {
             0

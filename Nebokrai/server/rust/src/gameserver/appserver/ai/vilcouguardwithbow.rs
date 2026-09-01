@@ -1,4 +1,4 @@
-//! Достигнутая часть окружного охранника с луком (AI16).
+//! Достигнутая часть окружного охранника с луком (AI13).
 //!
 //! Точная пара gameserver.exe + GameServer.pdb и исходный владелец
 //! appserver/ai/vilcouguardwithbow.cpp подтверждают общий со стражем с мечом
@@ -63,7 +63,7 @@ use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
 
-/// Повторяет `WhenBeenHurted` AI16: базовое событие защиты ставится всегда,
+/// Повторяет `WhenBeenHurted` AI13: базовое событие защиты ставится всегда,
 /// но новый противник выбирается общим country-search только если охранник до
 /// удара ещё не вёл бой и у него установлен текущий навык.
 pub(crate) fn retarget_village_bow_guard_after_hurt(

@@ -6,7 +6,7 @@
 //! наружу после возврата владельца региона; смерть любого монстра остаётся
 //! в его `CBaseAI` как пассивный `Died` и завершается runtime-владельцем AI.
 //! Производные hurt-owner-ы вызываются после освобождения mutation-заимствования;
-//! в частности AI100 сохраняет поиск summon-формы и принимает monster-attacker-а.
+//! в частности AI19 сохраняет поиск summon-формы и принимает monster-attacker-а.
 
 use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
@@ -352,7 +352,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     let lord_hurt_plan = target_monster_property
         .as_ref()
         .filter(|property| {
-            property.ai == 100 && current_health != 0 && attack.full_miss == 0
+            property.ai == 19 && current_health != 0 && attack.full_miss == 0
         })
         .map(|property| plan_lord_hurt_response_in_region(game, region, target.id, property));
     let (attacker_is_tamed, passive_attacker_is_owned_creature) = region
@@ -410,9 +410,9 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 // после освобождения изменяемого заимствования цели.
             } else if target_monster_property
                 .as_ref()
-                .is_some_and(|property| property.ai == 16)
+                .is_some_and(|property| property.ai == 13)
             {
-                // Поиск AI16 читает соседние категории после освобождения
+                // Поиск AI13 читает соседние категории после освобождения
                 // изменяемого заимствования цели.
             } else if target_monster_property
                 .as_ref()
@@ -422,15 +422,15 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 // после освобождения изменяемого заимствования цели.
             } else if target_monster_property
                 .as_ref()
-                .is_some_and(|property| property.ai == 0x65)
+                .is_some_and(|property| property.ai == 20)
             {
-                // AI101 разрешает атакующего и связывает близнеца после
+                // AI20 разрешает атакующего и связывает близнеца после
                 // освобождения изменяемого заимствования цели.
             } else if target_monster_property
                 .as_ref()
-                .is_some_and(|property| property.ai == 100)
+                .is_some_and(|property| property.ai == 19)
             {
-                // AI100 применяет Defense, spatial-step и выбор цели после
+                // AI19 применяет Defense, spatial-step и выбор цели после
                 // освобождения изменяемого заимствования монстра.
             } else if target_monster_property
                 .as_ref()
@@ -443,7 +443,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 );
             } else if target_monster_property
                 .as_ref()
-                .is_some_and(|property| matches!(property.ai, 8 | 13 | 14 | 20))
+                .is_some_and(|property| matches!(property.ai, 8 | 17 | 100 | 101))
             {
                 monster.when_been_hurted(now_ms);
             } else {
@@ -478,7 +478,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         && !target_tamed
         && target_monster_property
             .as_ref()
-            .is_some_and(|property| property.ai == 16)
+            .is_some_and(|property| property.ai == 13)
         && let Some(property) = target_monster_property.as_ref()
     {
         retarget_village_bow_guard_after_hurt(game, region, target.id, property, now_ms);
@@ -498,7 +498,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         && !target_tamed
         && target_monster_property
             .as_ref()
-            .is_some_and(|property| property.ai == 0x65)
+            .is_some_and(|property| property.ai == 20)
     {
         let _ = retarget_jiumai_after_hurt(
             game,
@@ -517,7 +517,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         && !target_tamed
         && let (Some(property), Some(plan)) =
             (target_monster_property.as_ref(), lord_hurt_plan)
-        && property.ai == 100
+        && property.ai == 19
     {
         let _ = apply_lord_hurt_response(
             game,
@@ -538,7 +538,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         && !target_tamed
         && target_monster_property
             .as_ref()
-            .is_some_and(|property| matches!(property.ai, 8 | 13 | 14 | 20))
+            .is_some_and(|property| matches!(property.ai, 8 | 17 | 100 | 101))
         && let Some(property) = target_monster_property.as_ref()
     {
         retarget_special_guard_after_hurt(game, region, target.id, property);

@@ -6,7 +6,7 @@
 //! сумма не покрыла бросок, назначается стандартная атака владельца.
 //! `OnChangeSkill` сохраняет выбранный concrete skill только после точной
 //! проверки `CSkill::IsRestored`, иначе вызывает
-//! `SetCurrentSkill(GetDefaultAttackSkillID())`; AI5/AI23 вместо отката ждут
+//! `SetCurrentSkill(GetDefaultAttackSkillID())`; AI5/AI103 вместо отката ждут
 //! полный restore delay в собственном FIFO.
 //! Выбранный ID хранится каноническим `CMoveShape::current_skill_id`; конкретный
 //! владелец навыка разрешает уровень и исполняет стадии. Общий достигнутый шаг
@@ -58,7 +58,10 @@ pub(crate) const fn schedule_attack_interval(
     ai_type: u32,
     ordinary_interval_ms: u32,
 ) -> Option<u32> {
-    if matches!(ai_type, 0x67 | 0x68) {
+    if matches!(
+        MonsterAiKind::from_ai_type(ai_type),
+        MonsterAiKind::BossBlue | MonsterAiKind::BossFiend
+    ) {
         None
     } else {
         Some(ordinary_interval_ms)
@@ -116,17 +119,16 @@ pub(crate) const fn hibernates_without_nearby_players(
             | 9
             | 10
             | 11
+            | 12
             | 13
-            | 14
-            | 15
             | 16
-            | 19
+            | 17
             | 20
+            | 21
             | 23
-            | 0x64
-            | 0x65
-            | 0x67
-            | 0x68
+            | 100
+            | 101
+            | 103
         )
         || (ai_type == 2 && smart_gladiator_ready_to_idle)
 }
@@ -136,8 +138,8 @@ pub(crate) const fn has_owned_search_enemy(ai_type: u32, tamed: bool) -> bool {
         || MonsterAiKind::is_generic_ai_type(ai_type)
         || matches!(
             ai_type,
-            0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 23 | 24
-                | 100 | 0x65 | 0x67 | 0x68
+            0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 23
+                | 100 | 101 | 103 | 104
         )
 }
 
@@ -392,7 +394,7 @@ pub(crate) fn approach_attack_range(
 // FUNCTION: CMonsterAI::OnChangeSkill
 // STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // MATERIALIZED: weighted selector, `CSkill::IsRestored`, default-skill
-// fallback и производная задержка AI5/AI23 выполняются достигнутым FIFO caller-ом.
+// fallback и производная задержка AI5/AI103 выполняются достигнутым FIFO caller-ом.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\monsterai.cpp:167
@@ -422,8 +424,8 @@ pub(crate) fn approach_attack_range(
 // `execute_owned_monster_base_attack` сохраняют проверку соседних игроков и
 // спящий переход. `queue_monster_idle` проводит `ChangeSkill`, точный RNG
 // случайного шага либо `Stand`, а затем `SearchEnemy` для достигнутых AI0,
-// AI1, AI2, AI3, AI4, AI6, AI7, AI8, AI9, AI10, AI13, AI14, AI17, AI18,
-// AI20, AI21, AI24, AI100, AI101 и двух боссов. Остальные виртуальные
+// AI1, AI2, AI3, AI4, AI6, AI7, AI8, AI9, AI10, AI12, AI14, AI15, AI16,
+// AI17, AI18, AI19, AI20, AI100, AI101, AI104 и двух боссов. Остальные виртуальные
 // владельцы остаются RAW.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb

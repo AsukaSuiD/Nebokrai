@@ -40,7 +40,7 @@ pub(crate) struct FixedArcherTarget {
 /// Стационарные лучники и охранники завершают атаку новым поиском, не сбрасывая
 /// текущий навык. Остальные monster-owner-ы сохраняют общий `ChangeSkill`.
 pub(crate) const fn attack_completion_action(ai_type: u32) -> AiShapeAction {
-    if matches!(ai_type, 5 | 11 | 23) {
+    if matches!(ai_type, 5 | 11 | 103) {
         AiShapeAction::SearchEnemy
     } else {
         AiShapeAction::ChangeSkill
@@ -64,7 +64,7 @@ pub(crate) fn queue_stationary_guard_idle<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Выполняет производный хвост `OnChangeSkill` AI5 и наследующего его AI23.
+/// Выполняет производный хвост `OnChangeSkill` AI5 и наследующего его AI103.
 /// `false` означает, что выбранный concrete skill не разрешился и общий owner
 /// обязан назначить default skill. Разрешённый выбор сохраняется; для ещё не
 /// восстановленного навыка полный `GetRestoreTime` дописывается в FIFO.
@@ -77,7 +77,7 @@ pub(crate) fn queue_fixed_archer_skill_delay<Runtime: GameMainLoopRuntime>(
     selected_skill_id: u16,
     runtime: &mut Runtime,
 ) -> bool {
-    if !matches!(property.ai, 5 | 23) {
+    if !matches!(property.ai, 5 | 103) {
         return false;
     }
     let Some(skill) = property
