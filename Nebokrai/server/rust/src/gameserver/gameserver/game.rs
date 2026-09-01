@@ -42163,14 +42163,9 @@ impl CGame {
             attacker_country_identity: country_identity,
             attacker_kill_count,
         });
-        let mut pk_count = None;
-        if disposition == KillPkDisposition::ReportMurderer {
-            let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
-            let confirmed_pk_count = self
-                .find_player_mut(murderer_id)?
-                .report_murderer(pk_count_per_kill, || runtime.now_milliseconds());
-            pk_count = Some(confirmed_pk_count);
-        }
+        let pk_count = (disposition == KillPkDisposition::ReportMurderer)
+            .then(|| self.report_player_murderer(murderer_id, runtime.now_milliseconds()))
+            .flatten();
         let mut jjc = None;
         if self
             .find_player(murderer_id)
@@ -42194,6 +42189,24 @@ impl CGame {
             "обработано убийство игрока"
         );
         Some(())
+    }
+
+    /// Exact `CPKSys::ReportMurderer`: mutation знака убийцы и `0xBF70E`
+    /// являются одним наблюдаемым эффектом каждого достигнутого PK-пути.
+    fn report_player_murderer(&mut self, player_id: i32, now_ms: u32) -> Option<u16> {
+        let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
+        let (pk_count, kill_count) = {
+            let player = self.find_player_mut(player_id)?;
+            let pk_count = player.report_murderer(pk_count_per_kill, || now_ms);
+            (pk_count, player.kill_count())
+        };
+        let mut message = CMessage::new(0x000b_f70e);
+        message.add_long(player_id);
+        message.base_mut().add_word(pk_count);
+        message.add_ulong(kill_count);
+        let around_delivery = self.send_player_shape_around(player_id, None, &message);
+        tracing::trace!(player_id, pk_count, kill_count, ?around_delivery, "знак убийцы опубликован");
+        Some(pk_count)
     }
 
     fn player_on_death<Runtime: GameMainLoopRuntime>(

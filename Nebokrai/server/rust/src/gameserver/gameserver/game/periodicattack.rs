@@ -37,23 +37,9 @@ impl CGame {
             attacker_kill_count: attacker.kill_count(),
         });
         let victim_level = victim.level();
-        let murderer_delivery = if disposition == KillPkDisposition::ReportMurderer {
-            let pk_count_per_kill = self.globe_setup.pk_count_per_kill();
-            let (pk_count, kill_count) = {
-                let attacker = self.find_player_mut(attacker_id)?;
-                let pk_count = attacker.report_murderer(pk_count_per_kill, || {
-                    runtime.now_milliseconds()
-                });
-                (pk_count, attacker.kill_count())
-            };
-            let mut message = CMessage::new(0x000b_f70e);
-            message.add_long(attacker_id);
-            message.base_mut().add_short(pk_count as i16);
-            message.add_ulong(kill_count);
-            self.send_player_shape_around(attacker_id, None, &message)
-        } else {
-            None
-        };
+        let murderer_report = (disposition == KillPkDisposition::ReportMurderer)
+            .then(|| self.report_player_murderer(attacker_id, runtime.now_milliseconds()))
+            .flatten();
         let eligible = matches!(
             disposition,
             KillPkDisposition::AllowedCombat | KillPkDisposition::ReportMurderer
@@ -73,7 +59,7 @@ impl CGame {
             attacker_id,
             victim_id,
             ?disposition,
-            ?murderer_delivery,
+            ?murderer_report,
             ?world_log_delivery,
             "обработан удар рассчитанного навыка по игроку"
         );

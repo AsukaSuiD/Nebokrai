@@ -323,7 +323,7 @@ impl CPKSys {
 
 // ============================================================================
 // FUNCTION: CPKSys::ReportMurderer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_RAW
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\pksys.cpp:496
