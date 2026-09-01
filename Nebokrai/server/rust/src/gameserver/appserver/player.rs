@@ -19,8 +19,10 @@
 //! wire строго на первом false, как исходная цепочка. После чтения base-wire
 //! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
 //! принимается как независимый persisted fact.
-//! Quest-map и friend-list decoder-ы сохраняют signed legacy count:
-//! отрицательное значение очищает коллекцию и не отклоняет остальной handoff.
+//! Quest-map, skill-list и friend-list decoder-ы сохраняют signed legacy
+//! count: отрицательное значение очищает коллекцию и не отклоняет остальной
+//! handoff. CiQing/pet loops исходника на отрицательном count патологически
+//! обходили бы весь `u32`; безопасная Rust-граница такие данные отклоняет.
 //! Exact virtual tail этого decoder-а вызывает `CPlayer::InitSkills`: он
 //! гарантирует базовую защиту и профессии 0/1/2 их базовые attack-owner-ы, не
 //! заменяет уже загруженные записи и завершает вход `SetHP(GetMaxHP)`.
@@ -2611,8 +2613,8 @@ impl CPlayer {
 
         player.move_shape.clear_persisted_runtime_state();
         player.auto_protected = false;
-        let skill_count = read_player_game_save_count(source, cursor, "skill count")?;
-        for _ in 0..skill_count {
+        let skill_count = read_player_game_save_i32(source, cursor, "skill count")?;
+        for _ in 0..skill_count.max(0) {
             let packed = read_player_game_save_u32(source, cursor, "tagSkillID")?;
             let skill_id = packed & 0xffff;
             let level = (packed >> 16) as i32;
@@ -15538,19 +15540,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::DecodeSkillsFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9096
-// RVA: 0x0002C5C0
-// ADDRESS: 0042c5c0
-// PROTOTYPE: void __thiscall DecodeSkillsFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_PSEUDOCODE: `DecodeSkillsFromByteArray` сохраняет
+// signed count и достигнут единым GameSave decoder-ом выше; покрытый RAW удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::OnChangeProperties
