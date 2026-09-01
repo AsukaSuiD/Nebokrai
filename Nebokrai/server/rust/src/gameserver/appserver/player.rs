@@ -9365,6 +9365,31 @@ impl CPlayer {
         })
     }
 
+    /// Точный `CPlayer::GetWeaponModifier`: отрицательная разница уровней
+    /// обнуляется, затем результат последовательно ограничивается сверху и
+    /// снизу обычными float-сравнениями. Отдельной защиты от нулевого divisor
+    /// в EXE нет, поэтому `0 / 0` намеренно остаётся `NaN`.
+    pub(crate) fn weapon_modifier(
+        &self,
+        factory: &CGoodsFactory,
+        target_level: i32,
+        divisor: f32,
+        minimum: f32,
+    ) -> f32 {
+        let delta = self
+            .weapon_damage_level(factory)
+            .wrapping_sub(target_level)
+            .max(0);
+        let mut modifier = delta as f32 / divisor;
+        if modifier > 1.0 {
+            modifier = 1.0;
+        }
+        if modifier < minimum {
+            modifier = minimum;
+        }
+        modifier
+    }
+
     /// Точный обход GoodsAI при первом входе: позиционные equipment/packet,
     /// одиночный hand, позиционные auction и depot. Возврат `false` повторяет
     /// исходный `break` только внутри текущего контейнера; следующий владелец
