@@ -20,7 +20,6 @@
 use super::super::country::countrywarsys::{
     CountryWarPhaseContext, CountryWarRegionContext, CountryWarSys, CountryWarVictoryContext,
 };
-use super::super::servercountryregion::CountryBattleStateBlock;
 use crate::gameserver::gameserver::game::{CGame, ScriptRegionChangeContext, ServerRegionOwner};
 use crate::gameserver::appserver::legacycodec::LegacyReader;
 use crate::nets::netserver::message::CMessage;
@@ -161,9 +160,7 @@ pub(crate) fn dispatch_game_country_war_message<Runtime: GameCountryWarRuntime>(
     message: &mut CMessage,
     game: &mut CGame,
     runtime: &mut Runtime,
-) -> Option<
-    Result<(), CountryWarMessageDispatchError<CountryBattleStateBlock>>,
-> {
+) -> Option<Result<(), CountryWarMessageDispatchError<std::convert::Infallible>>> {
     let opcode = message.message_type() as u32;
     if opcode == 0x7ff16 {
         dispatch_country_war_declaration_response(message, game, opcode);
@@ -909,7 +906,7 @@ impl<Runtime: GameCountryWarRuntime> CountryWarMessageContext
     for GameCountryWarContext<'_, Runtime>
 {
     type Region = i32;
-    type SideError = CountryBattleStateBlock;
+    type SideError = std::convert::Infallible;
 
     fn find_country_region(&mut self, region_id: i32) -> Option<Self::Region> {
         matches!(
@@ -989,7 +986,7 @@ impl<Runtime: GameCountryWarRuntime> CountryWarMessageContext
         let Some(ServerRegionOwner::Country(region)) = self.game.find_region(region) else {
             unreachable!("country handle получен из того же синхронного CGame map")
         };
-        region.country_side_bytes()
+        Ok(region.country_side_bytes())
     }
 
     fn reset_country_war_result(&mut self, country: u8) {

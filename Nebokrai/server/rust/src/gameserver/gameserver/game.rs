@@ -43405,11 +43405,9 @@ impl CGame {
             });
             return match identity.object_type {
                 kind if kind == CITY_GATE_OBJECT_TYPE as i32 => country_region
-                    .gate_is_attack_able(target, attacker, &mut context)
-                    .unwrap_or(false),
+                    .gate_is_attack_able(target, attacker, &mut context),
                 kind if kind == BUILD_OBJECT_TYPE as i32 => country_region
-                    .flag_is_attack_able(target, attacker, &mut context)
-                    .unwrap_or(false),
+                    .flag_is_attack_able(target, attacker, &mut context),
                 _ => false,
             };
         }

@@ -60,7 +60,8 @@
 //! независимо от исходного war-byte оставляет его false при совпавшем region
 //! ID; переданный country long не читает. Constructor RVA `0x001CE5D0` не
 //! инициализирует эти два `long` и три phase bool; Rust безопасно задаёт
-//! нейтральные `0/false` до доказанных writer/callback-ов.
+//! обязательные нейтральные `0/false` до доказанных writer/callback-ов, поэтому
+//! достигнутые reader-ы не вводят недостижимую Option/error-границу.
 //! Точный EXE подтвердил исходную странность `OnPrepareBegin/End`: оба проверяют
 //! `_state_prepare`, но меняют `_state_declare`; безопасный исходный gate закрыт.
 //! `CancelContendByPlayer` содержит отдельный
@@ -142,13 +143,6 @@ pub(crate) struct CountryAreaState {
     pub(crate) bottom: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CountryBattleStateBlock {
-    DefendCountry,
-    AttackCountry,
-    WarActive,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CountryRegionDecodeError<BaseError> {
     Base(BaseError),
@@ -157,13 +151,11 @@ pub(crate) enum CountryRegionDecodeError<BaseError> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountrySecurityError {
-    BattleState(CountryBattleStateBlock),
     Cell(RegionCellAccessBlock),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CountryReturnPointError {
-    BattleState(CountryBattleStateBlock),
     Base(ServerReturnSetupBlock),
 }
 
@@ -319,11 +311,11 @@ pub(crate) struct CServerCountryRegion {
     pub(crate) defend_guard_indices: BTreeSet<i32>,
     pub(crate) attack_guards: BTreeSet<i32>,
     pub(crate) attack_guard_indices: BTreeSet<i32>,
-    pub(crate) defend_country: Option<i32>,
-    pub(crate) attack_country: Option<i32>,
-    pub(crate) declare_active: Option<bool>,
-    pub(crate) prepare_active: Option<bool>,
-    pub(crate) war_active: Option<bool>,
+    pub(crate) defend_country: i32,
+    pub(crate) attack_country: i32,
+    pub(crate) declare_active: bool,
+    pub(crate) prepare_active: bool,
+    pub(crate) war_active: bool,
 }
 
 impl Default for CServerCountryRegion {
@@ -345,11 +337,11 @@ impl Default for CServerCountryRegion {
             // Exact ctor не инициализирует эти primitive-поля. Нулевые стороны
             // и закрытые фазы — безопасное нейтральное состояние до первых
             // доказанных CountryWarSys writer/callback-ов, без чтения UB.
-            defend_country: Some(0),
-            attack_country: Some(0),
-            declare_active: Some(false),
-            prepare_active: Some(false),
-            war_active: Some(false),
+            defend_country: 0,
+            attack_country: 0,
+            declare_active: false,
+            prepare_active: false,
+            war_active: false,
         }
     }
 }
@@ -506,19 +498,11 @@ impl CServerCountryRegion {
 
         // Нулевые стороны заданы safe constructor-ом до первого
         // `CountryWarSys::update_apply_war`; exact ctor оставлял здесь UB.
-        let defend_country = self
-            .defend_country
-            .ok_or(CountryReturnPointError::BattleState(
-                CountryBattleStateBlock::DefendCountry,
-            ))?;
+        let defend_country = self.defend_country;
         let areas = if i32::from(player.country) == defend_country {
             &mut self.defend_areas
         } else {
-            let attack_country =
-                self.attack_country
-                    .ok_or(CountryReturnPointError::BattleState(
-                        CountryBattleStateBlock::AttackCountry,
-                    ))?;
+            let attack_country = self.attack_country;
             if i32::from(player.country) != attack_country {
                 return Ok(self.base.region.get_return_point());
             }
@@ -607,10 +591,7 @@ impl CServerCountryRegion {
         x: i32,
         y: i32,
     ) -> Result<RegionSecurity, CountrySecurityError> {
-        let war_active = self.war_active.ok_or(CountrySecurityError::BattleState(
-            CountryBattleStateBlock::WarActive,
-        ))?;
-        if !war_active {
+        if !self.war_active {
             return Ok(RegionSecurity::SAFE);
         }
         self.base
@@ -824,8 +805,8 @@ impl CServerCountryRegion {
 
     /// Writer-side region projection: defend записывается раньше attack.
     pub(crate) fn set_country_sides(&mut self, defend_country: i32, attack_country: i32) {
-        self.defend_country = Some(defend_country);
-        self.attack_country = Some(attack_country);
+        self.defend_country = defend_country;
+        self.attack_country = attack_country;
     }
 
     /// Country vtable `0x65D464`, slot `+0x104`, указывает на единственный
@@ -833,25 +814,19 @@ impl CServerCountryRegion {
     /// фильтрует contender-ов, в отличие от city/village war owners.
     pub(crate) const fn update_contend_player(&mut self) {}
 
-    pub(crate) fn country_side_bytes(&self) -> Result<(u8, u8), CountryBattleStateBlock> {
-        let defend_country = self
-            .defend_country
-            .ok_or(CountryBattleStateBlock::DefendCountry)?;
-        let attack_country = self
-            .attack_country
-            .ok_or(CountryBattleStateBlock::AttackCountry)?;
-        Ok((defend_country as u8, attack_country as u8))
+    pub(crate) const fn country_side_bytes(&self) -> (u8, u8) {
+        (self.defend_country as u8, self.attack_country as u8)
     }
 
     pub(crate) fn on_declare_begin(&mut self, region_id: i32) {
         if self.base.id == region_id {
-            self.declare_active = Some(true);
+            self.declare_active = true;
         }
     }
 
     pub(crate) fn on_declare_end(&mut self, region_id: i32) {
         if self.base.id == region_id {
-            self.declare_active = Some(false);
+            self.declare_active = false;
         }
     }
 
@@ -859,11 +834,8 @@ impl CServerCountryRegion {
         if self.base.id != region_id {
             return;
         }
-        match self.prepare_active {
-            Some(false) => self.declare_active = Some(true),
-            Some(true) => {}
-            None if self.declare_active != Some(true) => self.declare_active = None,
-            None => {}
+        if !self.prepare_active {
+            self.declare_active = true;
         }
     }
 
@@ -871,23 +843,20 @@ impl CServerCountryRegion {
         if self.base.id != region_id {
             return;
         }
-        match self.prepare_active {
-            Some(true) => self.declare_active = Some(false),
-            Some(false) => {}
-            None if self.declare_active != Some(false) => self.declare_active = None,
-            None => {}
+        if self.prepare_active {
+            self.declare_active = false;
         }
     }
 
     pub(crate) fn on_war_start(&mut self, region_id: i32) {
         if self.base.id == region_id {
-            self.war_active = Some(true);
+            self.war_active = true;
         }
     }
 
     pub(crate) fn on_war_timeout(&mut self, region_id: i32) {
         if self.base.id == region_id {
-            self.war_active = Some(false);
+            self.war_active = false;
         }
     }
 
@@ -899,7 +868,7 @@ impl CServerCountryRegion {
 
     pub(crate) fn on_flag_destroy(&mut self, region_id: i32, _country: i32) {
         if self.base.id == region_id {
-            self.war_active = Some(false);
+            self.war_active = false;
         }
     }
 
@@ -950,27 +919,21 @@ impl CServerCountryRegion {
         &self,
         player_id: i32,
         context: &mut Context,
-    ) -> Result<i32, CountryBattleStateBlock> {
+    ) -> i32 {
         if player_id == 0 {
-            return Ok(-1);
+            return -1;
         }
         let Some(country) = context.country_player_country(player_id) else {
-            return Ok(-1);
+            return -1;
         };
-        let defend_country = self
-            .defend_country
-            .ok_or(CountryBattleStateBlock::DefendCountry)?;
-        if i32::from(country) == defend_country {
-            return Ok(WC_DEFEND);
+        if i32::from(country) == self.defend_country {
+            return WC_DEFEND;
         }
-        let attack_country = self
-            .attack_country
-            .ok_or(CountryBattleStateBlock::AttackCountry)?;
-        Ok(if i32::from(country) == attack_country {
+        if i32::from(country) == self.attack_country {
             WC_ATTACK
         } else {
             -1
-        })
+        }
     }
 
     pub(crate) fn gate_is_attack_able<Context: CountryCampContext>(
@@ -978,7 +941,7 @@ impl CServerCountryRegion {
         target: Option<CountryMoveShape>,
         attacker: Option<CountryMoveShape>,
         context: &mut Context,
-    ) -> Result<bool, CountryBattleStateBlock> {
+    ) -> bool {
         self.is_collection_attack_able(target, attacker, CountryTargetKind::Gate, context)
     }
 
@@ -987,7 +950,7 @@ impl CServerCountryRegion {
         target: Option<CountryMoveShape>,
         attacker: Option<CountryMoveShape>,
         context: &mut Context,
-    ) -> Result<bool, CountryBattleStateBlock> {
+    ) -> bool {
         self.is_collection_attack_able(target, attacker, CountryTargetKind::Flag, context)
     }
 
@@ -996,7 +959,7 @@ impl CServerCountryRegion {
         target: Option<CountryMoveShape>,
         attacker: Option<CountryMoveShape>,
         context: &mut Context,
-    ) -> Result<bool, CountryBattleStateBlock> {
+    ) -> bool {
         self.is_collection_attack_able(target, attacker, CountryTargetKind::Guard, context)
     }
 
@@ -1006,26 +969,25 @@ impl CServerCountryRegion {
         attacker: Option<CountryMoveShape>,
         kind: CountryTargetKind,
         context: &mut Context,
-    ) -> Result<bool, CountryBattleStateBlock> {
+    ) -> bool {
         let (Some(target), Some(attacker)) = (target, attacker) else {
-            return Ok(false);
+            return false;
         };
         if attacker.object_type != 400 {
-            return Ok(false);
+            return false;
         }
         // Safe constructor задаёт закрытую фазу до первого OnStart; exact ctor
         // оставлял byte неинициализированным.
-        let war_active = self.war_active.ok_or(CountryBattleStateBlock::WarActive)?;
-        if !war_active {
-            return Ok(false);
+        if !self.war_active {
+            return false;
         }
 
-        let camp = self.get_camp(attacker.id, context)?;
-        Ok(match camp {
+        let camp = self.get_camp(attacker.id, context);
+        match camp {
             WC_DEFEND => self.target_collection_contains(WC_ATTACK, kind, target.id),
             WC_ATTACK => self.target_collection_contains(WC_DEFEND, kind, target.id),
             _ => false,
-        })
+        }
     }
 
     fn target_collection_contains(&self, camp: i32, kind: CountryTargetKind, id: i32) -> bool {
