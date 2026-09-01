@@ -46,10 +46,11 @@
 //! Достигнутые GodsBattle scripts связывают `5413 / GetAreaID` с настоящим
 //! login-server ID, `11124/11128` — с persisted player SZL и уже существующим
 //! `CGame::UpdateSZL` effect-проходом, `11121` — с чтением player faction и
-//! sentinel-fallback на текущего игрока, `11125/11126` — с faction XYD World
-//! round-trip и region-guarded чтением, `11127` — с player faction mutation
-//! и `0xBF80C` around-publication, `11129` — с single-requester top-ten
-//! запросом, а точный case `11130` — с NPC-contend текущего
+//! sentinel-fallback на текущего игрока, `11122/11123` — с raw NPC-set
+//! faction и подтверждённым сравнением разных представлений, `11125/11126` —
+//! с faction XYD World round-trip и region-guarded чтением, `11127` — с
+//! player faction mutation и `0xBF80C` around-publication, `11129` — с
+//! single-requester top-ten запросом, а точный case `11130` — с NPC-contend текущего
 //! GodsBattle-региона игрока. Последний
 //! принимает неотрицательные секунды, сохраняет 32-битное умножение на `1000`
 //! и проходит до region AI.
@@ -784,6 +785,8 @@ pub(crate) const SCRIPT_FUNCTION_GET_REGION_COUNTRY: i32 = 9302;
 pub(crate) const SCRIPT_FUNCTION_IS_REGIONAL_PROTECTED: i32 = 9303;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION: i32 = 11121;
+pub(crate) const SCRIPT_FUNCTION_GET_GODS_BATTLE_NPC_FACTION: i32 = 11122;
+pub(crate) const SCRIPT_FUNCTION_IS_GODS_BATTLE_NPC_PLAYER_FACTION: i32 = 11123;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
 pub(crate) const SCRIPT_FUNCTION_SET_GODS_BATTLE_FACTION_XYD: i32 = 11125;
 pub(crate) const SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD: i32 = 11126;
@@ -1207,6 +1210,8 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
 enum GodsBattleScriptKind {
     AreaId,
     PlayerFaction,
+    NpcFaction,
+    NpcPlayerFaction,
     PlayerSzl,
     SetFactionXyd,
     FactionXyd,
@@ -1237,6 +1242,17 @@ enum GodsBattleScriptDisposition {
         player_id: Option<i32>,
         faction: Option<i32>,
         changed: bool,
+    },
+    NpcFaction {
+        npc_id: Option<i32>,
+        raw_index: Option<usize>,
+        value: i32,
+    },
+    NpcPlayerFactionCompared {
+        player_id: Option<i32>,
+        npc_id: Option<i32>,
+        raw_index: Option<usize>,
+        value: i32,
     },
     TopTenRequested {
         player_id: Option<i32>,
@@ -1275,6 +1291,10 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
     let kind = match function_id {
         SCRIPT_FUNCTION_GET_AREA_ID => GodsBattleScriptKind::AreaId,
         SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION => GodsBattleScriptKind::PlayerFaction,
+        SCRIPT_FUNCTION_GET_GODS_BATTLE_NPC_FACTION => GodsBattleScriptKind::NpcFaction,
+        SCRIPT_FUNCTION_IS_GODS_BATTLE_NPC_PLAYER_FACTION => {
+            GodsBattleScriptKind::NpcPlayerFaction
+        }
         SCRIPT_FUNCTION_GET_PLAYER_SZL => GodsBattleScriptKind::PlayerSzl,
         SCRIPT_FUNCTION_SET_GODS_BATTLE_FACTION_XYD => GodsBattleScriptKind::SetFactionXyd,
         SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD => GodsBattleScriptKind::FactionXyd,
@@ -1315,6 +1335,55 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
                 value,
                 GodsBattleScriptDisposition::Scalar {
                     player_id: target_player_id,
+                    value,
+                },
+            )
+        }
+        GodsBattleScriptKind::NpcFaction => {
+            let raw_index = script_region_id
+                .and_then(|region_id| game.find_region(region_id))
+                .and_then(|region| match region {
+                    ServerRegionOwner::GodsBattle(region) => script_npc_id
+                        .and_then(|npc_id| region.npc_faction_index(npc_id)),
+                    _ => None,
+                });
+            let value = match raw_index {
+                Some(0) => 7,
+                Some(1) => 5,
+                Some(2) => 6,
+                _ => 0,
+            };
+            handled(
+                value,
+                GodsBattleScriptDisposition::NpcFaction {
+                    npc_id: script_npc_id,
+                    raw_index,
+                    value,
+                },
+            )
+        }
+        GodsBattleScriptKind::NpcPlayerFaction => {
+            let raw_index = script_region_id
+                .and_then(|region_id| game.find_region(region_id))
+                .and_then(|region| match region {
+                    ServerRegionOwner::GodsBattle(region) => script_npc_id
+                        .and_then(|npc_id| region.npc_faction_index(npc_id)),
+                    _ => None,
+                });
+            let player_faction = script_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .map(CPlayer::gods_battle_faction);
+            let value = i32::from(
+                raw_index
+                    .zip(player_faction)
+                    .is_some_and(|(raw_index, player_faction)| raw_index as i32 == player_faction),
+            );
+            handled(
+                value,
+                GodsBattleScriptDisposition::NpcPlayerFactionCompared {
+                    player_id: script_player_id,
+                    npc_id: script_npc_id,
+                    raw_index,
                     value,
                 },
             )
@@ -3797,6 +3866,8 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GET_AREA_ID
         | SCRIPT_FUNCTION_GET_AREA_TYPE
         | SCRIPT_FUNCTION_GET_WORLD_SERVER_ID
+        | SCRIPT_FUNCTION_GET_GODS_BATTLE_NPC_FACTION
+        | SCRIPT_FUNCTION_IS_GODS_BATTLE_NPC_PLAYER_FACTION
         | SCRIPT_FUNCTION_GET_PLAYER_SZL
         | SCRIPT_FUNCTION_OPEN_CHANGE_PLAYER_NAME => Unused,
         SCRIPT_FUNCTION_KICK_MAP => match index {
