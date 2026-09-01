@@ -415,6 +415,15 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                         ex_id: CGuid::GUID_INVALID,
                     },
                 );
+                let _ = game.notify_country_after_player_hurt(
+                    target_id,
+                    ShapeIdentity {
+                        object_type: PLAYER_TYPE,
+                        id: player_id,
+                        ex_id: CGuid::GUID_INVALID,
+                    },
+                    runtime,
+                );
                 let _ = finish_player_blind_states_on_defense(game, target_id, now_ms);
             }
             if current_health == 0 {

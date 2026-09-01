@@ -4967,6 +4967,68 @@ impl CGame {
         retargeted
     }
 
+    /// Завершает player-attacker tail `CPlayer::OnBeenHurted`: вражеский
+    /// игрок вне block `1` запускает общий region cooldown и публикацию
+    /// `GS0133` в World для страны пострадавшего.
+    pub(crate) fn notify_country_after_player_hurt<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        victim_id: i32,
+        attacker: ShapeIdentity,
+        runtime: &mut Runtime,
+    ) -> bool {
+        if attacker.object_type != PLAYER_TYPE {
+            return false;
+        }
+        let Some(attacker_country) = self.find_player(attacker.id).map(CPlayer::country) else {
+            return false;
+        };
+        let Some((region_id, victim_country, tile_x, tile_y)) =
+            self.find_player(victim_id).and_then(|victim| {
+                Some((
+                    victim.server_region_id()?,
+                    victim.country(),
+                    victim.shape().get_tile_x().ok()?,
+                    victim.shape().get_tile_y().ok()?,
+                ))
+            })
+        else {
+            return false;
+        };
+        if victim_country == attacker_country {
+            return false;
+        }
+
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return false;
+        };
+        let notice = {
+            let region = &mut owner.base_mut().region;
+            (matches!(region.get_block(tile_x, tile_y), Ok(block) if block != 1)
+                && region.take_hurt_notice_due(|| runtime.now_milliseconds()))
+            .then(|| region.get_name().to_vec())
+        };
+        self.restore_region_owner(owner);
+        let Some(region_name) = notice else {
+            return false;
+        };
+
+        let text = format_legacy_mixed(
+            self.get_string_by_id(b"GS0133"),
+            &[
+                LegacyFormatArgument::Bytes(&region_name),
+                LegacyFormatArgument::Signed(tile_x),
+                LegacyFormatArgument::Signed(tile_y),
+            ],
+            1023,
+        );
+        let mut message = CMessage::new(0x5fd09);
+        message.add_byte(0);
+        message.add_byte(victim_country);
+        add_legacy_c_string(message.base_mut(), &text);
+        let _ = message.send(self, false);
+        true
+    }
+
     pub(crate) fn with_legacy_random_stream<Output>(
         &mut self,
         operation: impl FnOnce(&mut Self, &mut GameLegacyRandomStream) -> Output,
@@ -45162,6 +45224,15 @@ impl CGame {
                     id: master.master_id,
                     ex_id: CGuid::GUID_INVALID,
                 },
+            );
+            let _ = self.notify_country_after_player_hurt(
+                target_id,
+                ShapeIdentity {
+                    object_type: master.master_type,
+                    id: master.master_id,
+                    ex_id: CGuid::GUID_INVALID,
+                },
+                runtime,
             );
             let _ = finish_player_blind_states_on_defense(self, target_id, 0);
         }

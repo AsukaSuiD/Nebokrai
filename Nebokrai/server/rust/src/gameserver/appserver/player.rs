@@ -92,6 +92,10 @@
 //! самих max не выполняет этот clamp без конкретного caller-а.
 //! Достигнутый damage runtime использует те же maximum HP и `reank` в
 //! унаследованном `CMoveShape::Stiffen`, не создавая отдельный combat snapshot.
+//! `CPlayer::OnBeenHurted` RVA `0x00041D80` связан целиком: после износа брони
+//! пассивные свободные питомцы принимают identity нападавшего, а атака игрока
+//! другой страны вне block `1` через region-owned wrapping cooldown публикует
+//! World `0x5FD09/GS0133` с именем региона и координатами жертвы.
 //! `UseItem` материализует точные коды требований, принадлежащее игроку
 //! изучение навыков, расход предметов в рюкзаке и четыре заменяемых боевых
 //! `tagExpendableEffect`. Проверки и состояния ездового животного и
@@ -17114,19 +17118,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::OnBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2966
-// RVA: 0x00041D80
-// ADDRESS: 00441d80
-// PROTOTYPE: void __thiscall OnBeenHurted(long param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::OnBeenHurted` связан через combat callers, `CGame`
+// и region-owned cooldown; покрытый raw-блок удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::OnBeenMurdered

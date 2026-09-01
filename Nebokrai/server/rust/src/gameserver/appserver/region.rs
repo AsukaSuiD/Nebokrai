@@ -277,6 +277,22 @@ impl CRegion {
         self.last_notify_kill_time = value;
     }
 
+    /// Выполняет точный hurt-notify gate `CPlayer::OnBeenHurted`: ненулевой
+    /// signed interval сравнивается как `uint` с wrapping-разностью двух
+    /// `timeGetTime`, а второй замер часов сохраняется только при срабатывании.
+    pub(crate) fn take_hurt_notice_due(&mut self, mut now_milliseconds: impl FnMut() -> u32) -> bool {
+        let Some(interval_ms) = self.notify.filter(|interval| *interval != 0) else {
+            return false;
+        };
+        if (interval_ms as u32)
+            >= now_milliseconds().wrapping_sub(self.last_notify_hurt_time)
+        {
+            return false;
+        }
+        self.last_notify_hurt_time = now_milliseconds();
+        true
+    }
+
     pub(crate) fn file_name(&self) -> &[u8] {
         &self.file_name
     }
