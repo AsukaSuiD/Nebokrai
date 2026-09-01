@@ -6183,6 +6183,10 @@ impl CPlayer {
         found
     }
 
+    /// Поздняя часть `CMoveShape::UpdateProperty` для типизированных
+    /// persistent-state владельцев. Поле usage `20_001` у undead/ex-state
+    /// соответствует `tagProperty.wHit +0x24`, а не соседнему
+    /// `wAtcSpeed +0x32`; signed/unsigned добавления сохраняют raw WORD bits.
     fn apply_change_body_state_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
@@ -6297,7 +6301,7 @@ impl CPlayer {
             properties.element_avoid = properties
                 .element_avoid
                 .wrapping_add(state.element_avoid as u16);
-            properties.attack_speed = properties.attack_speed.wrapping_add(state.hit as u16);
+            properties.hit = properties.hit.wrapping_add(state.hit as u16);
             properties.dodge = properties.dodge.wrapping_add(state.dodge as u16);
         }
         for state in self.move_shape.extended_states() {
@@ -6319,7 +6323,7 @@ impl CPlayer {
             properties.full_miss = properties.full_miss.wrapping_add(state.full_miss);
             properties.attack_avoid = properties.attack_avoid.wrapping_add(state.attack_avoid);
             properties.element_avoid = properties.element_avoid.wrapping_add(state.element_avoid);
-            properties.attack_speed = properties.attack_speed.wrapping_add(state.hit);
+            properties.hit = properties.hit.wrapping_add(state.hit);
             properties.dodge = properties.dodge.wrapping_add(state.dodge);
         }
         if let Some(state) = self.move_shape.active_change_body_state() {
