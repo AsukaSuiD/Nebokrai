@@ -21,7 +21,8 @@
 //! `CGame` координирует урон и смерть, `Nation/GodsBattle`, награду, добычу,
 //! сценарий и окончательное удаление из региона. `Defense` и `Died` проходят
 //! через каноническую очередь `passive_actions` владельца `CBaseAI`, причём
-//! достигнутый `Defense` обрабатывается до активного хода монстра.
+//! достигнутые `Defense` и вероятностный `Stiffen` обрабатываются до активного
+//! хода монстра; stun сохраняет движение, но прерывает атаку и цель.
 //! Специализированный ИИ синего босса с ID `21` хранит здесь восемь
 //! одноразовых HP-порогов ярости как часть жизненного цикла конкретного
 //! монстра; выбор навыка остаётся в `ai/bossblue.rs`.
@@ -87,7 +88,9 @@
 use std::collections::BTreeMap;
 
 use super::ai::aifactory::{ActiveMonsterAi, MonsterAiBinding, MonsterAiKind};
-use super::ai::baseai::{AiShapeAction, CBaseAI, PassiveDeathAction};
+use super::ai::baseai::{
+    AiShapeAction, CBaseAI, PassiveDeathAction, PassiveStiffenAction,
+};
 use super::ai::bossblue::BossBlueAiState;
 use super::ai::bossfiend::BossFiendAiState;
 use super::ai::carriage::{
@@ -676,6 +679,25 @@ impl CMonster {
         scaled.trunc() as i32 as u32
     }
 
+    pub(crate) fn roll_stiffen(
+        &mut self,
+        damage: u32,
+        property: &MonsterProperties,
+        setup: crate::setup::globesetup::GlobeStiffenSetup,
+        now_ms: impl FnMut() -> u32,
+        random: impl FnMut(i32) -> i32,
+    ) -> u32 {
+        let maximum_hp = self.maximum_hp(property);
+        self.move_shape.stiffen(
+            damage as u16,
+            maximum_hp,
+            property.re_ank as u16,
+            setup,
+            now_ms,
+            random,
+        )
+    }
+
     pub(crate) const fn set_pet_mode(&mut self, mode: i32) {
         self.pet_behavior.set_mode(mode);
     }
@@ -1227,6 +1249,10 @@ impl CMonster {
         self.base_ai.when_been_hurted(now_ms);
     }
 
+    pub(crate) fn when_been_stiffened(&mut self, delay_ms: u32, now_ms: u32) {
+        self.base_ai.when_been_stiffened(delay_ms, now_ms);
+    }
+
     pub(crate) fn when_passive_gladiator_hurted_by(
         &mut self,
         attacker: ShapeIdentity,
@@ -1256,6 +1282,18 @@ impl CMonster {
 
     pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
         self.base_ai.process_reached_defense_actions()
+    }
+
+    pub(crate) fn process_reached_stiffen_action(
+        &mut self,
+        now_ms: u32,
+    ) -> PassiveStiffenAction {
+        let action = self.base_ai.process_reached_stiffen_action(now_ms);
+        if action == PassiveStiffenAction::InterruptAttack {
+            self.cancel_base_attack_cast();
+            self.ai_target = None;
+        }
+        action
     }
 
     pub(crate) fn begin_reached_death_action(&mut self) -> bool {

@@ -1236,7 +1236,9 @@ use crate::gameserver::appserver::skills::knightcutstate::{
     send_knight_cut_state_visual,
 };
 use crate::gameserver::appserver::ai::aifactory::{ActiveMonsterAi, MonsterAiKind};
-use crate::gameserver::appserver::ai::baseai::PassiveDeathAction;
+use crate::gameserver::appserver::ai::baseai::{
+    PassiveDeathAction, PassiveStiffenAction,
+};
 use crate::gameserver::appserver::ai::cityguardwithsword::release_guard_sword_target_for_death;
 use crate::gameserver::appserver::ai::jiumai::{
     retarget_jiumai_after_hurt, synchronize_jiumai_target_loss,
@@ -34306,7 +34308,18 @@ impl CGame {
         let Some(mut owner) = self.take_region_owner(region_id) else {
             return false;
         };
+        let stiffen_setup = self.globe_setup.stiffen_setup();
+        let mut stiffen_delay = 0;
         if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+            if current_health != 0 {
+                stiffen_delay = monster.roll_stiffen(
+                    damage,
+                    &property,
+                    stiffen_setup,
+                    || runtime.now_milliseconds(),
+                    |maximum| game_legacy_random(&mut self.random_state, maximum),
+                );
+            }
             let _ = monster.register_attacking_player(
                 player_id,
                 now_ms,
@@ -34356,6 +34369,11 @@ impl CGame {
                 now_ms,
                 plan,
             );
+        }
+        if stiffen_delay != 0
+            && let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id)
+        {
+            monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
         }
         self.restore_region_owner(owner);
         if current_health != 0 {
@@ -45253,8 +45271,19 @@ impl CGame {
                     &property,
                 )
             });
+        let stiffen_setup = self.globe_setup.stiffen_setup();
+        let mut stiffen_delay = 0;
         if let Some(mut owner) = self.take_region_owner(region_id) {
             if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
+                if attack.full_miss == 0 && damage != 0 && current_health != 0 {
+                    stiffen_delay = monster.roll_stiffen(
+                        damage,
+                        &property,
+                        stiffen_setup,
+                        || runtime.now_milliseconds(),
+                        |maximum| game_legacy_random(&mut self.random_state, maximum),
+                    );
+                }
                 monster.set_hit_points(current_health);
                 if damage != 0 && (attack.full_miss == 0 || current_health == 0) {
                     monster
@@ -45401,6 +45430,11 @@ impl CGame {
                     target_id,
                     &property,
                 );
+            }
+            if stiffen_delay != 0
+                && let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id)
+            {
+                monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
                 let _ = finish_blind_states_on_defense(
@@ -47171,12 +47205,15 @@ impl CGame {
                     let mut change_skill_pending = false;
                     let mut search_enemy_pending = false;
                     let mut passive_death = PassiveDeathAction::None;
+                    let mut passive_stiffen = PassiveStiffenAction::None;
+                    let mut passive_defense_processed = false;
                     let (death_started, guard_target_release, pet_target_release) = owner
                         .base_mut()
                         .find_monster_by_id_mut(monster_id)
                         .map_or((false, false, false), |monster| {
                             let processed = monster.process_reached_defense_actions();
                             if processed != 0 {
+                                passive_defense_processed = true;
                                 tracing::trace!(
                                     region_id,
                                     monster_id,
@@ -47184,7 +47221,11 @@ impl CGame {
                                     "обработаны пассивные Defense-события монстра"
                                 );
                             }
+                            if processed == 0 {
+                                passive_stiffen = monster.process_reached_stiffen_action(now_ms);
+                            }
                             let death_started = processed == 0
+                                && passive_stiffen == PassiveStiffenAction::None
                                 && monster.begin_reached_death_action();
                             let guard_target_release = death_started
                                 && matches!(
@@ -47224,6 +47265,12 @@ impl CGame {
                         {
                             passive_death = monster.finish_reached_death_action();
                         }
+                    }
+                    if passive_defense_processed
+                        || passive_stiffen != PassiveStiffenAction::None
+                    {
+                        self.restore_region_owner(owner);
+                        continue;
                     }
                     if let Some(monster) = owner.base_mut().find_monster_by_id_mut(monster_id) {
                         if passive_death == PassiveDeathAction::WaitingForMove {

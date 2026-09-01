@@ -530,8 +530,19 @@ impl CGame {
                     &property,
                 )
             });
+        let stiffen_setup = self.globe_setup.stiffen_setup();
+        let mut stiffen_delay = 0;
         if let Some(mut owner) = self.take_region_owner(region_id) {
             if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
+                if attack.full_miss == 0 && damage != 0 && current_health != 0 {
+                    stiffen_delay = monster.roll_stiffen(
+                        damage,
+                        &property,
+                        stiffen_setup,
+                        || runtime.now_milliseconds(),
+                        |maximum| game_legacy_random(&mut self.random_state, maximum),
+                    );
+                }
                 monster.set_hit_points(current_health);
                 if damage != 0 && (attack.full_miss == 0 || current_health == 0) {
                     monster
@@ -678,6 +689,11 @@ impl CGame {
                     target_id,
                     &property,
                 );
+            }
+            if stiffen_delay != 0
+                && let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id)
+            {
+                monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
             }
             if attack.full_miss == 0 && damage != 0 && current_health != 0 {
                 let _ = super::finish_blind_states_on_defense(

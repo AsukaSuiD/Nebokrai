@@ -28,8 +28,10 @@
 //! Пассивный `Died` также исполняет точный `OnBeenKilled`: из active FIFO
 //! сохраняется только первый `Move`, цель отпускается на каждом
 //! повторном проходе, а owner death разрешается лишь после завершения этого
-//! движения. Указатель владельца и остальные обработчики ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! движения. `WhenBeenHurted` сохраняет отдельные часы `Defense`/`Stiffen`, а
+//! достигнутый monster runtime прерывает атаку, теряет цель, сохраняет движение
+//! и удерживает passive FIFO до исходного stun deadline. Указатель владельца и
+//! остальные обработчики ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
 
@@ -61,6 +63,14 @@ pub(crate) enum PassiveDeathAction {
     None,
     WaitingForMove,
     Ready,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PassiveStiffenAction {
+    None,
+    InterruptAttack,
+    Waiting,
+    Finished,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -102,12 +112,17 @@ impl CBaseAI {
         }
     }
 
-    /// Точный достигнутый префикс `WhenBeenHurted`: `Defense` всегда
-    /// становится в очередь `passive_actions`. Ненулевая длительность
-    /// оглушения потребует второго отдельного замера часов; материализованные
-    /// боевые вызовы передают ноль и не создают `Stiffen`.
+    /// Точный первый event `WhenBeenHurted`: `Defense` всегда становится в
+    /// `passive_actions`; caller отдельно добавляет Stiffen после собственного
+    /// второго замера часов.
     pub(crate) fn when_been_hurted(&mut self, now_ms: u32) {
         self.add_ai_event(AiShapeAction::Defense, 0, 0, now_ms);
+    }
+
+    pub(crate) fn when_been_stiffened(&mut self, delay_ms: u32, now_ms: u32) {
+        if delay_ms != 0 {
+            self.add_ai_event(AiShapeAction::Stiffen, delay_ms, 0, now_ms);
+        }
     }
 
     /// Точный достигнутый префикс `WhenBeenKilled`: событие смерти сохраняет
@@ -145,6 +160,61 @@ impl CBaseAI {
             processed = processed.wrapping_add(1);
         }
         processed
+    }
+
+    /// Материализует exact `ASA_STIFFEN -> OnStiffen` и deadline-часть
+    /// `ProcessPassiveAction`. До первой атаки/движения active-префикс
+    /// отбрасывается; движение сохраняется, атака снимается и возвращается
+    /// concrete owner-у для `CSkill::End(4)`/`OnLoseTarget` эквивалента.
+    pub(crate) fn process_reached_stiffen_action(
+        &mut self,
+        now_ms: u32,
+    ) -> PassiveStiffenAction {
+        let Some(event) = self.passive_actions.front() else {
+            return PassiveStiffenAction::None;
+        };
+        if event.action != AiShapeAction::Stiffen {
+            return PassiveStiffenAction::None;
+        }
+
+        let mut interrupt_attack = false;
+        if event.handling == 0 {
+            while self.active_actions.front().is_some_and(|event| {
+                !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
+            }) {
+                self.active_actions.pop_front();
+            }
+            if self
+                .active_actions
+                .front()
+                .is_some_and(|event| event.action == AiShapeAction::Attack)
+            {
+                self.active_actions.pop_front();
+                interrupt_attack = true;
+            }
+            self.passive_actions
+                .front_mut()
+                .expect("Stiffen остаётся первым passive-событием")
+                .handling = 1;
+        }
+
+        let event = self
+            .passive_actions
+            .front()
+            .expect("Stiffen остаётся первым passive-событием");
+        if now_ms < event.beginning_time_ms.wrapping_add(event.delay_ms) {
+            return if interrupt_attack {
+                PassiveStiffenAction::InterruptAttack
+            } else {
+                PassiveStiffenAction::Waiting
+            };
+        }
+        self.passive_actions.pop_front();
+        if interrupt_attack {
+            PassiveStiffenAction::InterruptAttack
+        } else {
+            PassiveStiffenAction::Finished
+        }
     }
 
     /// Выполняет точный `ASA_DIED -> OnBeenKilled` после того, как caller
@@ -718,7 +788,10 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnStiffen
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: reached monster caller сохраняет active-префикс, Attack/Move
+// границу, passive handling/deadline и concrete interruption; player-skill
+// caller с самостоятельными execution-owner-ами остаётся ниже.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:847
@@ -851,7 +924,9 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::WhenBeenHurted
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: `when_been_hurted` и `when_been_stiffened` сохраняют оба
+// отдельных замера времени и FIFO-порядок Defense -> Stiffen.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1165

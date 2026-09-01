@@ -571,6 +571,8 @@ pub(crate) struct CMoveShape {
     is_god: bool,
     pets: Vec<MoveShapePet>,
     current_pets_mode: i32,
+    stiffen_started_ms: u32,
+    stiffen_count: i32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -707,11 +709,55 @@ impl Default for CMoveShape {
             is_god: false,
             pets: Vec::new(),
             current_pets_mode: 1,
+            stiffen_started_ms: 0,
+            stiffen_count: 0,
         }
     }
 }
 
 impl CMoveShape {
+    /// Exact `CMoveShape::Stiffen` (`RVA 0x000CD2F0`): окно и limit проверяются
+    /// до RNG, просроченное окно делает второй замер часов, а вероятность
+    /// уменьшается на `GetReAnk` перед signed-сравнением с `random(100)`.
+    pub(crate) fn stiffen(
+        &mut self,
+        damage: u16,
+        maximum_hp: u32,
+        reank: u16,
+        setup: crate::setup::globesetup::GlobeStiffenSetup,
+        mut now_ms: impl FnMut() -> u32,
+        mut random: impl FnMut(i32) -> i32,
+    ) -> u32 {
+        let now = now_ms();
+        if self
+            .stiffen_started_ms
+            .wrapping_add(setup.bound_time_ms)
+            < now
+        {
+            self.stiffen_started_ms = now_ms();
+            self.stiffen_count = 0;
+        } else if self.stiffen_count >= setup.limit {
+            return 0;
+        }
+
+        let damage_ratio = f32::from(damage) / maximum_hp as f32;
+        let probability = setup
+            .damage_thresholds
+            .iter()
+            .zip(setup.probabilities)
+            .take(usize::from(setup.count).min(4))
+            .find_map(|(threshold, probability)| {
+                (damage_ratio >= *threshold).then_some(probability)
+            })
+            .unwrap_or_default();
+        let chance = i32::from(probability) - i32::from(reank);
+        if random(100) > chance {
+            return 0;
+        }
+        self.stiffen_count = self.stiffen_count.wrapping_add(1);
+        setup.delay_ms
+    }
+
     pub(crate) const fn current_pets_mode(&self) -> i32 {
         self.current_pets_mode
     }
@@ -5735,20 +5781,6 @@ fn write_i32(destination: &mut [u8], offset: usize, value: i32) {
 
 // IMPLEMENTED: `CMoveShape::ForceMove` материализован выше; покрытый raw-блок
 // удалён.
-
-// ============================================================================
-// FUNCTION: CMoveShape::Stiffen
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\moveshape.cpp:2316
-// RVA: 0x000CD2F0
-// ADDRESS: 004cd2f0
-// PROTOTYPE: ulong __thiscall Stiffen(ushort param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CMoveShape::OnChangeStates

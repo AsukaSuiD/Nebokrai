@@ -366,6 +366,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             ))
         })
         .unwrap_or((false, false));
+    let stiffen_setup = game.globe_setup().stiffen_setup();
+    let mut stiffen_delay = 0;
     if target.object_type == PLAYER_TYPE {
         if let Some(player) = game.find_player_mut(target.id) {
             player.set_health(current_health);
@@ -377,6 +379,19 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             }
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(target.id) {
+        if attack.full_miss == 0
+            && damage != 0
+            && current_health != 0
+            && let Some(property) = target_monster_property.as_ref()
+        {
+            stiffen_delay = monster.roll_stiffen(
+                damage,
+                property,
+                stiffen_setup,
+                || runtime.now_milliseconds(),
+                |maximum| game.skill_random_below(maximum),
+            );
+        }
         monster.set_hit_points(current_health);
         if current_health == 0 || attack.full_miss == 0 {
             monster
@@ -542,6 +557,11 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         && let Some(property) = target_monster_property.as_ref()
     {
         retarget_special_guard_after_hurt(game, region, target.id, property);
+    }
+    if stiffen_delay != 0
+        && let Some(monster) = region.find_monster_by_id_mut(target.id)
+    {
+        monster.when_been_stiffened(stiffen_delay, runtime.now_milliseconds());
     }
     if attack.full_miss == 0 && current_health != 0 {
         let _ = finish_blind_states_on_defense(game, region, target, now_ms);

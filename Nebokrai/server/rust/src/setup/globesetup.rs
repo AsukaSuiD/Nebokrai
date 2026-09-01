@@ -79,6 +79,14 @@ const RESTORED_HP_FIGHT_OFFSET: usize = 0xC68;
 const RESTORED_MP_FIGHT_OFFSET: usize = 0xC6C;
 const SAVE_POINT_TIME_OFFSET: usize = 0x510;
 const CRIMINAL_TIME_OFFSET: usize = 0x4E8;
+// `CMoveShape::Stiffen` RVA `0x000CD2F0` читает этот компактный блок по
+// абсолютным VA `0xEF4280..0xEF42A4` при base `0xEF3DC0`.
+const STIFFEN_SETUP_COUNT_OFFSET: usize = 0x4C0;
+const STIFFEN_DAMAGE_OFFSET: usize = 0x4C4;
+const STIFFEN_PROBABILITY_OFFSET: usize = 0x4D4;
+const STIFFEN_DELAY_OFFSET: usize = 0x4DC;
+const STIFFEN_BOUND_TIME_OFFSET: usize = 0x4E0;
+const STIFFEN_LIMIT_OFFSET: usize = 0x4E4;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
 const AUCTION_PLAYER_MAXIMUM_OFFSET: usize = 0xC88;
 const AUCTION_FACTOR_B_OFFSET: usize = 0xC90;
@@ -250,6 +258,16 @@ pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) restored_mp_fight: i32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GlobeStiffenSetup {
+    pub(crate) count: u16,
+    pub(crate) damage_thresholds: [f32; 4],
+    pub(crate) probabilities: [u16; 4],
+    pub(crate) delay_ms: u32,
+    pub(crate) bound_time_ms: u32,
+    pub(crate) limit: i32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GlobeSetupDecodeError {
     Snapshot {
@@ -296,6 +314,33 @@ impl Default for GlobeSetupSnapshot {
 }
 
 impl GlobeSetupSnapshot {
+    /// Typed-проекция exact setup-блока `CMoveShape::Stiffen`; массивы имеют
+    /// четыре ABI-слота, а повреждённый внешний count безопасно ограничивается
+    /// их фактической длиной уже в игровом owner-е.
+    pub(crate) fn stiffen_setup(&self) -> GlobeStiffenSetup {
+        GlobeStiffenSetup {
+            count: u16::from_le_bytes(
+                self.bytes[STIFFEN_SETUP_COUNT_OFFSET..STIFFEN_SETUP_COUNT_OFFSET + 2]
+                    .try_into()
+                    .expect("fixed setup field"),
+            ),
+            damage_thresholds: std::array::from_fn(|index| {
+                self.read_f32(STIFFEN_DAMAGE_OFFSET + index * 4)
+            }),
+            probabilities: std::array::from_fn(|index| {
+                let offset = STIFFEN_PROBABILITY_OFFSET + index * 2;
+                u16::from_le_bytes(
+                    self.bytes[offset..offset + 2]
+                        .try_into()
+                        .expect("fixed setup field"),
+                )
+            }),
+            delay_ms: self.read_u32(STIFFEN_DELAY_OFFSET),
+            bound_time_ms: self.read_u32(STIFFEN_BOUND_TIME_OFFSET),
+            limit: self.read_i32(STIFFEN_LIMIT_OFFSET),
+        }
+    }
+
     /// Точная setup-часть успешного Game login `0xBF401` до полного player
     /// payload. `OnLogMessage` берёт поля непосредственно из `tagSetup`, но
     /// публикует их не сплошным ABI-блоком: prefix `0x84`, отдельные scalars,
