@@ -4884,8 +4884,8 @@ impl CPlayer {
     /// Базовая и equipment/CiQing половина `CPlayer::UpdateProperty` до
     /// виртуального `CMoveShape::UpdateProperty`. Два signed addon-pass-а
     /// сохраняют slot order `MountAllEquip`. Восемь recovery scalar-ов
-    /// пока не имеют материализованных `GlobeSetup` offsets, поэтому этот
-    /// проход сохраняет их загруженные значения вместо выдуманных defaults.
+    /// каждый раз восстанавливаются из `CGlobeSetup::tagSetup` до применения
+    /// equipment, CiQing и state addon-ов, как остальные базовые свойства.
     pub(crate) fn recompute_base_and_equipment_properties(
         &self,
         coefficients: GlobePlayerPropertyCoefficients,
@@ -4998,14 +4998,14 @@ impl CPlayer {
             element_blast_defense_scale_bits: base_combat_scales[3].to_bits(),
             full_miss_scale_bits: base_combat_scales[4].to_bits(),
             critical_rate_bits: critical_rate.to_bits(),
-            resume_hp_peace: self.combat_properties.resume_hp_peace,
-            resume_mp_peace: self.combat_properties.resume_mp_peace,
-            resume_hp_fight: self.combat_properties.resume_hp_fight,
-            resume_mp_fight: self.combat_properties.resume_mp_fight,
-            restored_hp_peace: self.combat_properties.restored_hp_peace,
-            restored_mp_peace: self.combat_properties.restored_mp_peace,
-            restored_hp_fight: self.combat_properties.restored_hp_fight,
-            restored_mp_fight: self.combat_properties.restored_mp_fight,
+            resume_hp_peace: coefficients.resume_hp_peace,
+            resume_mp_peace: coefficients.resume_mp_peace,
+            resume_hp_fight: coefficients.resume_hp_fight,
+            resume_mp_fight: coefficients.resume_mp_fight,
+            restored_hp_peace: coefficients.restored_hp_peace,
+            restored_mp_peace: coefficients.restored_mp_peace,
+            restored_hp_fight: coefficients.restored_hp_fight,
+            restored_mp_fight: coefficients.restored_mp_fight,
             ..PlayerCombatProperties::default()
         };
         for (_, goods) in self.equipment.traversing_goods() {

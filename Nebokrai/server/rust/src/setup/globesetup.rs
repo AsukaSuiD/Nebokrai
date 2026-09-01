@@ -32,6 +32,9 @@
 //! `othermessage 0x8FB01/channel 9` и `shapemessage 0x8F902`. Поле `bRotation +0xC48`,
 //! подтверждённое PDB непосредственно перед `bGoodsAi +0xC4C`, задаёт
 //! серверный байт поворота для квестового шага `0x8F903`.
+//! Восемь базовых recovery-полей `+0xC50..+0xC6C`, подтверждённые PDB
+//! `CGlobeSetup::tagSetup`, входят в player property projection и заново
+//! инициализируют `CPlayer::UpdateProperty` перед equipment/state addon-ами.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
 //! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
@@ -66,6 +69,14 @@ const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
 const ALLOW_CLIENT_RUN_SCRIPT_OFFSET: usize = 0x50C;
 const ALLOW_CLIENT_CHANGE_POSITION_OFFSET: usize = 0x50D;
 const ROTATION_OFFSET: usize = 0xC48;
+const RESUME_HP_PEACE_OFFSET: usize = 0xC50;
+const RESUME_MP_PEACE_OFFSET: usize = 0xC54;
+const RESUME_HP_FIGHT_OFFSET: usize = 0xC58;
+const RESUME_MP_FIGHT_OFFSET: usize = 0xC5C;
+const RESTORED_HP_PEACE_OFFSET: usize = 0xC60;
+const RESTORED_MP_PEACE_OFFSET: usize = 0xC64;
+const RESTORED_HP_FIGHT_OFFSET: usize = 0xC68;
+const RESTORED_MP_FIGHT_OFFSET: usize = 0xC6C;
 const SAVE_POINT_TIME_OFFSET: usize = 0x510;
 const CRIMINAL_TIME_OFFSET: usize = 0x4E8;
 const AUCTION_ENABLED_OFFSET: usize = 0xC87;
@@ -229,6 +240,14 @@ pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) int_to_element: [f32; 3],
     pub(crate) int_to_max_mp: [f32; 3],
     pub(crate) int_to_resistant: [f32; 3],
+    pub(crate) resume_hp_peace: i32,
+    pub(crate) resume_mp_peace: i32,
+    pub(crate) resume_hp_fight: i32,
+    pub(crate) resume_mp_fight: i32,
+    pub(crate) restored_hp_peace: i32,
+    pub(crate) restored_mp_peace: i32,
+    pub(crate) restored_hp_fight: i32,
+    pub(crate) restored_mp_fight: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -965,6 +984,10 @@ impl GlobeSetupSnapshot {
         self.read_i32(TRANSFER_MONEY_INTERVAL_OFFSET)
     }
 
+    /// Параметры полного базового `CPlayer::UpdateProperty`. PDB задаёт
+    /// `lResumeTimer*` как signed `long`, а `dwRestored*` как `ulong`;
+    /// преобразование последних в `i32` сохраняет исходные четыре ABI-байта
+    /// для последующих wrapping addon-операций player property owner-а.
     pub(crate) fn player_property_coefficients(&self) -> GlobePlayerPropertyCoefficients {
         let triplet = |offset| std::array::from_fn(|index| self.read_f32(offset + index * 4));
         GlobePlayerPropertyCoefficients {
@@ -977,6 +1000,14 @@ impl GlobeSetupSnapshot {
             int_to_element: triplet(76),
             int_to_max_mp: triplet(88),
             int_to_resistant: triplet(100),
+            resume_hp_peace: self.read_i32(RESUME_HP_PEACE_OFFSET),
+            resume_mp_peace: self.read_i32(RESUME_MP_PEACE_OFFSET),
+            resume_hp_fight: self.read_i32(RESUME_HP_FIGHT_OFFSET),
+            resume_mp_fight: self.read_i32(RESUME_MP_FIGHT_OFFSET),
+            restored_hp_peace: self.read_u32(RESTORED_HP_PEACE_OFFSET) as i32,
+            restored_mp_peace: self.read_u32(RESTORED_MP_PEACE_OFFSET) as i32,
+            restored_hp_fight: self.read_u32(RESTORED_HP_FIGHT_OFFSET) as i32,
+            restored_mp_fight: self.read_u32(RESTORED_MP_FIGHT_OFFSET) as i32,
         }
     }
 
