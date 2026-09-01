@@ -10,7 +10,9 @@
 //! заклинателем. `CGame` координирует владельцев и доставку; формула и пакеты
 //! остаются здесь. У `CSuperHeal2` состояние подтверждённо хранится у выбранной
 //! цели, но лечит и визуализирует заклинателя; каноническое состояние поэтому
-//! отдельно хранит владельца эффекта. Координатные перегрузки ещё не подключены.
+//! отдельно хранит владельца эффекта. Координатный `Begin` после базовой записи
+//! точки получает нулевую object-target и тем же virtual fallback выбирает
+//! заклинателя, поэтому точечный клиентский dispatch проходит как self-target.
 
 use super::baseattack::time_reached;
 use super::heal2::HEAL_2_SKILL_ID;
@@ -85,14 +87,19 @@ fn family_index(skill_id: u32) -> usize {
 
 fn requested_target(player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(u32, ShapeIdentity)> {
     match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. } if is_heal_skill(skill_id) => Some((
-            skill_id,
-            ShapeIdentity {
-                object_type: PLAYER_TYPE,
-                id: player_id,
-                ex_id: CGuid::GUID_INVALID,
-            },
-        )),
+        PlayerSkillDispatch::SelfTarget { skill_id, .. }
+        | PlayerSkillDispatch::Point { skill_id, .. }
+            if is_heal_skill(skill_id) =>
+        {
+            Some((
+                skill_id,
+                ShapeIdentity {
+                    object_type: PLAYER_TYPE,
+                    id: player_id,
+                    ex_id: CGuid::GUID_INVALID,
+                },
+            ))
+        }
         PlayerSkillDispatch::Object { skill_id, target }
             if is_heal_skill(skill_id)
                 && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) =>

@@ -40819,12 +40819,12 @@ impl CGame {
                 PlayerSkillDispatch::Point { .. } => false,
             };
             let concrete_heal = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. } => is_heal_skill(skill_id),
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. } => is_heal_skill(skill_id),
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     is_heal_skill(skill_id)
                         && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
                 }
-                PlayerSkillDispatch::Point { .. } => false,
             };
             let concrete_pets_control = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
