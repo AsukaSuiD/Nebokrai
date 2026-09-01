@@ -2,7 +2,7 @@
 //!
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb`
 //! подтверждает поиск ближайшего живого противника по лагерю `CountryWarSys`.
-//! Реальные типы ИИ `17/18` сохраняют порядок игроков перед питомцами и замену
+//! Реальные типы ИИ `14/15` сохраняют порядок игроков перед питомцами и замену
 //! предыдущей цели при равной `RealDistance`; номер типа задаёт собственный
 //! лагерь как `ai - 17`.
 
@@ -19,7 +19,6 @@ use crate::gameserver::appserver::ai::gladiator::{
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 
 /// Отбрасывает собственный лагерь и сохраняет общий выбор ближайшей цели.
@@ -63,12 +62,7 @@ pub(crate) fn select_country_war_enemy(
             selected,
             GladiatorTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             own_camp,
@@ -92,12 +86,7 @@ pub(crate) fn select_country_war_enemy(
             selected,
             GladiatorTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             own_camp,
