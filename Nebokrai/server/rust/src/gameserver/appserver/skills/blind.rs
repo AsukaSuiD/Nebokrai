@@ -1,4 +1,4 @@
-//! Ослепление `CBlind` (`0x76`) для достигнутого объектного пути игрока.
+//! Ослепление `CBlind` (`0x76`) для игрока.
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/skills/blind.cpp`. Навык дважды проверяет MP и оружие категории
@@ -7,6 +7,8 @@
 //! `AddBlindState` создаёт `CRushState2` (`0x7C`), а не `CBlindState`; поэтому
 //! блокировка цели проходит через канонический `Rush2State`. `CGame` оставляет
 //! разрешение владельцев, PK-уведомление и фактическую установку состояния.
+//! Координатный и пустой `Begin` сохраняют приоритет проверки cooldown, затем
+//! отказ `10 + GS0286` и `End(false)` без generic failure `2`.
 //! `End(true)` фиксирует cooldown после установки, а `End(false)` не откатывает
 //! уже установленный `Rush2State`.
 
@@ -40,7 +42,15 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
 }
 
 pub(crate) const fn is_blind_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    matches!(dispatch, PlayerSkillDispatch::Object { skill_id: BLIND_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } })
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::SelfTarget { skill_id: BLIND_SKILL_ID, .. }
+            | PlayerSkillDispatch::Point { skill_id: BLIND_SKILL_ID, .. }
+            | PlayerSkillDispatch::Object {
+                skill_id: BLIND_SKILL_ID,
+                target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+            }
+    )
 }
 
 fn restore_player_movement(game: &mut CGame, player_id: i32) {
@@ -155,6 +165,23 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
     if !is_blind_dispatch(dispatch) {
+        return terminal(QueuedSkillExecutionState::Rejected);
+    }
+    if matches!(dispatch, PlayerSkillDispatch::SelfTarget { .. } | PlayerSkillDispatch::Point { .. }) {
+        let Some(level) = game.find_player(player_id).map(|player| player.learned_skill_level(BLIND_SKILL_ID)) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let Some(properties) = game.skill_base_properties(BLIND_SKILL_ID, level) else {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        };
+        let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        if ai.blind_last_used_ms() != 0
+            && !time_reached(runtime.now_milliseconds(), ai.blind_last_used_ms(), reuse)
+        {
+            failure(game, player_id, 0x0d, 0, None, false);
+        } else {
+            failure(game, player_id, 10, 0, None, false);
+        }
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
@@ -310,9 +337,9 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
     terminal(QueuedSkillExecutionState::Completed)
 }
 
-// Ниже сохранены недостигнутые конструктор, деструктор, координатная и прямая
-// перегрузки `Begin`. Отдельный `CBlindState` остаётся RAW в своём owner-файле:
-// объектная рабочая цепочка выше его не вызывает и не подменяет.
+// Ниже сохранены только недостигнутые конструктор и деструктор. Отдельный
+// `CBlindState` остаётся RAW в своём owner-файле: рабочая цепочка выше его не
+// вызывает и не подменяет.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -344,34 +371,6 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
 // RVA: 0x0016DA10
 // ADDRESS: 0056da10
 // PROTOTYPE: void __thiscall ~CBlind(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBlind::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blind.cpp:239
-// RVA: 0x0016DA30
-// ADDRESS: 0056da30
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBlind::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\blind.cpp:222
-// RVA: 0x0016DBF0
-// ADDRESS: 0056dbf0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, CMoveShape * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
