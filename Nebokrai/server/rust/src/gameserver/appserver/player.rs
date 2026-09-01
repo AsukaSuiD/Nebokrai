@@ -62,6 +62,10 @@
 //! четырьмя base stat и base HP/MP maxima. Сохранены общий STR gate для всех
 //! `Add*`, безусловный расход очка и отдельный 0x9c-byte `m_Property` wire:
 //! reached recompute заменяет только подтверждённые поля, не обнуляя хвост.
+//! PDB-layout `tagBaseProperty/tagProperty` задаёт отдельные `wBaseMaxYp +0xB8`,
+//! `wBaseBurden +0xD6`, hit/attack-speed slots и fairy-флаги
+//! `+0x90..+0x92`; полный `UpdateProperty` пересобирает их из base owner-а,
+//! а не сохраняет ошибочно сдвинутые байты прежнего combat snapshot.
 //! PvP preferences `0x8FA05` хранят пять live permission flags, которые
 //! downstream player/skill AI читает при выборе обычных, team, union,
 //! criminal и country целей; unknown selector только потребляет вход.
@@ -396,12 +400,23 @@ const BASE_RP_OFFSET: usize = 0xac;
 const BASE_YP_OFFSET: usize = 0xae;
 const BASE_MAXIMUM_HP_OFFSET: usize = 0xb0;
 const BASE_MAXIMUM_MP_OFFSET: usize = 0xb4;
-const BASE_BURDEN_OFFSET: usize = 0xb8;
+const BASE_MAXIMUM_YP_OFFSET: usize = 0xb8;
 const BASE_MAXIMUM_RP_OFFSET: usize = 0xba;
 const BASE_STRENGTH_OFFSET: usize = 0xbc;
 const BASE_DEXTERITY_OFFSET: usize = 0xc0;
 const BASE_CONSTITUTION_OFFSET: usize = 0xc4;
 const BASE_INTELLIGENCE_OFFSET: usize = 0xc8;
+const BASE_MINIMUM_ATTACK_OFFSET: usize = 0xcc;
+const BASE_MAXIMUM_ATTACK_OFFSET: usize = 0xd0;
+const BASE_HIT_OFFSET: usize = 0xd4;
+const BASE_BURDEN_OFFSET: usize = 0xd6;
+const BASE_CCH_OFFSET: usize = 0xd8;
+const BASE_DEFENSE_OFFSET: usize = 0xdc;
+const BASE_DODGE_OFFSET: usize = 0xe0;
+const BASE_ATTACK_SPEED_OFFSET: usize = 0xe2;
+const BASE_ELEMENT_RESISTANCE_OFFSET: usize = 0xe4;
+const BASE_HP_RECOVERY_OFFSET: usize = 0xe8;
+const BASE_MP_RECOVERY_OFFSET: usize = 0xea;
 const BASE_VIGOUR_OFFSET: usize = 0xec;
 const BASE_MAXIMUM_VIGOUR_OFFSET: usize = 0xf0;
 const BASE_ENERGY_OFFSET: usize = 0xf4;
@@ -1162,6 +1177,7 @@ pub(crate) struct PlayerBaseProperties {
     pub(crate) mana: u32,
     pub(crate) rp: u16,
     pub(crate) yp: u16,
+    pub(crate) maximum_yp: u16,
     pub(crate) maximum_rp: u16,
     pub(crate) maximum_vigour: u32,
     pub(crate) energy: u32,
@@ -1431,6 +1447,8 @@ pub(crate) struct PlayerHonorEliminateMutation {
 pub(crate) struct PlayerCombatProperties {
     pub(crate) maximum_hp: u32,
     pub(crate) maximum_mp: u32,
+    pub(crate) maximum_yp: u16,
+    pub(crate) maximum_rp: u16,
     pub(crate) strength: u32,
     pub(crate) dexterity: u32,
     pub(crate) constitution: u32,
@@ -1470,6 +1488,9 @@ pub(crate) struct PlayerCombatProperties {
     pub(crate) restored_mp_peace: i32,
     pub(crate) restored_hp_fight: i32,
     pub(crate) restored_mp_fight: i32,
+    pub(crate) battle_fairy_summoned: bool,
+    pub(crate) battle_fairy_recall: bool,
+    pub(crate) battle_fairy_died: bool,
 }
 
 pub(crate) struct PlayerStatePropertyPass {
@@ -3013,6 +3034,11 @@ impl CPlayer {
         write_player_wire_u16(&mut wire, BASE_YP_OFFSET, self.base_properties.yp);
         write_player_wire_u16(
             &mut wire,
+            BASE_MAXIMUM_YP_OFFSET,
+            self.base_properties.maximum_yp,
+        );
+        write_player_wire_u16(
+            &mut wire,
             BASE_BURDEN_OFFSET,
             self.base_properties.base_burden,
         );
@@ -3075,6 +3101,7 @@ impl CPlayer {
         self.base_properties.mana = read_player_wire_u32(wire, BASE_MANA_OFFSET);
         self.base_properties.rp = read_player_wire_u16(wire, BASE_RP_OFFSET);
         self.base_properties.yp = read_player_wire_u16(wire, BASE_YP_OFFSET);
+        self.base_properties.maximum_yp = read_player_wire_u16(wire, BASE_MAXIMUM_YP_OFFSET);
         self.base_properties.maximum_rp = read_player_wire_u16(wire, BASE_MAXIMUM_RP_OFFSET);
         self.base_properties.base_maximum_hp = read_player_wire_u32(wire, BASE_MAXIMUM_HP_OFFSET);
         self.base_properties.base_maximum_mp = read_player_wire_u32(wire, BASE_MAXIMUM_MP_OFFSET);
@@ -3141,14 +3168,16 @@ impl CPlayer {
         self.combat_properties = PlayerCombatProperties {
             maximum_hp: read_player_wire_u32(wire, 0x00),
             maximum_mp: read_player_wire_u32(wire, 0x04),
+            maximum_yp: read_player_wire_u16(wire, 0x08),
+            maximum_rp: read_player_wire_u16(wire, 0x0a),
             strength: read_player_wire_u32(wire, 0x0c),
             dexterity: read_player_wire_u32(wire, 0x10),
             constitution: read_player_wire_u32(wire, 0x14),
             intelligence: read_player_wire_u32(wire, 0x18),
             minimum_attack: read_player_wire_u32(wire, 0x1c),
             maximum_attack: read_player_wire_u32(wire, 0x20),
-            attack_speed: read_player_wire_u16(wire, 0x24),
-            hit: read_player_wire_u16(wire, 0x2a),
+            attack_speed: read_player_wire_u16(wire, 0x32),
+            hit: read_player_wire_u16(wire, 0x24),
             dodge: read_player_wire_u16(wire, 0x30),
             cch: read_player_wire_u16(wire, 0x28),
             burden: read_player_wire_u16(wire, 0x26),
@@ -3180,6 +3209,9 @@ impl CPlayer {
             restored_mp_peace: read_player_wire_u32(wire, 0x84) as i32,
             restored_hp_fight: read_player_wire_u32(wire, 0x88) as i32,
             restored_mp_fight: read_player_wire_u32(wire, 0x8c) as i32,
+            battle_fairy_summoned: wire[0x90] != 0,
+            battle_fairy_recall: wire[0x91] != 0,
+            battle_fairy_died: wire[0x92] != 0,
         };
     }
 
@@ -4950,44 +4982,44 @@ impl CPlayer {
                     self.base_properties.base_intelligence,
                     coefficients.int_to_max_mp[occupation],
                 )),
+            maximum_yp: self.base_properties.maximum_yp,
+            maximum_rp: self.base_properties.maximum_rp,
             strength: self.base_properties.base_strength,
             dexterity: self.base_properties.base_dexterity,
             constitution: self.base_properties.base_constitution,
             intelligence: self.base_properties.base_intelligence,
-            minimum_attack: base_u32(0xcc).wrapping_add(derived(
+            minimum_attack: base_u32(BASE_MINIMUM_ATTACK_OFFSET).wrapping_add(derived(
                 self.base_properties.base_dexterity,
                 coefficients.dex_to_min_attack[occupation],
             )),
-            maximum_attack: base_u32(0xd0).wrapping_add(derived(
+            maximum_attack: base_u32(BASE_MAXIMUM_ATTACK_OFFSET).wrapping_add(derived(
                 self.base_properties.base_strength,
                 coefficients.str_to_max_attack[occupation],
             )),
-            attack_speed: base_u16(0xe0),
-            hit: base_u16(0xd4),
-            dodge: base_u16(0xd8),
-            cch: base_u16(0xd6),
-            defense: base_u32(0xdc).wrapping_add(derived(
+            attack_speed: base_u16(BASE_ATTACK_SPEED_OFFSET),
+            hit: base_u16(BASE_HIT_OFFSET),
+            dodge: base_u16(BASE_DODGE_OFFSET),
+            cch: base_u16(BASE_CCH_OFFSET),
+            defense: base_u32(BASE_DEFENSE_OFFSET).wrapping_add(derived(
                 self.base_properties.base_constitution,
                 coefficients.con_to_defense[occupation],
             )),
-            element_resistance: base_u32(0xe4).wrapping_add(derived(
+            element_resistance: base_u32(BASE_ELEMENT_RESISTANCE_OFFSET).wrapping_add(derived(
                 self.base_properties.base_intelligence,
                 coefficients.int_to_resistant[occupation],
             )),
-            hp_recovery: base_u16(0xe2),
-            mp_recovery: base_u16(0xe8),
+            hp_recovery: base_u16(BASE_HP_RECOVERY_OFFSET),
+            mp_recovery: base_u16(BASE_MP_RECOVERY_OFFSET),
             burden: self.base_properties.base_burden.wrapping_add(
                 derived(
                     self.base_properties.base_strength,
                     coefficients.str_to_burden[occupation],
                 ) as u16,
             ),
-            reank: base_u16(0xea).wrapping_add(
-                derived(
-                    self.base_properties.base_dexterity,
-                    coefficients.dex_to_stiff[occupation],
-                ) as u16,
-            ),
+            reank: derived(
+                self.base_properties.base_dexterity,
+                coefficients.dex_to_stiff[occupation],
+            ) as u16,
             element_modify: derived(
                 self.base_properties.base_intelligence,
                 coefficients.int_to_element[occupation],
@@ -5006,6 +5038,9 @@ impl CPlayer {
             restored_mp_peace: coefficients.restored_mp_peace,
             restored_hp_fight: coefficients.restored_hp_fight,
             restored_mp_fight: coefficients.restored_mp_fight,
+            battle_fairy_summoned: self.battle_fairy_summoned,
+            battle_fairy_recall: self.base_properties.battle_fairy_recall,
+            battle_fairy_died: self.base_properties.battle_fairy_died,
             ..PlayerCombatProperties::default()
         };
         for (_, goods) in self.equipment.traversing_goods() {
@@ -7096,7 +7131,7 @@ impl CPlayer {
             .expect("combat wire содержит maximum attack"),
             0x4b => LegacyWriter::write_u16_at(
                 &mut self.combat_property_wire,
-                0x24,
+                0x32,
                 self.combat_properties.attack_speed,
             )
             .expect("combat wire содержит attack speed"),
@@ -7233,6 +7268,8 @@ impl CPlayer {
         };
         write_u32(&mut self.combat_property_wire, 0x00, properties.maximum_hp);
         write_u32(&mut self.combat_property_wire, 0x04, properties.maximum_mp);
+        write_u16(&mut self.combat_property_wire, 0x08, properties.maximum_yp);
+        write_u16(&mut self.combat_property_wire, 0x0a, properties.maximum_rp);
         write_u32(&mut self.combat_property_wire, 0x0c, properties.strength);
         write_u32(&mut self.combat_property_wire, 0x10, properties.dexterity);
         write_u32(
@@ -7257,10 +7294,10 @@ impl CPlayer {
         );
         write_u16(
             &mut self.combat_property_wire,
-            0x24,
+            0x32,
             properties.attack_speed,
         );
-        write_u16(&mut self.combat_property_wire, 0x2a, properties.hit);
+        write_u16(&mut self.combat_property_wire, 0x24, properties.hit);
         write_u16(&mut self.combat_property_wire, 0x30, properties.dodge);
         write_u16(&mut self.combat_property_wire, 0x28, properties.cch);
         write_u16(&mut self.combat_property_wire, 0x26, properties.burden);
@@ -7352,6 +7389,9 @@ impl CPlayer {
         write_u32(&mut self.combat_property_wire, 0x84, properties.restored_mp_peace as u32);
         write_u32(&mut self.combat_property_wire, 0x88, properties.restored_hp_fight as u32);
         write_u32(&mut self.combat_property_wire, 0x8c, properties.restored_mp_fight as u32);
+        self.combat_property_wire[0x90] = u8::from(properties.battle_fairy_summoned);
+        self.combat_property_wire[0x91] = u8::from(properties.battle_fairy_recall);
+        self.combat_property_wire[0x92] = u8::from(properties.battle_fairy_died);
     }
 
     /// `MountAllEquip -> SetCurFlash`: пересобирает 17 flash-ячеек после
