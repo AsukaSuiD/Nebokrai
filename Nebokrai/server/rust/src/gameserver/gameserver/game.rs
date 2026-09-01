@@ -40620,7 +40620,9 @@ impl CGame {
                 | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == BASE_ATTACK_SKILL_ID
-                        && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                        && (matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
+                            || target.object_type == BUILD_OBJECT_TYPE as i32
+                            || target.object_type == CITY_GATE_OBJECT_TYPE as i32)
                 }
             };
             let concrete_base_magic = match dispatch {
