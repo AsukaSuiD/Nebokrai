@@ -941,8 +941,8 @@ impl CMonster {
             dodge: u32::from(self.dodge(property)),
             element_resistance: self.element_resistance(property),
             soul_resistance: self.soul_resistance(property),
-            attack_avoid: property.attack_avoid,
-            element_avoid: property.element_avoid,
+            attack_avoid: self.attack_avoid(property),
+            element_avoid: self.element_avoid(property),
             promotion_magic_attack_factor: self.move_shape.promotion_magic_attack_factor(),
         };
         for state in self.move_shape.reached_property_states() { if let super::moveshape::ReachedPropertyState::PoisonFog(state) = state { properties = state.apply_to_monster(properties); } }
@@ -959,6 +959,20 @@ impl CMonster {
             return scaled.trunc() as i32 as u16;
         }
         base
+    }
+
+    /// Достигнутая ресурсная часть `CMonster::GetAttackAvoid`
+    /// (RVA `0x000E64F0`): неположительное signed значение становится нулём,
+    /// а положительное ограничивается `99`.
+    pub(crate) fn attack_avoid(&self, property: &MonsterProperties) -> u16 {
+        (property.attack_avoid as i32).clamp(0, 99) as u16
+    }
+
+    /// Достигнутая ресурсная часть `CMonster::GetElementAvoid`
+    /// (RVA `0x000E6520`): контракт совпадает с physical avoid, кроме
+    /// разрешённой верхней границы `100`.
+    pub(crate) fn element_avoid(&self, property: &MonsterProperties) -> u16 {
+        (property.element_avoid as i32).clamp(0, 100) as u16
     }
 
     /// Exact `CMonster::GetDef` (RVA `0x000E6780`): отрицательная сумма
@@ -1749,34 +1763,6 @@ impl CMonster {
 // RVA: 0x000E6420
 // ADDRESS: 004e6420
 // PROTOTYPE: void __thiscall AI(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetAttackAvoid
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:273
-// RVA: 0x000E64F0
-// ADDRESS: 004e64f0
-// PROTOTYPE: ushort __thiscall GetAttackAvoid(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetElementAvoid
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:298
-// RVA: 0x000E6520
-// ADDRESS: 004e6520
-// PROTOTYPE: ushort __thiscall GetElementAvoid(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
