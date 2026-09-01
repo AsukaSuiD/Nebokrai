@@ -4,6 +4,8 @@
 //! межвладельческим примитивам. Проверки, стадии, формула, RNG и пакеты
 //! принадлежат базовой атаке; `CGame` остаётся владельцем игроков, регионов
 //! и фактического применения урона.
+//! Общая формула для player/monster/build усекает критический float-множитель
+//! к нулю перед записью каждого компонента в `int`.
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
@@ -355,8 +357,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             attack.critical = true;
             let critical_rate = game.globe_setup.critical_rate();
             for power in &mut attack.damages {
-                power.hp_damage =
-                    ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+                power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
             }
         }
         let pillar_damage_factor = game.find_player(target_id)
@@ -627,8 +628,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             attack.critical = true;
             let critical_rate = game.globe_setup.critical_rate();
             for power in &mut attack.damages {
-                power.hp_damage =
-                    ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+                power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
             }
         }
         let mut random = |maximum| game_legacy_random(&mut game.random_state, maximum);
@@ -1028,8 +1028,7 @@ fn execute_player_stationary_attack<Runtime: GameMainLoopRuntime>(
         attack.critical = true;
         let critical_rate = game.globe_setup.critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage =
-                ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+            power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
         }
     }
     let mut random = |maximum| game_legacy_random(&mut game.random_state, maximum);
