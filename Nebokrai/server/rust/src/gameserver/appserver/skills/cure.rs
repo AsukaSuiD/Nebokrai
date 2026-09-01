@@ -5,7 +5,8 @@
 //! время восстановления, путь и препятствия, задержку, направление, точную
 //! вероятность и один вызов генератора MSVCRT на каждое подходящее состояние
 //! в порядке исходного вектора состояний. Из уже типизированных состояний
-//! достигнуты `0xC9`, `0x138`, `0x191`, `0x192`, `0x199`, `0x1A6` и `0x1F8`; неизвестные старые записи
+//! достигнуты `0x67`, `0x73`, `0x7C`, `0xC9`, `0xD2`, `0x138`, `0x191`,
+//! `0x192`, `0x199`, `0x1A6` и `0x1F8`; неизвестные старые записи
 //! остаются нетронутыми. `CGame` только разрешает владельцев и выполняет
 //! доставку. Координатная перегрузка
 //! `Begin` остаётся ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -14,6 +15,9 @@ use super::baseattack::time_reached;
 use super::bossbluequakestate::{
     BOSS_BLUE_QUAKE_STATE_ID, BossBlueQuakeState,
     finish_player_boss_blue_quake_state_on_cure, send_boss_blue_quake_state_visual,
+};
+use super::boalockstate::{
+    BOA_LOCK_STATE_ID, BoaLockState, send_boa_lock_state_visual,
 };
 use super::curestate::{CureState, send_cure_state_visual, send_cure_state_visual_at};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -43,6 +47,8 @@ use super::spiderwebstate::{
 };
 use super::sealstate::{SEAL_STATE_ID, SealState, send_seal_state_visual};
 use super::poisonfogstate::{POISON_FOG_STATE_ID, PoisonFogState, send_poison_fog_state_visual};
+use super::rushstate::{RUSH_STATE_ID, RushState, send_rush_state_visual};
+use super::rushstate2::{RUSH_2_STATE_ID, Rush2State, send_rush_2_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -77,7 +83,6 @@ struct CureTarget {
     tile_y: i32,
     dead: bool,
     ordinary_monster: bool,
-    unsupported_tamed_monster: bool,
     display_name: Vec<u8>,
 }
 
@@ -100,7 +105,6 @@ fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Opt
                 tile_y,
                 dead: player.is_dead(),
                 ordinary_monster: false,
-                unsupported_tamed_monster: false,
                 display_name: player.player_name().to_vec(),
             })
         }
@@ -114,7 +118,6 @@ fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Opt
                 tile_y,
                 dead: monster.hit_points() == 0,
                 ordinary_monster: !monster.is_tamed() && !carriage,
-                unsupported_tamed_monster: monster.is_tamed() && !carriage,
                 display_name: monster.display_name().to_vec(),
             })
         }
@@ -195,6 +198,9 @@ fn curable_state_ids(game: &CGame, region_id: i32, target: ShapeIdentity) -> Vec
 }
 
 enum RemovedMonsterCurableState {
+    BoaLock(BoaLockState),
+    Rush(RushState),
+    Rush2(Rush2State),
     Seal(SealState),
     SpiderPoison(SpiderPoisonState),
     SpriteBurn(SpriteBurnState),
@@ -215,6 +221,23 @@ fn finish_monster_curable_state(
     let Some(mut owner) = game.take_region_owner(region_id) else { return false };
     let removed = owner.base_mut().find_monster_by_id_mut(monster_id).and_then(|monster| {
         let removed = match state_id {
+            BOA_LOCK_STATE_ID => {
+                let state = monster.move_shape_mut().take_boa_lock_state()?;
+                monster.move_shape_mut().set_moveable(true);
+                RemovedMonsterCurableState::BoaLock(state)
+            }
+            RUSH_STATE_ID => {
+                let state = monster.move_shape_mut().take_rush_state()?;
+                monster.move_shape_mut().set_moveable(true);
+                monster.move_shape_mut().set_fightable(true);
+                RemovedMonsterCurableState::Rush(state)
+            }
+            RUSH_2_STATE_ID => {
+                let state = monster.move_shape_mut().take_rush_2_state()?;
+                monster.move_shape_mut().set_moveable(true);
+                monster.move_shape_mut().set_fightable(true);
+                RemovedMonsterCurableState::Rush2(state)
+            }
             SEAL_STATE_ID => {
                 let state = monster.move_shape_mut().take_seal_state()?;
                 monster.move_shape_mut().set_moveable(true);
@@ -255,6 +278,15 @@ fn finish_monster_curable_state(
     game.restore_region_owner(owner);
     let Some((removed, identity, tile_x, tile_y)) = removed else { return false };
     match removed {
+        RemovedMonsterCurableState::BoaLock(state) => send_boa_lock_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
+        ),
+        RemovedMonsterCurableState::Rush(state) => send_rush_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
+        ),
+        RemovedMonsterCurableState::Rush2(state) => send_rush_2_state_visual(
+            game, region_id, identity, tile_x, tile_y, state, false, now_ms,
+        ),
         RemovedMonsterCurableState::Seal(state) => send_seal_state_visual(
             game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
         ),
@@ -286,6 +318,38 @@ fn finish_monster_curable_state(
 
 pub(crate) fn finish_curable_state(game: &mut CGame, region_id: i32, target: ShapeIdentity, state_id: u32, now_ms: u32) -> bool {
     match (target.object_type, state_id) {
+        (PLAYER_TYPE, BOA_LOCK_STATE_ID) => {
+            let removed = game.find_player_mut(target.id).and_then(|player| {
+                let state = player.take_boa_lock_state()?;
+                player.set_skill_moveable(true);
+                Some((state, player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+            });
+            let Some((state, region, x, y)) = removed else { return false };
+            send_boa_lock_state_visual(game, region, target, x, y, state, false, || now_ms);
+            true
+        }
+        (PLAYER_TYPE, RUSH_STATE_ID) => {
+            let removed = game.find_player_mut(target.id).and_then(|player| {
+                let state = player.take_rush_state()?;
+                player.set_skill_moveable(true);
+                player.set_skill_fightable(true);
+                Some((state, player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+            });
+            let Some((state, region, x, y)) = removed else { return false };
+            send_rush_state_visual(game, region, target, x, y, state, false, || now_ms);
+            true
+        }
+        (PLAYER_TYPE, RUSH_2_STATE_ID) => {
+            let removed = game.find_player_mut(target.id).and_then(|player| {
+                let state = player.take_rush_2_state()?;
+                player.set_skill_moveable(true);
+                player.set_skill_fightable(true);
+                Some((state, player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+            });
+            let Some((state, region, x, y)) = removed else { return false };
+            send_rush_2_state_visual(game, region, target, x, y, state, false, now_ms);
+            true
+        }
         (PLAYER_TYPE, SPIDER_POISON_SKILL_ID) => finish_player_spider_poison_state_on_cure(game, target.id, now_ms),
         (PLAYER_TYPE, SPRITE_BURN_SKILL_ID) => finish_player_sprite_burn_state_on_cure(game, target.id, now_ms),
         (PLAYER_TYPE, SPIDER_WEB_SKILL_ID) => finish_player_spider_web_state_on_defense(game, target.id, now_ms),
@@ -357,10 +421,6 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0286");
             return terminal(QueuedSkillExecutionState::Rejected);
         };
-        if initial_target.unsupported_tamed_monster {
-            send_failure(game, player_id, 2);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
         let cooldown_now_ms = runtime.now_milliseconds();
         if player_ai.cure_last_used_ms() != 0 && !time_reached(cooldown_now_ms, player_ai.cure_last_used_ms(), reuse_delay_ms) {
             send_failure(game, player_id, 0x0d);

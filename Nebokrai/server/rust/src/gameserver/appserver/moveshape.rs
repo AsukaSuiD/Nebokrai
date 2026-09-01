@@ -1520,21 +1520,33 @@ impl CMoveShape {
         if self.knight_cut_state.is_some() {
             self.curable_state_order.insert(KNIGHT_CUT_STATE_ID);
         }
+        self.curable_state_order.shift_remove(&BOA_LOCK_STATE_ID);
         self.boa_lock_state = known_offsets
             .iter()
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(BOA_LOCK_STATE_ID))
             .and_then(|offset| BoaLockState::decode(&states, offset).ok());
+        if self.boa_lock_state.is_some() {
+            self.curable_state_order.insert(BOA_LOCK_STATE_ID);
+        }
+        self.curable_state_order.shift_remove(&RUSH_STATE_ID);
         self.rush_state = known_offsets
             .iter()
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(RUSH_STATE_ID))
             .and_then(|offset| RushState::decode(&states, offset).ok());
+        if self.rush_state.is_some() {
+            self.curable_state_order.insert(RUSH_STATE_ID);
+        }
+        self.curable_state_order.shift_remove(&RUSH_2_STATE_ID);
         self.rush_2_state = known_offsets
             .iter()
             .copied()
             .find(|offset| read_u32(&states, *offset) == Some(RUSH_2_STATE_ID))
             .and_then(|offset| Rush2State::decode(&states, offset).ok());
+        if self.rush_2_state.is_some() {
+            self.curable_state_order.insert(RUSH_2_STATE_ID);
+        }
         self.roar_state = known_offsets
             .iter()
             .copied()
@@ -3567,6 +3579,7 @@ impl CMoveShape {
     pub(crate) fn replace_boa_lock_state(&mut self, state: BoaLockState) -> Option<BoaLockState> {
         self.remove_serialized_state_record(state.skill_id(), BOA_LOCK_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
+        self.curable_state_order.insert(state.skill_id());
         self.boa_lock_state.replace(state)
     }
 
@@ -3579,7 +3592,12 @@ impl CMoveShape {
 
     pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<BoaLockState> {
         self.boa_lock_state.filter(|state| state.expired(now_ms))?;
+        self.take_boa_lock_state()
+    }
+
+    pub(crate) fn take_boa_lock_state(&mut self) -> Option<BoaLockState> {
         let state = self.boa_lock_state.take()?;
+        self.curable_state_order.shift_remove(&state.skill_id());
         self.remove_serialized_state_record(state.skill_id(), BOA_LOCK_STATE_BYTES);
         Some(state)
     }
@@ -3589,6 +3607,7 @@ impl CMoveShape {
     pub(crate) fn replace_rush_state(&mut self, state: RushState) -> Option<RushState> {
         self.remove_serialized_state_record(state.skill_id(), RUSH_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
+        self.curable_state_order.insert(state.skill_id());
         self.rush_state.replace(state)
     }
 
@@ -3602,7 +3621,12 @@ impl CMoveShape {
 
     pub(crate) fn take_expired_rush_state(&mut self, now_ms: u32) -> Option<RushState> {
         self.rush_state.filter(|state| state.expired(now_ms))?;
+        self.take_rush_state()
+    }
+
+    pub(crate) fn take_rush_state(&mut self) -> Option<RushState> {
         let state = self.rush_state.take()?;
+        self.curable_state_order.shift_remove(&state.skill_id());
         self.remove_serialized_state_record(state.skill_id(), RUSH_STATE_BYTES);
         Some(state)
     }
@@ -3610,6 +3634,7 @@ impl CMoveShape {
     pub(crate) fn replace_rush_2_state(&mut self, state: Rush2State) -> Option<Rush2State> {
         self.remove_serialized_state_record(state.skill_id(), RUSH_2_STATE_BYTES);
         self.append_serialized_state_record(&state.encoded_for_install());
+        self.curable_state_order.insert(state.skill_id());
         self.rush_2_state.replace(state)
     }
 
@@ -3623,7 +3648,12 @@ impl CMoveShape {
 
     pub(crate) fn take_expired_rush_2_state(&mut self, now_ms: u32) -> Option<Rush2State> {
         self.rush_2_state.filter(|state| state.expired(now_ms))?;
+        self.take_rush_2_state()
+    }
+
+    pub(crate) fn take_rush_2_state(&mut self) -> Option<Rush2State> {
         let state = self.rush_2_state.take()?;
+        self.curable_state_order.shift_remove(&state.skill_id());
         self.remove_serialized_state_record(state.skill_id(), RUSH_2_STATE_BYTES);
         Some(state)
     }

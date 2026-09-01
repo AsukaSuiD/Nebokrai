@@ -5558,6 +5558,7 @@ impl CPlayer {
     pub(crate) fn replace_boa_lock_state(&mut self, state: super::skills::boalockstate::BoaLockState) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.replace_boa_lock_state(state) }
     pub(crate) fn activate_loaded_boa_lock_state(&mut self, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.activate_loaded_boa_lock_state(now_ms) }
     pub(crate) fn take_expired_boa_lock_state(&mut self, now_ms: u32) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_expired_boa_lock_state(now_ms) }
+    pub(crate) fn take_boa_lock_state(&mut self) -> Option<super::skills::boalockstate::BoaLockState> { self.move_shape.take_boa_lock_state() }
 
     pub(crate) fn pillar_state(&self) -> Option<super::skills::pillarstate::PillarState> {
         self.move_shape.pillar_state()
@@ -5584,6 +5585,10 @@ impl CPlayer {
         self.move_shape.take_expired_rush_state(now_ms)
     }
 
+    pub(crate) fn take_rush_state(&mut self) -> Option<super::skills::rushstate::RushState> {
+        self.move_shape.take_rush_state()
+    }
+
     pub(crate) fn replace_rush_2_state(
         &mut self,
         state: super::skills::rushstate2::Rush2State,
@@ -5603,6 +5608,10 @@ impl CPlayer {
         now_ms: u32,
     ) -> Option<super::skills::rushstate2::Rush2State> {
         self.move_shape.take_expired_rush_2_state(now_ms)
+    }
+
+    pub(crate) fn take_rush_2_state(&mut self) -> Option<super::skills::rushstate2::Rush2State> {
+        self.move_shape.take_rush_2_state()
     }
 
     pub(crate) fn replace_pillar_state(
