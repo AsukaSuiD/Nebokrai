@@ -11,12 +11,18 @@
 //! повторного поиска временно вынутого региона. Точные `GetUser/GetSufferer`
 //! разрешают player глобально, остальные identity типов
 //! `500/600/1100/1200` через регион, а координатная ветвь выбирает первый
-//! `CMoveShape` клетки. Остальной корпус сохранён ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `CMoveShape` клетки. Базовый wire-префикс сохраняет четыре little-endian
+//! `long` в порядке user type/ID → sufferer type/ID. Остальной корпус сохранён
+//! ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
+use crate::public::guid::CGuid;
+
+pub(crate) const STATE_IDENTITY_BYTES: usize = 16;
 
 pub(crate) fn send_owned_state_visual(
     game: &CGame,
@@ -93,6 +99,36 @@ pub(crate) fn resolve_state_user(
     identity: ShapeIdentity,
 ) -> Option<ShapeIdentity> {
     resolve_identity_sufferer(game, region_id, identity)
+}
+
+/// Byte-exact базовый `CState::Serialize`: user type/ID, затем sufferer type/ID.
+pub(crate) fn encode_state_identities(
+    user: ShapeIdentity,
+    sufferer: ShapeIdentity,
+) -> [u8; STATE_IDENTITY_BYTES] {
+    let mut bytes = Vec::with_capacity(STATE_IDENTITY_BYTES);
+    let mut writer = LegacyWriter::new(&mut bytes);
+    writer.write_i32(user.object_type);
+    writer.write_i32(user.id);
+    writer.write_i32(sufferer.object_type);
+    writer.write_i32(sufferer.id);
+    bytes.try_into().expect("размер identity-префикса CState фиксирован")
+}
+
+/// Byte-exact базовый `CState::Unserialize` без C++ cursor side effects.
+pub(crate) fn decode_state_identities(
+    payload: &[u8],
+    offset: usize,
+) -> Result<(ShapeIdentity, ShapeIdentity), LegacyReadBlock> {
+    let mut reader = LegacyReader::at(payload, offset)?;
+    let read_identity = |reader: &mut LegacyReader<'_>| -> Result<ShapeIdentity, LegacyReadBlock> {
+        Ok(ShapeIdentity {
+            object_type: reader.read_i32()?,
+            id: reader.read_i32()?,
+            ex_id: CGuid::GUID_INVALID,
+        })
+    };
+    Ok((read_identity(&mut reader)?, read_identity(&mut reader)?))
 }
 
 /// Exact базовый `CState::GetClientStateTime` для классов без override-а.
@@ -185,20 +221,6 @@ pub(crate) fn timed_client_state_time(
 //
 
 // ============================================================================
-// FUNCTION: CState::Serialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\state.cpp:247
-// RVA: 0x001DBD00
-// ADDRESS: 005dbd00
-// PROTOTYPE: void __thiscall Serialize(vector<unsigned_char,std::allocator<unsigned_char>_> * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CState::~CState
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -249,20 +271,6 @@ pub(crate) fn timed_client_state_time(
 // RVA: 0x001DBE20
 // ADDRESS: 005dbe20
 // PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CState::Unserialize
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\state.cpp:256
-// RVA: 0x001DBE70
-// ADDRESS: 005dbe70
-// PROTOTYPE: void __thiscall Unserialize(uchar * param_1, long * param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

@@ -21,7 +21,9 @@ use super::manashieldstate::{
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::states::state::{
+    decode_state_identities, encode_state_identities, timed_client_state_time,
+};
 use crate::gameserver::gameserver::game::{CGame, game_tick_milliseconds};
 use crate::nets::netserver::message::CMessage;
 
@@ -64,28 +66,15 @@ impl CureState {
                 available: payload.len().saturating_sub(offset),
             });
         }
-        Ok(Self::new(
-            ShapeIdentity {
-                object_type: reader.read_i32()?,
-                id: reader.read_i32()?,
-                ex_id: crate::public::guid::CGuid::GUID_INVALID,
-            },
-            ShapeIdentity {
-                object_type: reader.read_i32()?,
-                id: reader.read_i32()?,
-                ex_id: crate::public::guid::CGuid::GUID_INVALID,
-            },
-        ))
+        let (user, sufferer) = decode_state_identities(payload, reader.position())?;
+        Ok(Self::new(user, sufferer))
     }
 
     pub(crate) fn encoded(self) -> [u8; CURE_STATE_BYTES] {
         let mut bytes = Vec::with_capacity(CURE_STATE_BYTES);
         let mut writer = LegacyWriter::new(&mut bytes);
         writer.write_u32(CURE_STATE_SKILL_ID);
-        writer.write_i32(self.user.object_type);
-        writer.write_i32(self.user.id);
-        writer.write_i32(self.sufferer.object_type);
-        writer.write_i32(self.sufferer.id);
+        writer.write_bytes(&encode_state_identities(self.user, self.sufferer));
         bytes.try_into().expect("размер состояния очищения фиксирован")
     }
 }
