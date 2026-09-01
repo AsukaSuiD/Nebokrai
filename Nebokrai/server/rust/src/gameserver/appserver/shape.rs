@@ -33,6 +33,11 @@
 //! `Distance(CShape*)` RVA `0x0005B390` выражен через immutable `ShapeView`:
 //! сохраняются round-to-nearest-even positions, virtual figure extents,
 //! wrapping subtraction и signed max без искусственного clamp к нулю.
+//! Координатные `Distance(long,long)`, `Distance(long,long,long,long)` и
+//! `RealDistance(float,float)/(long,long)` RVA `0x0005B580..0x0005B730`
+//! также принадлежат этому owner-у. Общий integer helper теперь используется
+//! боевыми и AI-владельцами через тонкий adapter `skills::baseattack`, поэтому
+//! расстояние больше не дублируется в конкретном навыке.
 //! `InitMoveCheckCellList` RVA `0x0005BE60` материализован как process-owned
 //! registry: точные 96 offsets распределены по трём figure и восьми direction,
 //! insertion-order и повторный append сохранены, `Vec` заменяет MSVC list.
@@ -295,6 +300,64 @@ impl ShapeView {
     }
 }
 
+fn legacy_absolute_delta(left: i32, right: i32) -> i32 {
+    let delta = left.wrapping_sub(right);
+    if delta < 0 {
+        delta.wrapping_neg()
+    } else {
+        delta
+    }
+}
+
+/// Exact `CShape::Distance(long,long,long,long)`: Chebyshev distance с
+/// wrapping signed арифметикой исходного x86 owner-а.
+pub(crate) fn distance_between_points(
+    source_x: i32,
+    source_y: i32,
+    target_x: i32,
+    target_y: i32,
+) -> i32 {
+    legacy_absolute_delta(source_x, target_x)
+        .max(legacy_absolute_delta(source_y, target_y))
+}
+
+fn real_distance_from_rounded_position(
+    source_x: i32,
+    source_y: i32,
+    target_x: f32,
+    target_y: f32,
+) -> f32 {
+    let x = target_x - source_x as f32;
+    let y = target_y - source_y as f32;
+    (x * x + y * y).sqrt()
+}
+
+fn round_legacy_real_distance(distance: f32) -> i32 {
+    let truncated = distance.trunc() as i32;
+    if distance - truncated as f32 > 0.5 {
+        truncated.saturating_add(1)
+    } else {
+        truncated
+    }
+}
+
+/// Exact integer result `CShape::RealDistance(long,long)` для двух
+/// координатных пар. Native округляет вверх только дробную часть строго
+/// больше `0.5`; helper сохраняет эту границу явно.
+pub(crate) fn real_distance_between_points(
+    source_x: i32,
+    source_y: i32,
+    target_x: i32,
+    target_y: i32,
+) -> i32 {
+    round_legacy_real_distance(real_distance_from_rounded_position(
+        source_x,
+        source_y,
+        target_x as f32,
+        target_y as f32,
+    ))
+}
+
 pub(crate) trait ShapeResolver {
     /// Возвращает живой `CShape`-view для identity из region registry.
     fn resolve_shape(&self, identity: ShapeIdentity) -> Option<ShapeView>;
@@ -479,6 +542,32 @@ impl CShape {
 
     pub(crate) fn get_pos_y(&self) -> f32 {
         f32::from_bits(self.pos_y_bits)
+    }
+
+    /// Exact `CShape::Distance(long,long)`: virtual X/Y сначала округляются
+    /// к ближайшему целому, затем выбирается максимальная абсолютная дельта.
+    pub(crate) fn distance_to_point(&self, x: i32, y: i32) -> i32 {
+        distance_between_points(
+            self.get_pos_x().round_ties_even() as i32,
+            self.get_pos_y().round_ties_even() as i32,
+            x,
+            y,
+        )
+    }
+
+    /// Exact primitive `CShape::RealDistance(float,float)`.
+    pub(crate) fn real_distance_to_position(&self, x: f32, y: f32) -> f32 {
+        real_distance_from_rounded_position(
+            self.get_pos_x().round_ties_even() as i32,
+            self.get_pos_y().round_ties_even() as i32,
+            x,
+            y,
+        )
+    }
+
+    /// Exact rounded overload `CShape::RealDistance(long,long)`.
+    pub(crate) fn real_distance_to_point(&self, x: i32, y: i32) -> i32 {
+        round_legacy_real_distance(self.real_distance_to_position(x as f32, y as f32))
     }
 
     pub(crate) const fn get_direction(&self) -> i32 {
@@ -986,7 +1075,8 @@ fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) 
 
 // ============================================================================
 // FUNCTION: CShape::Distance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: `CShape::distance_to_point`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:415
@@ -1000,7 +1090,8 @@ fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) 
 
 // ============================================================================
 // FUNCTION: CShape::Distance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: `distance_between_points`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:420
@@ -1014,7 +1105,8 @@ fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) 
 
 // ============================================================================
 // FUNCTION: CShape::RealDistance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: `CShape::real_distance_to_position`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:425
@@ -1028,7 +1120,9 @@ fn shape_error(field: &'static str, block: super::legacycodec::LegacyReadBlock) 
 
 // ============================================================================
 // FUNCTION: CShape::RealDistance
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: `CShape::real_distance_to_point` и общий
+// `real_distance_between_points` для фактических AI/combat callers.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\shape.cpp:432

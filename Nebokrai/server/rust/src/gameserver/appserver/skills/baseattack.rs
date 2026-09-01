@@ -18,6 +18,7 @@
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::shape::real_distance_between_points;
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillTermination};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
@@ -34,9 +35,7 @@ pub(crate) const fn time_reached(now_ms: u32, started_at_ms: u32, delay_ms: u32)
 }
 
 pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_y: i32) -> i32 {
-    let x = target_x.wrapping_sub(source_x) as f32;
-    let y = target_y.wrapping_sub(source_y) as f32;
-    (x.mul_add(x, y * y).sqrt()).round_ties_even() as i32
+    real_distance_between_points(source_x, source_y, target_x, target_y)
 }
 
 /// Общий достигнутый хвост `CBaseAttack::End`, `CBaseMagic::End` и
