@@ -838,7 +838,7 @@ impl CMonster {
                 );
             } else {
                 let recovery_steps = dormancy_interval_ms / resume_timer_ms;
-                let recovery_speed = (property.hp_recover_speed as i32).max(1) as u16 as u32;
+                let recovery_speed = u32::from(self.hp_recovery_speed(property));
                 self.hit_points = self
                     .hit_points
                     .wrapping_add(recovery_speed.wrapping_mul(recovery_steps))
@@ -994,6 +994,13 @@ impl CMonster {
     /// значение всё равно проходит исходную нижнюю границу до `ushort`.
     pub(crate) fn soul_resistance(&self, property: &MonsterProperties) -> u16 {
         (property.soul_resistant as i32).max(1) as u16
+    }
+
+    /// Достигнутая часть `CMonster::GetHpRecoverSpeed` (RVA `0x000E6990`):
+    /// dormant AI использует ресурсное значение после нижней границы `1` и
+    /// исходного сужения к `ushort`.
+    pub(crate) fn hp_recovery_speed(&self, property: &MonsterProperties) -> u16 {
+        (property.hp_recover_speed as i32).max(1) as u16
     }
 
     /// Exact `CMonster::GetStopFrame` (RVA `0x000E6A40`): только приручённый
@@ -1885,20 +1892,6 @@ impl CMonster {
 // PROTOTYPE: ulong __thiscall GetElementResistant(void)
 //
 // Реализовано выше как `element_resistance`.
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetHpRecoverSpeed
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1557
-// RVA: 0x000E6990
-// ADDRESS: 004e6990
-// PROTOTYPE: ushort __thiscall GetHpRecoverSpeed(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
 //
 
 // ============================================================================
