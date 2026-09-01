@@ -44,7 +44,8 @@ impl CPoisonFogPhalanx {
     pub(crate) const fn shape(&self) -> &CShape { &self.shape }
     pub(crate) const fn shape_mut(&mut self) -> &mut CShape { &mut self.shape }
     pub(crate) const fn master(&self) -> MasterInfo { self.master }
-    pub(crate) fn replace_affect_region(&mut self, tile_x: i32, tile_y: i32) { if self.shape.get_tile_x() == Ok(tile_x) && self.shape.get_tile_y() == Ok(tile_y) { self.scope_active = false; } }
+    pub(crate) const fn skill_level(&self) -> i32 { self.skill_level }
+    pub(crate) fn replace_affect_region(&mut self, _level: i32, tile_x: i32, tile_y: i32) { if self.shape.get_tile_x() == Ok(tile_x) && self.shape.get_tile_y() == Ok(tile_y) { self.scope_active = false; } }
     pub(crate) fn tick(&mut self, now_ms: u32) -> PoisonFogPhalanxTick { if self.started_at_ms.wrapping_add(self.lifetime_ms) < now_ms || !self.scope_active { self.shape.set_change_state(SHAPE_CHANGE_DELETE); PoisonFogPhalanxTick::Expired } else { PoisonFogPhalanxTick::Scan } }
     pub(crate) fn state(&self, now_ms: u32) -> PoisonFogState { PoisonFogState::new(self.skill_level, now_ms, self.state_keep_time_ms, self.defense_loss, self.defense_loss_coefficient, self.dodge_loss, self.element_resistance_loss, self.element_resistance_loss_coefficient, self.weapon_damage_level) }
     pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> { let mut payload = Vec::new(); self.shape.add_to_byte_array(&mut payload, true).then_some(payload) }

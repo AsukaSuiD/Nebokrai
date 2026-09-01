@@ -124,6 +124,50 @@ impl CSpiderMistPhalanx {
         cells
     }
 
+    /// Вычитает из этой области клетки новой области того же семейства.
+    /// Во всех подтверждённых уровнях входная маска SpiderMist полная 5x5.
+    pub(crate) fn replace_affect_region(
+        &mut self,
+        _incoming_level: i32,
+        incoming_tile_x: i32,
+        incoming_tile_y: i32,
+    ) {
+        let (Ok(center_x), Ok(center_y)) =
+            (self.shape.get_tile_x(), self.shape.get_tile_y())
+        else {
+            return;
+        };
+        let half = (SCOPE_SIDE / 2) as i32;
+        let existing_left = center_x.wrapping_sub(half);
+        let existing_top = center_y.wrapping_sub(half);
+        let incoming_left = incoming_tile_x.wrapping_sub(half);
+        let incoming_top = incoming_tile_y.wrapping_sub(half);
+        let existing_right = existing_left.wrapping_add(SCOPE_SIDE as i32);
+        let existing_bottom = existing_top.wrapping_add(SCOPE_SIDE as i32);
+        let incoming_right = incoming_left.wrapping_add(SCOPE_SIDE as i32);
+        let incoming_bottom = incoming_top.wrapping_add(SCOPE_SIDE as i32);
+
+        let overlap_left = existing_left.max(incoming_left);
+        let overlap_top = existing_top.max(incoming_top);
+        let overlap_right = existing_right.min(incoming_right);
+        let overlap_bottom = existing_bottom.min(incoming_bottom);
+        if overlap_left >= overlap_right || overlap_top >= overlap_bottom {
+            return;
+        }
+
+        for world_y in overlap_top..overlap_bottom {
+            for world_x in overlap_left..overlap_right {
+                let incoming_x = world_x.wrapping_sub(incoming_left) as usize;
+                let incoming_y = world_y.wrapping_sub(incoming_top) as usize;
+                if SCOPE[incoming_y][incoming_x] != 0 {
+                    let existing_x = world_x.wrapping_sub(existing_left) as usize;
+                    let existing_y = world_y.wrapping_sub(existing_top) as usize;
+                    self.scope[existing_y][existing_x] = 0;
+                }
+            }
+        }
+    }
+
     pub(crate) fn encode_client_snapshot(&self) -> Option<Vec<u8>> {
         let mut payload = Vec::new();
         self.shape
@@ -220,7 +264,7 @@ pub(crate) fn apply_spider_mist_targets(
 
 // ============================================================================
 // FUNCTION: CSpiderMistPhalanx::ReplaceAffectRegion
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spidermistphalanx.cpp:204
