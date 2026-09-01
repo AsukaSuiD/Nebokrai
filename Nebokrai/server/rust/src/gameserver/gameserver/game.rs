@@ -24452,6 +24452,42 @@ impl CGame {
         true
     }
 
+    /// Точный script case `11127`: допустимы только faction 5/6; mutation
+    /// `lGodsBattleFaciton` предшествует публикации property `0xBF80C` вокруг
+    /// текущей позиции игрока.
+    pub(crate) fn set_script_player_gods_battle_faction(
+        &mut self,
+        player_id: i32,
+        faction: i32,
+    ) -> bool {
+        if !matches!(faction, 5 | 6) {
+            return false;
+        }
+        let Some((region_id, shape)) = self
+            .find_player(player_id)
+            .map(|player| (player.server_region_id(), player.shape().clone()))
+        else {
+            return false;
+        };
+        self.find_player_mut(player_id)
+            .expect("GodsBattle script player проверен до mutation")
+            .set_gods_battle_faction(faction);
+        let message = gods_battle_property_message(player_id, b"lGodsBattleFaciton", faction);
+        let delivery = region_id.and_then(|region_id| {
+            self.find_region(region_id).map(|region| {
+                self.send_game_shape_around(region.base(), &shape, None, &message)
+            })
+        });
+        tracing::trace!(
+            player_id,
+            region_id,
+            faction,
+            ?delivery,
+            "сценарий изменил фракцию игрока в битве богов"
+        );
+        true
+    }
+
     /// Декодирует GodsBattle-регион так, чтобы производная завершающая часть
     /// `AddObject` выполнялась после каждого созданного NPC, а не поздним
     /// повторным проходом. Тем самым сохраняется взаимный порядок обращений к

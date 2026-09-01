@@ -46,7 +46,8 @@
 //! Достигнутые GodsBattle scripts связывают `5413 / GetAreaID` с настоящим
 //! login-server ID, `11124/11128` — с persisted player SZL и уже существующим
 //! `CGame::UpdateSZL` effect-проходом, `11125/11126` — с faction XYD World
-//! round-trip и region-guarded чтением, `11129` — с single-requester top-ten
+//! round-trip и region-guarded чтением, `11127` — с player faction mutation
+//! и `0xBF80C` around-publication, `11129` — с single-requester top-ten
 //! запросом, а точный case `11130` — с NPC-contend текущего
 //! GodsBattle-региона игрока. Последний
 //! принимает неотрицательные секунды, сохраняет 32-битное умножение на `1000`
@@ -784,6 +785,7 @@ pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
 pub(crate) const SCRIPT_FUNCTION_SET_GODS_BATTLE_FACTION_XYD: i32 = 11125;
 pub(crate) const SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD: i32 = 11126;
+pub(crate) const SCRIPT_FUNCTION_SET_PLAYER_GODS_BATTLE_FACTION: i32 = 11127;
 pub(crate) const SCRIPT_FUNCTION_CHANGE_PLAYER_SZL: i32 = 11128;
 pub(crate) const SCRIPT_FUNCTION_GET_GODS_BATTLE_TOP_TEN: i32 = 11129;
 pub(crate) const SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND: i32 = 11130;
@@ -1205,6 +1207,7 @@ enum GodsBattleScriptKind {
     PlayerSzl,
     SetFactionXyd,
     FactionXyd,
+    SetPlayerFaction,
     ChangePlayerSzl,
     TopTen,
     EnterContend,
@@ -1226,6 +1229,11 @@ enum GodsBattleScriptDisposition {
         faction: Option<i32>,
         xyd: Option<i32>,
         sent: bool,
+    },
+    PlayerFactionChanged {
+        player_id: Option<i32>,
+        faction: Option<i32>,
+        changed: bool,
     },
     TopTenRequested {
         player_id: Option<i32>,
@@ -1266,6 +1274,7 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
         SCRIPT_FUNCTION_GET_PLAYER_SZL => GodsBattleScriptKind::PlayerSzl,
         SCRIPT_FUNCTION_SET_GODS_BATTLE_FACTION_XYD => GodsBattleScriptKind::SetFactionXyd,
         SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD => GodsBattleScriptKind::FactionXyd,
+        SCRIPT_FUNCTION_SET_PLAYER_GODS_BATTLE_FACTION => GodsBattleScriptKind::SetPlayerFaction,
         SCRIPT_FUNCTION_CHANGE_PLAYER_SZL => GodsBattleScriptKind::ChangePlayerSzl,
         SCRIPT_FUNCTION_GET_GODS_BATTLE_TOP_TEN => GodsBattleScriptKind::TopTen,
         SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND => GodsBattleScriptKind::EnterContend,
@@ -1352,6 +1361,22 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
                 GodsBattleScriptDisposition::Scalar {
                     player_id: script_player_id,
                     value,
+                },
+            )
+        }
+        GodsBattleScriptKind::SetPlayerFaction => {
+            let faction = evaluated_arguments[0].filter(|value| matches!(value, 5 | 6));
+            let changed = script_player_id
+                .zip(faction)
+                .is_some_and(|(player_id, faction)| {
+                    game.set_script_player_gods_battle_faction(player_id, faction)
+                });
+            handled(
+                0,
+                GodsBattleScriptDisposition::PlayerFactionChanged {
+                    player_id: script_player_id,
+                    faction,
+                    changed,
                 },
             )
         }
@@ -3752,6 +3777,10 @@ pub(crate) fn script_function_parameter_kind(
             _ => Unused,
         },
         SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD => match index {
+            0 => Integer,
+            _ => Unused,
+        },
+        SCRIPT_FUNCTION_SET_PLAYER_GODS_BATTLE_FACTION => match index {
             0 => Integer,
             _ => Unused,
         },
