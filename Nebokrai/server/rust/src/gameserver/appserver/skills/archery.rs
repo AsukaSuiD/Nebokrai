@@ -4,7 +4,11 @@
 //! `appserver/skills/archery.cpp`. Навык исполняется из обычной очереди
 //! `CPlayerAI`: проверяет дальность, непролётные клетки и оружие категории
 //! лука либо арбалета, блокирует движение на задержку и передаёт попадание
-//! региональному `CArcheryPhalanx`. Формулы и порядок RNG применяются только
+//! региональному `CArcheryPhalanx`. Тот же owner допускает monster-source без
+//! проверки оружия и создаёт видимый снаряд, но phalanx затем безусловно ищет
+//! атакующего в player-map: штатная monster-owned стрельба поэтому не наносит
+//! урон. Rust сохраняет этот наблюдаемый legacy-контракт без зависимости от
+//! случайного совпадения player/monster ID. Формулы и порядок RNG применяются только
 //! при достижении цели снарядом. Обычное, отказное и клиентское завершение
 //! после `Begin` используют общий подтверждённый `CBaseAttack`-хвост. Как и
 //! исходный `CState::GetSufferer`, owner принимает player/NPC/monster/build/gate;
@@ -14,10 +18,17 @@ use super::archeryphalanx::CArcheryPhalanx;
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::ai::monsterai::{
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
+};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::monsterattack::{
+    owned_monster_attackable, resolve_owned_monster_attack_target,
+};
 use crate::gameserver::appserver::skills::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME,
@@ -30,8 +41,246 @@ use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
 
 const PLAYER_TYPE: i32 = 400;
+const MONSTER_TYPE: i32 = 600;
 
 pub(crate) const ARCHERY_SKILL_ID: u32 = 2;
+
+fn send_monster_archery_visual(
+    game: &CGame,
+    region: &CServerRegion,
+    source: &crate::gameserver::appserver::shape::CShape,
+    skill_level: u16,
+    action: u8,
+    target: Option<(ShapeIdentity, i32, i32, i32)>,
+) {
+    let mut message = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
+    message.add_byte(action);
+    message.add_long(ARCHERY_SKILL_ID as i32);
+    message.add_short(skill_level as i16);
+    message.add_long(MONSTER_TYPE);
+    message.add_long(source.identity().id);
+    if action == 1 {
+        message.add_long(source.get_direction());
+    } else if let Some((target, x, y, attack_time)) = target {
+        message.add_long(target.object_type);
+        message.add_long(target.id);
+        message.add_long(x);
+        message.add_long(y);
+        message.add_long(attack_time);
+    } else {
+        return;
+    }
+    let _ = game.send_game_shape_around(region, source, None, &message);
+}
+
+#[allow(clippy::too_many_arguments, reason = "граница сохраняет monster AI, skill и region owners")]
+pub(crate) fn execute_owned_monster_archery<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    target_identity: ShapeIdentity,
+    skill_level: u16,
+    runtime: &mut Runtime,
+) -> bool {
+    let Some(properties) = game
+        .skill_base_properties(ARCHERY_SKILL_ID, i32::from(skill_level))
+        .cloned()
+    else {
+        return false;
+    };
+    let Some((source, property, master, tamed, cast, last_used_ms)) = region
+        .find_monster_by_id(monster_id)
+        .and_then(|monster| {
+            Some((
+                monster.move_shape().shape().clone(),
+                game.find_monster_property_by_origin_name(monster.base_property_key()?)?
+                    .clone(),
+                monster.master_info(),
+                monster.is_tamed(),
+                monster.base_attack_cast(),
+                monster.skill_last_used_ms(ARCHERY_SKILL_ID),
+            ))
+        })
+    else {
+        return false;
+    };
+    if cast.is_some_and(|cast| {
+        cast.dispatch().skill_id != ARCHERY_SKILL_ID
+            || cast.dispatch().target != target_identity
+    }) {
+        return false;
+    }
+    let now_ms = runtime.now_milliseconds();
+    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().set_moveable(true);
+            if cast.is_some() {
+                let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
+            }
+            monster.clear_ai_target();
+        }
+        return true;
+    };
+    if target.dead
+        || (cast.is_none()
+            && (target.god
+                || target.city_dead
+                || !owned_monster_attackable(
+                    game,
+                    region.id,
+                    &property,
+                    tamed,
+                    master,
+                    target_identity,
+                    &target,
+                )))
+    {
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().set_moveable(true);
+            if cast.is_some() {
+                let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
+            }
+            monster.clear_ai_target();
+        }
+        return true;
+    }
+    let (Ok(source_x), Ok(source_y), Ok(target_x), Ok(target_y)) = (
+        source.get_tile_x(),
+        source.get_tile_y(),
+        target.shape.get_tile_x(),
+        target.shape.get_tile_y(),
+    ) else {
+        if cast.is_some()
+            && let Some(monster) = region.find_monster_by_id_mut(monster_id)
+        {
+            monster.move_shape_mut().set_moveable(true);
+            let _ = monster.finish_base_attack_cast_without_reuse(now_ms);
+        }
+        return true;
+    };
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    if cast.is_none() {
+        if !approach_attack_range(
+            game,
+            region,
+            monster_id,
+            MonsterTraceTarget::Shape(target.view),
+            maximum_distance,
+            now_ms,
+        ) {
+            return true;
+        }
+        let attack_interval = if tamed {
+            region
+                .find_monster_by_id(monster_id)
+                .map(|monster| monster.pet_attack_properties(&property).attack_interval)
+                .unwrap_or(property.attack_speed)
+        } else {
+            property.attack_speed
+        };
+        if schedule_attack_interval(property.ai, attack_interval).is_some_and(|interval| {
+            region
+                .find_monster_by_id_mut(monster_id)
+                .is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))
+        }) {
+            return true;
+        }
+        let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+        if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay_ms) {
+            return true;
+        }
+        let path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);
+        if maximum_distance != 0 && path.len() > maximum_distance.wrapping_add(1) as usize {
+            return true;
+        }
+        if path.iter().any(|cell| cell.2 == 2) {
+            return true;
+        }
+        let direction = get_line_direction(source_x, source_y, target_x, target_y);
+        if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().shape_mut().set_direction(direction);
+            monster.move_shape_mut().set_moveable(false);
+            monster.begin_base_attack_cast(
+                target_identity,
+                ARCHERY_SKILL_ID,
+                skill_level,
+                now_ms,
+            );
+        }
+        let source = region
+            .find_monster_by_id(monster_id)
+            .map(|monster| monster.move_shape().shape())
+            .unwrap_or(&source);
+        send_monster_archery_visual(game, region, source, skill_level, 1, None);
+        return true;
+    }
+    let cast = cast.expect("monster archery cast проверен выше");
+    if !time_reached(
+        now_ms,
+        cast.started_at_ms(),
+        properties.query_property(SKILL_USAGE_DELAY_TIME),
+    ) {
+        return true;
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        monster.move_shape_mut().set_moveable(true);
+    }
+    let attack_time = real_distance(source_x, source_y, target_x, target_y)
+        .wrapping_mul(properties.query_property(SKILL_USAGE_SUMMONED_SPEED) as i32);
+    send_monster_archery_visual(
+        game,
+        region,
+        &source,
+        skill_level,
+        2,
+        Some((target_identity, target_x, target_y, attack_time)),
+    );
+    let forced_distance = real_distance(source_x, source_y, target_x, target_y) as u32;
+    let path = region.straight_skill_path(
+        source_x,
+        source_y,
+        target_x,
+        target_y,
+        Some(forced_distance),
+    );
+    if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {
+        let summon_id = game.allocate_summon_shape_id();
+        let started_at_ms = runtime.now_milliseconds();
+        let mut phalanx = CArcheryPhalanx::new(
+            summon_id,
+            MasterInfo {
+                master_type: MONSTER_TYPE,
+                master_id: monster_id,
+                ..MasterInfo::default()
+            },
+            started_at_ms,
+            properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME),
+            i32::from(skill_level),
+            attack_time as u32,
+            target_identity,
+        );
+        phalanx.shape_mut().set_region_id(region.id);
+        let (tile_x, tile_y, _) = path[0];
+        let (area_width, area_height) = game.area_dimensions();
+        let _ = region.add_archery_phalanx(
+            phalanx,
+            tile_x,
+            tile_y,
+            area_width,
+            area_height,
+            started_at_ms,
+            runtime,
+        );
+    }
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
+        let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
+        let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+        monster.move_shape_mut().shape_mut().set_action(1);
+        let _ = monster.finish_base_attack_cast(now_ms);
+    }
+    true
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ArcheryExecutionState {

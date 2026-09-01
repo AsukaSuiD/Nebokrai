@@ -7,7 +7,10 @@
 //! выхода здесь не отправляется. Расчёт трёх типов урона, wrapping и два
 //! исходных вызова RNG принадлежат этому owner-у; `CGame` передаёт снимок
 //! живого игрока и применяет рассчитанную атаку к независимому владельцу цели.
-//! Критический float-множитель усекается к нулю перед записью `int`.
+//! Exact `CalculateAttackPower` безусловно ищет attacker ID в player-map;
+//! созданный монстром снаряд поэтому остаётся визуальным и не получает
+//! выдуманную monster-формулу. Критический float-множитель усекается к нулю
+//! перед записью `int`.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
