@@ -20,7 +20,6 @@ use crate::gameserver::appserver::ai::guardwithbow::{
     select_guard_monster_target, select_guard_with_bow_target,
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -76,12 +75,7 @@ pub(crate) fn select_country_guard_target(
                 selected,
                 FixedArcherTarget {
                     identity: candidate.identity,
-                    distance: real_distance(
-                        monster_view.tile_x,
-                        monster_view.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ),
+                    distance: monster_view.real_distance(Some(candidate)),
                 },
                 property.guard_range as i32,
                 minimum_skill_distance,

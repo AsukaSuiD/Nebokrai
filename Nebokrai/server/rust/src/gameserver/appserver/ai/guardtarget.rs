@@ -102,12 +102,7 @@ pub(crate) fn select_nearest_player_or_pet(
         };
         let candidate = GuardDistanceTarget {
             identity: candidate.identity,
-            distance: real_distance(
-                owner.tile_x,
-                owner.tile_y,
-                candidate.tile_x,
-                candidate.tile_y,
-            ),
+            distance: owner.real_distance(Some(candidate)),
         };
         if candidate.distance <= guard_range
             && selected.is_none_or(|current: GuardDistanceTarget| {
@@ -131,12 +126,7 @@ pub(crate) fn select_nearest_player_or_pet(
         };
         let candidate = GuardDistanceTarget {
             identity: candidate.identity,
-            distance: real_distance(
-                owner.tile_x,
-                owner.tile_y,
-                candidate.tile_x,
-                candidate.tile_y,
-            ),
+            distance: owner.real_distance(Some(candidate)),
         };
         if candidate.distance <= guard_range
             && selected.is_none_or(|current| candidate.distance <= current.distance)
