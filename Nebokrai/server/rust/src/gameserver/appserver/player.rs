@@ -13487,6 +13487,10 @@ impl CPlayer {
         )
     }
 
+    pub(crate) fn activate_loaded_consumable_restore_states(&mut self, now_ms: u32) -> usize {
+        self.move_shape.activate_loaded_consumable_restore_states(now_ms)
+    }
+
     pub(crate) const fn consumable_restore_state_count(&self) -> usize {
         self.move_shape.consumable_restore_state_count()
     }

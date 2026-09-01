@@ -6,13 +6,17 @@
 //! когда `frequency * count + started < now`; сложение выполняется с
 //! переполнением и ограничивается текущим максимумом HP. После второго чтения
 //! часов состояние завершается при строгом `time_to_keep + started < now`.
-//! Смерть приостанавливает и шаги, и истечение. Vtable exact EXE подтверждает
-//! общий `CBlindState::GetRemainedTime` по `0x005F2CD0`; visual-effect update
-//! `0x004F86F0` сетевых пакетов не создаёт.
+//! Смерть приостанавливает и шаги, и истечение. Exact EXE подтверждает общие
+//! тела `Serialize/Unserialize` по `0x005F65F0/0x005EEC70`: DB-запись состоит
+//! из ID, оставшегося срока, частоты и прироста. Vtable также направляет
+//! `GetRemainedTime` на `0x005F2CD0`; visual-effect update `0x004F86F0`
+//! сетевых пакетов не создаёт.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 
 pub(crate) const RESTORE_HP_STATE_ID: i32 = 100_000;
+pub(crate) const RESTORE_HP_STATE_BYTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RestoreHpState {
@@ -41,6 +45,40 @@ impl RestoreHpState {
 
     pub(crate) const fn state_id(self) -> i32 {
         RESTORE_HP_STATE_ID
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let _state_id = reader.read_i32()?;
+        Ok(Self::new(
+            reader.read_u32()?,
+            reader.read_u32()?,
+            reader.read_u32()?,
+            0,
+        ))
+    }
+
+    pub(crate) fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; RESTORE_HP_STATE_BYTES] {
+        self.encoded_with_remaining(self.client_state_time(now_milliseconds) as u32)
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; RESTORE_HP_STATE_BYTES] {
+        self.encoded_with_remaining(self.time_to_keep_ms)
+    }
+
+    fn encoded_with_remaining(self, remaining_time_ms: u32) -> [u8; RESTORE_HP_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(RESTORE_HP_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_i32(RESTORE_HP_STATE_ID);
+        writer.write_u32(remaining_time_ms);
+        writer.write_u32(self.frequency_ms);
+        writer.write_u32(self.health_gain);
+        bytes.try_into().expect("размер состояния восстановления HP фиксирован")
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
+        self.restore_count = 0;
     }
 
     pub(crate) fn client_state_time(

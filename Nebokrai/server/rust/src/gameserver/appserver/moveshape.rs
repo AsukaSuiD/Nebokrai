@@ -31,6 +31,9 @@
 //! `CNotDisappearAfterDead` использует точный client-time override
 //! `CExStateNew::GetRemainedTime`: нулевой срок и достигнутый wrapping deadline
 //! дают `0`, иначе публикуется оставшийся DWORD.
+//! Расходуемые восстановления HP/MP также входят в общий DB-кодек: их
+//! 16-байтные записи материализуются при загрузке, активируются при входе и
+//! удаляются из wire вместе с живым состоянием, не обрывая следующий record.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
 //! остаются у этого владельца.
@@ -52,6 +55,8 @@ use super::particularstate::{PARTICULAR_STATE_ID, ParticularState};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::restorestate::{ConsumableRestoreMutation, ConsumableRestoreStateStorage};
+use super::restorehpstate::{RESTORE_HP_STATE_BYTES, RESTORE_HP_STATE_ID};
+use super::restorempstate::{RESTORE_MP_STATE_BYTES, RESTORE_MP_STATE_ID};
 use super::scriptstate::ScriptMoveState;
 use super::serverregion::{CServerRegion, RegionMembershipBlock};
 use super::teamstate::{CTeamState, TEAM_STATE_ID};
@@ -813,7 +818,6 @@ impl CMoveShape {
         }
         let total_count = declared_count
             .checked_add(self.automatic_restore_states.len())?
-            .checked_add(self.consumable_restore_states.len())?
             .checked_add(self.particular_states.len())?
             .checked_add(self.team_recruitment_states.len())?;
         let mut payload = Vec::new();
@@ -823,8 +827,22 @@ impl CMoveShape {
         let mut writer = LegacyWriter::new(&mut payload);
         writer.write_u8(u8::from(is_dead));
         writer.write_i32(i32::try_from(total_count).ok()?);
+        let mut restore_index = 0usize;
         for offset in offsets {
             let state_id = read_i32(&states, offset)?;
+            if state_id == RESTORE_HP_STATE_ID || state_id == RESTORE_MP_STATE_ID {
+                let (typed_state_id, client_time) = self
+                    .consumable_restore_states
+                    .client_snapshot_record(restore_index, &mut timed_state_now_milliseconds)?;
+                if typed_state_id != state_id {
+                    return None;
+                }
+                restore_index += 1;
+                writer.write_i32(state_id);
+                writer.write_i32(client_time);
+                writer.write_u32(default_additional_data());
+                continue;
+            }
             writer.write_i32(state_id);
             writer.write_i32(self.client_state_time(
                 &states,
@@ -840,13 +858,8 @@ impl CMoveShape {
             writer.write_i32(state.client_state_time());
             writer.write_u32(default_additional_data());
         }
-        for index in 0..self.consumable_restore_states.len() {
-            let (state_id, client_time) = self
-                .consumable_restore_states
-                .client_snapshot_record(index, &mut timed_state_now_milliseconds)?;
-            writer.write_i32(state_id);
-            writer.write_i32(client_time);
-            writer.write_u32(default_additional_data());
+        if restore_index != self.consumable_restore_states.len() {
+            return None;
         }
         for state in &self.particular_states {
             writer.write_i32(state.state_id());
@@ -1082,6 +1095,29 @@ impl CMoveShape {
                 destination.copy_from_slice(&record);
             }
         }
+        let mut restore_occurrences = BTreeMap::<i32, usize>::new();
+        for index in 0..self.consumable_restore_states.len() {
+            let Some(state_id) = self.consumable_restore_states.state_id(index) else {
+                continue;
+            };
+            let occurrence = restore_occurrences.entry(state_id).or_default();
+            let offset = known_state_record_offsets(&payload)
+                .into_iter()
+                .filter(|offset| read_i32(&payload, *offset) == Some(state_id))
+                .nth(*occurrence);
+            *occurrence += 1;
+            let Some(record) = self
+                .consumable_restore_states
+                .persisted_record(index, &mut timed_state_now_milliseconds)
+            else {
+                continue;
+            };
+            if let Some(offset) = offset
+                && let Some(destination) = payload.get_mut(offset..offset + record.len())
+            {
+                destination.copy_from_slice(&record);
+            }
+        }
         if let Some(state) = self.leaf_cut_state {
             state.update_serialized_runtime(&mut payload, now_ms);
         }
@@ -1305,6 +1341,8 @@ impl CMoveShape {
     pub(crate) fn replace_ex_states(&mut self, states: Vec<u8>, skill_factory: &CSkillFactory) {
         let known_offsets = known_state_record_offsets(&states);
         let state_owner = self.shape.identity();
+        self.consumable_restore_states =
+            ConsumableRestoreStateStorage::decode_known(&states, &known_offsets);
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
         self.change_body_states.retain(|state| {
             state
@@ -1810,13 +1848,17 @@ impl CMoveShape {
         interval_ms: u32,
         now_ms: impl FnMut() -> u32,
     ) -> bool {
-        self.consumable_restore_states.begin_health(
+        let Some(record) = self.consumable_restore_states.begin_health(
             amount,
             time_to_keep_ms,
             frequency_ms,
             interval_ms,
             now_ms,
-        )
+        ) else {
+            return false;
+        };
+        self.append_serialized_state_record(&record);
+        true
     }
 
     pub(crate) fn begin_consumable_mana_restore(
@@ -1827,17 +1869,25 @@ impl CMoveShape {
         interval_ms: u32,
         now_ms: impl FnMut() -> u32,
     ) -> bool {
-        self.consumable_restore_states.begin_mana(
+        let Some(record) = self.consumable_restore_states.begin_mana(
             amount,
             time_to_keep_ms,
             frequency_ms,
             interval_ms,
             now_ms,
-        )
+        ) else {
+            return false;
+        };
+        self.append_serialized_state_record(&record);
+        true
     }
 
     pub(crate) const fn consumable_restore_state_count(&self) -> usize {
         self.state_storage.consumable_restore_states.len()
+    }
+
+    pub(crate) fn activate_loaded_consumable_restore_states(&mut self, now_ms: u32) -> usize {
+        self.consumable_restore_states.activate_loaded(now_ms)
     }
 
     pub(crate) fn consumable_restore_state_is_health(&self, index: usize) -> Option<bool> {
@@ -1864,7 +1914,28 @@ impl CMoveShape {
     }
 
     pub(crate) fn remove_consumable_restore_state(&mut self, index: usize) -> bool {
-        self.consumable_restore_states.remove(index)
+        let Some(state_id) = self.consumable_restore_states.state_id(index) else {
+            return false;
+        };
+        let occurrence = (0..index)
+            .filter(|known| self.consumable_restore_states.state_id(*known) == Some(state_id))
+            .count();
+        let serialized_offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .filter(|offset| read_i32(&self.ex_states, *offset) == Some(state_id))
+            .nth(occurrence);
+        if !self.consumable_restore_states.remove(index) {
+            return false;
+        }
+        if let Some(offset) = serialized_offset {
+            let amount = if state_id == RESTORE_HP_STATE_ID {
+                RESTORE_HP_STATE_BYTES
+            } else {
+                RESTORE_MP_STATE_BYTES
+            };
+            let _ = self.remove_serialized_state_record_at(offset, amount);
+        }
+        true
     }
 
     pub(crate) fn particular_states(&self) -> &[ParticularState] {
@@ -5196,6 +5267,8 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             | super::skills::heal2::HEAL_2_SKILL_ID
             | super::skills::superheal::SUPER_HEAL_SKILL_ID
             | super::skills::superheal2::SUPER_HEAL_2_SKILL_ID => HEAL_STATE_BYTES,
+            state_id if state_id == RESTORE_HP_STATE_ID as u32 => RESTORE_HP_STATE_BYTES,
+            state_id if state_id == RESTORE_MP_STATE_ID as u32 => RESTORE_MP_STATE_BYTES,
             CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
             super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
             TAIJI_SKILL_ID => TAIJI_STATE_BYTES,

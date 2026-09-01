@@ -7,8 +7,8 @@
 //! исходным владельцам состояний. Полный клиентский снимок обходит тот же
 //! список и вычисляет remaining-time отдельными исходными чтениями часов.
 
-use super::restorehpstate::RestoreHpState;
-use super::restorempstate::RestoreMpState;
+use super::restorehpstate::{RESTORE_HP_STATE_ID, RestoreHpState};
+use super::restorempstate::{RESTORE_MP_STATE_ID, RestoreMpState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConsumableRestoreMutation {
@@ -60,6 +60,27 @@ impl ConsumableRestoreState {
     const fn is_health(self) -> bool {
         matches!(self, Self::Health(_))
     }
+
+    fn encoded(self, now_milliseconds: impl FnMut() -> u32) -> [u8; 16] {
+        match self {
+            Self::Health(state) => state.encoded(now_milliseconds),
+            Self::Mana(state) => state.encoded(now_milliseconds),
+        }
+    }
+
+    fn encoded_for_install(self) -> [u8; 16] {
+        match self {
+            Self::Health(state) => state.encoded_for_install(),
+            Self::Mana(state) => state.encoded_for_install(),
+        }
+    }
+
+    fn activate_loaded(&mut self, now_ms: u32) {
+        match self {
+            Self::Health(state) => state.activate_loaded(now_ms),
+            Self::Mana(state) => state.activate_loaded(now_ms),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -70,6 +91,31 @@ pub(crate) struct ConsumableRestoreStateStorage {
 }
 
 impl ConsumableRestoreStateStorage {
+    pub(crate) fn decode_known(payload: &[u8], offsets: &[usize]) -> Self {
+        let states = offsets
+            .iter()
+            .copied()
+            .filter_map(|offset| match payload.get(offset..offset + 4) {
+                Some(id) if id == RESTORE_HP_STATE_ID.to_le_bytes() => {
+                    RestoreHpState::decode(payload, offset)
+                        .ok()
+                        .map(ConsumableRestoreState::Health)
+                }
+                Some(id) if id == RESTORE_MP_STATE_ID.to_le_bytes() => {
+                    RestoreMpState::decode(payload, offset)
+                        .ok()
+                        .map(ConsumableRestoreState::Mana)
+                }
+                _ => None,
+            })
+            .collect();
+        Self {
+            states,
+            last_health_begin_ms: 0,
+            last_mana_begin_ms: 0,
+        }
+    }
+
     pub(crate) fn begin_health(
         &mut self,
         amount: u32,
@@ -77,20 +123,22 @@ impl ConsumableRestoreStateStorage {
         frequency_ms: u32,
         interval_ms: u32,
         mut now_ms: impl FnMut() -> u32,
-    ) -> bool {
+    ) -> Option<[u8; 16]> {
         let checked_at_ms = now_ms();
         if self.last_health_begin_ms.wrapping_add(interval_ms) > checked_at_ms {
-            return false;
+            return None;
         }
         let started_at_ms = now_ms();
         self.last_health_begin_ms = started_at_ms;
-        self.states.push(ConsumableRestoreState::Health(RestoreHpState::new(
+        let state = ConsumableRestoreState::Health(RestoreHpState::new(
             time_to_keep_ms,
             frequency_ms,
             amount,
             started_at_ms,
-        )));
-        true
+        ));
+        let record = state.encoded_for_install();
+        self.states.push(state);
+        Some(record)
     }
 
     pub(crate) fn begin_mana(
@@ -100,20 +148,22 @@ impl ConsumableRestoreStateStorage {
         frequency_ms: u32,
         interval_ms: u32,
         mut now_ms: impl FnMut() -> u32,
-    ) -> bool {
+    ) -> Option<[u8; 16]> {
         let checked_at_ms = now_ms();
         if self.last_mana_begin_ms.wrapping_add(interval_ms) > checked_at_ms {
-            return false;
+            return None;
         }
         let started_at_ms = now_ms();
         self.last_mana_begin_ms = started_at_ms;
-        self.states.push(ConsumableRestoreState::Mana(RestoreMpState::new(
+        let state = ConsumableRestoreState::Mana(RestoreMpState::new(
             time_to_keep_ms,
             frequency_ms,
             amount,
             started_at_ms,
-        )));
-        true
+        ));
+        let record = state.encoded_for_install();
+        self.states.push(state);
+        Some(record)
     }
 
     pub(crate) const fn len(&self) -> usize {
@@ -139,6 +189,25 @@ impl ConsumableRestoreStateStorage {
 
     pub(crate) fn is_health(&self, index: usize) -> Option<bool> {
         self.states.get(index).copied().map(ConsumableRestoreState::is_health)
+    }
+
+    pub(crate) fn state_id(&self, index: usize) -> Option<i32> {
+        self.states.get(index).copied().map(ConsumableRestoreState::state_id)
+    }
+
+    pub(crate) fn persisted_record(
+        &self,
+        index: usize,
+        now_milliseconds: impl FnMut() -> u32,
+    ) -> Option<[u8; 16]> {
+        self.states.get(index).copied().map(|state| state.encoded(now_milliseconds))
+    }
+
+    pub(crate) fn activate_loaded(&mut self, now_ms: u32) -> usize {
+        for state in &mut self.states {
+            state.activate_loaded(now_ms);
+        }
+        self.states.len()
     }
 
     pub(crate) fn client_snapshot_record(
