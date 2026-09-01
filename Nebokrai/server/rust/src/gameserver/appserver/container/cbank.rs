@@ -7,8 +7,9 @@
 //! player/game owner-у и передаётся сюда уже как результат аутентификации:
 //! container сохраняет только подтверждённый state transition. Достигнутый
 //! `0x90301` caller переносит
-//! owned gold между wallet и bank с rollback и клиентским move. Codec restore
-//! ниже остаётся RAW.
+//! owned gold между wallet и bank с rollback и клиентским move. Persisted
+//! restore временно открывает внутренний wallet только на время decode и
+//! обязательно возвращает bank в locked-состояние, включая ошибочный вход.
 
 use super::cgoodscontainer::CGoodsContainer;
 use super::cwallet::{
@@ -167,14 +168,16 @@ impl CBank {
         BattleThreshold: FnMut(u32, u32) -> u32,
     {
         self.locked = false;
-        self.wallet.unserialize(
+        let result = self.wallet.unserialize(
             source,
             cursor,
             "CBank marker",
             factory,
             ordinary_threshold,
             battle_threshold,
-        )
+        );
+        self.locked = true;
+        result
     }
 }
 
