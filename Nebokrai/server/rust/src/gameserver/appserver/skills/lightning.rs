@@ -6,8 +6,9 @@
 //! точные пакеты начала и удара и непосредственное применение атаки в том же
 //! такте. Формула сохраняет два исходных RNG-вызова: разброс элементального
 //! урона, затем критический удар. `CGame` только разрешает владельцев цели и
-//! применяет рассчитанную атаку через общую защиту. Координатные перегрузки
-//! `Begin` остаются ниже недостигнутыми.
+//! применяет рассчитанную атаку через общую защиту. Координатный `Begin`
+//! сохраняет точку без объектной цели: после обычных проверок, расхода MP и
+//! задержки он отправляет выстрел с нулевыми type/id, затем отмену и `End(0)`.
 //! `End(1)` сбрасывает execution-состояние и завершает успешную атаку;
 //! `End(0)` очищает отменённую команду без обновления свойств и cooldown.
 
@@ -44,7 +45,8 @@ const TARGET_FINAL_DAMAGE_MODIFIER: u32 = 20_002;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LightningExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
-    target: ShapeIdentity,
+    target: Option<ShapeIdentity>,
+    destination: (i32, i32),
     condition_checked: bool,
     attacking_started: bool,
 }
@@ -52,12 +54,14 @@ pub(crate) struct LightningExecutionState {
 impl LightningExecutionState {
     const fn begin(
         dispatch: PlayerSkillDispatch,
-        target: ShapeIdentity,
+        target: Option<ShapeIdentity>,
+        destination: (i32, i32),
         started_at_ms: u32,
     ) -> Self {
         Self {
             kernel: SkillExecutionKernel::begin(dispatch, started_at_ms),
             target,
+            destination,
             condition_checked: false,
             attacking_started: false,
         }
@@ -117,7 +121,7 @@ fn send_start(game: &mut CGame, player_id: i32, level: i32) {
 fn send_fire(
     game: &mut CGame,
     player_id: i32,
-    target: ShapeIdentity,
+    target: Option<ShapeIdentity>,
     target_x: i32,
     target_y: i32,
     level: i32,
@@ -128,8 +132,8 @@ fn send_fire(
     message.add_short(level as i16);
     message.add_long(PLAYER_TYPE);
     message.add_long(player_id);
-    message.add_long(target.object_type);
-    message.add_long(target.id);
+    message.add_long(target.map_or(0, |target| target.object_type));
+    message.add_long(target.map_or(0, |target| target.id));
     message.add_long(target_x);
     message.add_long(target_y);
     let _ = game.send_player_shape_around(player_id, None, &message);
@@ -285,7 +289,13 @@ fn calculate_attack(
 pub(crate) const fn is_lightning_target(dispatch: PlayerSkillDispatch) -> bool {
     matches!(
         dispatch,
-        PlayerSkillDispatch::Object {
+        PlayerSkillDispatch::SelfTarget {
+            skill_id: LIGHTNING_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Point {
+            skill_id: LIGHTNING_SKILL_ID,
+            ..
+        } | PlayerSkillDispatch::Object {
             skill_id: LIGHTNING_SKILL_ID,
             target: ShapeIdentity {
                 object_type: PLAYER_TYPE | MONSTER_TYPE,
@@ -302,11 +312,22 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let target = match dispatch {
+    let (target, requested_destination) = match dispatch {
+        PlayerSkillDispatch::SelfTarget {
+            skill_id: LIGHTNING_SKILL_ID,
+            ..
+        } => (None, (0, 0)),
+        PlayerSkillDispatch::Point {
+            skill_id: LIGHTNING_SKILL_ID,
+            x,
+            y,
+        } => (None, (x, y)),
         PlayerSkillDispatch::Object {
             skill_id: LIGHTNING_SKILL_ID,
             target,
-        } => target,
+        } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => {
+            (Some(target), (0, 0))
+        }
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
     let Some((region_id, source_x, source_y, level, initial_mana)) =
@@ -352,15 +373,20 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            return terminal(QueuedSkillExecutionState::Rejected);
+        let destination = if let Some(target) = target {
+            let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            (target_view.tile_x, target_view.tile_y)
+        } else {
+            requested_destination
         };
         let path = game.base_magic_path(
             region_id,
             source_x,
             source_y,
-            target_view.tile_x,
-            target_view.tile_y,
+            destination.0,
+            destination.1,
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
@@ -382,6 +408,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         player_ai.begin_lightning(LightningExecutionState::begin(
             dispatch,
             target,
+            destination,
             started_at_ms,
         ));
     } else if player_ai
@@ -402,17 +429,25 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
             abort_player_lightning(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            abort_player_lightning(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
+        let destination = if let Some(target) = target {
+            let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+                abort_player_lightning(game, player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            (target_view.tile_x, target_view.tile_y)
+        } else {
+            player_ai
+                .lightning()
+                .map(|state| state.destination)
+                .expect("выполнение молнии хранит координатную цель")
         };
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_mana(mana.wrapping_sub(mp_loss));
             player.movement_shape_mut().set_direction(get_line_direction(
                 source_x,
                 source_y,
-                target_view.tile_x,
-                target_view.tile_y,
+                destination.0,
+                destination.1,
             ));
             player.set_skill_moveable(false);
         }
@@ -438,16 +473,27 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
             return terminal(QueuedSkillExecutionState::Pending);
         }
-        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            send_failure(game, player_id, 10);
-            abort_player_lightning(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
+        let (destination, visual_target) = if let Some(target) = target {
+            let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+                send_failure(game, player_id, 10);
+                abort_player_lightning(game, player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            };
+            if target_dead(game, region_id, target) {
+                send_failure(game, player_id, 10);
+                abort_player_lightning(game, player_id);
+                return terminal(QueuedSkillExecutionState::Rejected);
+            }
+            ((target_view.tile_x, target_view.tile_y), Some(target))
+        } else {
+            (
+                player_ai
+                    .lightning()
+                    .map(|state| state.destination)
+                    .expect("выполнение молнии хранит координатную цель"),
+                None,
+            )
         };
-        if target_dead(game, region_id, target) {
-            send_failure(game, player_id, 10);
-            abort_player_lightning(game, player_id);
-            return terminal(QueuedSkillExecutionState::Rejected);
-        }
         let Some((current_source_x, current_source_y)) =
             game.find_player(player_id).and_then(|player| {
                 Some((
@@ -463,8 +509,8 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
             region_id,
             current_source_x,
             current_source_y,
-            target_view.tile_x,
-            target_view.tile_y,
+            destination.0,
+            destination.1,
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
@@ -476,12 +522,13 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
         send_fire(
             game,
             player_id,
-            target,
-            target_view.tile_x,
-            target_view.tile_y,
+            visual_target,
+            destination.0,
+            destination.1,
             level,
         );
         if let Some(state) = player_ai.lightning_mut() {
+            state.destination = destination;
             state.mark_attacking_started();
             let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate);
         }
@@ -489,6 +536,11 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
+    let Some(target) = target else {
+        send_cancel(game, player_id, level);
+        abort_player_lightning(game, player_id);
+        return terminal(QueuedSkillExecutionState::Rejected);
+    };
     let Some(master) = game.find_player(player_id).map(master_info) else {
         abort_player_lightning(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -537,28 +589,3 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
     finish_player_lightning(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
-
-// Остаются недостигнутыми координатные перегрузки запуска навыка.
-// ============================================================================
-// FUNCTION: CLightning::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightning.cpp:157
-// RVA: 0x001AC130
-// ADDRESS: 005ac130
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-// ============================================================================
-// FUNCTION: CLightning::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\lightning.cpp:176
-// RVA: 0x001AC200
-// ADDRESS: 005ac200
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, OBJECT_TYPE param_2, long param_3, long param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
