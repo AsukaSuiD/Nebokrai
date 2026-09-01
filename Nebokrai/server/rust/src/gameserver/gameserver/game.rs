@@ -42032,7 +42032,7 @@ impl CGame {
                     victim.is_badman(self.globe_setup.pk_count_per_kill()),
                 ))
             })?;
-        let (region_country, no_contribute, security, gods_battle_region) = {
+        let (region_country, no_contribute, block, security, gods_battle_region) = {
             let owner = self.find_region(region_id)?;
             let victim = self.find_player(blow.victim_id)?;
             let x = victim.shape().get_tile_x().ok()?;
@@ -42040,6 +42040,7 @@ impl CGame {
             (
                 owner.base().country,
                 owner.base().no_contribute,
+                owner.base().region.get_block(x, y).ok()?,
                 owner.get_security(x, y).ok()?,
                 matches!(owner, ServerRegionOwner::GodsBattle(_)),
             )
@@ -42110,11 +42111,13 @@ impl CGame {
             && murderer_country != victim_country
             && (i32::from(murderer_level) - i32::from(victim_level)).abs()
                 <= self.honor_eliminate_config.level_difference
-            && security != RegionSecurity::FIGHT
+            && block != 1
             && self.find_player(murderer_id).is_some_and(|murderer| {
-                murderer.union_id() == 0
-                    || self.find_player(blow.victim_id).map(CPlayer::union_id)
-                        != Some(murderer.union_id())
+                murderer.union_master_id() == 0
+                    || self
+                        .find_player(blow.victim_id)
+                        .map(CPlayer::union_master_id)
+                        != Some(murderer.union_master_id())
             })
         {
             let counts = self.find_player(murderer_id)?.honor_snapshot();

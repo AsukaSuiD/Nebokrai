@@ -99,6 +99,9 @@
 //! Соседний `OnDied` использует тот же `m_lNotify`, но отдельный kill timestamp
 //! и строгий gate `last + interval < now`; `GS0140..GS0142` также запрещены
 //! именно block `1`, а не одноимённым значением security.
+//! `OnBeenMurdered` honor-eliminate `0x5FD0D` сравнивает union master identity,
+//! проверяет тот же block `1` и передаёт World все четыре текущих счётчика;
+//! общий PK policy ниже по цепочке по-прежнему использует security клетки.
 //! `UseItem` материализует точные коды требований, принадлежащее игроку
 //! изучение навыков, расход предметов в рюкзаке и четыре заменяемых боевых
 //! `tagExpendableEffect`. Проверки и состояния ездового животного и
@@ -3970,6 +3973,10 @@ impl CPlayer {
 
     pub(crate) const fn union_id(&self) -> i32 {
         self.union_id
+    }
+
+    pub(crate) const fn union_master_id(&self) -> i32 {
+        self.union_master_id
     }
 
     pub(crate) const fn is_union_master(&self) -> bool {
