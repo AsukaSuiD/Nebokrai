@@ -150,7 +150,6 @@ pub(crate) struct CMonster {
     first_attack_player_id: i32,
     last_attack_timer_ms: u32,
     killed_by: Option<MonsterKillingAttack>,
-    ai_target: Option<ShapeIdentity>,
     base_attack_cast: Option<MonsterBaseAttackCast>,
     fast_attack_progress: Option<MonsterFastAttackProgress>,
     monster_projectile_progress: Option<MonsterProjectileProgress>,
@@ -341,7 +340,6 @@ impl CMonster {
             first_attack_player_id: 0,
             last_attack_timer_ms: 0,
             killed_by: None,
-            ai_target: None,
             base_attack_cast: None,
             fast_attack_progress: None,
             monster_projectile_progress: None,
@@ -709,7 +707,7 @@ impl CMonster {
 
     pub(crate) fn set_pet_action(&mut self, action: i32) {
         if self.pet_behavior.set_action(action) {
-            self.ai_target = None;
+            self.base_ai.lose_target();
             self.cancel_base_attack_cast();
             self.base_ai.cancel_active_move();
         }
@@ -734,7 +732,7 @@ impl CMonster {
 
     pub(crate) fn set_pet_target(&mut self, target: ShapeIdentity) {
         self.pet_behavior.begin_target();
-        self.ai_target = Some(target);
+        self.base_ai.set_object_target(target);
         self.cancel_base_attack_cast();
         self.base_ai.cancel_active_move();
     }
@@ -746,7 +744,7 @@ impl CMonster {
         {
             return false;
         }
-        self.ai_target = Some(target);
+        self.base_ai.set_object_target(target);
         true
     }
 
@@ -840,7 +838,6 @@ impl CMonster {
         self.hit_points = maximum_hp;
         if self.ai_binding.is_some() {
             self.base_ai.clear_guard_refresh_state();
-            self.ai_target = None;
         }
     }
 
@@ -1250,7 +1247,7 @@ impl CMonster {
     ) {
         self.when_been_hurted(now_ms);
         if accepts_hurt_target(self.ai_target(), attacker, attacker_is_tamed) {
-            self.ai_target = Some(attacker);
+            self.base_ai.set_object_target(attacker);
         }
     }
 
@@ -1276,14 +1273,14 @@ impl CMonster {
             state.on_hurt(attacker, already_fighting, attacker_is_owned_creature)
         });
         if let Some(selected) = selected {
-            self.ai_target = Some(selected);
+            self.base_ai.set_object_target(selected);
         }
     }
 
     pub(crate) fn when_pet_been_hurted_by(&mut self, attacker: ShapeIdentity, now_ms: u32) {
         self.base_ai.when_been_hurted(now_ms);
         if self.pet_behavior.on_hurt(self.ai_target(), attacker) {
-            self.ai_target = Some(attacker);
+            self.base_ai.set_object_target(attacker);
         }
     }
 
@@ -1313,7 +1310,7 @@ impl CMonster {
         let action = self.base_ai.process_reached_stiffen_action(now_ms);
         if action == PassiveStiffenAction::InterruptAttack {
             self.cancel_base_attack_cast();
-            self.ai_target = None;
+            self.base_ai.lose_target();
         }
         action
     }
@@ -1326,7 +1323,7 @@ impl CMonster {
     /// не отменяет сохранённый `ASA_MOVE`; расширенный `clear_ai_target`
     /// намеренно остаётся для обычных schedule/interruption путей.
     pub(crate) fn release_ai_target_for_death(&mut self) {
-        self.ai_target = None;
+        self.base_ai.lose_target();
     }
 
     pub(crate) fn finish_reached_death_action(&mut self) -> PassiveDeathAction {
@@ -1417,18 +1414,15 @@ impl CMonster {
     }
 
     pub(crate) const fn ai_target(&self) -> Option<ShapeIdentity> {
-        match self.ai_target {
-            // Exact `CBaseAI::HasTarget` принимает object target только при
-            // строго положительных ID и type; отрицательные legacy-значения
-            // могут храниться полями, но расписание целью их не считает.
-            Some(target) if target.object_type > 0 && target.id > 0 => Some(target),
-            _ => None,
+        if !self.base_ai.has_object_target() {
+            return None;
         }
+        self.base_ai.object_target()
     }
 
     pub(crate) fn set_ai_target(&mut self, target: ShapeIdentity) {
         self.pet_behavior.begin_ai_target(self.tamed);
-        self.ai_target = Some(target);
+        self.base_ai.set_object_target(target);
     }
 
     pub(crate) const fn base_attack_cast(&self) -> Option<MonsterBaseAttackCast> {
@@ -1613,7 +1607,7 @@ impl CMonster {
     }
 
     pub(crate) fn clear_ai_target(&mut self) {
-        self.ai_target = None;
+        self.base_ai.lose_target();
         self.cancel_base_attack_cast();
         self.base_ai.cancel_active_move();
         self.pet_behavior.target_cleared(self.tamed);

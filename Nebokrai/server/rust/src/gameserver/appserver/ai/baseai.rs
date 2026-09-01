@@ -22,9 +22,10 @@
 //! ставит следующий `Stand` на 1000 мс только при пустом результате основного
 //! прохода и отсутствии цели; `CPlayerAI` применяет эту границу после своих
 //! typed очередей. Общий runtime не вызывает очереди и `OnSchedule`, пока этот
-//! владелец спит. City/country guard refresh также достигает точный `Clear`
-//! обычных active/passive очередей и dormancy-флага без затрагивания war-soul
-//! FIFO.
+//! владелец спит. Достигнутая object-target часть `SetTarget`, `GetTarget`,
+//! `HasTarget` и `OnLoseTarget` также принадлежит этому owner-у. City/country
+//! guard refresh достигает `Clear` обычных active/passive очередей,
+//! object-цели и dormancy-флага без затрагивания war-soul FIFO.
 //! Пассивный `Died` также исполняет точный `OnBeenKilled`: из active FIFO
 //! сохраняется только первый `Move`, цель отпускается на каждом
 //! повторном проходе, а owner death разрешается лишь после завершения этого
@@ -34,6 +35,8 @@
 //! остальные обработчики ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use std::collections::VecDeque;
+
+use crate::gameserver::appserver::shape::ShapeIdentity;
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,9 +86,42 @@ pub(crate) struct CBaseAI {
     is_dormant: bool,
     dormancy_time_ms: u32,
     dormancy_interval_ms: u32,
+    target_id: i32,
+    target_type: i32,
 }
 
 impl CBaseAI {
+    /// Точный достигнутый `SetTarget(long, long)` object identity.
+    pub(crate) const fn set_object_target(&mut self, target: ShapeIdentity) {
+        self.target_type = target.object_type;
+        self.target_id = target.id;
+    }
+
+    /// Материализованная identity-часть `GetTarget`. Разрешение объекта
+    /// остаётся у region owner-а, а нулевые legacy-поля не образуют lookup.
+    pub(crate) const fn object_target(&self) -> Option<ShapeIdentity> {
+        if self.target_type == 0 || self.target_id == 0 {
+            return None;
+        }
+        Some(ShapeIdentity {
+            object_type: self.target_type,
+            id: self.target_id,
+            ex_id: crate::public::guid::CGuid::GUID_INVALID,
+        })
+    }
+
+    /// Достигнутая object-ветвь `HasTarget` требует строго положительные
+    /// type/ID. Point-цель пока остаётся у недостигнутого coordinate caller-а.
+    pub(crate) const fn has_object_target(&self) -> bool {
+        self.target_id > 0 && self.target_type > 0
+    }
+
+    /// Достигнутая object-часть `OnLoseTarget`.
+    pub(crate) const fn lose_target(&mut self) {
+        self.target_id = 0;
+        self.target_type = 0;
+    }
+
     pub(crate) fn add_ai_event(
         &mut self,
         action: AiShapeAction,
@@ -134,12 +170,14 @@ impl CBaseAI {
     }
 
     /// Точный наблюдаемый участок `CBaseAI::Clear`, вызываемый при обновлении
-    /// city/country guard: очищает обычные active/passive FIFO и снимает сон.
-    /// Исходный owner не очищает отдельную war-soul очередь и не обнуляет
-    /// сохранённые времена сна, поэтому Rust сохраняет это различие.
+    /// city/country guard: очищает обычные active/passive FIFO, object-цель и
+    /// снимает сон. Исходный owner не очищает отдельную war-soul очередь и
+    /// сохранённые времена сна, поэтому Rust сохраняет различие.
     pub(crate) fn clear_guard_refresh_state(&mut self) {
         self.active_actions.clear();
         self.passive_actions.clear();
+        self.target_id = 0;
+        self.target_type = 0;
         self.is_dormant = false;
     }
 
@@ -530,7 +568,8 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 //
 // ============================================================================
 // FUNCTION: CBaseAI::SetTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// IMPLEMENTED: object identity материализована в `CBaseAI::set_object_target`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:212
@@ -605,7 +644,9 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnLoseTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `CBaseAI::lose_target` материализует достигнутые object-поля;
+// point-координаты остаются у недостигнутого coordinate caller-а.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1110
@@ -633,7 +674,9 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::HasTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `CBaseAI::has_object_target` материализует достигнутую object-
+// ветвь; coordinate-ветвь пока не имеет caller-а.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:1350
@@ -661,7 +704,9 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::GetTarget
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: PARTIALLY_IMPLEMENTED
+// IMPLEMENTED: `CBaseAI::object_target` владеет сохранённой identity;
+// canonical region callers разрешают её в живую форму.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:183
