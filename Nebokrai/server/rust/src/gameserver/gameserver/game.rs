@@ -24736,25 +24736,34 @@ impl CGame {
             self.restore_region_owner(owner);
             return false;
         };
-        let Some((npc_name, configuration)) =
-            region.war.base.find_npc_by_id(npc_id).and_then(|npc| {
-                let name = npc.name().to_vec();
-                self.gods_battle_mgr
-                    .npc_configuration(&name)
-                    .cloned()
-                    .map(|configuration| (name, configuration))
-            })
-        else {
-            self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-            return false;
-        };
+        let npc_name = region
+            .war
+            .base
+            .find_npc_by_id(npc_id)
+            .map(|npc| npc.name().to_vec());
         if !region.change_npc_faction(npc_id, faction) {
             self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
             return false;
         }
         self.restore_region_owner(ServerRegionOwner::GodsBattle(region));
-        let (spawned_monsters, blocked_spawns) = self
-            .spawn_gods_battle_configured_monsters(region_id, &configuration, faction)
+        let Some(npc_name) = npc_name else {
+            tracing::debug!(
+                region_id,
+                npc_id,
+                faction,
+                "фракция отсутствующего live NPC битвы богов изменена без manager-эффектов"
+            );
+            return true;
+        };
+        let configuration = self
+            .gods_battle_mgr
+            .npc_configuration(&npc_name)
+            .cloned();
+        let (spawned_monsters, blocked_spawns) = configuration
+            .as_ref()
+            .and_then(|configuration| {
+                self.spawn_gods_battle_configured_monsters(region_id, configuration, faction)
+            })
             .unwrap_or_default();
         self.gods_battle_mgr
             .reset_npc_killed_monster_count(&npc_name);
@@ -24776,6 +24785,7 @@ impl CGame {
             region_id,
             npc_id,
             faction,
+            configured = configuration.is_some(),
             spawned_monsters,
             blocked_spawns,
             npc_name_bytes = npc_name.len(),

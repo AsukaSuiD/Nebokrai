@@ -30,6 +30,11 @@
 //! форматирует во временный buffer, но наружу не публикует.
 //! SZL owner дополнительно материализует inclusive tier lookup и обе
 //! victim-tier gain/loss формулы; death/team/client ordering остаётся у `CGame`.
+//! `OnChangeFaction` сохраняет отдельный обязательный region-set transition:
+//! отсутствие live NPC или записи конфигурации не отменяет уже подтверждённую
+//! смену стороны. Monster refresh и `OnNpcUpdate` выполняются только после неё;
+//! для найденного NPC update всегда сбрасывает kill-counter, а config/world
+//! publication остаётся условной на совпавшее имя, как в RVA `0x000AA8A0`.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
