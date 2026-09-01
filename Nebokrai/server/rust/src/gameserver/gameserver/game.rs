@@ -43420,15 +43420,6 @@ impl CGame {
         let Some(owner) = self.find_region(region_id) else {
             return false;
         };
-        let Some(build) = owner.stationary_build(identity) else {
-            return false;
-        };
-        if !build.is_combat_available()
-            || (identity.object_type == CITY_GATE_OBJECT_TYPE as i32 && build.action() == 7)
-        {
-            return false;
-        }
-
         if owner.base().war_region_type == 3 {
             let ServerRegionOwner::Country(country_region) = owner else {
                 return false;
@@ -43447,25 +43438,51 @@ impl CGame {
             });
             return match identity.object_type {
                 kind if kind == CITY_GATE_OBJECT_TYPE as i32 => country_region
-                    .gate_is_attack_able(target, attacker, &mut context),
+                    .defend_gates
+                    .get(&identity.id)
+                    .or_else(|| country_region.attack_gates.get(&identity.id))
+                    .is_some_and(|gate| {
+                        gate.is_attackable_in_region(true, || {
+                            country_region.gate_is_attack_able(target, attacker, &mut context)
+                        })
+                    }),
                 kind if kind == BUILD_OBJECT_TYPE as i32 => country_region
-                    .flag_is_attack_able(target, attacker, &mut context),
+                    .defend_flags
+                    .get(&identity.id)
+                    .or_else(|| country_region.attack_flags.get(&identity.id))
+                    .is_some_and(|build| {
+                        build.is_attackable_in_region(|| {
+                            country_region.flag_is_attack_able(target, attacker, &mut context)
+                        })
+                    }),
                 _ => false,
             };
         }
 
         if identity.object_type == BUILD_OBJECT_TYPE as i32 {
-            return owner.symbol_is_attackable();
+            return owner
+                .stationary_build(identity)
+                .is_some_and(|build| {
+                    build.is_attackable_in_region(|| owner.symbol_is_attackable())
+                });
         }
         let ServerRegionOwner::City(city_region) = owner else {
             return false;
         };
-        city_region.war.base.get_city_state() == 3
-            && city_region.guard_is_attackable(
-                PLAYER_TYPE,
-                player.faction_id(),
-                player.union_id(),
-            )
+        city_region
+            .city_gates
+            .values()
+            .find(|state| state.gate.id() == identity.id)
+            .is_some_and(|state| {
+                state.gate.is_attackable_in_region(true, || {
+                    city_region.war.base.get_city_state() == 3
+                        && city_region.guard_is_attackable(
+                            PLAYER_TYPE,
+                            player.faction_id(),
+                            player.union_id(),
+                        )
+                })
+            })
     }
 
     pub(crate) fn apply_stationary_build_damage(

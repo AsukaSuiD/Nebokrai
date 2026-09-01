@@ -173,8 +173,15 @@ impl CBuild {
         self.hp = hp;
     }
 
-    pub(crate) const fn is_combat_available(&self) -> bool {
-        self.action() != 6 && self.hp != 0
+    /// Exact `CBuild::IsAttackAble`: локальные action/death guards принадлежат
+    /// самой постройке, а virtual region-policy передаётся уже разрешённым
+    /// результатом owning региона. Для country это `BuildIsAttackAble`, для
+    /// остальных регионов — `SymbolIsAttackAble`.
+    pub(crate) fn is_attackable_in_region(
+        &self,
+        region_allows: impl FnOnce() -> bool,
+    ) -> bool {
+        self.action() != 6 && self.hp != 0 && region_allows()
     }
 
     /// Стадия `ApplyFinalDamage` меняет только HP. Смертельные callbacks и
@@ -496,7 +503,7 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 
 // ============================================================================
 // FUNCTION: CBuild::IsAttackAble
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:254
@@ -504,7 +511,9 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 // ADDRESS: 005dd520
 // PROTOTYPE: bool __thiscall IsAttackAble(CMoveShape * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// Реализовано выше как `is_attackable_in_region`: action `6` и dead guard
+// выполняются до результата virtual region-policy; concrete policy остаётся у
+// `CServerRegion`/`CServerCountryRegion` и передаётся без erased указателей.
 //
 //
 

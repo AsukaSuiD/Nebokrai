@@ -102,6 +102,20 @@ impl CCityGate {
         self.build.refresh_hp();
     }
 
+    /// Exact reached `CCityGate::IsAttackAble` для уже разрешённого attacker-а:
+    /// derived action `7` закрывает цель дополнительно к базовым action `6` и
+    /// death guard. Country/city faction policy вычисляет concrete region
+    /// owner, поэтому здесь нет обратной ссылки на erased `CRegion`.
+    pub(crate) fn is_attackable_in_region(
+        &self,
+        attacker_present: bool,
+        region_allows: impl FnOnce() -> bool,
+    ) -> bool {
+        attacker_present
+            && self.action() != 7
+            && self.build.is_attackable_in_region(region_allows)
+    }
+
     pub(crate) fn footprint(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
             region_id: self.region_id(),
@@ -266,7 +280,7 @@ impl CCityGate {
 
 // ============================================================================
 // FUNCTION: CCityGate::IsAttackAble
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\citygate.cpp:91
@@ -274,7 +288,10 @@ impl CCityGate {
 // ADDRESS: 005ddc10
 // PROTOTYPE: bool __thiscall IsAttackAble(CMoveShape * param_1)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
+// Реализовано выше как `is_attackable_in_region`: null-attacker, action
+// `6/7` и death guards принадлежат derived owner-у; country/city faction
+// решение передаёт concrete region caller. Достигнутый caller пока атакует
+// игроком; monster/pet ветвь остаётся у соответствующего AI-прохода.
 //
 //
 
