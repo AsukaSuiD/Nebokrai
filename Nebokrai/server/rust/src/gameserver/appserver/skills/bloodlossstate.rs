@@ -5,6 +5,8 @@
 //! выполняет два отдельных чтения часов, затем ровно два обращения к
 //! `legacy MSVCRT RNG`: равномерный урон на включительном диапазоне и проверку
 //! критического удара.
+//! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
+//! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
 //! Этот же владелец извлекает каноническое состояние на такте ИИ, возвращает
 //! его до применения удара и передаёт рассчитанную атаку координатору `CGame`.
 //! DB-запись буквально сохраняет десять DWORD `MasterInfo`, остаток срока,
@@ -27,7 +29,7 @@ use crate::nets::netserver::message::CMessage;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
-const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+const DEFAULT_PERIODIC_SKILL_ID: u32 = i32::MAX as u32;
 pub(crate) const BLOOD_LOSS_STATE_BYTES: usize = 68;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -210,8 +212,8 @@ impl BloodLossState {
             damage = (damage as f32 * critical_rate).round_ties_even() as i32;
         }
         AttackInformation {
-            skill_id: LEGACY_UNKNOWN_SKILL_ID,
-            skill_level: 0,
+            skill_id: DEFAULT_PERIODIC_SKILL_ID,
+            skill_level: 1,
             attacker_type: self.master.master_type,
             attacker_id: self.master.master_id,
             attacker_team_id: self.master.master_team_id,

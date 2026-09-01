@@ -6,6 +6,8 @@
 //! срока и периодического удара. Формула яда, lifecycle и wire-сообщения
 //! принадлежат этому модулю; `CGame` координирует независимых владельцев цели
 //! и смерти.
+//! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
+//! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
 //! Координатные перегрузки `Begin` остаются RAW ниже.
 //! Клиентский срок использует общий exact-owner `0x00606320`: проверка
 //! deadline и положительный остаток читают wrapping clock независимо.
@@ -25,7 +27,7 @@ use crate::nets::netserver::message::CMessage;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
-const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+const DEFAULT_PERIODIC_SKILL_ID: u32 = i32::MAX as u32;
 const MONSTER_TYPE: i32 = 600;
 pub(crate) const SPIDER_POISON_STATE_BYTES: usize = 56;
 
@@ -94,8 +96,8 @@ impl SpiderPoisonState {
         }
         self.attack_count = self.attack_count.wrapping_add(1);
         SpiderPoisonStateTick::Attack(AttackInformation {
-            skill_id: LEGACY_UNKNOWN_SKILL_ID,
-            skill_level: 0,
+            skill_id: DEFAULT_PERIODIC_SKILL_ID,
+            skill_level: 1,
             attacker_type: self.master.master_type,
             attacker_id: self.master.master_id,
             attacker_team_id: self.master.master_team_id,

@@ -6,6 +6,8 @@
 //! строгую границу `>` и увеличивает счётчик перед каждым огненным ударом.
 //! Замена, визуальные пакеты и применение урона идут через реальных владельцев
 //! игрока либо монстра; координатные перегрузки `Begin` остаются RAW ниже.
+//! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
+//! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
 //! Клиентский срок направлен на общий exact-owner `0x00606320` с двумя
 //! отдельными чтениями wrapping clock для положительного остатка. Persisted-
 //! запись длиной 56 байт сохраняет `MasterInfo`, остаток срока, частоту и урон,
@@ -24,7 +26,7 @@ use crate::nets::netserver::message::CMessage;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
-const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+const DEFAULT_PERIODIC_SKILL_ID: u32 = i32::MAX as u32;
 const MONSTER_TYPE: i32 = 600;
 pub(crate) const SPRITE_BURN_STATE_BYTES: usize = 56;
 
@@ -129,8 +131,8 @@ impl SpriteBurnState {
         }
         self.attack_count = self.attack_count.wrapping_add(1);
         SpriteBurnStateTick::Attack(AttackInformation {
-            skill_id: LEGACY_UNKNOWN_SKILL_ID,
-            skill_level: 0,
+            skill_id: DEFAULT_PERIODIC_SKILL_ID,
+            skill_level: 1,
             attacker_type: self.master.master_type,
             attacker_id: self.master.master_id,
             attacker_team_id: self.master.master_team_id,

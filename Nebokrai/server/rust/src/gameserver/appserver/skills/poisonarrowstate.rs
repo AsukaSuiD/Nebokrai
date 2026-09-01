@@ -8,6 +8,8 @@
 //! и полный такт lifecycle принадлежат этому модулю; `CGame` только применяет
 //! рассчитанную атаку к независимому владельцу игрока или монстра и выполняет
 //! доставку.
+//! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
+//! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
 //! DB-запись сохраняет десять DWORD `MasterInfo`, остаток срока, частоту и
 //! потерю HP. Недостигнутые координатные перегрузки `Begin` сохранены ниже.
 //! Клиентский `GetRemainedTime` разделяет точное тело `0x00606320` и при
@@ -27,7 +29,7 @@ use crate::nets::netserver::message::CMessage;
 
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
-const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+const DEFAULT_PERIODIC_SKILL_ID: u32 = i32::MAX as u32;
 pub(crate) const POISON_ARROW_STATE_BYTES: usize = 56;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,8 +144,8 @@ impl PoisonArrowState {
 
     fn attack(self) -> AttackInformation {
         AttackInformation {
-            skill_id: LEGACY_UNKNOWN_SKILL_ID,
-            skill_level: 0,
+            skill_id: DEFAULT_PERIODIC_SKILL_ID,
+            skill_level: 1,
             attacker_type: self.master.master_type,
             attacker_id: self.master.master_id,
             attacker_team_id: self.master.master_team_id,
