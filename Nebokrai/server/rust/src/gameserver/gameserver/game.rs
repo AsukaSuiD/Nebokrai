@@ -46850,9 +46850,11 @@ impl CGame {
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))
                     .and_then(|monster| {
-                        self.find_monster_property_by_origin_name(monster.base_property_key()?)
+                        let property = self
+                            .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+                        Some((property.ai, monster.stop_frame(property)))
                     })
-                    .map_or((0, 0), |property| (property.ai, property.stop_frame));
+                    .unwrap_or((0, 0));
                 if let Some(mut owner) = self.take_region_owner(region_id) {
                     let mut schedule_ready = false;
                     let mut attack_pending = false;

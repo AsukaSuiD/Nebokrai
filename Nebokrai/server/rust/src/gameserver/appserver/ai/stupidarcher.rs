@@ -63,6 +63,9 @@ pub(crate) fn search_stupid_archer_enemy<Runtime: GameMainLoopRuntime>(
     speed: f32,
     runtime: &mut Runtime,
 ) -> StupidArcherSearch {
+    let stop_frame = region
+        .find_monster_by_id(monster_id)
+        .map_or(property.stop_frame, |monster| monster.stop_frame(property));
     let mut selected = None;
     for player_id in region.player_ids_around_area(area_index) {
         let Some(player) = game.find_player(player_id) else {
@@ -141,7 +144,7 @@ pub(crate) fn search_stupid_archer_enemy<Runtime: GameMainLoopRuntime>(
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
             monster.begin_active_ai_move(
-                one_step_move_delay_ms(direction, speed, property.stop_frame),
+                one_step_move_delay_ms(direction, speed, stop_frame),
                 runtime.now_milliseconds(),
             );
         }

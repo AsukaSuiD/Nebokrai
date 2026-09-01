@@ -975,6 +975,21 @@ impl CMonster {
         base as u16
     }
 
+    /// Exact `CMonster::GetStopFrame` (RVA `0x000E6A40`): только приручённый
+    /// монстр с живой player-owner связью применяет pet factor `9`. Оригинал
+    /// умножает signed DWORD на f32 в x87 и временно включает truncation.
+    pub(crate) fn stop_frame(&self, property: &MonsterProperties) -> u32 {
+        if self.tamed
+            && self.master_info.master_type == 400
+            && self.master_info.master_id != 0
+        {
+            let scaled = f64::from(property.stop_frame as i32)
+                * f64::from(f32::from_bits(self.factors[9]));
+            return scaled.trunc() as i32 as u32;
+        }
+        property.stop_frame
+    }
+
     pub(crate) fn pet_attack_properties(
         &self,
         property: &MonsterProperties,
@@ -996,7 +1011,7 @@ impl CMonster {
             minimum_attack,
             maximum_attack,
             attack_interval: scaled(property.attack_speed, 7),
-            stop_frame: scaled(property.stop_frame, 9),
+            stop_frame: self.stop_frame(property),
             speed_bits: ((self.move_shape.shape().get_speed() * factor(8)).max(0.0)).to_bits(),
         }
     }
@@ -1932,7 +1947,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetStopFrame
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1601
@@ -1940,8 +1955,7 @@ impl CMonster {
 // ADDRESS: 004e6a40
 // PROTOTYPE: long __thiscall GetStopFrame(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `stop_frame`.
 //
 
 // ============================================================================

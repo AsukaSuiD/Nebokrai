@@ -78,16 +78,18 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
     monster_id: i32,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((property, source, source_view, target, schedule_idle)) = region
+    let Some((property, source, source_view, stop_frame, target, schedule_idle)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let property = game
                 .find_monster_property_by_origin_name(monster.base_property_key()?)?
                 .clone();
+            let stop_frame = monster.stop_frame(&property);
             Some((
                 property.clone(),
                 monster.move_shape().shape().clone(),
                 monster.shape_view(&property)?,
+                stop_frame,
                 monster.ai_target(),
                 monster.primary_ai_queues_idle(),
             ))
@@ -143,7 +145,7 @@ pub(crate) fn execute_owned_puniness_creature<Runtime: GameMainLoopRuntime>(
             ) {
                 if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                     monster.begin_active_ai_move(
-                        one_step_move_delay_ms(direction, source.get_speed(), property.stop_frame),
+                        one_step_move_delay_ms(direction, source.get_speed(), stop_frame),
                         runtime.now_milliseconds(),
                     );
                 }

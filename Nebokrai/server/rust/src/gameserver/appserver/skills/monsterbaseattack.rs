@@ -275,7 +275,7 @@ fn release_reciprocal_monster_target<Runtime: GameMainLoopRuntime>(
                 target.ai_target() == Some(pet_identity),
                 target.is_tamed(),
                 target.pet_action(),
-                property.stop_frame,
+                target.stop_frame(property),
                 property.ai,
             ))
         })
@@ -792,6 +792,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         tamed,
         attacker_master,
         pet_attack_properties,
+        stop_frame,
         area_index,
         pet_action,
     )) = region.find_monster_by_id(monster_id).and_then(|monster| {
@@ -802,6 +803,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let pet_attack_properties = monster
             .is_tamed()
             .then(|| monster.pet_attack_properties(&property));
+        let stop_frame = monster.stop_frame(&property);
         Some((
             property,
             monster.move_shape().shape().clone(),
@@ -812,6 +814,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             monster.is_tamed(),
             monster.master_info(),
             pet_attack_properties,
+            stop_frame,
             monster.move_shape().shape().area_index(),
             monster.pet_action(),
         ))
@@ -900,7 +903,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                         one_step_move_delay_ms(
                             direction,
                             monster_shape.get_speed(),
-                            property.stop_frame,
+                            stop_frame,
                         ),
                         runtime.now_milliseconds(),
                     );
@@ -917,7 +920,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         return queue_stationary_guard_idle(
             region,
             monster_id,
-            property.stop_frame,
+            stop_frame,
             runtime,
         );
     }
@@ -932,7 +935,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         lose_pet_target_and_search(
             region,
             monster_id,
-            property.stop_frame,
+            stop_frame,
             runtime,
         );
         return true;
@@ -987,7 +990,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 lose_pet_target_and_search(
                     region,
                     monster_id,
-                    property.stop_frame,
+                    stop_frame,
                     runtime,
                 );
             } else if matches!(property.ai, 10 | 15 | 19) {
@@ -1037,7 +1040,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 lose_pet_target_and_search(
                     region,
                     monster_id,
-                    property.stop_frame,
+                    stop_frame,
                     runtime,
                 );
             } else if matches!(property.ai, 10 | 15 | 19) {
@@ -1493,7 +1496,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     )) = target_snapshot
     else {
         if tamed {
-            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
         } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
         }
@@ -1514,7 +1517,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             ))
     {
         if tamed {
-            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
         } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
         }
@@ -1537,7 +1540,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .unsigned_abs()
             .max(target_y.wrapping_sub(anchor_y).unsigned_abs());
         if anchor_distance >= game.globe_setup().maximum_pet_tracing_distance() {
-            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
             return true;
         }
     }
@@ -1559,12 +1562,12 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         {
             game.send_base_attack_level_block(attacker_master.master_id, string_id, limit);
             game.release_reciprocal_player_target(target.id, pet_identity, runtime);
-            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
             return true;
         }
         if !game.player_base_attackable(attacker_master.master_id, target.id) {
             game.release_reciprocal_player_target(target.id, pet_identity, runtime);
-            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
             return true;
         }
     }
@@ -1609,7 +1612,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         let distance = real_distance(monster_x, monster_y, target_x, target_y);
         let minimum_distance = skill_properties.query_property(5_004) as i32;
         if distance < minimum_distance || distance > maximum_distance as i32 {
-            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
             return true;
         }
     }
@@ -1829,7 +1832,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         now_ms,
     ) {
         if tamed && pet_action == 2 {
-            lose_pet_target_and_search(region, monster_id, property.stop_frame, runtime);
+            lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
         }
         return true;
     }

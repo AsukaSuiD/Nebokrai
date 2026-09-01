@@ -146,7 +146,7 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
     property: &crate::setup::monsterlist::MonsterProperties,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some((origin, speed, has_skill)) = region
+    let Some((origin, speed, stop_frame, has_skill)) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| {
             let shape = monster.move_shape().shape();
@@ -156,6 +156,7 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
                     y: shape.get_tile_y().ok()?,
                 },
                 shape.get_speed(),
+                monster.stop_frame(property),
                 monster.move_shape().current_skill_id().is_some(),
             ))
         })
@@ -180,12 +181,12 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
             && let Some(monster) = region.find_monster_by_id_mut(monster_id)
         {
             monster.begin_active_ai_move(
-                one_step_move_delay_ms(direction, speed, property.stop_frame),
+                one_step_move_delay_ms(direction, speed, stop_frame),
                 runtime.now_milliseconds(),
             );
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-        monster.begin_active_ai_stand(property.stop_frame, runtime.now_milliseconds());
+        monster.begin_active_ai_stand(stop_frame, runtime.now_milliseconds());
     }
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         monster.begin_active_ai_search_enemy(runtime.now_milliseconds());
