@@ -226,6 +226,7 @@ enum RemovedMonsterCurableState {
     BossBlueQuake(BossBlueQuakeState),
     KnightCut(KnightCutState),
     PoisonFog(PoisonFogState),
+    ActiveSpiderMist,
 }
 
 fn finish_monster_curable_state(
@@ -288,6 +289,17 @@ fn finish_monster_curable_state(
                 RemovedMonsterCurableState::KnightCut(state)
             }
             POISON_FOG_STATE_ID => RemovedMonsterCurableState::PoisonFog(monster.move_shape_mut().take_poison_fog_state()?),
+            SPIDER_MIST_SKILL_ID => {
+                if monster
+                    .base_attack_cast()
+                    .is_none_or(|cast| cast.dispatch().skill_id != SPIDER_MIST_SKILL_ID)
+                {
+                    return None;
+                }
+                monster.move_shape_mut().set_moveable(true);
+                monster.cancel_base_attack_cast();
+                RemovedMonsterCurableState::ActiveSpiderMist
+            }
             _ => return None,
         };
         Some((removed, monster.move_shape().shape().identity(), monster.move_shape().shape().get_tile_x().ok()?, monster.move_shape().shape().get_tile_y().ok()?))
@@ -329,6 +341,9 @@ fn finish_monster_curable_state(
             game, region_id, identity, tile_x, tile_y, state, false, || now_ms,
         ),
         RemovedMonsterCurableState::PoisonFog(state) => send_poison_fog_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms),
+        // У `CSpiderMist` нет собственного override `CState::End`: native
+        // cure-path только удаляет active state-skill из owner-а.
+        RemovedMonsterCurableState::ActiveSpiderMist => {}
     }
     true
 }

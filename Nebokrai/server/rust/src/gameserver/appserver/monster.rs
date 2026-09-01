@@ -111,7 +111,7 @@ use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::monsterprojectile::MonsterProjectileProgress;
 use super::skills::spiderweb::SpiderWebProgress;
-use super::skills::spidermist::SpiderMistProgress;
+use super::skills::spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistProgress};
 use super::skills::summoncreatureskill::SummonCreatureProgress;
 use super::skills::yunshenglightning::YunShengLightningProgress;
 use super::skills::skillfactory::CSkillFactory;
@@ -1352,6 +1352,9 @@ impl CMonster {
         }, now_ms);
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         self.base_attack_cast = Some(execution);
+        if skill_id == SPIDER_MIST_SKILL_ID {
+            self.move_shape.register_curable_skill_state(skill_id);
+        }
         self.base_ai
             .add_ai_event(AiShapeAction::Attack, 0, 0, now_ms);
     }
@@ -1465,6 +1468,9 @@ impl CMonster {
     ) -> Option<MonsterBaseAttackCast> {
         let mut execution = self.base_attack_cast.take()?;
         let skill_id = execution.dispatch().skill_id;
+        if skill_id == SPIDER_MIST_SKILL_ID {
+            self.move_shape.finish_curable_skill_state(skill_id);
+        }
         self.fast_attack_progress = None;
         self.monster_projectile_progress = None;
         self.path_projectile_progress = None;
@@ -1532,6 +1538,10 @@ impl CMonster {
         self.summon_creature_progress = None;
         self.yunsheng_lightning_progress = None;
         if let Some(mut execution) = self.base_attack_cast.take() {
+            let skill_id = execution.dispatch().skill_id;
+            if skill_id == SPIDER_MIST_SKILL_ID {
+                self.move_shape.finish_curable_skill_state(skill_id);
+            }
             self.move_shape.set_current_skill_id(None);
             let _ = execution.terminate(SkillTermination::Cancelled);
         }
