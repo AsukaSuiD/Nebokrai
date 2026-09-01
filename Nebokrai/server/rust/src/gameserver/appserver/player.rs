@@ -16947,19 +16947,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::UpdateGoodsGS2C
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:12784
-// RVA: 0x0003EC40
-// ADDRESS: 0043ec40
-// PROTOTYPE: void __thiscall UpdateGoodsGS2C(CGoods * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::UpdateGoodsGS2C` связан с goods/factory/game owner-ами; покрытый
+// raw-блок удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::SetLastUseSkillItemTime
@@ -17100,36 +17089,11 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::OnEquipmentWaste
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2731
-// RVA: 0x000419B0
-// ADDRESS: 004419b0
-// PROTOTYPE: void __thiscall OnEquipmentWaste(EQUIPMENT_COLUMN param_1, CGoods * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED: `CPlayer::OnEquipmentWaste` связан с goods/factory/game owner-ами; покрытый
+// raw-блок удалён.
 
-// ============================================================================
-// FUNCTION: CPlayer::OnArmorDamaged
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:2818
-// RVA: 0x00041AF0
-// ADDRESS: 00441af0
-// PROTOTYPE: void __thiscall OnArmorDamaged(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// IMPLEMENTED: `CPlayer::OnBeenHurted` связан через combat callers, `CGame`
-// и region-owned cooldown; покрытый raw-блок удалён.
+// IMPLEMENTED: `CPlayer::OnArmorDamaged` связан с goods/factory/game owner-ами; покрытый
+// raw-блок удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::OnBeenMurdered

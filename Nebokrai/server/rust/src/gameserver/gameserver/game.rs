@@ -38008,13 +38008,11 @@ impl CGame {
             );
             let payload = if current < 1 {
                 let mut payload = Vec::new();
-                if !goods.serialize_for_old_client(
+                let _ = goods.serialize_for_old_client(
                     &mut payload,
                     factory,
                     self.globe_setup.da_kong_key(),
-                ) {
-                    return;
-                }
+                );
                 Some(payload)
             } else {
                 None
