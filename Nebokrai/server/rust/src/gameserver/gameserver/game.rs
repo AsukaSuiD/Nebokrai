@@ -13618,7 +13618,7 @@ impl CGame {
                 );
                 continue;
             };
-            let Some((shape, class, mutation)) = region
+            let Some((class, mutation)) = region
                 .find_monster_by_id_mut(monster_id)
                 .map(|monster| {
                     let mutation =
@@ -13630,28 +13630,13 @@ impl CGame {
                     } else {
                         AreaWokenMonsterClass::Active
                     };
-                    (monster.move_shape().shape().clone(), class, mutation)
+                    (class, mutation)
                 })
             else {
                 continue;
             };
             if mutation.publish_states {
-                let mut states = CMessage::new(0x000b_fe02);
-                states.add_long(MONSTER_TYPE);
-                states.add_long(monster_id);
-                states.add_ulong(mutation.hit_points);
-                states.add_long(0);
-                states.add_long(0);
-                states.add_long(0);
-                let delivery = self.send_game_shape_around(region, &shape, None, &states);
-                tracing::trace!(
-                    region_id = region.id,
-                    area_index,
-                    monster_id,
-                    hit_points = mutation.hit_points,
-                    ?delivery,
-                    "опубликовано восстановление монстра после сна"
-                );
+                let _ = self.publish_owned_monster_states(region, monster_id);
             }
             region.restore_woken_monster(area_index, monster_id, class);
         }

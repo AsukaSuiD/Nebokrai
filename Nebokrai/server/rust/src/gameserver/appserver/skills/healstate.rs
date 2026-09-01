@@ -6,7 +6,9 @@
 //! перед расчётом, прибавление HP использует DWORD-обёртку, а коэффициент
 //! `Promotion` считывается заново при каждом проходе. Визуальные пакеты
 //! `0xBFE03/0xBFE04` формируются в модуле-владельце состояния. Фактическая
-//! цель эффекта хранится отдельно от владельца записи только ради подтверждённой
+//! публикация изменённого HP использует точный базовый `OnChangeStates` цели:
+//! `DWORD HP, DWORD MP, WORD RP, WORD YP` и текущий spatial owner. Цель эффекта
+//! хранится отдельно от владельца записи только ради подтверждённой
 //! ветви `CSuperHeal2`; DB-запись её не сохраняет, поэтому после загрузки
 //! целью снова становится владелец записи, как в исходном `Unserialize`.
 //! Vtable exact EXE направляет клиентский срок семейства на общее тело
@@ -306,18 +308,11 @@ fn advance_effect(
                     monster.set_hit_points(pass.health);
                     Some((pass, tile_x, tile_y))
                 });
+            if result.as_ref().is_some_and(|(pass, _, _)| pass.changed) {
+                let _ = game.publish_owned_monster_states(owner.base(), target.id);
+            }
             game.restore_region_owner(owner);
             let (pass, tile_x, tile_y) = result?;
-            if pass.changed {
-                let mut states = CMessage::new(0x000b_fe02);
-                states.add_long(600);
-                states.add_long(target.id);
-                states.add_ulong(pass.health);
-                states.add_long(0);
-                states.add_long(0);
-                states.add_long(0);
-                let _ = game.send_shape_position_around(region_id, tile_x, tile_y, &states);
-            }
             Some((pass.ended, tile_x, tile_y))
         }
         _ => None,
