@@ -8,7 +8,6 @@
 //! разрешает региональные identity и применяет рассчитанный результат.
 
 use super::lightingarrow::LIGHTING_ARROW_SKILL_ID;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -119,11 +118,8 @@ pub(crate) fn calculate_owned_lighting_arrow_attack(game: &mut CGame, phalanx: &
     target_level: u8) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let player = game.find_player(phalanx.master().master_id)?;
     let mut combat = player.combat_properties(); let occupation = player.occupation(); let attacker_level = player.level();
-    let weapon_level = player.equipment().get_goods(2).map_or(0, |goods|
-        goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1));
     let (divisor, floor) = game.globe_setup().weapon_damage_factors();
-    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let weapon_factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(floor) };
+    let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, floor);
     let damage_factor = weapon_factor * phalanx.damage_factor_percent() as f32 * 0.01;
     let minimum = combat.minimum_attack as i32; let maximum = combat.maximum_attack as i32;
     let delta = maximum.wrapping_sub(minimum); let width = if delta < 0 { delta.wrapping_neg() } else { delta }.wrapping_add(1);

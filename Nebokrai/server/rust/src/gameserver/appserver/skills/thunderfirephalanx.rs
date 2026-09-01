@@ -6,7 +6,6 @@
 //! первой клетки с применённой атакой. Формула сохраняет два вызова MSVCRT RNG.
 
 use super::itemskill2::ITEM_SKILL_2_ID;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -47,7 +46,7 @@ impl CThunderFirePhalanx {
 }
 
 pub(crate) fn calculate_owned_thunder_fire_attack(game:&mut CGame,p:&CThunderFirePhalanx,target_level:u8)->Option<(AttackInformation,PlayerCombatProperties,u8,u8)>{
-    let player=game.find_player(p.master.master_id)?;let mut combat=player.combat_properties();let occupation=player.occupation();let attacker_level=player.level();let weapon_level=player.equipment().get_goods(2).map_or(0,|goods|goods.addon_property_value(game.goods_factory(),GAP_WEAPON_DAMAGE_LEVEL,1));let(divisor,minimum)=game.globe_setup().weapon_damage_factors();let delta=weapon_level.wrapping_sub(i32::from(target_level)).max(0);let factor=if divisor==0.0{1.0}else{(delta as f32/divisor).min(1.0).max(minimum)};
+    let player=game.find_player(p.master.master_id)?;let mut combat=player.combat_properties();let occupation=player.occupation();let attacker_level=player.level();let(divisor,minimum)=game.globe_setup().weapon_damage_factors();let factor=player.weapon_modifier(game.goods_factory(),i32::from(target_level),divisor,minimum);
     let width_delta=p.maximum_attack.wrapping_sub(p.minimum_attack);let width=if width_delta<0{width_delta.wrapping_neg()}else{width_delta}.wrapping_add(1);let mut damage=p.element_modifier.wrapping_mul(combat.element_modify).wrapping_div(100).wrapping_add(combat.add_element_attack as i32).wrapping_add(game.skill_random_below(width)).wrapping_add(p.minimum_attack);if p.soul_count!=0&&p.soul_variable!=0{damage=((p.soul_variable as f32*p.soul_count as f32*0.01+1.0)*damage as f32).round_ties_even() as i32;}damage=damage.max(0);
     let mut attack=AttackInformation{skill_id:ITEM_SKILL_2_ID,skill_level:p.skill_level as u8,attacker_type:p.master.master_type,attacker_id:p.master.master_id,attacker_team_id:p.master.master_team_id,attacker_faction_id:p.master.master_guild_id,attacker_union_id:p.master.master_union_id,hit_modifier:100,damage_factor:factor,damage_modifier:0,critical:false,blast_attack:false,full_miss:0,damages:vec![AttackPower{kind:AttackPowerType::Element,hp_damage:damage,mp_damage:0}]};
     if game.skill_random_below(100)<i32::from(combat.cch){attack.critical=true;let rate=combat.critical_rate();for power in &mut attack.damages{power.hp_damage=(power.hp_damage as f32*rate).round_ties_even() as i32;}}

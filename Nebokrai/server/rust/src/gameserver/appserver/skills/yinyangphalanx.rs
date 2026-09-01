@@ -10,7 +10,6 @@
 //! урона и критический удар.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
-use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
@@ -67,10 +66,8 @@ pub(crate) fn calculate_owned_yin_yang_attack(game: &mut CGame, phalanx: &CYinYa
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let weapon_level = player.equipment().get_goods(2).map_or(0, |goods| goods.addon_property_value(game.goods_factory(), GAP_WEAPON_DAMAGE_LEVEL, 1));
     let (divisor, minimum) = game.globe_setup().weapon_damage_factors();
-    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let damage_factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(minimum) };
+    let damage_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum);
     let critical_rate = game.globe_setup().critical_rate();
     Some(phalanx.calculate_attack(damage_factor, combat, occupation, attacker_level, critical_rate, &mut |maximum| game.skill_random_below(maximum)))
 }
