@@ -77,12 +77,7 @@ impl PassiveGladiatorState {
             let Some(candidate) = resolve(*player_id) else {
                 return false;
             };
-            let distance = crate::gameserver::appserver::skills::baseattack::real_distance(
-                owner.tile_x,
-                owner.tile_y,
-                candidate.tile_x,
-                candidate.tile_y,
-            );
+            let distance = owner.real_distance(Some(candidate));
             if chase_range < distance {
                 return false;
             }
