@@ -921,7 +921,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && matches!(property.ai, 5 | 11 | 13 | 103)
+        && matches!(property.ai, 5 | 11 | 13 | 101 | 103)
     {
         return queue_stationary_guard_idle(
             region,
@@ -933,7 +933,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     if target.is_none()
         && cast.is_none()
         && !tamed
-        && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 12 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 100 | 101 | 104)
+        && (matches!(property.ai, 0 | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 10 | 12 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 100 | 104)
             || MonsterAiKind::is_generic_ai_type(property.ai))
     {
         return queue_monster_idle(game, region, monster_id, &property, runtime);
