@@ -9,6 +9,7 @@
 //! Оба варианта завершаются одинаково: сбрасывают сохранённое направление,
 //! возвращают движение и выполняют `CSummonSkill::End(1)` с единичным
 //! оружейным `AfterUseSkill`; обход целей сам оружие не изнашивает.
+//! Все варианты усекают критический float-множитель к нулю перед записью `int`.
 
 use super::armybreak2::ARMY_BREAK_2_SKILL_ID;
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
@@ -68,7 +69,7 @@ fn calculate(game: &mut CGame, player_id: i32, target_level: u8, skill_id: u32, 
     let player = game.find_player(player_id)?; let combat = player.combat_properties(); let owner = master(player); let weapon = player.weapon_damage_level(game.goods_factory()); let (divisor, floor) = game.globe_setup().weapon_damage_factors(); let delta = weapon.wrapping_sub(i32::from(target_level)).max(0); let weapon_factor = (if divisor == 0.0 { 1.0 } else { delta as f32 / divisor }).min(1.0).max(floor);
     let difference = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32); let width = (if difference < 0 { difference.wrapping_neg() } else { difference }).wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
     let mut attack = AttackInformation { skill_id, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: owner.master_team_id, attacker_faction_id: owner.master_guild_id, attacker_union_id: owner.master_union_id, hit_modifier, damage_factor: factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
-    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for damage in &mut attack.damages { damage.hp_damage = (damage.hp_damage as f32 * rate).round_ties_even() as i32; } } Some((owner, attack))
+    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for damage in &mut attack.damages { damage.hp_damage = (damage.hp_damage as f32 * rate) as i32; } } Some((owner, attack))
 }
 
 pub(crate) fn execute_player_army_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {

@@ -13,6 +13,7 @@
 //! `AfterUseSkill` делает это один раз в подтверждённом хвосте
 //! `CSummonSkill::End(1)`, после освобождения обоих path-наборов и возврата
 //! движения.
+//! Совпадающая формула усекает критический float-множитель к нулю перед `int`.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -184,7 +185,7 @@ pub(super) fn calculate_dash_attack(game: &mut CGame, player_id: i32, skill_id: 
     let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1);
     let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
     let mut attack = AttackInformation { skill_id, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier, damage_factor: damage_factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
-    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } }
+    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate) as i32; } }
     Some((master, attack))
 }
 

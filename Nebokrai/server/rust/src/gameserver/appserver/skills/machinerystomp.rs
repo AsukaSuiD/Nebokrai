@@ -12,6 +12,7 @@
 //! обоих владельцев не изнашивают оружие в `Attack` или `AI`: унаследованный
 //! `AfterUseSkill` делает это один раз через общий `End`, после возврата
 //! движения и перед cooldown соответствующего идентификатора.
+//! Критический float-множитель усекается к нулю перед записью `int`.
 
 // ============================================================================
 // FUNCTION: CMachineryStomp::Begin
@@ -209,7 +210,7 @@ fn calculate_player_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
     Some((master, attack))
