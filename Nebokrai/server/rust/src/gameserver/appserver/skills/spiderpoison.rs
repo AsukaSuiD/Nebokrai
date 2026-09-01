@@ -4,6 +4,8 @@
 //! `appserver/skills/spiderpoison.cpp`. Объектный путь сохраняет проверку
 //! длины пути, задержку повторного применения, блокировку движения, прямой удар
 //! с двумя RNG-вызовами и отдельный бросок вероятности `CSpiderPoisonState`.
+//! `Attack` создаёт `tagAttackInformation` со штатными skill-id `0x7fffffff`
+//! и уровнем `1`; `CalculateAttackPower` заполняет урон, не меняя эти поля.
 //! Состояние заменяется после удара и только при отсутствии `Cure`;
 //! `CGame` координирует владельцев и применение рассчитанных последствий.
 //! Две координатные перегрузки `Begin` сохранены ниже как RAW, поскольку
@@ -75,7 +77,7 @@ use crate::public::tools::get_line_direction;
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
 const CURE_SKILL_ID: u32 = 0x131;
-const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+const DEFAULT_CONTACT_SKILL_ID: u32 = i32::MAX as u32;
 const SKILL_USAGE_STATE_PERSIST_TIME: u32 = 10_002;
 const SKILL_USAGE_TARGET_AFFECT_FREQUENCY: u32 = 6_001;
 const SKILL_USAGE_CONST: u32 = 20_010;
@@ -176,7 +178,7 @@ fn calculate_player_attack(game: &mut CGame, player_id: i32) -> Option<(MasterIn
     let span = maximum.wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32;
     let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
     let mut attack = AttackInformation {
-        skill_id: LEGACY_UNKNOWN_SKILL_ID, skill_level: 0, attacker_type: PLAYER_TYPE,
+        skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1, attacker_type: PLAYER_TYPE,
         attacker_id: player_id, attacker_team_id: master.master_team_id,
         attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id,
         hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0, critical: false,
@@ -482,7 +484,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
     let physical = minimum.wrapping_add(game.skill_random_below(span));
     let _critical_roll = game.skill_random_below(100);
     let attack = AttackInformation {
-        skill_id: LEGACY_UNKNOWN_SKILL_ID, skill_level: 0, attacker_type: MONSTER_TYPE,
+        skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1, attacker_type: MONSTER_TYPE,
         attacker_id: monster_id, attacker_team_id: 0, attacker_faction_id: 0,
         attacker_union_id: 0, hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0,
         critical: false, blast_attack: false, full_miss: 0,
