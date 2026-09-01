@@ -9,8 +9,9 @@
 //! `CGame` только разрешает владельцев, применяет рассчитанную атаку и доставляет
 //! пакеты. Координатные перегрузки `Begin` остаются ниже недостигнутыми.
 //! Player `End` сбрасывает execution-флаги, возвращает движение и завершает
-//! `CAttackSkill::End(1)` после второго удара; отмена использует `End(0)` без
-//! обновления свойств и cooldown.
+//! `CAttackSkill::End(1)` после второго удара с единичным оружейным
+//! `AfterUseSkill`; сами два `Attack` оружие не изнашивают. Отмена использует
+//! `End(0)` без износа, обновления свойств и cooldown.
 
 // ============================================================================
 // FUNCTION: CLordFastAttack::Begin
@@ -153,6 +154,7 @@ fn finish_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_lord_fast_attack_used(now_ms);
     });
@@ -309,7 +311,6 @@ fn apply_attack<Runtime: GameMainLoopRuntime>(
         ),
         _ => return,
     }
-    game.damage_player_weapon(player_id, runtime);
 }
 
 pub(crate) const fn is_lord_fast_attack_dispatch(dispatch: PlayerSkillDispatch) -> bool {
