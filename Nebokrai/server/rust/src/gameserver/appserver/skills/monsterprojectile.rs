@@ -5,7 +5,10 @@
 //! проверки преград, расчёта времени полёта и удара по клетке. Конкретный
 //! владелец сохраняет идентификатор навыка, а начало полёта отдельно занимает
 //! attack-speed timestamp ИИ; выбор цели, защита и последствия
-//! смерти остаются у существующих владельцев боя и `CGame`.
+//! смерти остаются у существующих владельцев боя и `CGame`. Оба исходных
+//! `CalculateAttackPower` берут elemental damage из virtual
+//! `CMonster::GetAddElementAtk == 0`, поэтому ресурсный element range здесь не
+//! участвует и между physical и critical roll нет дополнительного RNG.
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
@@ -429,14 +432,9 @@ pub(crate) fn execute_owned_monster_projectile_target<Runtime: GameMainLoopRunti
         .max(0)
         .wrapping_add(1);
     let physical = physical_minimum.wrapping_add(game.skill_random_below(physical_span));
-    let element_minimum = dispatch.property.minimum_element as i32;
-    let element_span = (dispatch.property.maximum_element as i32)
-        .wrapping_sub(element_minimum)
-        .max(0)
-        .wrapping_add(1);
-    let element = element_minimum.wrapping_add(game.skill_random_below(element_span));
-    // Нулевая вероятность критического удара монстра не устраняет исходный
-    // третий вызов генератора.
+    // `CMonster::GetAddElementAtk` возвращает ноль. Нулевая вероятность
+    // критического удара всё равно оставляет второй вызов генератора.
+    let element = 0;
     let _critical_roll = game.skill_random_below(100);
     let attack = AttackInformation {
         skill_id: dispatch.skill_id,
