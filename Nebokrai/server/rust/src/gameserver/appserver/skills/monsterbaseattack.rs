@@ -2,7 +2,10 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/monsterbaseattack.cpp`. Модуль навыка хранит выбор цели,
-//! стадии атаки, преследование и два исходных броска урона. Общие защита,
+//! стадии атаки, преследование и два исходных RNG-вызова: физический разброс,
+//! затем обязательный critical-roll при виртуальном `GetCCH == 0`. Встроенный
+//! `GetAddElementAtk` возвращает ноль; диапазон monster element здесь не
+//! разыгрывается. Общие защита,
 //! применение повреждений и точные пакеты принадлежат узкому
 //! `monsterattack`; `CGame` оставляет возврат владельца региона и
 //! межвладельческие последствия смерти. Неиспользуемые координатный и
@@ -1725,13 +1728,10 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 .max(0)
                 .wrapping_add(1);
             let physical = physical_minimum.wrapping_add(game.skill_random_below(physical_span));
-            let element_minimum = property.minimum_element as i32;
-            let element_maximum = property.maximum_element as i32;
-            let element_span = element_maximum
-                .wrapping_sub(element_minimum)
-                .max(0)
-                .wrapping_add(1);
-            let element = element_minimum.wrapping_add(game.skill_random_below(element_span));
+            // `CMonster::GetAddElementAtk` остаётся нулевым даже для pet-owner;
+            // второй RNG оригинала — последующий roll при `GetCCH == 0`.
+            let element = 0;
+            let _critical_roll = game.skill_random_below(100);
             let attack = AttackInformation {
                 skill_id: dispatch.skill_id,
                 skill_level: dispatch.skill_level as u8,
