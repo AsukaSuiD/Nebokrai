@@ -10,6 +10,7 @@
 //! `End` очищает накопленный путь, возвращает движение и фиксирует время
 //! восстановления без оружейного `AfterUseSkill`; тот же хвост используется
 //! при отказе после `Begin` и клиентской отмене.
+//! Element modifier и критический множитель усекаются к нулю перед `int`.
 
 use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -194,8 +195,7 @@ fn calculate_attack(
     let damage_factor = if divisor == 0.0 { 1.0 } else { (delta as f32 / divisor).min(1.0).max(floor) };
     let width_delta = maximum.wrapping_sub(minimum);
     let width = if width_delta < 0 { width_delta.wrapping_neg() } else { width_delta }.wrapping_add(1);
-    let damage = ((element_modifier as f32 * 0.01 * combat.element_modify as f32)
-        .round_ties_even() as i32)
+    let damage = ((element_modifier as f32 * 0.01 * combat.element_modify as f32) as i32)
         .wrapping_add(combat.add_element_attack as i32)
         .wrapping_add(game.skill_random_below(width))
         .wrapping_add(minimum);
@@ -219,7 +219,7 @@ fn calculate_attack(
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
         }
     }
     Some((master, attack))

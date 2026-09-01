@@ -7,6 +7,7 @@
 //! двойную проверку MP, строгие границы времени, точные визуальные пакеты и
 //! два вызова legacy RNG на рассчитанную атаку. `CGame` только разрешает
 //! владельцев, применяет готовую атаку и выполняет доставку.
+//! Element modifier и критический множитель усекаются к нулю перед `int`.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -204,8 +205,7 @@ fn calculate_attack(
     };
     let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
     let random_damage = game.skill_random_below(width);
-    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32)
-        .round_ties_even() as i32;
+    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32) as i32;
     let damage = (combat.add_element_attack as i32).wrapping_add(random_damage)
         .wrapping_add(minimum).wrapping_add(element_bonus).max(0);
     let mut attack = AttackInformation {
@@ -228,7 +228,7 @@ fn calculate_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
     Some((master, attack))

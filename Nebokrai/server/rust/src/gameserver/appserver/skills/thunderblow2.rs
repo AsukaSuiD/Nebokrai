@@ -10,6 +10,7 @@
 //! Подтверждённый `End` не возвращает движение: он очищает внутренний путь,
 //! обновляет свойства через `CSummonSkill`, очищает текущий навык и фиксирует
 //! время восстановления.
+//! Element modifier и критический множитель усекаются к нулю перед `int`.
 
 use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -170,8 +171,7 @@ fn calculate_attack(
     let master = master_info(player);
     let width_delta = maximum.wrapping_sub(minimum);
     let width = if width_delta < 0 { width_delta.wrapping_neg() } else { width_delta }.wrapping_add(1);
-    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32)
-        .round_ties_even() as i32;
+    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32) as i32;
     let damage = (combat.add_element_attack as i32)
         .wrapping_add(game.skill_random_below(width))
         .wrapping_add(minimum)
@@ -197,7 +197,7 @@ fn calculate_attack(
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
         }
     }
     Some((master, attack))
