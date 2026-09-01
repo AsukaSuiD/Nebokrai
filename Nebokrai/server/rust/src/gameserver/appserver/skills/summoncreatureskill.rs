@@ -19,12 +19,12 @@ use super::summonspore::SUMMON_SPORE_SKILL_ID;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
@@ -209,21 +209,24 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     player_terminal(QueuedSkillExecutionState::Completed)
 }
 
-fn target_coordinates(
+fn target_view(
     game: &CGame,
     region: &CServerRegion,
     target: ShapeIdentity,
-) -> Option<(i32, i32)> {
-    let shape = match target.object_type {
+) -> Option<ShapeView> {
+    match target.object_type {
         400 => game.find_player(target.id).and_then(|player| {
-            (player.server_region_id() == Some(region.id)).then(|| player.shape())
+            (player.server_region_id() == Some(region.id))
+                .then(|| player.shape_view())
+                .flatten()
         }),
-        MONSTER_TYPE => region
-            .find_monster_by_id(target.id)
-            .map(|monster| monster.move_shape().shape()),
+        MONSTER_TYPE => region.find_monster_by_id(target.id).and_then(|monster| {
+            let property = game
+                .find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            monster.shape_view(property)
+        }),
         _ => None,
-    }?;
-    Some((shape.get_tile_x().ok()?, shape.get_tile_y().ok()?))
+    }
 }
 
 fn send_start(
@@ -308,12 +311,14 @@ pub(crate) fn execute_owned_summon_creature(
         if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME)) {
             return true;
         }
-        let target = target_coordinates(game, region, cast.dispatch().target).or_else(|| {
-            region
-                .find_monster_by_id(monster_id)
-                .and_then(|monster| monster.summon_creature_progress())
-                .map(|progress| (progress.destination_x, progress.destination_y))
-        });
+        let target = target_view(game, region, cast.dispatch().target)
+            .map(|view| (view.tile_x, view.tile_y))
+            .or_else(|| {
+                region
+                    .find_monster_by_id(monster_id)
+                    .and_then(|monster| monster.summon_creature_progress())
+                    .map(|progress| (progress.destination_x, progress.destination_y))
+            });
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.move_shape_mut().set_moveable(true);
             let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
@@ -361,7 +366,7 @@ pub(crate) fn execute_owned_summon_creature(
         return true;
     }
 
-    let Some((destination_x, destination_y)) = target_coordinates(game, region, target) else {
+    let Some(target_view) = target_view(game, region, target) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
             monster.clear_ai_target();
         }
@@ -371,13 +376,13 @@ pub(crate) fn execute_owned_summon_creature(
         game,
         region,
         monster_id,
-        destination_x,
-        destination_y,
+        MonsterTraceTarget::Shape(target_view),
         properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
         now_ms,
     ) {
         return true;
     }
+    let (destination_x, destination_y) = (target_view.tile_x, target_view.tile_y);
     if let Some(attack_interval_ms) = schedule_attack_interval(property.ai, attack_interval_ms) {
         let attack_started = region
             .find_monster_by_id_mut(monster_id)

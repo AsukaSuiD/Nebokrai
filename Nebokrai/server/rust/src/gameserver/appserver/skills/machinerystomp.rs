@@ -28,7 +28,7 @@ use super::monsterattack::{
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -585,8 +585,7 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
             now_ms,
         ) {

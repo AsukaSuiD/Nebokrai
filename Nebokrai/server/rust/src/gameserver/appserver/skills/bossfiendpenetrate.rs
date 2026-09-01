@@ -24,7 +24,9 @@ use super::monsterattack::{
 };
 use super::poisonmoth::{cell_targets, master_info, target_level, target_position};
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::monsterai::{
+    MonsterTraceTarget, approach_attack_range,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -895,12 +897,15 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
 
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if cast.is_none() {
+        let trace_target = target.as_ref().map_or_else(
+            || MonsterTraceTarget::point(destination.0, destination.1),
+            |target| MonsterTraceTarget::Shape(target.view),
+        );
         if !approach_attack_range(
             game,
             region,
             monster_id,
-            destination.0,
-            destination.1,
+            trace_target,
             maximum_distance,
             now_ms,
         ) {

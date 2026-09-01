@@ -100,6 +100,7 @@ pub(crate) enum MonsterAttackDeath {
 #[derive(Clone, Debug)]
 pub(crate) struct OwnedMonsterAttackTarget {
     pub(crate) shape: CShape,
+    pub(crate) view: ShapeView,
     pub(crate) health: u32,
     pub(crate) mana: u32,
     pub(crate) war_soul_mana: Option<i32>,
@@ -122,8 +123,10 @@ pub(crate) fn resolve_owned_monster_attack_target(
     match identity.object_type {
         PLAYER_TYPE => {
             let player = game.find_player(identity.id)?;
+            let view = player.shape_view()?;
             (player.server_region_id() == Some(region.id)).then(|| OwnedMonsterAttackTarget {
                 shape: player.shape().clone(),
+                view,
                 health: player.health(),
                 mana: player.mana(),
                 war_soul_mana: player.war_soul_mana(game.goods_factory()),
@@ -143,8 +146,10 @@ pub(crate) fn resolve_owned_monster_attack_target(
             let property = game
                 .find_monster_property_by_origin_name(monster.base_property_key()?)?
                 .clone();
+            let view = monster.shape_view(&property)?;
             Some(OwnedMonsterAttackTarget {
                 shape: monster.move_shape().shape().clone(),
+                view,
                 health: monster.hit_points(),
                 mana: 0,
                 war_soul_mana: None,

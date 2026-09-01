@@ -18,7 +18,7 @@ use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderwebstate::SpiderWebState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -595,8 +595,7 @@ pub(crate) fn execute_owned_spider_web(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            MonsterTraceTarget::Shape(target.view),
             maximum_distance,
             now_ms,
         ) {

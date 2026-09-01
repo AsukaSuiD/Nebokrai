@@ -16,12 +16,13 @@ use super::skillbaseproperties::CSkillBaseProperties;
 use super::spidermistphalanx::CSpiderMistPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::monsterattack::resolve_owned_monster_attack_target;
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
@@ -467,16 +468,10 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
         return true;
     }
 
-    let target_shape = match target.object_type {
-        400 => game.find_player(target.id).and_then(|player| {
-            (player.server_region_id() == Some(region.id)).then(|| player.shape().clone())
-        }),
-        MONSTER_TYPE => region
-            .find_monster_by_id(target.id)
-            .map(|monster| monster.move_shape().shape().clone()),
-        _ => None,
+    let Some(target_owner) = resolve_owned_monster_attack_target(game, region, target) else {
+        return true;
     };
-    let Some(target_shape) = target_shape else { return true };
+    let target_shape = &target_owner.shape;
     let (Ok(source_x), Ok(source_y), Ok(destination_x), Ok(destination_y)) = (
         source_shape.get_tile_x(),
         source_shape.get_tile_y(),
@@ -485,7 +480,12 @@ pub(crate) fn execute_owned_spider_mist<Runtime: GameMainLoopRuntime>(
     ) else { return true };
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     if !approach_attack_range(
-        game, region, monster_id, destination_x, destination_y, maximum_distance, now_ms,
+        game,
+        region,
+        monster_id,
+        MonsterTraceTarget::Shape(target_owner.view),
+        maximum_distance,
+        now_ms,
     ) {
         return true;
     }

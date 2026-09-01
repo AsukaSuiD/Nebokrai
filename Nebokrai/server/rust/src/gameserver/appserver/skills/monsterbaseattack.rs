@@ -143,7 +143,8 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::ai::lord::{select_lord_attack_skill, select_lord_enemy};
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, has_owned_search_enemy, hibernates_without_nearby_players,
+    MonsterTraceTarget, approach_attack_range, has_owned_search_enemy,
+    hibernates_without_nearby_players,
     queue_monster_idle, schedule_attack_interval, select_attack_skill,
 };
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
@@ -1834,8 +1835,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         game,
         region,
         monster_id,
-        target_x,
-        target_y,
+        MonsterTraceTarget::Shape(target_view),
         maximum_distance,
         now_ms,
     ) {

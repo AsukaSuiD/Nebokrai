@@ -22,7 +22,7 @@ use super::monsterattack::{
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -159,8 +159,7 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
             now_ms,
         ) {

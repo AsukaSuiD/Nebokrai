@@ -25,7 +25,9 @@ use super::monsterattack::{
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
 };
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::monsterai::approach_attack_range;
+use crate::gameserver::appserver::ai::monsterai::{
+    MonsterTraceTarget, approach_attack_range,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -792,18 +794,17 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         game.find_monster_property_by_origin_name(monster.base_property_key()?)?.clone(),
         monster.master_info(), monster.is_tamed(), monster.base_attack_cast(), monster.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID),
     ))) else { return false };
-    let target = resolve_owned_monster_attack_target(game, region, target_identity);
-    let Some((target_x, target_y)) = target.as_ref().and_then(|target| Some((target.shape.get_tile_x().ok()?, target.shape.get_tile_y().ok()?))) else {
+    let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
         return true;
     };
+    let (target_x, target_y) = (target.view.tile_x, target.view.tile_y);
     if cast.is_none() {
         if !approach_attack_range(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
             now_ms,
         ) {

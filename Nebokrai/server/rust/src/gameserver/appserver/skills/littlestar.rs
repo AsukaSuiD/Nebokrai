@@ -25,7 +25,7 @@ use super::monsterattack::{
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -582,12 +582,15 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
     let (target_x, target_y) = target_position.unwrap_or((source_x, source_y));
 
     if cast.is_none() {
+        let trace_target = target.as_ref().map_or_else(
+            || MonsterTraceTarget::point(target_x, target_y),
+            |target| MonsterTraceTarget::Shape(target.view),
+        );
         if !approach_attack_range(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            trace_target,
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
             now_ms,
         ) {

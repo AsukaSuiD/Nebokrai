@@ -26,7 +26,7 @@ use super::spiderpoisonstate::{
     SpiderPoisonState, send_spider_poison_state_visual_in_region,
 };
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -412,8 +412,7 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            MonsterTraceTarget::Shape(target.view),
             maximum_distance,
             now_ms,
         ) {

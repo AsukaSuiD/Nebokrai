@@ -27,7 +27,7 @@ use super::monsterattack::{
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -919,12 +919,15 @@ pub(crate) fn execute_owned_path_projectile<Runtime: GameMainLoopRuntime>(
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
 
     if cast.is_none() {
+        let trace_target = target.as_ref().map_or_else(
+            || MonsterTraceTarget::point(destination.0, destination.1),
+            |target| MonsterTraceTarget::Shape(target.view),
+        );
         if !approach_attack_range(
             game,
             region,
             monster_id,
-            destination.0,
-            destination.1,
+            trace_target,
             maximum_distance,
             now_ms,
         ) {

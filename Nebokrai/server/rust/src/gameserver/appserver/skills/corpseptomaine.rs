@@ -20,7 +20,7 @@ use super::skillbaseproperties::CSkillBaseProperties;
 use super::spiderpoison::{install_spider_poison_state, target_has_cure};
 use super::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -121,17 +121,11 @@ pub(crate) fn execute_owned_corpse_ptomaine<Runtime: GameMainLoopRuntime>(
             }
             return true;
         };
-        let (Ok(target_x), Ok(target_y)) =
-            (target.shape.get_tile_x(), target.shape.get_tile_y())
-        else {
-            return true;
-        };
         if !approach_attack_range(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
             now_ms,
         ) {

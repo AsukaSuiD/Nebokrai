@@ -20,7 +20,7 @@ use super::promotionstate::{PromotionState, send_promotion_state_begin};
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::monsterai::{
-    approach_attack_range, schedule_attack_interval,
+    MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -318,8 +318,7 @@ pub(crate) fn execute_owned_monster_promotion(
             game,
             region,
             monster_id,
-            target_x,
-            target_y,
+            MonsterTraceTarget::Shape(target.view),
             properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE),
             now_ms,
         ) {

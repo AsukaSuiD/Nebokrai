@@ -28,7 +28,9 @@ use crate::gameserver::appserver::ai::aifactory::MonsterAiKind;
 use crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms;
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
+use crate::gameserver::appserver::shape::{
+    CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
+};
 use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::tools::get_line_direction;
@@ -248,20 +250,44 @@ pub(crate) fn queue_monster_idle<Runtime: GameMainLoopRuntime>(
     true
 }
 
-/// Выполняет общий шаг `CMonsterAI::Tracing` перед запуском выбранного навыка.
+/// Живая форма сохраняет геометрию цели; точка нужна только для уже начатого
+/// навыка, когда объект исчез, а подтверждённый прогресс ещё хранит назначение.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonsterTraceTarget {
+    Shape(ShapeView),
+    Point(ShapeAreaCoordinates),
+}
+
+impl MonsterTraceTarget {
+    pub(crate) const fn point(x: i32, y: i32) -> Self {
+        Self::Point(ShapeAreaCoordinates { x, y })
+    }
+
+    const fn coordinates(self) -> ShapeAreaCoordinates {
+        match self {
+            Self::Shape(view) => ShapeAreaCoordinates {
+                x: view.tile_x,
+                y: view.tile_y,
+            },
+            Self::Point(point) => point,
+        }
+    }
+}
+
+/// Выполняет общий шаг `CBaseAI::Tracing` перед запуском выбранного навыка.
 /// Наблюдаемый порядок движения задаёт существующий индекс региона; функция не
 /// выбирает навык и не потребляет RNG.
 pub(crate) fn approach_attack_range(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
-    target_x: i32,
-    target_y: i32,
+    target: MonsterTraceTarget,
     maximum_distance: u32,
     now_ms: u32,
 ) -> bool {
     let Some((
         property,
+        monster_view,
         monster_x,
         monster_y,
         tamed,
@@ -276,8 +302,10 @@ pub(crate) fn approach_attack_range(
         let pet = monster
             .is_tamed()
             .then(|| monster.pet_attack_properties(&property));
+        let monster_view = monster.shape_view(&property)?;
         Some((
             property.clone(),
+            monster_view,
             monster.move_shape().shape().get_tile_x().ok()?,
             monster.move_shape().shape().get_tile_y().ok()?,
             monster.is_tamed(),
@@ -292,7 +320,12 @@ pub(crate) fn approach_attack_range(
         return false;
     };
 
-    let distance = real_distance(monster_x, monster_y, target_x, target_y);
+    let target_coordinates = target.coordinates();
+    let (target_x, target_y) = (target_coordinates.x, target_coordinates.y);
+    let distance = match target {
+        MonsterTraceTarget::Shape(target) => monster_view.real_distance(Some(target)),
+        MonsterTraceTarget::Point(_) => real_distance(monster_x, monster_y, target_x, target_y),
+    };
     let path_blocked = region
         .straight_skill_path(monster_x, monster_y, target_x, target_y, None)
         .iter()
