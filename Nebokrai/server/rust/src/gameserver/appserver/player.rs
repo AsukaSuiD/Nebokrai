@@ -111,6 +111,9 @@
 //! prelude: base fallback мутирует canonical goods, живая BF HP разрешает
 //! масштабированный `0.0001` вклад в player properties, а BF HP/MP зажимаются
 //! к обновлённым максимумам до общего state pass-а.
+//! Durability gate в `MountAllEquip` ограничивает только Flash/TaoZhuang scan:
+//! последующие `MountEquip/MountCiQingEquip` применяют addon-ы всех занятых
+//! слотов, включая предметы с нулевой прочностью.
 //! Periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
@@ -5108,11 +5111,6 @@ impl CPlayer {
             ..PlayerCombatProperties::default()
         };
         for (_, goods) in self.equipment.traversing_goods() {
-            if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
-                && goods.addon_property_value(goods_factory, GAP_GOODS_MAXIMUM_DURABILITY, 2) < 1
-            {
-                continue;
-            }
             apply_equipment_goods_properties(
                 &mut properties,
                 goods,
@@ -5127,12 +5125,6 @@ impl CPlayer {
                 let Some(goods) = self.ci_qing.get_goods(position) else {
                     continue;
                 };
-                if goods.query_attribute(GAP_GOODS_MAXIMUM_DURABILITY)
-                    && goods.addon_property_value(goods_factory, GAP_GOODS_MAXIMUM_DURABILITY, 2)
-                        < 1
-                {
-                    continue;
-                }
                 apply_equipment_goods_properties(
                     &mut properties,
                     goods,
