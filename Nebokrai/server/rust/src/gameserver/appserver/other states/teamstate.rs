@@ -9,13 +9,17 @@
 //! хранилищем игрока. Владелец состояния строит пакеты начала, завершения и
 //! изменения числа участников; AI раз в пять секунд двумя отдельными чтениями
 //! часов проверяет, остался ли игрок лидером найденной team-session.
-//! Координатные overload-ы `Begin` и восстановление из старого хранилища пока
-//! не достигнуты и сохранены в RAW ниже.
+//! Exact `Serialize/Unserialize` по `0x005BFA50/0x005BFF20` сохраняют
+//! `ID + team-name C-string + password C-string`; bounded Rust-кодек оставляет
+//! допустимый максимум каждого legacy-буфера 255 байт. Координатные overload-ы
+//! `Begin` пока не достигнуты и сохранены в RAW ниже.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::states::state::default_client_state_time;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const TEAM_STATE_ID: i32 = 0x0001_86a6;
+const TEAM_STATE_STRING_CAPACITY: usize = 256;
 const TEAM_STATE_CHECK_INTERVAL_MS: u32 = 5_000;
 const TEAM_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const TEAM_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -35,6 +39,31 @@ impl CTeamState {
             team_password,
             last_check_timestamp_ms: 0,
         }
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let _state_id = reader.read_i32()?;
+        let team_name = reader.read_c_string(TEAM_STATE_STRING_CAPACITY)?.to_vec();
+        let team_password = reader.read_c_string(TEAM_STATE_STRING_CAPACITY)?.to_vec();
+        Ok(Self::new(team_name, team_password))
+    }
+
+    pub(crate) fn serialized_size(payload: &[u8], offset: usize) -> Option<usize> {
+        let mut reader = LegacyReader::at(payload, offset).ok()?;
+        let _state_id = reader.read_i32().ok()?;
+        let _team_name = reader.read_c_string(TEAM_STATE_STRING_CAPACITY).ok()?;
+        let _team_password = reader.read_c_string(TEAM_STATE_STRING_CAPACITY).ok()?;
+        reader.position().checked_sub(offset)
+    }
+
+    pub(crate) fn encoded_for_install(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(6 + self.team_name.len() + self.team_password.len());
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_i32(TEAM_STATE_ID);
+        writer.write_c_string(&self.team_name);
+        writer.write_c_string(&self.team_password);
+        bytes
     }
 
     pub(crate) const fn state_id(&self) -> i32 {

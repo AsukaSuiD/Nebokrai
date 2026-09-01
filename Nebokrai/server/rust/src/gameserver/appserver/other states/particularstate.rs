@@ -9,16 +9,21 @@
 //! границы оригинал обходит оба контейнера на каждом вызове AI.
 //! Полный клиентский снимок сохраняет каждый экземпляр отдельной state-тройкой
 //! с тем же particular attribute в virtual additional-data.
+//! Exact `Serialize/Unserialize` по `0x005E23D0/0x00601350` используют общий
+//! 8-байтный кодек `ID + additional_data`; загрузка и удаление обновляют тот же
+//! ordered `ex_states`, поэтому запись не обрывает следующие состояния.
 //!
 //! Состояниями владеет `CanonicalStateStorage`; `CGame` только доставляет
 //! точные `0xBFE03/0xBFE04`. Координатный и object-identity overload-ы `Begin`
 //! пока не достигнуты и сохранены ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::shape::CShape;
 use crate::gameserver::appserver::states::state::default_client_state_time;
 use crate::nets::netserver::message::CMessage;
 
 pub(crate) const PARTICULAR_STATE_ID: u32 = 0x186a5;
+pub(crate) const PARTICULAR_STATE_BYTES: usize = 8;
 const PARTICULAR_STATE_CHECK_INTERVAL_MS: u32 = 2_000;
 const PARTICULAR_STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const PARTICULAR_STATE_END_MESSAGE: i32 = 0x000b_fe04;
@@ -39,6 +44,24 @@ impl ParticularState {
 
     pub(crate) const fn additional_data(self) -> u32 {
         self.additional_data
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        let _state_id = reader.read_u32()?;
+        Ok(Self {
+            additional_data: reader.read_u32()?,
+        })
+    }
+
+    pub(crate) fn encoded(self) -> [u8; PARTICULAR_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(PARTICULAR_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(PARTICULAR_STATE_ID);
+        writer.write_u32(self.additional_data);
+        bytes
+            .try_into()
+            .expect("размер particular-state фиксирован")
     }
 
     pub(crate) const fn state_id(self) -> i32 {

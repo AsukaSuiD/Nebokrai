@@ -53,7 +53,7 @@ use super::exstate::{
     EX_STATE_ID, EX_STATE_NEW_ID, ExtendedState, ExtendedStateKind, ExtendedStateMutation,
 };
 use super::legacycodec::{LegacyReader, LegacyWriter};
-use super::particularstate::{PARTICULAR_STATE_ID, ParticularState};
+use super::particularstate::{PARTICULAR_STATE_BYTES, PARTICULAR_STATE_ID, ParticularState};
 use super::region::{CRegion, RegionCellAccessBlock};
 use super::ridestate::{RIDE_STATE_ID, RideState};
 use super::restorestate::{ConsumableRestoreMutation, ConsumableRestoreStateStorage};
@@ -820,9 +820,7 @@ impl CMoveShape {
         if offsets.len() != declared_count {
             return None;
         }
-        let total_count = declared_count
-            .checked_add(self.particular_states.len())?
-            .checked_add(self.team_recruitment_states.len())?;
+        let total_count = declared_count;
         let mut payload = Vec::new();
         self.shape
             .add_to_byte_array(&mut payload, include_child)
@@ -831,6 +829,8 @@ impl CMoveShape {
         writer.write_u8(u8::from(is_dead));
         writer.write_i32(i32::try_from(total_count).ok()?);
         let mut restore_index = 0usize;
+        let mut particular_index = 0usize;
+        let mut team_index = 0usize;
         for offset in offsets {
             let state_id = read_i32(&states, offset)?;
             if state_id == RESTORE_HP_STATE_ID || state_id == RESTORE_MP_STATE_ID {
@@ -846,6 +846,26 @@ impl CMoveShape {
                 writer.write_u32(default_additional_data());
                 continue;
             }
+            if state_id == PARTICULAR_STATE_ID as i32 {
+                let state = self.particular_states.get(particular_index)?;
+                if read_u32(&states, offset + 4) != Some(state.additional_data()) {
+                    return None;
+                }
+                particular_index += 1;
+                writer.write_i32(state_id);
+                writer.write_i32(state.client_state_time());
+                writer.write_u32(state.additional_data());
+                continue;
+            }
+            if state_id == TEAM_STATE_ID {
+                let state = self.team_recruitment_states.get(team_index)?;
+                team_index += 1;
+                writer.write_i32(state_id);
+                writer.write_i32(state.client_state_time());
+                writer.write_u32(state.additional_data(team_member_count));
+                writer.write_c_string(state.team_name());
+                continue;
+            }
             writer.write_i32(state_id);
             writer.write_i32(self.client_state_time(
                 &states,
@@ -859,16 +879,10 @@ impl CMoveShape {
         if restore_index != self.consumable_restore_states.len() {
             return None;
         }
-        for state in &self.particular_states {
-            writer.write_i32(state.state_id());
-            writer.write_i32(state.client_state_time());
-            writer.write_u32(state.additional_data());
-        }
-        for state in &self.team_recruitment_states {
-            writer.write_i32(state.state_id());
-            writer.write_i32(state.client_state_time());
-            writer.write_u32(state.additional_data(team_member_count));
-            writer.write_c_string(state.team_name());
+        if particular_index != self.particular_states.len()
+            || team_index != self.team_recruitment_states.len()
+        {
+            return None;
         }
         Some(payload)
     }
@@ -1346,6 +1360,18 @@ impl CMoveShape {
             .iter()
             .copied()
             .filter_map(|offset| AutomaticRestoreState::decode(&states, offset))
+            .collect();
+        self.particular_states = known_offsets
+            .iter()
+            .copied()
+            .filter(|offset| read_u32(&states, *offset) == Some(PARTICULAR_STATE_ID))
+            .filter_map(|offset| ParticularState::decode(&states, offset).ok())
+            .collect();
+        self.team_recruitment_states = known_offsets
+            .iter()
+            .copied()
+            .filter(|offset| read_i32(&states, *offset) == Some(TEAM_STATE_ID))
+            .filter_map(|offset| CTeamState::decode(&states, offset).ok())
             .collect();
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
         self.change_body_states.retain(|state| {
@@ -1976,19 +2002,31 @@ impl CMoveShape {
         {
             return None;
         }
+        self.append_serialized_state_record(&state.encoded());
         self.particular_states.push(state);
         Some(state)
     }
 
     pub(crate) fn take_particular_states(&mut self) -> Vec<ParticularState> {
-        std::mem::take(&mut self.particular_states)
+        let states = std::mem::take(&mut self.particular_states);
+        while self.remove_serialized_state_record(PARTICULAR_STATE_ID, PARTICULAR_STATE_BYTES) {}
+        states
     }
 
     pub(crate) fn remove_particular_state_at(
         &mut self,
         index: usize,
     ) -> Option<ParticularState> {
-        (index < self.particular_states.len()).then(|| self.particular_states.remove(index))
+        let state = (index < self.particular_states.len())
+            .then(|| self.particular_states.remove(index))?;
+        let offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(PARTICULAR_STATE_ID))
+            .nth(index);
+        if let Some(offset) = offset {
+            let _ = self.remove_serialized_state_record_at(offset, PARTICULAR_STATE_BYTES);
+        }
+        Some(state)
     }
 
     pub(crate) fn team_recruitment_states(&self) -> &[CTeamState] {
@@ -2003,6 +2041,7 @@ impl CMoveShape {
     }
 
     pub(crate) fn attach_team_recruitment_state(&mut self, state: CTeamState) {
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.team_recruitment_states.push(state);
     }
 
@@ -2010,8 +2049,18 @@ impl CMoveShape {
         &mut self,
         index: usize,
     ) -> Option<CTeamState> {
-        (index < self.team_recruitment_states.len())
-            .then(|| self.team_recruitment_states.remove(index))
+        let state = (index < self.team_recruitment_states.len())
+            .then(|| self.team_recruitment_states.remove(index))?;
+        let offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .filter(|offset| read_i32(&self.ex_states, *offset) == Some(TEAM_STATE_ID))
+            .nth(index);
+        if let Some(offset) = offset
+            && let Some(amount) = CTeamState::serialized_size(&self.ex_states, offset)
+        {
+            let _ = self.remove_serialized_state_record_at(offset, amount);
+        }
+        Some(state)
     }
 
     pub(crate) fn automatic_restore_state(&self, index: usize) -> Option<AutomaticRestoreState> {
@@ -5293,6 +5342,13 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             state_id if state_id == RESTORE_HP_STATE_ID as u32 => RESTORE_HP_STATE_BYTES,
             state_id if state_id == RESTORE_MP_STATE_ID as u32 => RESTORE_MP_STATE_BYTES,
             state_id if is_automatic_restore_state_id(state_id) => AUTOMATIC_RESTORE_STATE_BYTES,
+            PARTICULAR_STATE_ID => PARTICULAR_STATE_BYTES,
+            state_id if state_id == TEAM_STATE_ID as u32 => {
+                let Some(size) = CTeamState::serialized_size(payload, cursor) else {
+                    break;
+                };
+                size
+            }
             CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
             super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
             TAIJI_SKILL_ID => TAIJI_STATE_BYTES,
