@@ -7,7 +7,8 @@
 //! прекращает поражение перед первой клеткой `BLOCK_UNFLY` и обрабатывает не
 //! более одной клетки за проход ИИ. Каждая фигура поражается не более одного
 //! раза; формула игрока сохраняет два RNG-вызова и поправку уровня оружия,
-//! формула монстра — физический, стихийный и холистический RNG-порядок.
+//! а критический множитель усекает каждый компонент к нулю. Формула монстра —
+//! физический, стихийный и холистический RNG-порядок.
 //! `SkillExecutionKernel` хранит стадии игрока, а `CGame` только разрешает
 //! владельцев, применяет рассчитанную атаку и доставляет пакеты.
 
@@ -329,7 +330,7 @@ fn calculate_player_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
     Some((master, attack))
