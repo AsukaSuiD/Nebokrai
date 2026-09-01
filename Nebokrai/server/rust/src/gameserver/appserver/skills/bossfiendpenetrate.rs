@@ -7,8 +7,9 @@
 //! прекращает поражение перед первой клеткой `BLOCK_UNFLY` и обрабатывает не
 //! более одной клетки за проход ИИ. Каждая фигура поражается не более одного
 //! раза; формула игрока сохраняет два RNG-вызова и поправку уровня оружия,
-//! а критический множитель усекает каждый компонент к нулю. Формула монстра —
-//! физический, стихийный и холистический RNG-порядок.
+//! а критический множитель усекает каждый компонент к нулю. Формула монстра
+//! вызывает нулевой `GetAddElementAtk` между физическим уроном и уроном души,
+//! не продвигая RNG до отдельного критического броска.
 //! `SkillExecutionKernel` хранит стадии игрока, а `CGame` только разрешает
 //! владельцев, применяет рассчитанную атаку и доставляет пакеты.
 
@@ -789,14 +790,7 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     let maximum = maximum as i32;
     let span = 1_i32.wrapping_sub(minimum).wrapping_add(maximum);
     let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0);
-    let element_minimum = attacker_property.minimum_element as i32;
-    let element_maximum = attacker_property.maximum_element as i32;
-    let element_span = 1_i32
-        .wrapping_sub(element_minimum)
-        .wrapping_add(element_maximum);
-    let element = element_minimum
-        .wrapping_add(game.skill_random_below(element_span))
-        .max(0);
+    let element = 0;
     // `CMonster::GetCriticalChance` возвращает ноль, но исходный вызов
     // `random(100)` всё равно продвигает общий генератор.
     let _critical_roll = game.skill_random_below(100);

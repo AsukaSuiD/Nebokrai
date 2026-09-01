@@ -707,18 +707,9 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     let physical = minimum
         .wrapping_add(game.skill_random_below(physical_width))
         .max(0);
-    let element_minimum = attacker_property.minimum_element as i32;
-    let element_difference =
-        (attacker_property.maximum_element as i32).wrapping_sub(element_minimum);
-    let element_width = (if element_difference < 0 {
-        element_difference.wrapping_neg()
-    } else {
-        element_difference
-    })
-    .wrapping_add(1);
-    let element = element_minimum
-        .wrapping_add(game.skill_random_below(element_width))
-        .max(0);
+    // Исходный virtual `GetAddElementAtk` у `CMonster` возвращает ноль;
+    // дополнительного RNG-вызова между физическим и критическим бросками нет.
+    let element = 0;
     let _critical_roll = game.skill_random_below(100);
     let attack = AttackInformation {
         skill_id: BOSS_BLUE_QUAKE_SKILL_ID,
