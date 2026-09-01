@@ -57,7 +57,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
-    resolve_coordinate_sufferer, resolve_identity_sufferer,
+    resolve_coordinate_sufferer, resolve_identity_sufferer, resolve_state_user,
 };
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
@@ -144,11 +144,11 @@ fn requested_target(
         PlayerSkillDispatch::SelfTarget { skill_id: CURE_SKILL_ID, .. } => Some(caster_identity(player_id)),
         PlayerSkillDispatch::Point { skill_id: CURE_SKILL_ID, x, y } => {
             resolve_coordinate_sufferer(game, region_id, x, y)
-                .or_else(|| Some(caster_identity(player_id)))
+                .or_else(|| resolve_state_user(game, region_id, caster_identity(player_id)))
         }
         PlayerSkillDispatch::Object { skill_id: CURE_SKILL_ID, target: target @ ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } } => {
             resolve_identity_sufferer(game, region_id, target)
-                .or_else(|| Some(caster_identity(player_id)))
+                .or_else(|| resolve_state_user(game, region_id, caster_identity(player_id)))
         }
         _ => None,
     }
