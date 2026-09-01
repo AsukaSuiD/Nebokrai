@@ -9,7 +9,8 @@
 //! оружия. Общая с `CFlash` damage-формула вызывается из этого owner-а;
 //! различия второго навыка задаёт его собственный owner.
 //! Общий `End` очищает execution-state, возвращает движение и завершает
-//! `CAttackSkill::End(1)` с отдельной cooldown-ячейкой варианта.
+//! `CAttackSkill::End(1)` с единичным оружейным `AfterUseSkill` и отдельной
+//! cooldown-ячейкой варианта; `Attack` оружие по числу целей не изнашивает.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -134,6 +135,7 @@ fn finish_player_little_flash<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_little_flash_used(skill_id, now_ms);
     });
@@ -314,7 +316,6 @@ fn attack_path<Runtime: GameMainLoopRuntime>(
                 MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
                 _ => unreachable!("тип цели проверен перед расчётом"),
             }
-            game.damage_player_weapon(player_id, runtime);
         }
     }
 }
