@@ -7,6 +7,7 @@
 //! критического удара.
 //! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
 //! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
+//! Критический float-множитель тика усекается к нулю перед записью `int`.
 //! Этот же владелец извлекает каноническое состояние на такте ИИ, возвращает
 //! его до применения удара и передаёт рассчитанную атаку координатору `CGame`.
 //! DB-запись буквально сохраняет десять DWORD `MasterInfo`, остаток срока,
@@ -209,7 +210,7 @@ impl BloodLossState {
         }
         let critical = random(100) < i32::from(critical_chance);
         if critical {
-            damage = (damage as f32 * critical_rate).round_ties_even() as i32;
+            damage = (damage as f32 * critical_rate) as i32;
         }
         AttackInformation {
             skill_id: DEFAULT_PERIODIC_SKILL_ID,
