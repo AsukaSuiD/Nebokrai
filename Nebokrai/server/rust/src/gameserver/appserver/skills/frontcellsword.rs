@@ -4,7 +4,8 @@
 //! лицевой клетки, packet layout и физико-элементно-духовной формуле. Этот
 //! owner не хранит execution-state и не выбирает момент списания ресурсов:
 //! различающиеся lifecycle и ошибки остаются в конкретных skill-owner-ах.
-//! Общий `End` возвращает движение и выполняет `CSummonSkill::End(1)`.
+//! Общий `End` возвращает движение, один раз выполняет унаследованный
+//! `AfterUseSkill` с износом оружия и затем `CSummonSkill::End(1)`.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -44,6 +45,7 @@ pub(crate) fn finish_front_cell_sword<Runtime, MarkUsed>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, mark_used);
 }
 

@@ -7,8 +7,9 @@
 //! layout находятся в `frontcellsword`; lifecycle и ошибка категории оружия
 //! остаются здесь. Варианты `2` и `4` сохраняют категорию `1` и `GS0287`, а
 //! вариант `3` переопределяет их на категорию `2` и `GS0292`.
-//! Все четыре варианта используют общий `End`: возврат движения и
-//! `CSummonSkill::End(1)` с отдельной cooldown-ячейкой варианта.
+//! Ни один из четырёх вариантов не изнашивает оружие в `Attack` или `AI`:
+//! унаследованный `AfterUseSkill` делает это один раз через общий `End(1)`
+//! фронтального семейства с отдельной cooldown-ячейкой варианта.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -253,7 +254,6 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
             ),
             _ => unreachable!("тип цели проверен перед расчётом"),
         }
-        game.damage_player_weapon(player_id, runtime);
     }
     if let Some(execution) = player_ai.lightning_sword_mut() {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

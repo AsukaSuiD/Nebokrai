@@ -7,8 +7,9 @@
 //! фигура не пропускается ради следующей. Формула выполняет один бросок урона
 //! и один бросок критического удара только для фактически атакуемой цели.
 //! `CGame` используется только для разрешения независимого владельца цели,
-//! применения рассчитанной атаки, износа оружия и доставки.
-//! `End` возвращает движение и выполняет `CSummonSkill::End(1)`.
+//! применения рассчитанной атаки и доставки. `Attack` и `AI` не изнашивают
+//! оружие в точке попадания: унаследованный `AfterUseSkill` делает это один
+//! раз через общий `End(1)` фронтального семейства.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -224,7 +225,6 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
             ),
             _ => unreachable!("тип цели проверен перед расчётом"),
         }
-        game.damage_player_weapon(player_id, runtime);
     }
     if let Some(execution) = player_ai.ju_cut_mut() {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
