@@ -6,7 +6,8 @@
 //! только из ранее созданных стен. Обход активных клеток идёт X→Y, цели
 //! обрабатываются один раз за окно, а строгие lifetime/frequency границы
 //! используют три последовательных чтения часов. Формула сохраняет ровно два
-//! вызова legacy RNG: диапазон урона и критический удар.
+//! вызова legacy RNG: диапазон урона и критический удар; результат критического
+//! множителя усекается к нулю.
 
 use super::firewall::FIRE_WALL_SKILL_ID;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_DAMAGE_LEVEL;
@@ -244,7 +245,7 @@ pub(crate) fn calculate_owned_fire_wall_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
         }
     }
     Some((attack, combat, occupation, attacker_level))
