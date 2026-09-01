@@ -15,7 +15,6 @@ use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
 };
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
@@ -66,12 +65,7 @@ impl SmartGladiatorSelection {
         candidate: SmartGladiatorCandidate,
         guard_range: i32,
     ) -> Self {
-        let distance = real_distance(
-            owner.tile_x,
-            owner.tile_y,
-            candidate.view.tile_x,
-            candidate.view.tile_y,
-        );
+        let distance = owner.real_distance(Some(candidate.view));
         if guard_range < distance {
             return self;
         }
@@ -200,25 +194,11 @@ fn nearest_player(
         })
         .fold(None, |nearest, candidate| match nearest {
             Some((_, distance))
-                if distance
-                    < real_distance(
-                        owner.tile_x,
-                        owner.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ) =>
+                if distance < owner.real_distance(Some(candidate)) =>
             {
                 nearest
             }
-            _ => Some((
-                candidate,
-                real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
-            )),
+            _ => Some((candidate, owner.real_distance(Some(candidate)))),
         })
         .map(|(candidate, _)| candidate)
 }
@@ -245,25 +225,11 @@ fn nearest_monster(
         })
         .fold(None, |nearest, candidate| match nearest {
             Some((_, distance))
-                if distance
-                    < real_distance(
-                        owner.tile_x,
-                        owner.tile_y,
-                        candidate.tile_x,
-                        candidate.tile_y,
-                    ) =>
+                if distance < owner.real_distance(Some(candidate)) =>
             {
                 nearest
             }
-            _ => Some((
-                candidate,
-                real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
-            )),
+            _ => Some((candidate, owner.real_distance(Some(candidate)))),
         })
         .map(|(candidate, _)| candidate)
 }
