@@ -7,8 +7,10 @@
 //! поражает каждую фигуру не более одного раза за полёт, отправляет end-пакет
 //! и после срока пути отбрасывает самого стрелка назад. Формула каждого нового
 //! попадания выполняет ровно два RNG-вызова; защитные RNG остаются у `CGame`.
-//! `End(true)` прекращает оставшийся полёт, обновляет свойства и cooldown;
-//! `End(false)` только освобождает runtime-состояние и не откатывает попадания.
+//! `Attack` не изнашивает оружие на отдельных целях: унаследованный
+//! `AfterUseSkill` делает это один раз из `End(true)`, после чего обновляются
+//! свойства и cooldown. `End(false)` только освобождает runtime-состояние и не
+//! откатывает попадания.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -62,6 +64,7 @@ pub(crate) fn is_blood_rose_dispatch(dispatch: PlayerSkillDispatch) -> bool { ma
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_blood_rose<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_blood_rose_used(now_ms));
 }
 fn abort_player_blood_rose(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
@@ -101,7 +104,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет порядок области, уникальность целей и применение попаданий")]
 fn attack_scope<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, region_id: i32, level: i32, damage_factor: u32, hit_modifier: i32, element_addition: u32, center_x: i32, center_y: i32, attacked: &mut Vec<ShapeIdentity>, runtime: &mut Runtime) -> (bool, Option<ShapeIdentity>) {
     let Some(master) = game.find_player(player_id).map(master_info) else { return (false, None) }; let mut any = false; let mut visual_target = None;
-    for offset_x in -1..=1 { for offset_y in -1..=1 { let cell_x = center_x.wrapping_add(offset_x); let cell_y = center_y.wrapping_add(offset_y); for target in cell_targets(game, region_id, cell_x, cell_y) { if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue } any = true; if cell_x == center_x && cell_y != 0 && visual_target.is_none() { visual_target = Some(target); } if attacked.contains(&target) { continue } attacked.push(target); let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, damage_factor, hit_modifier, element_addition) else { continue }; match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue } game.damage_player_weapon(player_id, runtime); } } }
+    for offset_x in -1..=1 { for offset_y in -1..=1 { let cell_x = center_x.wrapping_add(offset_x); let cell_y = center_y.wrapping_add(offset_y); for target in cell_targets(game, region_id, cell_x, cell_y) { if (target.object_type == PLAYER_TYPE && target.id == player_id) || !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || !game.owned_player_skill_target_attackable(master, target, region_id) { continue } any = true; if cell_x == center_x && cell_y != 0 && visual_target.is_none() { visual_target = Some(target); } if attacked.contains(&target) { continue } attacked.push(target); let Some(target_level) = target_level(game, region_id, target) else { continue }; let Some((master, attack)) = calculate_attack(game, player_id, target_level, level, damage_factor, hit_modifier, element_addition) else { continue }; match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => continue } } } }
     (any, visual_target)
 }
 
