@@ -21,6 +21,7 @@ use super::{
     finish_player_blind_states_on_defense, game_legacy_random, get_line_direction, real_distance,
     retarget_jiumai_after_hurt, time_reached,
 };
+use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 
 pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -49,13 +50,20 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let now_ms = runtime.now_milliseconds();
-    let target = match dispatch {
-        PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE => game
+    let region_id = player.server_region_id();
+    let requested_target = match dispatch {
+        PlayerSkillDispatch::Object { target, .. } => Some(target),
+        PlayerSkillDispatch::Point { x, y, .. } => {
+            region_id.and_then(|region_id| resolve_coordinate_sufferer(game, region_id, x, y))
+        }
+        PlayerSkillDispatch::SelfTarget { .. } => None,
+    };
+    let target = match requested_target {
+        Some(target) if target.object_type == PLAYER_TYPE => game
             .find_player(target.id)
             .and_then(|player| player.shape_view())
             .map(|view| (target, view)),
-        PlayerSkillDispatch::Object { target, .. } if target.object_type == 600 => player
-            .server_region_id()
+        Some(target) if target.object_type == 600 => region_id
             .and_then(|region_id| game.find_region(region_id))
             .and_then(|owner| owner.base().find_monster_by_id(target.id))
             .and_then(|monster| {
@@ -65,17 +73,18 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 monster.shape_view(property)
             })
             .map(|view| (target, view)),
-        PlayerSkillDispatch::Object { target, .. }
+        Some(target)
             if target.object_type == BUILD_OBJECT_TYPE as i32
-                || target.object_type == CITY_GATE_OBJECT_TYPE as i32 => player
-                .server_region_id()
+                || target.object_type == CITY_GATE_OBJECT_TYPE as i32 => region_id
                 .and_then(|region_id| game.find_shape_in_region(region_id, target))
                 .map(|view| (target, view)),
         _ => None,
     };
 
     if player_ai.base_attack().is_none() {
-        if matches!(dispatch, PlayerSkillDispatch::Object { .. }) && target.is_none() {
+        if matches!(dispatch, PlayerSkillDispatch::Object { .. } | PlayerSkillDispatch::Point { .. })
+            && target.is_none()
+        {
             let _ = game.send_base_attack_failure(player_id, 2);
             return rejected();
         }

@@ -13,7 +13,8 @@
 //! конкретный владелец явно выбирает задержанный или немедленный вариант.
 //! При входе в другой регион исходный `OnChangeRegion` выполняет `End(false)`:
 //! движение и текущий навык освобождаются без износа оружия и фиксации
-//! времени восстановления.
+//! времени восстановления. Координатный `Begin` разрешает первый `CMoveShape`
+//! клетки через точный `CState::GetSufferer` без fallback к заклинателю.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
@@ -190,20 +191,6 @@ pub(crate) fn abort_player_base_attack_on_region_change(
 // RVA: 0x001B2E40
 // ADDRESS: 005b2e40
 // PROTOTYPE: int __thiscall CheckCastCondition(CMoveShape * param_1, CMoveShape * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CBaseAttack::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\baseattack.cpp:65
-// RVA: 0x001B2E70
-// ADDRESS: 005b2e70
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
