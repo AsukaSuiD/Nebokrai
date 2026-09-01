@@ -29,6 +29,7 @@ use super::sealstate::{
 use super::blindstate::{
     BLIND_STATE_ID, expire_player_blind_state, finish_player_blind_state_on_defense,
 };
+use super::strikestate::{STRIKE_STATE_ID, finish_player_strike_states_on_defense};
 
 pub(crate) const KNOCK_OUT_STATE_ID: u32 = 0x192;
 pub(crate) const KNOCK_OUT_STATE_BYTES: usize = 8;
@@ -202,6 +203,7 @@ pub(crate) fn finish_player_blind_states_on_defense(game: &mut CGame, player_id:
             BLIND_STATE_ID => finish_player_blind_state_on_defense(game, player_id, now_ms),
             SPIDER_WEB_SKILL_ID => finish_player_spider_web_state_on_defense(game, player_id, now_ms),
             KNOCK_OUT_STATE_ID => finish_player_knock_out_state_on_defense(game, player_id, now_ms),
+            STRIKE_STATE_ID => finish_player_strike_states_on_defense(game, player_id, now_ms),
             _ => false,
         };
     }
@@ -231,8 +233,14 @@ pub(crate) fn finish_blind_states_on_defense(game: &mut CGame, region: &mut CSer
     let mut changed = false;
     for state_id in order {
         changed |= match state_id {
+            BLIND_STATE_ID if target.object_type == 400 => {
+                finish_player_blind_state_on_defense(game, target.id, now_ms)
+            }
             SPIDER_WEB_SKILL_ID => finish_spider_web_state_on_defense(game, region, target, now_ms),
             KNOCK_OUT_STATE_ID => finish_knock_out_state_on_defense(game, region, target, now_ms),
+            STRIKE_STATE_ID if target.object_type == 400 => {
+                finish_player_strike_states_on_defense(game, target.id, now_ms)
+            }
             SEAL_STATE_ID if target.object_type == 600 => {
                 finish_monster_seal_state_on_defense(game, region, target.id, now_ms)
             }

@@ -6,7 +6,9 @@
 //! идентификатор и остаток срока занимают восемь байт. Player-login повторно
 //! начинает срок, восстанавливает вложенные запреты движения/боя и публикует
 //! begin-визуал, а logout сохраняет отдельный остаток для каждого экземпляра
-//! состояния. Создание и снятие остаются RAW до настоящего runtime-caller-а.
+//! состояния. Унаследованный `OnAction(ACTION_DEFENSE)` снимает все экземпляры
+//! через достигнутый combat-dispatcher. Создание остаётся RAW до настоящего
+//! runtime-caller-а.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -53,6 +55,13 @@ pub(crate) fn expire_player_strike_states(game: &mut CGame, player_id: i32, now_
     let ended = game.find_player_mut(player_id).map(|player| player.take_expired_strike_states(now_ms)).unwrap_or_default();
     if let Some((region_id, identity, x, y)) = context { for state in &ended { send_strike_state_visual(game, region_id, identity, x, y, *state, false, now_ms); } }
     ended.len()
+}
+
+pub(crate) fn finish_player_strike_states_on_defense(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    let context = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().identity(), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?)));
+    let ended = game.find_player_mut(player_id).map(|player| player.take_strike_states()).unwrap_or_default();
+    if let Some((region_id, identity, x, y)) = context { for state in &ended { send_strike_state_visual(game, region_id, identity, x, y, *state, false, now_ms); } }
+    !ended.is_empty()
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer

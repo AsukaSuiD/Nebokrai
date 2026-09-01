@@ -1317,12 +1317,16 @@ impl CMoveShape {
             })
             .filter_map(|offset| SwordshipState::decode(&states, offset).ok())
             .collect();
+        self.blind_state_order.shift_remove(&STRIKE_STATE_ID);
         self.strike_states = known_offsets
             .iter()
             .copied()
             .filter(|offset| read_u32(&states, *offset) == Some(STRIKE_STATE_ID))
             .filter_map(|offset| StrikeState::decode(&states, offset).ok())
             .collect();
+        if !self.strike_states.is_empty() {
+            self.blind_state_order.insert(STRIKE_STATE_ID);
+        }
         self.wuxing_states = known_offsets
             .iter()
             .copied()
@@ -3630,6 +3634,18 @@ impl CMoveShape {
                 self.remove_serialized_state_record_at(offset, STRIKE_STATE_BYTES);
             }
             self.set_moveable(true); self.set_fightable(true); ended.push(state);
+        }
+        if self.strike_states.is_empty() { self.blind_state_order.shift_remove(&STRIKE_STATE_ID); }
+        ended
+    }
+
+    pub(crate) fn take_strike_states(&mut self) -> Vec<StrikeState> {
+        let ended = std::mem::take(&mut self.strike_states);
+        self.blind_state_order.shift_remove(&STRIKE_STATE_ID);
+        for _ in 0..ended.len() {
+            self.remove_serialized_state_record(STRIKE_STATE_ID, STRIKE_STATE_BYTES);
+            self.set_moveable(true);
+            self.set_fightable(true);
         }
         ended
     }

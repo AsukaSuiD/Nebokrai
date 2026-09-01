@@ -5719,6 +5719,12 @@ impl CPlayer {
         self.move_shape.take_expired_strike_states(now_ms)
     }
 
+    pub(crate) fn take_strike_states(
+        &mut self,
+    ) -> Vec<super::skills::strikestate::StrikeState> {
+        self.move_shape.take_strike_states()
+    }
+
     pub(crate) fn replace_leaf_cut_3_state(
         &mut self,
         state: super::skills::leafcutstate3::LeafCutState3,
