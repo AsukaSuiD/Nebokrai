@@ -1280,8 +1280,19 @@ impl CMonster {
         self.base_ai.when_been_killed(now_ms);
     }
 
-    pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
-        self.base_ai.process_reached_defense_actions()
+    pub(crate) fn process_reached_defense_actions(
+        &mut self,
+        mut now_ms: impl FnMut() -> u32,
+    ) -> usize {
+        let processed = self.base_ai.process_reached_defense_actions();
+        if self.passive_gladiator_ai.is_some() {
+            for _ in 0..processed {
+                // `CPassiveGladiator::OnBeenHurted` RVA `0x00210E40` после
+                // успешного base-handler ставит отдельный SearchEnemy.
+                self.base_ai.begin_active_search_enemy(now_ms());
+            }
+        }
+        processed
     }
 
     pub(crate) fn process_reached_stiffen_action(

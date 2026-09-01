@@ -47286,7 +47286,9 @@ impl CGame {
                         .base_mut()
                         .find_monster_by_id_mut(monster_id)
                         .map_or((false, false, false), |monster| {
-                            let processed = monster.process_reached_defense_actions();
+                            let processed = monster.process_reached_defense_actions(|| {
+                                runtime.now_milliseconds()
+                            });
                             if processed != 0 {
                                 passive_defense_processed = true;
                                 tracing::trace!(
