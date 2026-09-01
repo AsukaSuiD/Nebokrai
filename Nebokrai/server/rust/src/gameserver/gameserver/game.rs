@@ -407,7 +407,7 @@
 //! преследование и скользящее движение, канонические цель, применение и
 //! повторное использование, защиту, HP и действие игрока, переназначение цели
 //! пассивного питомца, защиту, HP и ИИ питомца, разрыв связи с хозяином,
-//! удаление, износ брони, `BF506/BFE01/BF60A/BF60B/BF612/BF504` и общий хвост
+//! удаление, износ брони вне safe-клетки, `BF506/BFE01/BF60A/BF60B/BF612/BF504` и общий хвост
 //! смерти игрока. Ответный бой пассивного или управляемого питомца использует
 //! те же коэффициенты и преследование и завершает награду, добычу, сценарии и
 //! удаление дикого монстра через игрока-получателя. Цель-игрок рекурсивно
@@ -38436,6 +38436,23 @@ impl CGame {
         runtime: &mut Runtime,
     ) {
         const POSITIONS: [u32; 10] = [0, 1, 3, 4, 9, 10, 12, 13, 14, 15];
+        let safe_cell = self
+            .find_player(player_id)
+            .and_then(|player| {
+                Some((
+                    player.server_region_id()?,
+                    player.shape().get_tile_x().ok()?,
+                    player.shape().get_tile_y().ok()?,
+                ))
+            })
+            .and_then(|(region_id, tile_x, tile_y)| {
+                self.find_region(region_id)
+                    .and_then(|owner| owner.base().block_at(tile_x, tile_y))
+            })
+            == Some(2);
+        if safe_cell {
+            return;
+        }
         let probabilities = self.globe_setup.armor_waste_probabilities();
         let rolls: [i32; 10] =
             std::array::from_fn(|_| game_legacy_random(&mut self.random_state, 100));
