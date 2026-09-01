@@ -5642,11 +5642,10 @@ impl CPlayer {
     }
 
     /// Применяет все уже материализованные семейства общего
-    /// `CPlayer::UpdateProperty`. Типизированные skill-state следуют byte-exact
+    /// `CPlayer::UpdateProperty`. Типизированные состояния следуют byte-exact
     /// insertion-order исходного `m_vStates`; формулы остаются методами
-    /// конкретных владельцев. Сценарные и change-body состояния пока проходят
-    /// своими цельными группами после них, поэтому их взаимное положение со
-    /// skill-state остаётся отдельной неизвестностью owner-а.
+    /// конкретных владельцев. Неактивные change-body записи сохраняются в
+    /// wire-кодеке, но, как и в исходном owner-е, свойства даёт только последняя.
     pub(crate) fn apply_materialized_state_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
@@ -5657,8 +5656,8 @@ impl CPlayer {
         let hearten_visual = self.move_shape.hearten_state();
         let callosity_visual = self.callosity_state();
         let occupation = usize::from(self.base_properties.occupation).min(2);
-        for state in self.move_shape.ordered_player_skill_property_states() {
-            use super::moveshape::PlayerSkillPropertyState as State;
+        for state in self.move_shape.ordered_player_property_states() {
+            use super::moveshape::PlayerPropertyState as State;
             properties = match state {
                 State::PersistentAgility(state) => state.apply_to_player(properties),
                 State::Agility2(state) => state.apply_to_player(properties),
@@ -5697,11 +5696,37 @@ impl CPlayer {
                 State::PoisonFog(state) => state.apply_to_player(self.level(), properties),
                 State::GodBless(state) => state.apply_to_player(properties),
                 State::Roar(state) => state.apply_to_player(properties),
+                State::Script(state) => {
+                    state.apply_properties(&mut properties, &mut self.auto_protected);
+                    properties
+                }
+                State::Undead(state) => {
+                    self.apply_undead_state_properties(properties, coefficients, &state)
+                }
+                State::Extended(state) => {
+                    Self::apply_extended_state_properties(properties, &state)
+                }
+                State::ChangeBody(state) => {
+                    Self::apply_active_change_body_state_properties(properties, &state)
+                }
+                State::Ride(_) => self.apply_ride_state_properties(
+                    properties,
+                    coefficients,
+                    goods_factory,
+                ),
+                State::RageBreak(state) => {
+                    properties.maximum_attack =
+                        state.apply_to_player_maximum_attack(properties.maximum_attack);
+                    properties
+                }
+                State::Fury(state) => {
+                    properties.maximum_attack =
+                        state.apply_to_player_maximum_attack(properties.maximum_attack);
+                    properties
+                }
             };
         }
-        let (properties, script_visuals) = self.apply_script_move_state_properties(properties);
-        let properties =
-            self.apply_change_body_state_properties(properties, coefficients, goods_factory);
+        let script_visuals = self.move_shape.take_pending_script_state_visuals();
         if let Some(state) = self.move_shape.wangsheng_state()
             && let Some(health) = state.capped_health(self.health(), properties.maximum_hp)
         {
@@ -6484,23 +6509,6 @@ impl CPlayer {
         self.auto_protected
     }
 
-    /// Накладывает шесть конкретных состояний предметов в порядке живого
-    /// списка `CMoveShape`. Округление и сужение повторяют отдельные поля
-    /// исходного `CPlayer::m_Property`.
-    pub(crate) fn apply_script_move_state_properties(
-        &mut self,
-        mut properties: PlayerCombatProperties,
-    ) -> (
-        PlayerCombatProperties,
-        Vec<super::scriptstate::ScriptMoveState>,
-    ) {
-        for state in self.move_shape.script_states() {
-            state.apply_properties(&mut properties, &mut self.auto_protected);
-        }
-        let visuals = self.move_shape.take_pending_script_state_visuals();
-        (properties, visuals)
-    }
-
     pub(crate) fn improve_experience_multiplier(&self) -> f32 {
         self.move_shape
             .script_states()
@@ -6701,15 +6709,14 @@ impl CPlayer {
         found
     }
 
-    /// Поздняя часть `CMoveShape::UpdateProperty` для типизированных
-    /// persistent-state владельцев. Поле usage `20_001` у undead/ex-state
+    /// Поле usage `20_001` у undead-state
     /// соответствует `tagProperty.wHit +0x24`, а не соседнему
     /// `wAtcSpeed +0x32`; signed/unsigned добавления сохраняют raw WORD bits.
-    fn apply_change_body_state_properties(
-        &mut self,
+    fn apply_undead_state_properties(
+        &self,
         mut properties: PlayerCombatProperties,
         coefficients: GlobePlayerPropertyCoefficients,
-        goods_factory: &CGoodsFactory,
+        state: &super::moveshape::UndeadState,
     ) -> PlayerCombatProperties {
         let occupation = usize::from(self.base_properties.occupation).min(2);
         let signed = |target: &mut u32, value: i64| {
@@ -6719,14 +6726,13 @@ impl CPlayer {
             let delta = ((*target as f64) * value as f64 * 0.01).round() as i64;
             *target = ((*target as i64) + delta).clamp(1, i32::MAX as i64) as u32;
         };
-        for state in self.move_shape.undead_states() {
-            let scalar = |current: u32, value: i64| -> i64 {
-                if state.percentage {
-                    ((current as f64) * value as f64 * 0.01).round() as i64
-                } else {
-                    value
-                }
-            };
+        let scalar = |current: u32, value: i64| -> i64 {
+            if state.percentage {
+                ((current as f64) * value as f64 * 0.01).round() as i64
+            } else {
+                value
+            }
+        };
             if state.percentage {
                 percent(&mut properties.maximum_hp, i64::from(state.maximum_hp));
                 percent(&mut properties.maximum_mp, i64::from(state.maximum_mp));
@@ -6820,46 +6826,64 @@ impl CPlayer {
                 .element_avoid
                 .wrapping_add(state.element_avoid as u16);
             properties.hit = properties.hit.wrapping_add(state.hit as u16);
-            properties.dodge = properties.dodge.wrapping_add(state.dodge as u16);
-        }
-        for state in self.move_shape.extended_states() {
-            let add = |target: &mut u32, value: u16| {
-                *target = (*target)
-                    .saturating_add(u32::from(value))
-                    .min(i32::MAX as u32);
-            };
-            add(&mut properties.maximum_hp, state.maximum_hp);
-            add(&mut properties.maximum_mp, state.maximum_mp);
-            add(&mut properties.minimum_attack, state.minimum_attack);
-            add(&mut properties.maximum_attack, state.maximum_attack);
-            add(&mut properties.defense, state.defense);
-            add(&mut properties.element_resistance, state.element_resistance);
-            properties.element_modify = properties
-                .element_modify
-                .wrapping_add(i32::from(state.element_modify));
-            properties.cch = properties.cch.wrapping_add(state.cch);
-            properties.full_miss = properties.full_miss.wrapping_add(state.full_miss);
-            properties.attack_avoid = properties.attack_avoid.wrapping_add(state.attack_avoid);
-            properties.element_avoid = properties.element_avoid.wrapping_add(state.element_avoid);
-            properties.hit = properties.hit.wrapping_add(state.hit);
-            properties.dodge = properties.dodge.wrapping_add(state.dodge);
-        }
-        if let Some(state) = self.move_shape.active_change_body_state() {
-            let add = |target: &mut u32, value: u32| {
-                *target = u32::min((*target).saturating_add(value), i32::MAX as u32);
-            };
-            add(&mut properties.maximum_hp, state.maximum_hp);
-            add(&mut properties.maximum_mp, state.maximum_mp);
-            add(&mut properties.minimum_attack, state.minimum_attack);
-            add(&mut properties.maximum_attack, state.maximum_attack);
-            add(&mut properties.defense, state.defense);
-            add(&mut properties.element_resistance, state.element_resistance);
-            properties.cch = properties.cch.wrapping_add(state.cch);
-            properties.blast_attack = properties.blast_attack.wrapping_add(state.blast_attack);
-            properties.blast_element_attack = properties
-                .blast_element_attack
-                .wrapping_add(state.blast_element_attack);
-        }
+        properties.dodge = properties.dodge.wrapping_add(state.dodge as u16);
+        properties
+    }
+
+    fn apply_extended_state_properties(
+        mut properties: PlayerCombatProperties,
+        state: &super::exstate::ExtendedState,
+    ) -> PlayerCombatProperties {
+        let add = |target: &mut u32, value: u16| {
+            *target = (*target)
+                .saturating_add(u32::from(value))
+                .min(i32::MAX as u32);
+        };
+        add(&mut properties.maximum_hp, state.maximum_hp);
+        add(&mut properties.maximum_mp, state.maximum_mp);
+        add(&mut properties.minimum_attack, state.minimum_attack);
+        add(&mut properties.maximum_attack, state.maximum_attack);
+        add(&mut properties.defense, state.defense);
+        add(&mut properties.element_resistance, state.element_resistance);
+        properties.element_modify = properties
+            .element_modify
+            .wrapping_add(i32::from(state.element_modify));
+        properties.cch = properties.cch.wrapping_add(state.cch);
+        properties.full_miss = properties.full_miss.wrapping_add(state.full_miss);
+        properties.attack_avoid = properties.attack_avoid.wrapping_add(state.attack_avoid);
+        properties.element_avoid = properties.element_avoid.wrapping_add(state.element_avoid);
+        properties.hit = properties.hit.wrapping_add(state.hit);
+        properties.dodge = properties.dodge.wrapping_add(state.dodge);
+        properties
+    }
+
+    fn apply_active_change_body_state_properties(
+        mut properties: PlayerCombatProperties,
+        state: &super::chbystate::ChangeBodyState,
+    ) -> PlayerCombatProperties {
+        let add = |target: &mut u32, value: u32| {
+            *target = u32::min((*target).saturating_add(value), i32::MAX as u32);
+        };
+        add(&mut properties.maximum_hp, state.maximum_hp);
+        add(&mut properties.maximum_mp, state.maximum_mp);
+        add(&mut properties.minimum_attack, state.minimum_attack);
+        add(&mut properties.maximum_attack, state.maximum_attack);
+        add(&mut properties.defense, state.defense);
+        add(&mut properties.element_resistance, state.element_resistance);
+        properties.cch = properties.cch.wrapping_add(state.cch);
+        properties.blast_attack = properties.blast_attack.wrapping_add(state.blast_attack);
+        properties.blast_element_attack = properties
+            .blast_element_attack
+            .wrapping_add(state.blast_element_attack);
+        properties
+    }
+
+    fn apply_ride_state_properties(
+        &mut self,
+        mut properties: PlayerCombatProperties,
+        coefficients: GlobePlayerPropertyCoefficients,
+        goods_factory: &CGoodsFactory,
+    ) -> PlayerCombatProperties {
         if let Some(goods) = self.ride_goods(goods_factory) {
             apply_equipment_goods_properties(
                 &mut properties,
@@ -6870,12 +6894,6 @@ impl CPlayer {
                 false,
                 None,
             );
-        }
-        if let Some(state) = self.move_shape.rage_break_state() {
-            properties.maximum_attack = state.apply_to_player_maximum_attack(properties.maximum_attack);
-        }
-        for state in self.move_shape.fury_states().iter().copied() {
-            properties.maximum_attack = state.apply_to_player_maximum_attack(properties.maximum_attack);
         }
         properties
     }

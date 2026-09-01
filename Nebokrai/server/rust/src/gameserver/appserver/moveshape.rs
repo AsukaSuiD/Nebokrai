@@ -11,7 +11,7 @@
 //! Сырой `ex_states` скрыт внутри `LegacyStateCodec` и служит только для
 //! сохранения точного порядка, неизвестных записей и обратного двоичного кодека;
 //! игровое поведение читает типизированные состояния. Пересчёт свойств игрока
-//! проецирует уже достигнутые skill-state в том же insertion-order, включая
+//! проецирует уже достигнутые property-state в том же insertion-order, включая
 //! повторные экземпляры одного ID. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
@@ -695,11 +695,11 @@ pub(crate) enum ReachedPropertyState {
     Roar(RoarState),
 }
 
-/// Типизированные skill-state, влияющие на `CPlayer::UpdateProperty`.
+/// Типизированные состояния, влияющие на `CPlayer::UpdateProperty`.
 /// Значения копируются из канонического хранилища в порядке соответствующих
 /// записей `m_vStates`; сырой payload остаётся только владельцем порядка.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlayerSkillPropertyState {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlayerPropertyState {
     PersistentAgility(PersistentAgilityFamilyState),
     Agility2(AgilityState2),
     TaiJi(TaiJiState),
@@ -717,6 +717,29 @@ pub(crate) enum PlayerSkillPropertyState {
     PoisonFog(PoisonFogState),
     GodBless(GodBlessState),
     Roar(RoarState),
+    Script(ScriptMoveState),
+    Undead(UndeadState),
+    Extended(ExtendedState),
+    ChangeBody(ChangeBodyState),
+    Ride(RideState),
+    RageBreak(RageBreakState),
+    Fury(FuryState),
+}
+
+fn next_ordered_cloned_state<T: Clone>(
+    states: &[T],
+    state_id: u32,
+    occurrences: &mut BTreeMap<u32, usize>,
+    id: impl Fn(&T) -> u32,
+) -> Option<T> {
+    let occurrence = occurrences.entry(state_id).or_default();
+    let state = states
+        .iter()
+        .filter(|state| id(state) == state_id)
+        .nth(*occurrence)?
+        .clone();
+    *occurrence = occurrence.wrapping_add(1);
+    Some(state)
 }
 
 fn next_ordered_state<T: Copy>(
@@ -3570,17 +3593,19 @@ impl CMoveShape {
         states.into_iter().map(|(_, state)| state).collect()
     }
 
-    /// Восстанавливает относительный порядок уже типизированных skill-state
+    /// Восстанавливает относительный порядок уже типизированных property-state
     /// по byte-exact записям исходного `m_vStates`. Повторные экземпляры одного
     /// ID выбираются последовательно, поэтому два одинаковых состояния не
     /// схлопываются в одно при пересчёте свойств.
-    pub(crate) fn ordered_player_skill_property_states(
-        &self,
-    ) -> Vec<PlayerSkillPropertyState> {
+    pub(crate) fn ordered_player_property_states(&self) -> Vec<PlayerPropertyState> {
         let mut ordered = Vec::new();
         let mut swordship_occurrences = BTreeMap::new();
         let mut wuxing_occurrences = BTreeMap::new();
         let mut battle_fairy_occurrences = BTreeMap::new();
+        let mut script_occurrences = BTreeMap::new();
+        let mut undead_occurrences = BTreeMap::new();
+        let mut extended_occurrences = BTreeMap::new();
+        let mut fury_occurrences = BTreeMap::new();
 
         for offset in known_state_record_offsets(&self.ex_states) {
             let Some(state_id) = read_u32(&self.ex_states, offset) else {
@@ -3589,46 +3614,46 @@ impl CMoveShape {
             let state = self
                 .persistent_agility_family_state
                 .filter(|state| state.skill_id() == state_id)
-                .map(PlayerSkillPropertyState::PersistentAgility)
+                .map(PlayerPropertyState::PersistentAgility)
                 .or_else(|| {
                     self.agility_state_2
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::Agility2)
+                        .map(PlayerPropertyState::Agility2)
                 })
                 .or_else(|| {
                     self.taiji_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::TaiJi)
+                        .map(PlayerPropertyState::TaiJi)
                 })
                 .or_else(|| {
                     self.enlarge_max_hp_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::EnlargeMaxHp)
+                        .map(PlayerPropertyState::EnlargeMaxHp)
                 })
                 .or_else(|| {
                     self.enlarge_max_mp_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::EnlargeMaxMp)
+                        .map(PlayerPropertyState::EnlargeMaxMp)
                 })
                 .or_else(|| {
                     self.enlarge_full_miss_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::EnlargeFullMiss)
+                        .map(PlayerPropertyState::EnlargeFullMiss)
                 })
                 .or_else(|| {
                     self.origin_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::Origin)
+                        .map(PlayerPropertyState::Origin)
                 })
                 .or_else(|| {
                     self.hearten_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::Hearten)
+                        .map(PlayerPropertyState::Hearten)
                 })
                 .or_else(|| {
                     self.callosity_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::Callosity)
+                        .map(PlayerPropertyState::Callosity)
                 })
                 .or_else(|| {
                     next_ordered_state(
@@ -3637,7 +3662,7 @@ impl CMoveShape {
                         &mut swordship_occurrences,
                         SwordshipState::skill_id,
                     )
-                    .map(PlayerSkillPropertyState::Swordship)
+                    .map(PlayerPropertyState::Swordship)
                 })
                 .or_else(|| {
                     next_ordered_state(
@@ -3646,7 +3671,7 @@ impl CMoveShape {
                         &mut wuxing_occurrences,
                         WuXingState::skill_id,
                     )
-                    .map(PlayerSkillPropertyState::WuXing)
+                    .map(PlayerPropertyState::WuXing)
                 })
                 .or_else(|| {
                     next_ordered_state(
@@ -3655,32 +3680,92 @@ impl CMoveShape {
                         &mut battle_fairy_occurrences,
                         BattleFairyAttributeState::skill_id,
                     )
-                    .map(PlayerSkillPropertyState::BattleFairyAttribute)
+                    .map(PlayerPropertyState::BattleFairyAttribute)
                 })
                 .or_else(|| {
                     self.tian_shen_xia_fan_state
                         .filter(|state| state.state_id() == state_id)
-                        .map(PlayerSkillPropertyState::TianShenXiaFan)
+                        .map(PlayerPropertyState::TianShenXiaFan)
                 })
                 .or_else(|| {
                     self.weak_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::Weak)
+                        .map(PlayerPropertyState::Weak)
                 })
                 .or_else(|| {
                     self.poison_fog_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::PoisonFog)
+                        .map(PlayerPropertyState::PoisonFog)
                 })
                 .or_else(|| {
                     self.god_bless_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::GodBless)
+                        .map(PlayerPropertyState::GodBless)
                 })
                 .or_else(|| {
                     self.roar_state
                         .filter(|state| state.skill_id() == state_id)
-                        .map(PlayerSkillPropertyState::Roar)
+                        .map(PlayerPropertyState::Roar)
+                })
+                .or_else(|| {
+                    next_ordered_state(
+                        &self.script_states,
+                        state_id,
+                        &mut script_occurrences,
+                        |state| state.state_id() as u32,
+                    )
+                    .map(PlayerPropertyState::Script)
+                })
+                .or_else(|| {
+                    next_ordered_cloned_state(
+                        &self.undead_states,
+                        state_id,
+                        &mut undead_occurrences,
+                        |_| UNDEAD_STATE_ID,
+                    )
+                    .map(PlayerPropertyState::Undead)
+                })
+                .or_else(|| {
+                    next_ordered_cloned_state(
+                        &self.extended_states,
+                        state_id,
+                        &mut extended_occurrences,
+                        |state| state.kind.state_id(),
+                    )
+                    .map(PlayerPropertyState::Extended)
+                })
+                .or_else(|| {
+                    self.active_change_body_state()
+                        .filter(|state| {
+                            state.serialized_span().map(|(state_offset, _)| state_offset)
+                                == Some(offset)
+                        })
+                        .cloned()
+                        .map(PlayerPropertyState::ChangeBody)
+                })
+                .or_else(|| {
+                    self.ride_state
+                        .as_ref()
+                        .filter(|state| {
+                            state.serialized_span().map(|(state_offset, _)| state_offset)
+                                == Some(offset)
+                        })
+                        .cloned()
+                        .map(PlayerPropertyState::Ride)
+                })
+                .or_else(|| {
+                    self.rage_break_state
+                        .filter(|state| state.skill_id() == state_id)
+                        .map(PlayerPropertyState::RageBreak)
+                })
+                .or_else(|| {
+                    next_ordered_state(
+                        &self.fury_states,
+                        state_id,
+                        &mut fury_occurrences,
+                        FuryState::skill_id,
+                    )
+                    .map(PlayerPropertyState::Fury)
                 });
             if let Some(state) = state {
                 ordered.push(state);
