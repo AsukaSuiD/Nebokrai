@@ -471,6 +471,28 @@ impl CServerGodsBattleRegion {
             .position(|npcs| npcs.contains(&npc_id))
     }
 
+    /// Exact `CServerGodsBattleRegion::GetObjFaction`: player faction 5/6
+    /// преобразуется в raw `1/2`, NPC возвращает индекс одного из трёх sets,
+    /// а неизвестный type/object — `-1` (`INVALID_FACTION`).
+    pub(crate) fn get_obj_faction(
+        &self,
+        object_type: i32,
+        object_id: i32,
+        player_faction: impl FnOnce(i32) -> Option<i32>,
+    ) -> i32 {
+        match object_type {
+            400 => match player_faction(object_id) {
+                Some(5) => 1,
+                Some(6) => 2,
+                _ => -1,
+            },
+            500 => self
+                .npc_faction_index(object_id)
+                .map_or(-1, |index| index as i32),
+            _ => -1,
+        }
+    }
+
     pub(crate) fn remove_faction_npc(&mut self, npc_id: i32) -> bool {
         self.faction_npcs
             .iter_mut()
@@ -758,7 +780,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::GetObjFaction
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:312

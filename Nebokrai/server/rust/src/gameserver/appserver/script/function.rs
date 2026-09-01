@@ -1245,13 +1245,13 @@ enum GodsBattleScriptDisposition {
     },
     NpcFaction {
         npc_id: Option<i32>,
-        raw_index: Option<usize>,
+        raw_faction: Option<i32>,
         value: i32,
     },
     NpcPlayerFactionCompared {
         player_id: Option<i32>,
         npc_id: Option<i32>,
-        raw_index: Option<usize>,
+        raw_faction: Option<i32>,
         value: i32,
     },
     TopTenRequested {
@@ -1340,14 +1340,15 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
             )
         }
         GodsBattleScriptKind::NpcFaction => {
-            let raw_index = script_region_id
+            let raw_faction = script_region_id
                 .and_then(|region_id| game.find_region(region_id))
                 .and_then(|region| match region {
-                    ServerRegionOwner::GodsBattle(region) => script_npc_id
-                        .and_then(|npc_id| region.npc_faction_index(npc_id)),
+                    ServerRegionOwner::GodsBattle(region) => script_npc_id.map(|npc_id| {
+                        region.get_obj_faction(500, npc_id, |_| None)
+                    }),
                     _ => None,
                 });
-            let value = match raw_index {
+            let value = match raw_faction {
                 Some(0) => 7,
                 Some(1) => 5,
                 Some(2) => 6,
@@ -1357,33 +1358,34 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
                 value,
                 GodsBattleScriptDisposition::NpcFaction {
                     npc_id: script_npc_id,
-                    raw_index,
+                    raw_faction,
                     value,
                 },
             )
         }
         GodsBattleScriptKind::NpcPlayerFaction => {
-            let raw_index = script_region_id
+            let raw_faction = script_region_id
                 .and_then(|region_id| game.find_region(region_id))
                 .and_then(|region| match region {
-                    ServerRegionOwner::GodsBattle(region) => script_npc_id
-                        .and_then(|npc_id| region.npc_faction_index(npc_id)),
+                    ServerRegionOwner::GodsBattle(region) => script_npc_id.map(|npc_id| {
+                        region.get_obj_faction(500, npc_id, |_| None)
+                    }),
                     _ => None,
                 });
             let player_faction = script_player_id
                 .and_then(|player_id| game.find_player(player_id))
                 .map(CPlayer::gods_battle_faction);
             let value = i32::from(
-                raw_index
+                raw_faction
                     .zip(player_faction)
-                    .is_some_and(|(raw_index, player_faction)| raw_index as i32 == player_faction),
+                    .is_some_and(|(raw_faction, player_faction)| raw_faction == player_faction),
             );
             handled(
                 value,
                 GodsBattleScriptDisposition::NpcPlayerFactionCompared {
                     player_id: script_player_id,
                     npc_id: script_npc_id,
-                    raw_index,
+                    raw_faction,
                     value,
                 },
             )
