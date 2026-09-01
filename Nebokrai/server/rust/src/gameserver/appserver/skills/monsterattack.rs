@@ -338,21 +338,22 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     deaths: &mut Vec<MonsterAttackDeath>,
 ) {
     let (damage, mana_damage) = CGame::applied_attack_damage(&attack, target_health, target_mana);
-    if attack.full_miss != 0 {
-        let mut missed = CMessage::new(0x000b_f612);
-        missed.add_byte(attack.full_miss);
-        missed.add_long(target.object_type);
-        missed.add_long(target.id);
-        let _ = game.send_game_shape_around(region, target_shape, None, &missed);
-        return;
-    }
     if damage == 0 && mana_damage == 0 {
+        if attack.full_miss != 0 {
+            let mut missed = CMessage::new(0x000b_f612);
+            missed.add_byte(attack.full_miss);
+            missed.add_long(target.object_type);
+            missed.add_long(target.id);
+            let _ = game.send_game_shape_around(region, target_shape, None, &missed);
+        }
         return;
     }
     let current_health = target_health - damage;
     let lord_hurt_plan = target_monster_property
         .as_ref()
-        .filter(|property| property.ai == 100 && current_health != 0)
+        .filter(|property| {
+            property.ai == 100 && current_health != 0 && attack.full_miss == 0
+        })
         .map(|property| plan_lord_hurt_response_in_region(game, region, target.id, property));
     let (attacker_is_tamed, passive_attacker_is_owned_creature) = region
         .find_monster_by_id(monster_id)
@@ -369,16 +370,20 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(target.id) {
             player.set_health(current_health);
             player.set_mana(target_mana - mana_damage);
-            player
-                .movement_shape_mut()
-                .set_action(if current_health == 0 { 6 } else { 5 });
+            if current_health == 0 || attack.full_miss == 0 {
+                player
+                    .movement_shape_mut()
+                    .set_action(if current_health == 0 { 6 } else { 5 });
+            }
         }
     } else if let Some(monster) = region.find_monster_by_id_mut(target.id) {
         monster.set_hit_points(current_health);
-        monster
-            .move_shape_mut()
-            .shape_mut()
-            .set_action(if current_health == 0 { 6 } else { 5 });
+        if current_health == 0 || attack.full_miss == 0 {
+            monster
+                .move_shape_mut()
+                .shape_mut()
+                .set_action(if current_health == 0 { 6 } else { 5 });
+        }
         if current_health == 0 {
             monster.when_been_killed(now_ms);
             monster.set_killed_by(MonsterKillingAttack {
@@ -389,7 +394,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 critical: attack.critical,
                 blast_attack: attack.blast_attack,
             });
-        } else {
+        } else if attack.full_miss == 0 {
             let attacker = ShapeIdentity {
                 object_type: MONSTER_TYPE,
                 id: monster_id,
@@ -445,7 +450,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 monster.when_been_hurted_by(attacker, attacker_is_tamed, now_ms);
             }
         }
-        if !target_tamed
+        if attack.full_miss == 0
+            && !target_tamed
             && !target_carriage
             && attacker_master.master_type == PLAYER_TYPE
             && attacker_master.master_id != 0
@@ -458,7 +464,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             );
         }
     }
-    if current_health != 0
+    if attack.full_miss == 0
+        && current_health != 0
         && !target_tamed
         && target_monster_property
             .as_ref()
@@ -466,7 +473,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     {
         apply_monster_hurt_response(game, region, target.id, monster_id, now_ms);
     }
-    if current_health != 0
+    if attack.full_miss == 0
+        && current_health != 0
         && !target_tamed
         && target_monster_property
             .as_ref()
@@ -475,7 +483,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     {
         retarget_village_bow_guard_after_hurt(game, region, target.id, property, now_ms);
     }
-    if current_health != 0
+    if attack.full_miss == 0
+        && current_health != 0
         && !target_tamed
         && target_monster_property
             .as_ref()
@@ -484,7 +493,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     {
         retarget_city_bow_guard_after_hurt(game, region, target.id, property, now_ms);
     }
-    if current_health != 0
+    if attack.full_miss == 0
+        && current_health != 0
         && !target_tamed
         && target_monster_property
             .as_ref()
@@ -502,7 +512,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             now_ms,
         );
     }
-    if current_health != 0
+    if attack.full_miss == 0
+        && current_health != 0
         && !target_tamed
         && let (Some(property), Some(plan)) =
             (target_monster_property.as_ref(), lord_hurt_plan)
@@ -522,7 +533,8 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             plan,
         );
     }
-    if current_health != 0
+    if attack.full_miss == 0
+        && current_health != 0
         && !target_tamed
         && target_monster_property
             .as_ref()
@@ -531,7 +543,7 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
     {
         retarget_special_guard_after_hurt(game, region, target.id, property);
     }
-    if current_health != 0 {
+    if attack.full_miss == 0 && current_health != 0 {
         let _ = finish_blind_states_on_defense(game, region, target, now_ms);
     }
     if current_health == 0 {
@@ -552,6 +564,12 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 attacker_faction_id: 0,
             }));
         }
+    } else if attack.full_miss != 0 {
+        let mut missed = CMessage::new(0x000b_f612);
+        missed.add_byte(attack.full_miss);
+        missed.add_long(target.object_type);
+        missed.add_long(target.id);
+        let _ = game.send_game_shape_around(region, target_shape, None, &missed);
     } else {
         let mut hurt = CMessage::new(0x000b_f60a);
         hurt.add_long(MONSTER_TYPE);

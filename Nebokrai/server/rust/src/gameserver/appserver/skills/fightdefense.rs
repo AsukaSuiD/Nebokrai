@@ -3,7 +3,9 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/fightdefense.cpp`. Сохранены проверки попадания и полного
 //! промаха, физический, стихийный и духовный урон, критические и усиленные
-//! удары, уклонение и коэффициент PvP. Для монстров сохраняются отдельные
+//! удары, уклонение и коэффициент PvP. Полный промах обнуляет только physical,
+//! element и soul: poison остаётся для последующего `ApplyFinalDamage`. Для
+//! монстров сохраняются отдельные
 //! ограничения попадания, защита и сопротивления без коэффициента PvP.
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
 //! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
@@ -34,6 +36,18 @@ fn avoid_damage(damage: i32, avoid: u16) -> i32 {
     } else {
         damage
     }
+}
+
+fn clear_miss_sensitive_damage(attack: &mut AttackInformation) {
+    for power in &mut attack.damages {
+        if matches!(
+            power.kind,
+            AttackPowerType::Physical | AttackPowerType::Element | AttackPowerType::Soul
+        ) {
+            power.hp_damage = 0;
+        }
+    }
+    attack.damage_modifier = 0;
 }
 
 fn apply_monster_promotion(
@@ -85,10 +99,7 @@ pub(crate) fn defend_monster_base_attack(
         .wrapping_add(attack.hit_modifier)
         .clamp(minimum_hit, maximum_hit);
     if hit <= random(100) {
-        for power in &mut attack.damages {
-            power.hp_damage = 0;
-        }
-        attack.damage_modifier = 0;
+        clear_miss_sensitive_damage(attack);
         attack.full_miss = 2;
         return;
     }
@@ -199,10 +210,7 @@ pub(crate) fn defend_build_base_attack(
         .wrapping_add(attack.hit_modifier)
         .clamp(minimum_hit, maximum_hit);
     if hit <= random(100) {
-        for power in &mut attack.damages {
-            power.hp_damage = 0;
-        }
-        attack.damage_modifier = 0;
+        clear_miss_sensitive_damage(attack);
         attack.full_miss = 2;
         return;
     }
@@ -316,10 +324,7 @@ pub(crate) fn defend_player_base_attack(
         random(100) < chance
     };
     if hit <= random(100) || full_miss {
-        for power in &mut attack.damages {
-            power.hp_damage = 0;
-        }
-        attack.damage_modifier = 0;
+        clear_miss_sensitive_damage(attack);
         attack.full_miss = if full_miss { 1 } else { 2 };
         return;
     }
@@ -435,10 +440,7 @@ pub(crate) fn defend_player_from_monster_base_attack(
         .clamp(minimum_hit, maximum_hit);
     let full_miss = target.full_miss != 0 && random(100) < i32::from(target.full_miss);
     if hit <= random(100) || full_miss {
-        for power in &mut attack.damages {
-            power.hp_damage = 0;
-        }
-        attack.damage_modifier = 0;
+        clear_miss_sensitive_damage(attack);
         attack.full_miss = if full_miss { 1 } else { 2 };
         return;
     }
@@ -495,10 +497,7 @@ pub(crate) fn defend_monster_from_monster_base_attack(
         .wrapping_add(attack.hit_modifier)
         .clamp(minimum_hit, maximum_hit);
     if hit <= random(100) {
-        for power in &mut attack.damages {
-            power.hp_damage = 0;
-        }
-        attack.damage_modifier = 0;
+        clear_miss_sensitive_damage(attack);
         attack.full_miss = 2;
         return;
     }

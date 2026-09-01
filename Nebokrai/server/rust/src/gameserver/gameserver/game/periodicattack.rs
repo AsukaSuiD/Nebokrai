@@ -286,26 +286,27 @@ impl CGame {
         }
         let (damage, mana_damage) =
             Self::applied_attack_damage(&attack, target_health, target_mana);
-        if attack.full_miss != 0 {
-            let mut missed = CMessage::new(0x000b_f612);
-            missed.add_byte(attack.full_miss);
-            missed.add_long(PLAYER_TYPE);
-            missed.add_long(target_id);
-            let _ = self.send_player_shape_around(target_id, None, &missed);
-            return;
-        }
         if damage == 0 && mana_damage == 0 {
+            if attack.full_miss != 0 {
+                let mut missed = CMessage::new(0x000b_f612);
+                missed.add_byte(attack.full_miss);
+                missed.add_long(PLAYER_TYPE);
+                missed.add_long(target_id);
+                let _ = self.send_player_shape_around(target_id, None, &missed);
+            }
             return;
         }
         let current_health = target_health - damage;
         if let Some(target) = self.find_player_mut(target_id) {
             target.set_health(current_health);
             target.set_mana(target_mana - mana_damage);
-            target
-                .movement_shape_mut()
-                .set_action(if current_health == 0 { 6 } else { 5 });
+            if current_health == 0 || attack.full_miss == 0 {
+                target
+                    .movement_shape_mut()
+                    .set_action(if current_health == 0 { 6 } else { 5 });
+            }
         }
-        if current_health != 0 {
+        if current_health != 0 && attack.full_miss == 0 {
             let _ = super::finish_player_blind_states_on_defense(self, target_id, 0);
         }
         if current_health == 0 {
@@ -327,6 +328,12 @@ impl CGame {
                 },
                 runtime,
             );
+        } else if attack.full_miss != 0 {
+            let mut missed = CMessage::new(0x000b_f612);
+            missed.add_byte(attack.full_miss);
+            missed.add_long(PLAYER_TYPE);
+            missed.add_long(target_id);
+            let _ = self.send_player_shape_around(target_id, None, &missed);
         } else {
             let mut hurt = CMessage::new(0x000b_f60a);
             hurt.add_long(master.master_type);
@@ -526,7 +533,7 @@ impl CGame {
         if let Some(mut owner) = self.take_region_owner(region_id) {
             if let Some(monster) = owner.base_mut().find_monster_by_id_mut(target_id) {
                 monster.set_hit_points(current_health);
-                if attack.full_miss == 0 && damage != 0 {
+                if damage != 0 && (attack.full_miss == 0 || current_health == 0) {
                     monster
                         .move_shape_mut()
                         .shape_mut()
@@ -686,7 +693,7 @@ impl CGame {
             }
             self.restore_region_owner(owner);
         }
-        if attack.full_miss != 0 {
+        if attack.full_miss != 0 && current_health != 0 {
             let mut missed = CMessage::new(0x000b_f612);
             missed.add_byte(attack.full_miss);
             missed.add_long(MONSTER_TYPE);
