@@ -6,21 +6,9 @@
 //! flight-time на клетку, level-ограничение и точный пакет `0xBFE01`.
 //! После полёта владелец проверяет `Cure`, вычисляет wrapping-длительность и
 //! атомарно заменяет канонический `SpiderWebState`. `CGame` только разрешает
-//! независимых владельцев, выполняет dispatch и доставку. Координатный overload
-//! пока не достигнут: его сохранённое RAW-тело не доказывает объектную цель.
-
-// ============================================================================
-// FUNCTION: CSpiderWeb::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\spiderweb.cpp:111
-// RVA: 0x0013F940
-// ADDRESS: 0053f940
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1, long param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+//! независимых владельцев, выполняет dispatch и доставку. Координатный
+//! overload по точному EXE использует общий `CState::GetSufferer`: выбирает
+//! первый `CMoveShape` клетки и затем проходит тот же объектный pipeline.
 //
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
@@ -215,16 +203,32 @@ fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutc
 pub(crate) const fn is_player_spider_web_dispatch(dispatch: PlayerSkillDispatch) -> bool {
     matches!(
         dispatch,
-        PlayerSkillDispatch::Object {
-            skill_id: SPIDER_WEB_SKILL_ID,
-            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
-        }
+        PlayerSkillDispatch::Point { skill_id: SPIDER_WEB_SKILL_ID, .. }
+            | PlayerSkillDispatch::Object {
+                skill_id: SPIDER_WEB_SKILL_ID,
+                target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+            }
     )
 }
 
-fn player_target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
+fn player_target(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
     match dispatch {
         PlayerSkillDispatch::Object { target, .. } => Some(target),
+        PlayerSkillDispatch::Point { skill_id, x, y } if skill_id == SPIDER_WEB_SKILL_ID => {
+            if x == 0 && y == 0 {
+                return None;
+            }
+            let region = game.find_region(region_id)?.base();
+            let (area_width, area_height) = game.area_dimensions();
+            let mut shapes = Vec::new();
+            region
+                .get_shapes(x, y, area_width, area_height, game, &mut shapes)
+                .ok()?;
+            shapes
+                .into_iter()
+                .map(|shape| shape.identity)
+                .find(|identity| matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE))
+        }
         _ => None,
     }
 }
@@ -330,9 +334,6 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
     if !is_player_spider_web_dispatch(dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-    let Some(target) = player_target(dispatch) else {
-        return reject_player_begin(game, player_id, None);
-    };
     let Some((region_id, source_x, source_y, source_level, skill_level)) = game
         .find_player(player_id)
         .and_then(|player| {
@@ -346,6 +347,9 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         })
     else {
         return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
+    let Some(target) = player_target(game, region_id, dispatch) else {
+        return reject_player_begin(game, player_id, None);
     };
     let Some(properties) = game.skill_base_properties(SPIDER_WEB_SKILL_ID, skill_level).cloned() else {
         if player_ai.spider_web().is_some() {
