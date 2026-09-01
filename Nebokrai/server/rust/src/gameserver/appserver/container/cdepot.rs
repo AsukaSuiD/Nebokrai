@@ -12,14 +12,17 @@
 //! Достигнутый `0x90301` move/stack caller сохраняет запрет извлечения anchor,
 //! kind-1 activation, GoodsAI/listener effects и rollback. Hand-owned
 //! `OT_SWITCH_OBJECT` проходит через depot guard и общий volume swap. Persisted
-//! restore временно снимает lock только для внутреннего positional decode и
-//! возвращает его при любом результате; вне-клиентский extension-remove
+//! restore очищает исходные 96 ячеек, при `bToAdd` расширяет их на 65,
+//! размечает extension-anchor и загружает goods через depot-specific Add;
+//! lock возвращается при любом результате. Вне-клиентский extension-remove
 //! callback остаётся RAW.
 
-use super::camountlimitgoodscontainer::{AmountLimitGoodsCleared, AmountLimitGoodsRelease};
+use super::camountlimitgoodscontainer::{
+    AmountLimitGoodsCleared, AmountLimitGoodsCodecError, AmountLimitGoodsRelease,
+};
 use super::cvolumelimitgoodscontainer::{
     CVolumeLimitGoodsContainer, VolumeExpandOutcome, VolumeGoodsAddBlock, VolumeGoodsAddOutcome,
-    VolumeGoodsCodecError, VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome,
+    VolumeGoodsCodecError, VolumeGoodsRemoveOutcome, VolumeGoodsSwapOutcome, read_volume_wire_u32,
 };
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::{
@@ -478,6 +481,7 @@ impl CDepot {
         source: &[u8],
         cursor: &mut usize,
         factory: &CGoodsFactory,
+        expansion_enabled: bool,
         ordinary_threshold: OrdinaryThreshold,
         battle_threshold: BattleThreshold,
     ) -> Result<(), VolumeGoodsCodecError>
@@ -485,14 +489,36 @@ impl CDepot {
         OrdinaryThreshold: FnMut(u32, u32) -> u32,
         BattleThreshold: FnMut(u32, u32) -> u32,
     {
+        let mut ordinary_threshold = ordinary_threshold;
+        let mut battle_threshold = battle_threshold;
+        self.locked = true;
+        let _cleared = self.base.clear_goods();
+        if expansion_enabled {
+            let _legacy_ignored = self.expand(0x41, true);
+        }
         self.locked = false;
-        let result = self.base.unserialize(
-            source,
-            cursor,
-            factory,
-            ordinary_threshold,
-            battle_threshold,
-        );
+        let result = (|| {
+            let count = read_volume_wire_u32(source, cursor, "depot goods count")?;
+            for _ in 0..count {
+                let position =
+                    read_volume_wire_u32(source, cursor, "depot goods position")?;
+                let mut goods = CGoods::default();
+                goods
+                    .unserialize(
+                        source,
+                        cursor,
+                        true,
+                        factory,
+                        &mut ordinary_threshold,
+                        &mut battle_threshold,
+                    )
+                    .map_err(AmountLimitGoodsCodecError::Goods)?;
+                let mut incoming = Some(goods);
+                let _legacy_ignored =
+                    self.add_goods_at(position, &mut incoming, factory, true);
+            }
+            Ok(())
+        })();
         self.locked = true;
         result
     }

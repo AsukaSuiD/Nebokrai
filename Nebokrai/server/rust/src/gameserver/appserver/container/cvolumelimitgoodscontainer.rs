@@ -716,7 +716,7 @@ impl CVolumeLimitGoodsContainer {
     }
 }
 
-fn read_volume_wire_u32(
+pub(super) fn read_volume_wire_u32(
     source: &[u8],
     cursor: &mut usize,
     field: &'static str,

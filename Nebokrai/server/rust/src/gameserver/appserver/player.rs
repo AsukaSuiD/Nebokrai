@@ -2168,6 +2168,8 @@ impl CPlayer {
         let _empty_release = auction_goods.set_container_volume(0x12);
         let mut auction_listing = CVolumeLimitGoodsContainer::new();
         let _empty_release = auction_listing.set_container_volume(2);
+        let mut depot = CDepot::new();
+        let _empty_release = depot.base_mut().set_container_dimensions(8, 12);
         let mut player = Self {
             move_shape,
             player_ai: CPlayerAI::default(),
@@ -2282,7 +2284,7 @@ impl CPlayer {
             last_container_script: Vec::new(),
             variable_list: CVariableList::default(),
             bank: CBank::new(),
-            depot: CDepot::new(),
+            depot,
             hand: CAmountLimitGoodsContainer::new(),
             enhancement,
             last_operated_container: 0,
@@ -2540,11 +2542,11 @@ impl CPlayer {
             &mut *ordinary_threshold,
             &mut *battle_threshold,
         )?;
-        let _released = player.depot.base_mut().set_container_volume(0xa1);
         player.depot.unserialize(
             source,
             cursor,
             goods_factory,
+            pack_add_enabled,
             &mut *ordinary_threshold,
             &mut *battle_threshold,
         )?;
