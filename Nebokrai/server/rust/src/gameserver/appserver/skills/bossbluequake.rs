@@ -8,7 +8,9 @@
 //! `BossBlueQuakeState` и `ForceMove`. `Attack` и `AI` не изнашивают оружие на
 //! отдельных целях: унаследованный `AfterUseSkill` делает это один раз при
 //! успешном `End`. Для источника-игрока длительность состояния уменьшается на
-//! `reank` источника с насыщением до нуля.
+//! `reank` источника с насыщением до нуля. Критический множитель исходного
+//! `CalculateAttackPower` усекается к нулю отдельно для физического,
+//! элементального и духовного компонентов.
 //! Путь монстра сохраняет собственную формулу и тот же порядок состояния и `ForceMove`;
 //! `CGame` только координирует временное владение регионом и доставку.
 
@@ -287,7 +289,7 @@ fn calculate_player_attack(
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32;
+            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
         }
     }
     Some((master, attack))
