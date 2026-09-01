@@ -707,6 +707,7 @@ use crate::gameserver::appserver::ai::carriage::{
     CARRIAGE_FOLLOWING, CARRIAGE_STAYING, CarriageMasterFacts, CarriageMovementPlan,
     plan_carriage_movement,
 };
+use crate::gameserver::appserver::ai::monsterai::find_slip_step;
 use crate::gameserver::appserver::ai::pet::{
     PetLifecycleFacts, PetLifecycleNotice, PetMasterRef, execute_owned_pet_active_search,
     execute_owned_pet_follow, pet_master_ref,
@@ -38677,6 +38678,7 @@ impl CGame {
                     .find_monster_property_by_origin_name(monster.base_property_key()?)?
                     .clone();
                 monster.is_carriage(&property).then(|| {
+                    let stop_frame = monster.stop_frame(&property);
                     (
                         property,
                         monster.move_shape().shape().clone(),
@@ -38684,20 +38686,51 @@ impl CGame {
                         monster.move_shape().is_moveable(),
                         monster.master_info(),
                         monster.carriage_action(),
+                        monster.move_shape().shape().get_speed(),
+                        stop_frame,
                     )
                 })
             });
-        let Some((property, carriage_shape, health, moveable, master, action)) = snapshot else {
+        let Some((
+            property,
+            carriage_shape,
+            health,
+            moveable,
+            master,
+            action,
+            speed,
+            stop_frame,
+        )) = snapshot else {
             self.restore_region_owner(owner);
             return false;
         };
         let now_ms = runtime.now_milliseconds();
+        // `CCarriage::OnSchedule` проверяет virtual `CShape::GetState`
+        // (vtable slot `+0x74`), а не собственный follow/stay action: смерть
+        // удаляет повозку только вне боевого shape-state `1`.
+        let mut vanish_reason =
+            (CMoveShape::is_died(health) && carriage_shape.get_state() != 1).then_some(3);
+        let mut vanish = vanish_reason.is_some();
+        if !vanish
+            && !owner
+                .base_mut()
+                .find_monster_by_id_mut(monster_id)
+                .is_some_and(|monster| monster.advance_carriage_schedule(now_ms))
+        {
+            self.restore_region_owner(owner);
+            return true;
+        }
         let master_ref = pet_master_ref(master);
         let master_snapshot = match master_ref {
             Some(PetMasterRef::Player(player_id)) => self
                 .find_player(player_id)
-                .filter(|player| player.server_region_id() == Some(region_id))
-                .map(|player| (player.shape().clone(), Some(player.active_carriage_id()))),
+                .map(|player| {
+                    (
+                        player.shape().clone(),
+                        Some(player.active_carriage_id()),
+                        player.server_region_id() == Some(region_id),
+                    )
+                }),
             Some(PetMasterRef::Region(identity)) => {
                 let shape = match identity.object_type {
                     MONSTER_TYPE => owner
@@ -38710,53 +38743,71 @@ impl CGame {
                         .map(|npc| npc.move_shape().shape().clone()),
                     _ => None,
                 };
-                shape.map(|shape| (shape, None))
+                shape.map(|shape| (shape, None, true))
             }
             None => None,
         };
-        let master_present = master_snapshot.is_some();
+        let master_present = master_snapshot
+            .as_ref()
+            .is_some_and(|(_, _, same_region)| *same_region);
         let mut master_owns = master_snapshot
             .as_ref()
-            .is_some_and(|(_, carriage_id)| *carriage_id == Some(monster_id));
+            .is_some_and(|(_, carriage_id, _)| *carriage_id == Some(monster_id));
         let master_owns_other = master_snapshot
             .as_ref()
-            .is_some_and(|(_, carriage_id)| {
+            .is_some_and(|(_, carriage_id, _)| {
                 carriage_id.is_some_and(|carriage_id| carriage_id != 0 && carriage_id != monster_id)
             });
-
-        // `CCarriage::OnSchedule` проверяет virtual `CShape::GetState`
-        // (vtable slot `+0x74`), а не собственный follow/stay action: смерть
-        // удаляет повозку только вне боевого shape-state `1`.
-        let mut vanish_reason =
-            (CMoveShape::is_died(health) && carriage_shape.get_state() != 1).then_some(3);
-        let mut vanish = vanish_reason.is_some();
         if !vanish {
             let movement = plan_carriage_movement(
                 action,
                 moveable,
                 &carriage_shape,
-                master_snapshot.as_ref().map(|(shape, _)| shape),
+                master_snapshot.as_ref().map(|(shape, _, _)| shape),
+                master_snapshot
+                    .as_ref()
+                    .is_some_and(|(_, _, same_region)| *same_region),
+                master_snapshot
+                    .as_ref()
+                    .and_then(|(_, carriage_id, _)| *carriage_id)
+                    .is_some_and(|carriage_id| carriage_id != 0),
                 self.globe_setup.carriage_stop_distance() as i32,
             );
             match movement {
                 CarriageMovementPlan::None => {}
                 CarriageMovementPlan::Move { x, y } => {
-                    if let Some(around) = GameServerAroundRuntime::new(
+                    let origin = ShapeAreaCoordinates {
+                        x: carriage_shape.get_tile_x().unwrap_or_default(),
+                        y: carriage_shape.get_tile_y().unwrap_or_default(),
+                    };
+                    if let Some((direction, destination)) = find_slip_step(
                         self,
-                        &self.session_factory,
-                        self.area_width,
-                        self.area_height,
-                    ) {
-                        let _ = owner.base_mut().move_owned_monster(
-                            monster_id,
-                            x,
-                            y,
-                            0,
-                            CMonster::figure(&property),
-                            self.area_width,
-                            self.area_height,
-                            &around,
+                        owner.base(),
+                        origin,
+                        ShapeAreaCoordinates { x, y },
+                        CMonster::figure(&property),
+                    ) && self.move_owned_monster_step(
+                        owner.base_mut(),
+                        monster_id,
+                        destination.x,
+                        destination.y,
+                        CMonster::figure(&property),
+                    ) && let Some(carriage) =
+                        owner.base_mut().find_monster_by_id_mut(monster_id)
+                    {
+                        carriage.block_carriage_schedule(
+                            now_ms,
+                            crate::gameserver::appserver::ai::baseai::one_step_move_delay_ms(
+                                direction,
+                                speed,
+                                stop_frame,
+                            ),
                         );
+                    }
+                }
+                CarriageMovementPlan::Stand => {
+                    if let Some(carriage) = owner.base_mut().find_monster_by_id_mut(monster_id) {
+                        carriage.block_carriage_schedule(now_ms, 1_000);
                     }
                 }
                 CarriageMovementPlan::Wait => {
@@ -38788,7 +38839,8 @@ impl CGame {
             }
         }
 
-        let master_close = master_snapshot.as_ref().is_some_and(|(master_shape, _)| {
+        let master_close = master_snapshot.as_ref().is_some_and(|(master_shape, _, same_region)| {
+            *same_region &&
             carriage_shape
                 .get_tile_x()
                 .ok()

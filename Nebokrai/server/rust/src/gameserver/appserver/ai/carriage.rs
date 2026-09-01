@@ -2,7 +2,10 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/ai/carriage.cpp`. Контроллер хранит действие, секундную проверку
-//! хозяина, выход хозяина, повторную привязку и таймер исчезновения. `CGame`
+//! хозяина, выход хозяина, повторную привязку, таймер исчезновения и отдельную
+//! active-задержку `Move/Stand`. `FindPositionForCarriage` требует ненулевую
+//! активную повозку хозяина и задаёт цель ровно в двух клетках сзади; фактический
+//! `CBaseAI::MoveTo` выполняет к ней один figure-aware `Slip`-шаг. `CGame`
 //! оставляет пространственное перемещение, привязку игрока, журналирование,
 //! пакеты и фактическое удаление.
 //!
@@ -22,6 +25,9 @@ pub(crate) struct CarriageLifecycleState {
     invalid_master_ms: u32,
     seek_master_ms: u32,
     master_logout: bool,
+    schedule_started_ms: u32,
+    schedule_delay_ms: u32,
+    schedule_pending: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -44,6 +50,7 @@ pub(crate) struct CarriageMasterOutcome {
 pub(crate) enum CarriageMovementPlan {
     None,
     Move { x: i32, y: i32 },
+    Stand,
     Wait,
     Follow,
 }
@@ -53,6 +60,8 @@ pub(crate) fn plan_carriage_movement(
     moveable: bool,
     carriage: &CShape,
     master: Option<&CShape>,
+    master_in_same_region: bool,
+    master_has_carriage: bool,
     stop_distance: i32,
 ) -> CarriageMovementPlan {
     if !moveable {
@@ -70,13 +79,16 @@ pub(crate) fn plan_carriage_movement(
         return CarriageMovementPlan::None;
     };
     if action == CARRIAGE_FOLLOWING {
+        if !master_in_same_region {
+            return CarriageMovementPlan::Stand;
+        }
+        let distance = real_distance(carriage_x, carriage_y, master_x, master_y);
+        if distance <= 2 || !master_has_carriage {
+            return CarriageMovementPlan::Stand;
+        }
         let Ok(rear) = master.get_rear_direction() else {
             return CarriageMovementPlan::None;
         };
-        let distance = real_distance(carriage_x, carriage_y, master_x, master_y);
-        if distance <= 2 {
-            return CarriageMovementPlan::None;
-        }
         if distance > stop_distance {
             return CarriageMovementPlan::Wait;
         }
@@ -91,7 +103,7 @@ pub(crate) fn plan_carriage_movement(
             return CarriageMovementPlan::None;
         };
         if (carriage_x, carriage_y) == (destination.x, destination.y) {
-            CarriageMovementPlan::None
+            CarriageMovementPlan::Stand
         } else {
             CarriageMovementPlan::Move {
                 x: destination.x,
@@ -99,9 +111,12 @@ pub(crate) fn plan_carriage_movement(
             }
         }
     } else if action == CARRIAGE_STAYING
+        && master_in_same_region
         && real_distance(carriage_x, carriage_y, master_x, master_y) <= stop_distance
     {
         CarriageMovementPlan::Follow
+    } else if action == CARRIAGE_STAYING {
+        CarriageMovementPlan::Stand
     } else {
         CarriageMovementPlan::None
     }
@@ -114,6 +129,24 @@ impl CarriageLifecycleState {
 
     pub(crate) const fn set_action(&mut self, action: i32) {
         self.action = action;
+    }
+
+    /// Отдельная active FIFO исходного auxiliary `CCarriage`: завершившийся
+    /// `Move/Stand` освобождает расписание только на следующем AI-такте.
+    pub(crate) fn advance_schedule(&mut self, now_ms: u32) -> bool {
+        if !self.schedule_pending {
+            return true;
+        }
+        if now_ms.wrapping_sub(self.schedule_started_ms) >= self.schedule_delay_ms {
+            self.schedule_pending = false;
+        }
+        false
+    }
+
+    pub(crate) const fn block_schedule(&mut self, now_ms: u32, delay_ms: u32) {
+        self.schedule_started_ms = now_ms;
+        self.schedule_delay_ms = delay_ms;
+        self.schedule_pending = true;
     }
 
     pub(crate) fn tick_master(&mut self, facts: CarriageMasterFacts) -> CarriageMasterOutcome {

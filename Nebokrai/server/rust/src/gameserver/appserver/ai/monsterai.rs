@@ -33,6 +33,49 @@ use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterSkill;
 
+const SLIP_ORDER: [[usize; 8]; 8] = [
+    [0, 7, 1, 6, 2, 5, 3, 4],
+    [1, 0, 2, 7, 3, 6, 4, 5],
+    [2, 1, 3, 0, 4, 7, 5, 6],
+    [3, 2, 4, 1, 5, 0, 6, 7],
+    [4, 3, 5, 2, 6, 1, 7, 0],
+    [5, 4, 6, 3, 7, 2, 0, 1],
+    [6, 5, 7, 4, 0, 3, 1, 2],
+    [7, 6, 0, 5, 1, 4, 2, 3],
+];
+
+/// Точный одноклеточный `Slip` общего `CBaseAI::MoveTo`: желаемое
+/// направление и семь обходных направлений проверяются в legacy-порядке
+/// против figure-specific move-check клеток региона.
+pub(crate) fn find_slip_step(
+    game: &CGame,
+    region: &CServerRegion,
+    origin: ShapeAreaCoordinates,
+    target: ShapeAreaCoordinates,
+    figure: crate::gameserver::appserver::shape::ShapeFigure,
+) -> Option<(i32, ShapeAreaCoordinates)> {
+    let desired_direction = get_line_direction(origin.x, origin.y, target.x, target.y);
+    let figure_index = usize::from(figure.get(0).min(2));
+    SLIP_ORDER[desired_direction as usize]
+        .into_iter()
+        .find_map(|direction| {
+            let destination = CShape::get_direction_position(direction as i32, origin).ok()?;
+            let cells = game.move_check_cells().get(figure_index, direction)?;
+            cells
+                .iter()
+                .all(|cell| {
+                    region
+                        .region
+                        .get_block(
+                            origin.x.wrapping_add(cell.x),
+                            origin.y.wrapping_add(cell.y),
+                        )
+                        .is_ok_and(|block| block == 0)
+                })
+                .then_some((direction as i32, destination))
+        })
+}
+
 /// Отдельный timestamp расписания `CMonsterAI`; он не является cooldown
 /// конкретного `CSkill` и обновляется до его `CheckCast`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -278,41 +321,21 @@ pub(crate) fn approach_attack_range(
         return false;
     }
 
-    const SLIP_ORDER: [[usize; 8]; 8] = [
-        [0, 7, 1, 6, 2, 5, 3, 4],
-        [1, 0, 2, 7, 3, 6, 4, 5],
-        [2, 1, 3, 0, 4, 7, 5, 6],
-        [3, 2, 4, 1, 5, 0, 6, 7],
-        [4, 3, 5, 2, 6, 1, 7, 0],
-        [5, 4, 6, 3, 7, 2, 0, 1],
-        [6, 5, 7, 4, 0, 3, 1, 2],
-        [7, 6, 0, 5, 1, 4, 2, 3],
-    ];
-    let desired_direction = get_line_direction(monster_x, monster_y, target_x, target_y);
     let origin = ShapeAreaCoordinates {
         x: monster_x,
         y: monster_y,
     };
     let figure = CMonster::figure(&property);
-    let figure_index = usize::from(figure.get(0).min(2));
-    let destination = SLIP_ORDER[desired_direction as usize]
-        .into_iter()
-        .find_map(|direction| {
-            let destination = CShape::get_direction_position(direction as i32, origin).ok()?;
-            let cells = game.move_check_cells().get(figure_index, direction)?;
-            cells
-                .iter()
-                .all(|cell| {
-                    region
-                        .region
-                        .get_block(
-                            origin.x.wrapping_add(cell.x),
-                            origin.y.wrapping_add(cell.y),
-                        )
-                        .is_ok_and(|block| block == 0)
-                })
-                .then_some((direction, destination))
-        });
+    let destination = find_slip_step(
+        game,
+        region,
+        origin,
+        ShapeAreaCoordinates {
+            x: target_x,
+            y: target_y,
+        },
+        figure,
+    );
     let Some((direction, destination)) = destination else {
         return false;
     };

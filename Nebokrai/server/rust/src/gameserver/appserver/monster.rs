@@ -599,6 +599,14 @@ impl CMonster {
         self.carriage_lifecycle.set_action(action);
     }
 
+    pub(crate) fn advance_carriage_schedule(&mut self, now_ms: u32) -> bool {
+        self.carriage_lifecycle.advance_schedule(now_ms)
+    }
+
+    pub(crate) const fn block_carriage_schedule(&mut self, now_ms: u32, delay_ms: u32) {
+        self.carriage_lifecycle.block_schedule(now_ms, delay_ms);
+    }
+
     pub(crate) fn tick_carriage_master(
         &mut self,
         facts: CarriageMasterFacts,
