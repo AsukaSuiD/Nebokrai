@@ -10,6 +10,8 @@
 //! уже рассчитанной атаки координатором `CGame`.
 //! Клиентский срок разделяет exact-owner `0x00606320`: deadline-check и
 //! положительный остаток читают wrapping clock отдельно.
+//! Встроенный `tagAttackInformation` сохраняет конструкторные skill-id
+//! `0x7fffffff` и уровень `1`; `Clear` между тиками их не переопределяет.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -23,7 +25,7 @@ pub(crate) const LEAF_CUT_STATE_ID: u32 = 0x6b;
 pub(crate) const LEAF_CUT_STATE_BYTES: usize = 68;
 const STATE_BEGIN_MESSAGE: i32 = 0x000b_fe03;
 const STATE_END_MESSAGE: i32 = 0x000b_fe04;
-const LEGACY_UNKNOWN_SKILL_ID: u32 = i32::MAX as u32;
+const DEFAULT_PERIODIC_SKILL_ID: u32 = i32::MAX as u32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LeafCutStateTick { Pending, Attack(AttackInformation), Ended }
@@ -102,7 +104,7 @@ impl LeafCutState {
     fn attack(self, critical_chance: u16, critical_rate: f32, random: &mut dyn FnMut(i32) -> i32) -> AttackInformation {
         let minimum = i32::from(self.minimum_attack); let maximum = i32::from(self.maximum_attack); let span = minimum.abs_diff(maximum).wrapping_add(1) as i32; let mut physical = (random(span) as f32 + f32::from_bits(self.damage_modifier_bits) + minimum as f32) as i32; if physical < 0 { physical = 0; }
         let critical = random(100) < i32::from(critical_chance); let mut damages = vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: i32::from(self.element_attack), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(self.soul_attack), mp_damage: 0 }]; if critical { for damage in &mut damages { damage.hp_damage = (damage.hp_damage as f32 * critical_rate) as i32; } }
-        AttackInformation { skill_id: LEGACY_UNKNOWN_SKILL_ID, skill_level: 0, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 0, damage_factor: f32::from_bits(self.damage_factor_bits), damage_modifier: 0, critical, blast_attack: false, full_miss: 0, damages }
+        AttackInformation { skill_id: DEFAULT_PERIODIC_SKILL_ID, skill_level: 1, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 0, damage_factor: f32::from_bits(self.damage_factor_bits), damage_modifier: 0, critical, blast_attack: false, full_miss: 0, damages }
     }
 }
 
