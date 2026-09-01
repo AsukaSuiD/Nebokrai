@@ -219,7 +219,9 @@
 //! TaoZhuang теперь сохраняет constructor flags, unique original-name set,
 //! ordered set counts/threshold-prefix, max-level skills и раздельные обычные/
 //! CiQing property maps. `CGame` исполняет полный `DoneTaoZhuang`, поэтому эти
-//! player-методы не являются отдельным недостижимым adapter-слоем.
+//! player-методы не являются отдельным недостижимым adapter-слоем. Каждый
+//! полный `UpdateProperty` снова выставляет equipment/TaoZhuang pending-флаг;
+//! выбор немедленного либо AI-tail завершения остаётся у setup-gate caller-а.
 //! `skillmessage 0x90001` сохраняет learned-skill authorization, contend
 //! notice, безусловное обнуление emotion state, self/point/object target и
 //! socket reject; `0x90005` добавляет feature/HP guards и странный fallback
@@ -5606,6 +5608,7 @@ impl CPlayer {
         critical_rate: f32,
         factory: &CGoodsFactory,
     ) -> PlayerPropertyRecompute {
+        self.equipment_changed = true;
         self.refresh_battle_fairy_equipment_properties(factory);
         self.apply_ci_qing_base_properties(factory);
         let previous = self.recompute_without_ci_qing_properties(

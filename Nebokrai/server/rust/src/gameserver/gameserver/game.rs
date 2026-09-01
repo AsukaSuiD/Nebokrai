@@ -280,7 +280,9 @@
 //! обязательного runtime-а полные combat snapshots до/после универсальных
 //! equipment/addon формул, а `CPlayer` сам вычисляет и сохраняет CiQing delta.
 //! Общий result-owner объединяет TaoZhuang values и всегда шлёт values-only
-//! `0xC0110` до последующего `0xBF721`, как native `MountAllEquip`.
+//! `0xC0110` до последующего `0xBF721`, как native `MountAllEquip`. Общая
+//! публикация полного `UpdateProperty` затем вызывает `DoneTaoZhuang` только
+//! при `bTaoZhuangModify`; при обратном режиме pending закрывает AI-tail.
 //! Обычный skill request `0x90001` проходит через owned learned skills и
 //! emotion state: optional `GS0090`, concrete around `0xBF611`, self/point/
 //! object resolution и `0xBFE01` сохраняют native order до owned очереди
@@ -6028,6 +6030,30 @@ impl CGame {
         recompute: PlayerPropertyRecompute,
     ) -> bool {
         self.commit_player_property_recompute(player_id, recompute, true)
+    }
+
+    /// Публикует полный native tail в порядке `C0110 → BF721 → DoneTaoZhuang`.
+    /// Последний шаг выполняется здесь только в modify-режиме; инвертированный
+    /// startup gate оставляет тот же pending-флаг для достигнутого AI-tail.
+    fn publish_player_property_update(
+        &mut self,
+        player_id: i32,
+        recompute: PlayerPropertyRecompute,
+        publish_state_visuals: bool,
+    ) -> Option<(i32, bool)> {
+        if !self.commit_player_property_recompute(
+            player_id,
+            recompute,
+            publish_state_visuals,
+        ) {
+            return None;
+        }
+        let delivery = self
+            .find_player(player_id)
+            .map(|player| self.send_player_properties_changed(player))?;
+        let tao_zhuang_ran = self.globe_setup.tao_zhuang_modify_enabled()
+            && self.done_player_tao_zhuang(player_id);
+        Some((delivery, tao_zhuang_ran))
     }
 
     fn commit_player_property_recompute(
@@ -17097,14 +17123,10 @@ impl CGame {
             let _ = player.set_script_value(property, value)?;
             recompute(player)
         };
-        let _ = self.apply_recomputed_player_properties(player_id, recomputed);
-
-        let player = self
-            .players
-            .get(&player_id)
-            .expect("script-player сохранён до OnChangeProperties");
-        let _ = self.send_player_properties_changed(player);
-        if property.eq_ignore_ascii_case(b"dwExp") {
+        let _ = self.publish_player_property_update(player_id, recomputed, true);
+        if property.eq_ignore_ascii_case(b"dwExp")
+            && let Some(player) = self.find_player(player_id)
+        {
             let mut result = CMessage::new(0x000b_f704);
             result.add_ulong(player.experience());
             result.add_ulong(player.vigour());
@@ -17225,12 +17247,7 @@ impl CGame {
             .change_script_value(property, delta)
             .unwrap_or(0);
         let recomputed = self.recompute_player_properties_for_update(player_id)?;
-        let _ = self.apply_recomputed_player_properties(player_id, recomputed);
-        let player = self
-            .players
-            .get(&player_id)
-            .expect("named script-player сохранён до ChangePlayer OnChangeProperties");
-        let _ = self.send_player_properties_changed(player);
+        let _ = self.publish_player_property_update(player_id, recomputed, true);
         Some(applied)
     }
 
@@ -17255,12 +17272,7 @@ impl CGame {
             .unwrap_or(0);
 
         let recomputed = self.recompute_player_properties_for_update(player_id)?;
-        let _ = self.apply_recomputed_player_properties(player_id, recomputed);
-        let player = self
-            .players
-            .get(&player_id)
-            .expect("named script-player сохранён до OnChangeProperties");
-        let _ = self.send_player_properties_changed(player);
+        let _ = self.publish_player_property_update(player_id, recomputed, true);
         let mut changed = CMessage::new(0x000b_f80c);
         changed.add_long(400);
         changed.add_long(player_id);
@@ -17425,10 +17437,6 @@ impl CGame {
         let Some(target_id) = target_id else {
             return -1;
         };
-        let previous_properties = self
-            .find_player(target_id)
-            .expect("script skill target проверен до mutation")
-            .combat_properties();
         let mutation = {
             let (players, skill_factory) = (&mut self.players, &self.skill_factory);
             players
@@ -17445,17 +17453,7 @@ impl CGame {
             let current_properties = self
                 .recompute_player_properties_for_update(target_id)
                 .expect("realm skill mutation сохраняет canonical player");
-            let current_combat_properties = current_properties.properties;
-            let _ = self.apply_recomputed_player_properties(target_id, current_properties);
-            let applied_properties = self
-                .find_player(target_id)
-                .map(CPlayer::combat_properties)
-                .unwrap_or(current_combat_properties);
-            if previous_properties != applied_properties {
-                if let Some(player) = self.find_player(target_id) {
-                    let _ = self.send_player_properties_changed(player);
-                }
-            }
+            let _ = self.publish_player_property_update(target_id, current_properties, true);
         } else if let Some(response) = player_skill_learned_message(
             0x000b_f71d,
             mutation.skill_id,
@@ -28462,12 +28460,7 @@ impl CGame {
         player_id: i32,
         recompute: PlayerPropertyRecompute,
     ) {
-        if !self.commit_player_property_recompute(player_id, recompute, false) {
-            return;
-        }
-        if let Some(player) = self.find_player(player_id) {
-            let _ = self.send_player_properties_changed(player);
-        }
+        let _ = self.publish_player_property_update(player_id, recompute, false);
     }
 
     fn refresh_ride_properties<Context>(
@@ -29126,17 +29119,7 @@ impl CGame {
         let current_properties = self
             .recompute_player_properties_for_update(player_id)
             .expect("realm mutation сохраняет canonical player");
-        let current_combat_properties = current_properties.properties;
-        let _ = self.apply_recomputed_player_properties(player_id, current_properties);
-        let applied_properties = self
-            .find_player(player_id)
-            .map(CPlayer::combat_properties)
-            .unwrap_or(current_combat_properties);
-        if mutation.previous_properties != applied_properties {
-            if let Some(player) = self.find_player(player_id) {
-                let _ = self.send_player_properties_changed(player);
-            }
-        }
+        let _ = self.publish_player_property_update(player_id, current_properties, true);
         Some(i32::from(mutation.succeeded))
     }
 
@@ -35098,15 +35081,9 @@ impl CGame {
     /// goods message, FourNation и skill/state pipeline без фиктивного
     /// container/runtime параметра.
     pub(crate) fn update_player_properties(&mut self, player_id: i32) -> Option<(i32, bool)> {
-        let properties = self.recompute_player_properties_for_update(player_id)?;
-        if !self.apply_recomputed_player_properties(player_id, properties) {
-            return None;
-        }
-        let property_delivery = self
-            .find_player(player_id)
-            .map(|player| self.send_player_properties_changed(player))?;
-        let tao_zhuang_ran =
-            self.globe_setup.tao_zhuang_modify_enabled() && self.done_player_tao_zhuang(player_id);
+        let recompute = self.recompute_player_properties_for_update(player_id)?;
+        let (property_delivery, tao_zhuang_ran) =
+            self.publish_player_property_update(player_id, recompute, true)?;
         Some((property_delivery, tao_zhuang_ran))
     }
 
@@ -37956,10 +37933,7 @@ impl CGame {
             update.base_mut().add(&payload);
             let _ = update.send_to_player(self.net_server(), player_id);
             if let Some(properties) = self.recompute_player_properties_for_update(player_id) {
-                let _ = self.apply_recomputed_player_properties(player_id, properties);
-                if let Some(player) = self.find_player(player_id) {
-                    let _ = self.send_player_properties_changed(player);
-                }
+                let _ = self.publish_player_property_update(player_id, properties, true);
             }
         } else if old / 100 != current / 100 {
             let mut durability = CMessage::new(0x000b_f90c);
