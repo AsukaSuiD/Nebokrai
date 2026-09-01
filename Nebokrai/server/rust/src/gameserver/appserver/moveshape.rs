@@ -4633,6 +4633,49 @@ impl CMoveShape {
         }
     }
 
+    /// Общая геометрия exact overrides `CBuild/CMonster::GetBeAttackedPoint`:
+    /// ближайшая клетка footprint с предпочтением прямого направления при
+    /// равной Chebyshev-дистанции.
+    pub(crate) fn nearest_figure_attack_point(
+        tile_x: i32,
+        tile_y: i32,
+        figure: ShapeFigure,
+        attacker_x: i32,
+        attacker_y: i32,
+    ) -> (i32, i32) {
+        let horizontal = i32::from(figure.get(2));
+        let vertical = i32::from(figure.get(0));
+        let mut best_point = (tile_x, tile_y);
+        let mut best_distance = 10_000_000;
+        let mut best_direction: i32 = 0;
+
+        for offset_x in -horizontal..=horizontal {
+            let candidate_x = tile_x.wrapping_add(offset_x);
+            for offset_y in -vertical..=vertical {
+                let candidate_y = tile_y.wrapping_add(offset_y);
+                let distance_x = candidate_x.wrapping_sub(attacker_x).unsigned_abs() as i32;
+                let distance_y = candidate_y.wrapping_sub(attacker_y).unsigned_abs() as i32;
+                let distance = distance_x.max(distance_y);
+                let direction = Self::get_dest_direction(
+                    attacker_x,
+                    attacker_y,
+                    candidate_x,
+                    candidate_y,
+                );
+                if distance < best_distance
+                    || (distance == best_distance
+                        && best_direction.rem_euclid(2) == 1
+                        && direction.rem_euclid(2) == 0)
+                {
+                    best_point = (candidate_x, candidate_y);
+                    best_distance = distance;
+                    best_direction = direction;
+                }
+            }
+        }
+        best_point
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "literal ForceMove сохраняет исходные аргументы и две достигнутые owner-границы"

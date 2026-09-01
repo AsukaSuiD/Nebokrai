@@ -39167,8 +39167,9 @@ impl CGame {
     }
 
     /// Точка назначения унаследованного `CSkill::GetTargetPath`. Обычные
-    /// shapes используют центральную tile-позицию, а `CBuild/CCityGate` —
-    /// ближайшую клетку их footprint через virtual `GetBeAttackedPoint`.
+    /// shapes используют центральную tile-позицию, а монстры с ненулевой
+    /// figure и `CBuild/CCityGate` — ближайшую клетку их footprint через
+    /// virtual `GetBeAttackedPoint`.
     pub(crate) fn base_magic_target_point(
         &self,
         region_id: i32,
@@ -39176,6 +39177,15 @@ impl CGame {
         source_y: i32,
         target: ShapeIdentity,
     ) -> Option<(i32, i32)> {
+        if target.object_type == MONSTER_TYPE {
+            let monster = self
+                .find_region(region_id)?
+                .base()
+                .find_monster_by_id(target.id)?;
+            let property =
+                self.find_monster_property_by_origin_name(monster.base_property_key()?)?;
+            return monster.be_attacked_point(property, source_x, source_y);
+        }
         if target.object_type == BUILD_OBJECT_TYPE as i32
             || target.object_type == CITY_GATE_OBJECT_TYPE as i32
         {

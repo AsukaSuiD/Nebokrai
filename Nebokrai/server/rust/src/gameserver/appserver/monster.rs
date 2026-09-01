@@ -78,6 +78,8 @@
 //! Там же разрешается `GetBeneficiary`: при непригодности прямого кандидата
 //! используется первый участник его типизированного командного сеанса в том
 //! же регионе и в исходном порядке списка подключений.
+//! Для ненулевой figure унаследованный `CSkill::GetTargetPath` выбирает
+//! ближайшую клетку footprint, а не центральную tile-позицию монстра.
 
 use std::collections::BTreeMap;
 
@@ -1548,6 +1550,27 @@ impl CMonster {
             figure: Self::figure(property),
         })
     }
+
+    /// Exact `CMonster::GetBeAttackedPoint` (RVA `0x000E6AA0`). Нулевая
+    /// figure сохраняет базовую центральную точку `CMoveShape`.
+    pub(crate) fn be_attacked_point(
+        &self,
+        property: &MonsterProperties,
+        attacker_x: i32,
+        attacker_y: i32,
+    ) -> Option<(i32, i32)> {
+        let view = self.shape_view(property)?;
+        if property.figure as u8 == 0 {
+            return Some((view.tile_x, view.tile_y));
+        }
+        Some(CMoveShape::nearest_figure_attack_point(
+            view.tile_x,
+            view.tile_y,
+            view.figure,
+            attacker_x,
+            attacker_y,
+        ))
+    }
 }
 
 // COMPONENT_VARIANT_BEGIN: GameServer
@@ -1923,7 +1946,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetBeAttackedPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1611
@@ -1931,6 +1954,8 @@ impl CMonster {
 // ADDRESS: 004e6aa0
 // PROTOTYPE: void __thiscall GetBeAttackedPoint(long param_1, long param_2, long * param_3, long * param_4)
 //
+// Реализовано выше как `be_attacked_point`; сохранённый raw ниже фиксирует
+// отличие нулевой figure от footprint-ветви.
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
 //
