@@ -50,6 +50,10 @@
 //! остановочный кадр. Пустой основной проход `CPlayerAI::Run` теперь замыкает
 //! подтверждённый `CBaseAI::OnIdle`: только при отсутствии исполненного
 //! player-действия, target-а и primary FIFO ставится `ASA_STAND` на 1000 мс.
+//! Общий passive-проход теперь также предшествует movement/skill/destination:
+//! `Defense` занимает отдельный такт, `Stiffen` прерывает materialized skill и
+//! удерживает расписание до deadline, не останавливая собственный auto-inc
+//! хвост `CPlayerAI::Run`.
 //! Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
@@ -61,7 +65,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use super::baseai::CBaseAI;
+use super::baseai::{CBaseAI, PassiveStiffenAction};
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
@@ -391,6 +395,25 @@ pub(crate) struct PlayerEnergyRegeneration {
 }
 
 impl CPlayerAI {
+    pub(crate) fn when_been_hurted(&mut self, now_ms: u32) {
+        self.base_ai.when_been_hurted(now_ms);
+    }
+
+    pub(crate) fn when_been_stiffened(&mut self, delay_ms: u32, now_ms: u32) {
+        self.base_ai.when_been_stiffened(delay_ms, now_ms);
+    }
+
+    pub(crate) fn process_reached_defense_actions(&mut self) -> usize {
+        self.base_ai.process_reached_defense_actions()
+    }
+
+    pub(crate) fn process_reached_stiffen_action(
+        &mut self,
+        now_ms: u32,
+    ) -> PassiveStiffenAction {
+        self.base_ai.process_reached_stiffen_action(now_ms)
+    }
+
     pub(crate) fn queue_client_destination(&mut self, direction: i32, is_run: bool) {
         while 3 < self.destinations.len() {
             self.destinations.pop_front();

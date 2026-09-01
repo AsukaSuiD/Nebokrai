@@ -87,6 +87,8 @@
 //! Текущие HP/MP имеют собственные setter-и с clamp к текущим max-свойствам;
 //! RP/YP сохраняют соседние WORD offsets `0xAC/0xAE` base-wire. Изменение
 //! самих max не выполняет этот clamp без конкретного caller-а.
+//! Достигнутый damage runtime использует те же maximum HP и `reank` в
+//! унаследованном `CMoveShape::Stiffen`, не создавая отдельный combat snapshot.
 //! `UseItem` материализует точные коды требований, принадлежащее игроку
 //! изучение навыков, расход предметов в рюкзаке и четыре заменяемых боевых
 //! `tagExpendableEffect`. Проверки и состояния ездового животного и
@@ -13387,6 +13389,19 @@ impl CPlayer {
 
     pub(crate) const fn maximum_health(&self) -> u32 {
         self.combat_properties.maximum_hp
+    }
+
+    pub(crate) fn roll_stiffen(
+        &mut self,
+        damage: u32,
+        setup: crate::setup::globesetup::GlobeStiffenSetup,
+        now_ms: impl FnMut() -> u32,
+        random: impl FnMut(i32) -> i32,
+    ) -> u32 {
+        let maximum_hp = self.combat_properties.maximum_hp;
+        let reank = self.combat_properties.reank;
+        self.move_shape
+            .stiffen(damage as u16, maximum_hp, reank, setup, now_ms, random)
     }
 
     pub(crate) const fn maximum_mana(&self) -> u32 {

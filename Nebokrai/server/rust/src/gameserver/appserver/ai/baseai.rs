@@ -69,6 +69,8 @@ pub(crate) enum PassiveDeathAction {
 pub(crate) enum PassiveStiffenAction {
     None,
     InterruptAttack,
+    StartedWaiting,
+    StartedFinished,
     Waiting,
     Finished,
 }
@@ -177,8 +179,10 @@ impl CBaseAI {
             return PassiveStiffenAction::None;
         }
 
+        let mut started = false;
         let mut interrupt_attack = false;
         if event.handling == 0 {
+            started = true;
             while self.active_actions.front().is_some_and(|event| {
                 !matches!(event.action, AiShapeAction::Attack | AiShapeAction::Move)
             }) {
@@ -205,6 +209,8 @@ impl CBaseAI {
         if now_ms < event.beginning_time_ms.wrapping_add(event.delay_ms) {
             return if interrupt_attack {
                 PassiveStiffenAction::InterruptAttack
+            } else if started {
+                PassiveStiffenAction::StartedWaiting
             } else {
                 PassiveStiffenAction::Waiting
             };
@@ -212,6 +218,8 @@ impl CBaseAI {
         self.passive_actions.pop_front();
         if interrupt_attack {
             PassiveStiffenAction::InterruptAttack
+        } else if started {
+            PassiveStiffenAction::StartedFinished
         } else {
             PassiveStiffenAction::Finished
         }
@@ -788,10 +796,9 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnStiffen
-// STATUS: PARTIALLY_IMPLEMENTED
-// IMPLEMENTED: reached monster caller сохраняет active-префикс, Attack/Move
-// границу, passive handling/deadline и concrete interruption; player-skill
-// caller с самостоятельными execution-owner-ами остаётся ниже.
+// STATUS: IMPLEMENTED
+// IMPLEMENTED: reached monster/player caller-ы сохраняют active-префикс,
+// Attack/Move-границу, passive handling/deadline и concrete interruption.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:847

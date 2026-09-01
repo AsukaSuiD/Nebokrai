@@ -4905,6 +4905,40 @@ impl OldClientGoodsEncoder {
 }
 
 impl CGame {
+    /// Общая достигнутая player-ветвь `CMoveShape::Stiffen ->
+    /// CBaseAI::WhenBeenHurted`: roll использует canonical combat properties,
+    /// затем два события получают собственные последовательные замеры часов.
+    pub(crate) fn queue_player_hurt_ai<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        damage: u32,
+        runtime: &mut Runtime,
+    ) -> bool {
+        if damage == 0 {
+            return false;
+        }
+        let setup = self.globe_setup.stiffen_setup();
+        let random_state = &mut self.random_state;
+        let Some(player) = self.players.get_mut(&player_id) else {
+            return false;
+        };
+        let delay_ms = player.roll_stiffen(
+            damage,
+            setup,
+            || runtime.now_milliseconds(),
+            |maximum| game_legacy_random(random_state, maximum),
+        );
+        player
+            .player_ai_mut()
+            .when_been_hurted(runtime.now_milliseconds());
+        if delay_ms != 0 {
+            player
+                .player_ai_mut()
+                .when_been_stiffened(delay_ms, runtime.now_milliseconds());
+        }
+        true
+    }
+
     pub(crate) fn with_legacy_random_stream<Output>(
         &mut self,
         operation: impl FnOnce(&mut Self, &mut GameLegacyRandomStream) -> Output,
@@ -45136,6 +45170,7 @@ impl CGame {
             }
         }
         if current_health != 0 && attack.full_miss == 0 {
+            let _ = self.queue_player_hurt_ai(target_id, damage, runtime);
             let _ = finish_player_blind_states_on_defense(self, target_id, 0);
         }
         if current_health == 0 {
@@ -46859,18 +46894,44 @@ impl CGame {
                                 .find_player_mut(player_id)
                                 .expect("active-state caller проверил canonical player")
                                 .take_player_ai();
+                            let defense_processed =
+                                player_ai.process_reached_defense_actions() != 0;
+                            let passive_stiffen = if defense_processed {
+                                PassiveStiffenAction::None
+                            } else {
+                                player_ai.process_reached_stiffen_action(
+                                    runtime.now_milliseconds(),
+                                )
+                            };
+                            let passive_action_handled = defense_processed
+                                || passive_stiffen != PassiveStiffenAction::None;
+                            let interrupt_current_skill = matches!(
+                                passive_stiffen,
+                                PassiveStiffenAction::InterruptAttack
+                                    | PassiveStiffenAction::StartedWaiting
+                                    | PassiveStiffenAction::StartedFinished
+                            )
+                            .then(|| {
+                                self.find_player(player_id)
+                                    .and_then(CPlayer::current_skill_id)
+                            })
+                            .flatten();
                             let ai_hibernated = player_ai.is_hibernated();
                             let can_schedule_skill = self
                                 .find_player(player_id)
                                 .is_some_and(|player| !player.is_dead());
                             let moving_started =
-                                !ai_hibernated && player_ai.active_move_unhandled();
+                                !ai_hibernated
+                                    && !passive_action_handled
+                                    && player_ai.active_move_unhandled();
                             let active_move_handled = !ai_hibernated
+                                && !passive_action_handled
                                 && player_ai.advance_active_move(runtime.now_milliseconds());
                             if moving_started {
                                 let _ = self.on_player_stand_on_switch_point(player_id);
                             }
                             let active_stand_handled = if !ai_hibernated
+                                && !passive_action_handled
                                 && !active_move_handled
                                 && player_ai.active_stand_pending()
                             {
@@ -46887,12 +46948,14 @@ impl CGame {
                             };
                             let active_action_handled =
                                 active_move_handled || active_stand_handled;
-                            let back_stage_skills = if ai_hibernated {
+                            let back_stage_skills = if ai_hibernated || passive_action_handled {
                                 0
                             } else {
                                 self.execute_player_back_stage_skills(player_id, runtime)
                             };
-                            let (executed_skills, executed_player_skills) = if ai_hibernated {
+                            let (executed_skills, executed_player_skills) = if ai_hibernated
+                                || passive_action_handled
+                            {
                                 (0, 0)
                             } else {
                                 self.execute_queued_player_skills(
@@ -46906,6 +46969,7 @@ impl CGame {
                             player_skill_executions += back_stage_skills + executed_skills;
                             let destination_handled = active_action_handled
                                 || (!ai_hibernated
+                                    && !passive_action_handled
                                     && executed_player_skills == 0
                                     && self.find_player(player_id).is_some()
                                     && self.run_player_ai_destination(
@@ -46913,7 +46977,10 @@ impl CGame {
                                         &mut player_ai,
                                         runtime,
                                     ));
-                            if self.find_player(player_id).is_some() && !ai_hibernated {
+                            if self.find_player(player_id).is_some()
+                                && !ai_hibernated
+                                && !passive_action_handled
+                            {
                                 let player_action_executed = active_action_handled
                                     || executed_player_skills != 0
                                     || destination_handled;
@@ -46982,6 +47049,14 @@ impl CGame {
                             if let Some(player) = self.find_player_mut(player_id) {
                                 player.restore_player_ai(player_ai);
                                 ran_player_body = true;
+                            }
+                            if let Some(skill_id) = interrupt_current_skill {
+                                let _ = self.end_materialized_player_skill(
+                                    player_id,
+                                    skill_id,
+                                    MaterializedSkillEndCause::Interruption,
+                                    runtime,
+                                );
                             }
                             if let Some(mutation) = energy {
                                 let mut message = CMessage::new(0x000b_f72c);

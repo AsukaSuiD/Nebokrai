@@ -403,6 +403,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 }
             }
             if current_health != 0 && attack.full_miss == 0 {
+                let _ = game.queue_player_hurt_ai(target_id, damage, runtime);
                 let _ = finish_player_blind_states_on_defense(game, target_id, now_ms);
             }
             if current_health == 0 {
