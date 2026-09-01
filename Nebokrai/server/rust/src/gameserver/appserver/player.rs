@@ -19,6 +19,9 @@
 //! wire строго на первом false, как исходная цепочка. После чтения base-wire
 //! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
 //! принимается как независимый persisted fact.
+//! Exact virtual tail этого decoder-а вызывает `CPlayer::InitSkills`: он
+//! гарантирует базовую защиту и профессии 0/1/2 их базовые attack-owner-ы, не
+//! заменяет уже загруженные записи и завершает вход `SetHP(GetMaxHP)`.
 //! Initial-login tail обходит GoodsAI candidates в exact positional order:
 //! equipment, packet, hand, auction и depot. Для equipment-state `2` нулевая
 //! packed date прерывает только текущий container; просроченное состояние
@@ -372,7 +375,7 @@ use super::goods::cgoodsfactory::CGoodsFactory;
 use super::legacycodec::{LegacyReader, LegacyWriter};
 use super::moveshape::{
     CMoveShape, MoveShapeCommandBlock, MoveShapePositionFacts,
-    MoveShapeSkill,
+    MoveShapeSkill, SKILL_BASE_DEFENSE,
 };
 use super::particularstate::ParticularState;
 use super::script::variablelist::{
@@ -2874,6 +2877,7 @@ impl CPlayer {
         player.decode_organizing_snapshot(source, cursor)?;
         player.session_id = read_player_game_save_string(source, cursor, "m_strSessionID", 0x40)?;
         player.refresh_reached_container_owners(player.player_id());
+        player.initialize_intrinsic_skills(skill_factory);
 
         let consumed_bytes = cursor.saturating_sub(start);
         tracing::trace!(
@@ -10928,6 +10932,29 @@ impl CPlayer {
         self.move_shape.skill(skill_id).map(|skill| skill.level())
     }
 
+    /// Exact `CPlayer::InitSkills`, вызываемый virtual tail-ом полного
+    /// `DecordFromByteArray`: отсутствующая базовая защита добавляется первой,
+    /// затем профессии `0/1/2` получают соответственно обычную атаку,
+    /// атаку со стрельбой либо базовую магию. Уже загруженные записи не
+    /// заменяются. Последний `SetHP(GetMaxHP)` полностью восстанавливает HP.
+    fn initialize_intrinsic_skills(&mut self, factory: &CSkillFactory) {
+        if self.move_shape.skill(SKILL_BASE_DEFENSE).is_none() {
+            self.move_shape.add_base_defense_skill(factory);
+        }
+        let intrinsic = match self.occupation() {
+            0 => &[BASE_ATTACK_SKILL_ID][..],
+            1 => &[BASE_ATTACK_SKILL_ID, ARCHERY_SKILL_ID][..],
+            2 => &[BASE_MAGIC_SKILL_ID][..],
+            _ => &[],
+        };
+        for &skill_id in intrinsic {
+            if self.move_shape.skill(skill_id).is_none() {
+                let _ = self.move_shape.add_skill(skill_id, 1, factory);
+            }
+        }
+        self.set_health(self.maximum_health());
+    }
+
     pub(crate) const fn has_pet(&self) -> bool {
         self.active_pet_count != 0
     }
@@ -17006,7 +17033,7 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 
 // ============================================================================
 // FUNCTION: CPlayer::InitSkills
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:530
@@ -17014,9 +17041,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // ADDRESS: 00440c30
 // PROTOTYPE: void __thiscall InitSkills(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// Реализовано выше как `initialize_intrinsic_skills`; exact virtual вызов
+// `DecordFromByteArray +0x9c` замкнут в полном Rust decoder-е.
 
 // ============================================================================
 // FUNCTION: CPlayer::AddToByteArray
