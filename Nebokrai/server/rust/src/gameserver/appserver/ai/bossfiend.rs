@@ -29,7 +29,6 @@ use super::guardtarget::{GuardDistanceTarget, consider_guard_distance_target};
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 
@@ -63,12 +62,7 @@ pub(crate) fn select_boss_fiend_enemy(
             selected,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
@@ -90,12 +84,7 @@ pub(crate) fn select_boss_fiend_enemy(
             selected,
             GuardDistanceTarget {
                 identity: candidate.identity,
-                distance: real_distance(
-                    owner.tile_x,
-                    owner.tile_y,
-                    candidate.tile_x,
-                    candidate.tile_y,
-                ),
+                distance: owner.real_distance(Some(candidate)),
             },
             guard_range,
             minimum_skill_distance,
