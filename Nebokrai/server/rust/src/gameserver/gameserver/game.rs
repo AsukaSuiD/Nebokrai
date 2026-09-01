@@ -42797,25 +42797,23 @@ impl CGame {
                 victim_country,
             )) = notify_facts
             {
-                let now = runtime.now_milliseconds();
-                let notify = self.find_region(region_id).and_then(|owner| {
-                    let interval = owner.base().region.notify_interval_ms()?;
-                    let last = owner.base().region.last_notify_kill_time_ms();
-                    (interval != 0
-                        && attacker_country != victim_country
-                        && security != RegionSecurity::FIGHT
-                        && now.wrapping_sub(last) >= interval as u32)
-                        .then_some(interval)
-                });
-                if notify.is_some() {
-                    if let Some(owner) = self.find_region_mut(region_id) {
-                        owner.base_mut().region.set_last_notify_kill_time_ms(now);
+                let region_name = if attacker_country != victim_country {
+                    if let Some(mut owner) = self.take_region_owner(region_id) {
+                        let notice = {
+                            let region = &mut owner.base_mut().region;
+                            (matches!(region.get_block(tile_x, tile_y), Ok(block) if block != 1)
+                                && region.take_kill_notice_due(|| runtime.now_milliseconds()))
+                            .then(|| region.get_name().to_vec())
+                        };
+                        self.restore_region_owner(owner);
+                        notice
+                    } else {
+                        None
                     }
-                    let region_name = self
-                        .find_region(region_id)
-                        .map(ServerRegionOwner::name)
-                        .unwrap_or_default()
-                        .to_vec();
+                } else {
+                    None
+                };
+                if let Some(region_name) = region_name {
                     let victim_text = format_legacy_mixed(
                         self.get_string_by_id(b"GS0140"),
                         &[

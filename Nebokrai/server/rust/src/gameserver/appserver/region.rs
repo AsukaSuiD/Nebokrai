@@ -265,18 +265,6 @@ impl CRegion {
         self.country
     }
 
-    pub(crate) const fn notify_interval_ms(&self) -> Option<i32> {
-        self.notify
-    }
-
-    pub(crate) const fn last_notify_kill_time_ms(&self) -> u32 {
-        self.last_notify_kill_time
-    }
-
-    pub(crate) const fn set_last_notify_kill_time_ms(&mut self, value: u32) {
-        self.last_notify_kill_time = value;
-    }
-
     /// Выполняет точный hurt-notify gate `CPlayer::OnBeenHurted`: ненулевой
     /// signed interval сравнивается как `uint` с wrapping-разностью двух
     /// `timeGetTime`, а второй замер часов сохраняется только при срабатывании.
@@ -290,6 +278,23 @@ impl CRegion {
             return false;
         }
         self.last_notify_hurt_time = now_milliseconds();
+        true
+    }
+
+    /// Выполняет sibling kill-notify gate `CPlayer::OnDied`: EXE сравнивает
+    /// строго `last + interval < now` и только затем читает часы для записи.
+    pub(crate) fn take_kill_notice_due(&mut self, mut now_milliseconds: impl FnMut() -> u32) -> bool {
+        let Some(interval_ms) = self.notify.filter(|interval| *interval != 0) else {
+            return false;
+        };
+        if self
+            .last_notify_kill_time
+            .wrapping_add(interval_ms as u32)
+            >= now_milliseconds()
+        {
+            return false;
+        }
+        self.last_notify_kill_time = now_milliseconds();
         true
     }
 
