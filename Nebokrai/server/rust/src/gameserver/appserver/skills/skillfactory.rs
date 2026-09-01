@@ -9,11 +9,16 @@
 //!
 //! Точный цикл и malformed-record skip подтверждены дизассемблировкой RVA
 //! `0x0006CE10`; WorldServer serializer является парной стороной wire-контракта.
+//! Допустимые ID `QuerySkill` подтверждены самой функцией RVA `0x00069870`:
+//! для `1..=0x195` сохранена точная jump-table классификация, далее — её
+//! сравнения и switch-ветви. Rust не воспроизводит служебные `new`/vtable
+//! конкретных классов, а хранит тот же admission-контракт перед обращением к
+//! уже восстановленным typed owner-ам.
 //! `BTreeMap`, `Vec` и `Drop` заменяют служебный код MSVC map/heap. Старые
 //! переполнения и выходы за границу при повреждённой длине остановлены
-//! типизированной ошибкой без дополнительных side effects. Конкретный
-//! `QuerySkill` ещё остаётся RAW до восстановления иерархии владельцев
-//! skill/state; реестр и все его операции поиска уже исполняются в Rust.
+//! типизированной ошибкой без дополнительных side effects. Неизвестным
+//! остаётся только concrete layout ещё не восстановленных skill-owner-ов;
+//! фабричная допустимость ID и операции реестра уже исполняются в Rust.
 
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -110,9 +115,41 @@ impl CSkillFactory {
     }
 
     pub(crate) fn query_skill_type(&self, skill_id: u32, level: i32) -> u32 {
+        if !Self::supports_skill_id(skill_id) {
+            return UNKNOWN_SKILL_TYPE;
+        }
         self.query_skill_base_properties(skill_id, level)
             .map(CSkillBaseProperties::skill_type)
             .unwrap_or(UNKNOWN_SKILL_TYPE)
+    }
+
+    /// Точная null/non-null граница `CSkillFactory::QuerySkill`. Уровень
+    /// влияет на `SetSourceObjectAmount`, но не на выбор concrete owner-а.
+    pub(crate) const fn supports_skill_id(skill_id: u32) -> bool {
+        matches!(
+            skill_id,
+            0x001..=0x003
+                | 0x00a
+                | 0x065..=0x081
+                | 0x083
+                | 0x089..=0x08a
+                | 0x08f
+                | 0x0c9..=0x0e9
+                | 0x0f1..=0x0f2
+                | 0x12d..=0x146
+                | 0x14d
+                | 0x191..=0x1a7
+                | 0x1f5..=0x1fa
+                | 0x212..=0x224
+                | 0x259..=0x25b
+                | 0x2bd
+                | 0x2d1
+                | 0x2ef
+                | 0x322
+                | 0x353..=0x357
+                | 0x384..=0x3b2
+                | 0x3c0..=0x3c2
+        )
     }
 
     pub(crate) fn query_skill_id(&self, name: Option<&[u8]>) -> u32 {
@@ -305,25 +342,3 @@ fn skill_read_error(
         available: block.available,
     }
 }
-
-// COMPONENT_VARIANT_BEGIN: GameServer
-// Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SHA-256 EXE: 4F5C98E0FDF6147D8AECF55F7937AAF6E2CF5E4F5A2C44491A6359228762C80E
-// SHA-256 PDB: B17BB9B7D69A9CC43E314C0E35C517830BB42CAA89416E173380AB17D2D66016
-// Исходный владелец PDB: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\skillfactory.cpp
-
-// ============================================================================
-// FUNCTION: CSkillFactory::QuerySkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\skillfactory.cpp:354
-// RVA: 0x00069870
-// ADDRESS: 00469870
-// PROTOTYPE: CSkill * __cdecl QuerySkill(tagSkillID param_1, long param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// COMPONENT_VARIANT_END: GameServer

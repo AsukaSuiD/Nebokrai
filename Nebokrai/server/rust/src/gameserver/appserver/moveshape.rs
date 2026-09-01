@@ -5010,7 +5010,7 @@ impl CMoveShape {
 
     /// Exact `AddSkill(tagSkillID, long)` для already decoded factory registry:
     /// прежний ненулевой уровень не понижается; иначе entry заменяется только
-    /// для одной из четырёх canonical категорий.
+    /// для native-supported ID одной из четырёх canonical категорий.
     pub(crate) fn add_skill(&mut self, skill_id: u32, level: i32, factory: &CSkillFactory) -> bool {
         if let Some(existing) = self.skills.get(&skill_id) {
             if existing.level != 0 && level <= existing.level {
@@ -5019,6 +5019,9 @@ impl CMoveShape {
         }
         self.skills.remove(&skill_id);
         self.state_skill_order.shift_remove(&skill_id);
+        if !CSkillFactory::supports_skill_id(skill_id) {
+            return false;
+        }
         let Some(properties) = factory.query_skill_base_properties(skill_id, level) else {
             return false;
         };
@@ -5058,6 +5061,9 @@ impl CMoveShape {
             .is_some_and(|current| self.skills.contains_key(&current))
         {
             self.current_skill_id = None;
+        }
+        if !CSkillFactory::supports_skill_id(skill_id) {
+            return false;
         }
         if !matches!(
             factory.query_skill_type(skill_id, 1),
