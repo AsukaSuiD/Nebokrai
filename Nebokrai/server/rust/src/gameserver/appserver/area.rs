@@ -224,6 +224,12 @@ impl CArea {
         std::mem::take(&mut self.sleeping_monsters)
     }
 
+    /// Возвращает неразрешённого живого owner-а после неудачного wake-up,
+    /// сохраняя относительный порядок таких записей текущего прохода.
+    pub(crate) fn restore_sleeping_monster(&mut self, id: i32) {
+        self.sleeping_monsters.push(id);
+    }
+
     pub(crate) fn push_woken_monster(&mut self, id: i32, class: AreaWokenMonsterClass) {
         match class {
             AreaWokenMonsterClass::Active => self.active_monsters.push(id),

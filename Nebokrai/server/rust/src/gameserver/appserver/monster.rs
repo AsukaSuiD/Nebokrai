@@ -305,12 +305,6 @@ pub(crate) struct MonsterBaseAttackDispatch {
 
 pub(crate) type MonsterBaseAttackCast = SkillExecutionKernel<MonsterBaseAttackDispatch>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MonsterWakeMutation {
-    pub(crate) hit_points: u32,
-    pub(crate) publish_states: bool,
-}
-
 impl CMonster {
     pub(crate) fn with_constructor_defaults() -> Self {
         let mut move_shape = CMoveShape::default();
@@ -826,7 +820,7 @@ impl CMonster {
         now_ms: u32,
         resume_timer_ms: u32,
         property: &MonsterProperties,
-    ) -> MonsterWakeMutation {
+    ) -> bool {
         let dormancy_interval_ms = self.base_ai.wake_up(now_ms);
         let maximum_hp = self.maximum_hp(property);
         let publish_states = self.hit_points != maximum_hp;
@@ -851,10 +845,7 @@ impl CMonster {
         ) {
             self.boss_blue_ai.wake(self.hit_points, maximum_hp);
         }
-        MonsterWakeMutation {
-            hit_points: self.hit_points,
-            publish_states,
-        }
+        publish_states
     }
 
     pub(crate) fn boss_blue_ai_mut(&mut self) -> &mut BossBlueAiState {

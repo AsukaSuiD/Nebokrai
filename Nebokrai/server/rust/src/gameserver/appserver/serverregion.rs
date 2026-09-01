@@ -2603,6 +2603,12 @@ impl CServerRegion {
         }
     }
 
+    pub(crate) fn restore_sleeping_monster(&mut self, area_index: usize, monster_id: i32) {
+        if let Some(area) = self.areas.get_mut(area_index) {
+            area.restore_sleeping_monster(monster_id);
+        }
+    }
+
     pub(crate) fn active_shape_candidates(&self, area_index: usize) -> Vec<ShapeIdentity> {
         self.areas
             .get(area_index)

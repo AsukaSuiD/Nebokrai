@@ -13595,7 +13595,8 @@ impl CGame {
     /// Завершает exact `CArea::WakeUpMonsters → CMonsterAI::WakeUp` для
     /// областей, которые увидел вошедший игрок. Хранилище спящих уже изъято;
     /// состояние рассылается до возврата ID в список активных, питомцев или
-    /// повозок.
+    /// повозок. Живой owner без разрешимых свойств возвращается в sleeping
+    /// storage, а действительно stale ID удаляется.
     fn wake_owned_monsters_around_area(
         &mut self,
         region: &mut CServerRegion,
@@ -13606,22 +13607,43 @@ impl CGame {
         for (area_index, monster_id) in
             region.take_sleeping_monsters_around_area(center_area_index)
         {
-            let Some(property) = region.find_monster_by_id(monster_id).and_then(|monster| {
-                self.find_monster_property_by_origin_name(monster.base_property_key()?)
-                    .cloned()
-            }) else {
+            let Some(monster) = region.find_monster_by_id(monster_id) else {
                 tracing::warn!(
                     region_id = region.id,
                     area_index,
                     monster_id,
-                    "спящий монстр не разрешён при пробуждении"
+                    "stale спящий монстр удалён при пробуждении"
                 );
                 continue;
             };
-            let Some((class, mutation)) = region
+            let Some(property_key) = monster.base_property_key().map(<[u8]>::to_vec) else {
+                tracing::warn!(
+                    region_id = region.id,
+                    area_index,
+                    monster_id,
+                    "спящий монстр без ключа свойств сохранён"
+                );
+                region.restore_sleeping_monster(area_index, monster_id);
+                continue;
+            };
+            let Some(property) = self
+                .find_monster_property_by_origin_name(&property_key)
+                .cloned()
+            else {
+                tracing::warn!(
+                    region_id = region.id,
+                    area_index,
+                    monster_id,
+                    property = ?String::from_utf8_lossy(&property_key),
+                    "спящий монстр сохранён до появления свойств"
+                );
+                region.restore_sleeping_monster(area_index, monster_id);
+                continue;
+            };
+            let Some((class, publish_states)) = region
                 .find_monster_by_id_mut(monster_id)
                 .map(|monster| {
-                    let mutation =
+                    let publish_states =
                         monster.wake_ai(now_milliseconds(), resume_timer_ms, &property);
                     let class = if monster.is_tamed() {
                         AreaWokenMonsterClass::Pet
@@ -13630,12 +13652,12 @@ impl CGame {
                     } else {
                         AreaWokenMonsterClass::Active
                     };
-                    (class, mutation)
+                    (class, publish_states)
                 })
             else {
                 continue;
             };
-            if mutation.publish_states {
+            if publish_states {
                 let _ = self.publish_owned_monster_states(region, monster_id);
             }
             region.restore_woken_monster(area_index, monster_id, class);
