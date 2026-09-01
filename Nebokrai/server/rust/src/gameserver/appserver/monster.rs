@@ -940,7 +940,7 @@ impl CMonster {
             defense: self.defense(property),
             dodge: u32::from(self.dodge(property)),
             element_resistance: self.element_resistance(property),
-            soul_resistance: property.soul_resistant as u16,
+            soul_resistance: self.soul_resistance(property),
             attack_avoid: property.attack_avoid,
             element_avoid: property.element_avoid,
             promotion_magic_attack_factor: self.move_shape.promotion_magic_attack_factor(),
@@ -987,6 +987,13 @@ impl CMonster {
         }
         let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[3]));
         scaled.trunc() as i32 as u32
+    }
+
+    /// Достигнутая часть `CMonster::GetSoulResistant` (RVA `0x000E6970`):
+    /// текущая цепочка не имеет setter-а runtime modifier, но ресурсное
+    /// значение всё равно проходит исходную нижнюю границу до `ushort`.
+    pub(crate) fn soul_resistance(&self, property: &MonsterProperties) -> u16 {
+        (property.soul_resistant as i32).max(1) as u16
     }
 
     /// Exact `CMonster::GetStopFrame` (RVA `0x000E6A40`): только приручённый
@@ -1878,20 +1885,6 @@ impl CMonster {
 // PROTOTYPE: ulong __thiscall GetElementResistant(void)
 //
 // Реализовано выше как `element_resistance`.
-//
-
-// ============================================================================
-// FUNCTION: CMonster::GetSoulResistant
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1550
-// RVA: 0x000E6970
-// ADDRESS: 004e6970
-// PROTOTYPE: ushort __thiscall GetSoulResistant(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
 //
 
 // ============================================================================
