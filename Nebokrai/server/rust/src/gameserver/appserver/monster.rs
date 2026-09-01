@@ -73,7 +73,8 @@
 //! `CBaseAI` и оставляет формирование `0xBF60F` координирующему `CGame`.
 //! Pet attack/speed/timing и elemental modifier getters применяют факторы
 //! только при валидной player-owner связи; целочисленные результаты сохраняют
-//! x87 truncation.
+//! x87 truncation. Некоммутативные attack/element property-state обходятся в
+//! общем byte-exact порядке `m_vStates`, включая повторяемые Fury и BattleFairy.
 //! Два направления virtual `IsAttackAble` разведены явно: этот owner
 //! проверяет monster-target относительно player/monster attacker-а, а
 //! обратную player-target политику хранит `CPlayer` и координирует `CGame`.
@@ -975,7 +976,11 @@ impl CMonster {
             element_avoid: self.element_avoid(property),
             promotion_magic_attack_factor: self.move_shape.promotion_magic_attack_factor(),
         };
-        for state in self.move_shape.reached_property_states() { if let super::moveshape::ReachedPropertyState::PoisonFog(state) = state { properties = state.apply_to_monster(properties); } }
+        for state in self.move_shape.ordered_monster_property_states() {
+            if let super::moveshape::MonsterPropertyState::PoisonFog(state) = state {
+                properties = state.apply_to_monster(properties);
+            }
+        }
         properties
     }
 
@@ -1132,33 +1137,35 @@ impl CMonster {
         mut minimum: u32,
         mut maximum: u32,
     ) -> (u32, u32) {
-        for state in self.move_shape.swordship_states() {
-            (minimum, maximum) = state.apply_to_monster(minimum, maximum);
-        }
-        for state in self.move_shape.battle_fairy_attribute_states() {
-            minimum = state.apply_to_monster_attack(minimum);
-            maximum = state.apply_to_monster_attack(maximum);
-        }
-        for state in self.move_shape.fury_states() {
-            maximum = state.apply_to_monster_max_attack(maximum);
-        }
-        for state in self.move_shape.reached_property_states() {
+        for state in self.move_shape.ordered_monster_property_states() {
             match state {
-                super::moveshape::ReachedPropertyState::Weak(state) => {
+                super::moveshape::MonsterPropertyState::Swordship(state) => {
                     (minimum, maximum) = state.apply_to_monster(minimum, maximum);
                 }
-                super::moveshape::ReachedPropertyState::PoisonFog(_) => {}
-                super::moveshape::ReachedPropertyState::GodBless(state) => {
+                super::moveshape::MonsterPropertyState::BattleFairyAttribute(state) => {
+                    minimum = state.apply_to_monster_attack(minimum);
+                    maximum = state.apply_to_monster_attack(maximum);
+                }
+                super::moveshape::MonsterPropertyState::Fury(state) => {
+                    maximum = state.apply_to_monster_max_attack(maximum);
+                }
+                super::moveshape::MonsterPropertyState::Weak(state) => {
+                    (minimum, maximum) = state.apply_to_monster(minimum, maximum);
+                }
+                super::moveshape::MonsterPropertyState::GodBless(state) => {
                     (minimum, maximum, _) = state.apply_to_monster(minimum, maximum, 0);
                 }
-                super::moveshape::ReachedPropertyState::Roar(state) => {
+                super::moveshape::MonsterPropertyState::Roar(state) => {
                     (minimum, maximum, _) = state.apply_to_monster(minimum, maximum, 0);
                 }
+                super::moveshape::MonsterPropertyState::BossBlueFury(state) => {
+                    minimum = state.apply_to_monster_attack(minimum);
+                    maximum = state.apply_to_monster_attack(maximum);
+                }
+                super::moveshape::MonsterPropertyState::TaiJi(_)
+                | super::moveshape::MonsterPropertyState::Origin(_)
+                | super::moveshape::MonsterPropertyState::PoisonFog(_) => {}
             }
-        }
-        if let Some(state) = self.move_shape.boss_blue_fury_state() {
-            minimum = state.apply_to_monster_attack(minimum);
-            maximum = state.apply_to_monster_attack(maximum);
         }
         (minimum, maximum)
     }
@@ -1167,23 +1174,27 @@ impl CMonster {
     /// runtime modifier сначала ограничивается нулём, затем pet factor `2`
     /// умножается в x87 и усекается к signed DWORD.
     pub(crate) fn element_modifier(&self, mut value: i32) -> u32 {
-        if let Some(state) = self.move_shape.origin_state() {
-            value = state.apply_to_monster(value);
-        }
-        for state in self.move_shape.reached_property_states() {
+        for state in self.move_shape.ordered_monster_property_states() {
             match state {
-                super::moveshape::ReachedPropertyState::GodBless(state) => {
+                super::moveshape::MonsterPropertyState::Origin(state) => {
+                    value = state.apply_to_monster(value);
+                }
+                super::moveshape::MonsterPropertyState::GodBless(state) => {
                     (_, _, value) = state.apply_to_monster(0, 0, value);
                 }
-                super::moveshape::ReachedPropertyState::Roar(state) => {
+                super::moveshape::MonsterPropertyState::Roar(state) => {
                     (_, _, value) = state.apply_to_monster(0, 0, value);
                 }
-                super::moveshape::ReachedPropertyState::Weak(_) => {}
-                super::moveshape::ReachedPropertyState::PoisonFog(_) => {}
+                super::moveshape::MonsterPropertyState::BattleFairyAttribute(state) => {
+                    value = state.apply_to_monster_element(value);
+                }
+                super::moveshape::MonsterPropertyState::TaiJi(_)
+                | super::moveshape::MonsterPropertyState::Swordship(_)
+                | super::moveshape::MonsterPropertyState::Fury(_)
+                | super::moveshape::MonsterPropertyState::Weak(_)
+                | super::moveshape::MonsterPropertyState::PoisonFog(_)
+                | super::moveshape::MonsterPropertyState::BossBlueFury(_) => {}
             }
-        }
-        for state in self.move_shape.battle_fairy_attribute_states() {
-            value = state.apply_to_monster_element(value);
         }
         let base = value.max(0) as u32;
         if !self.has_player_pet_master() {
