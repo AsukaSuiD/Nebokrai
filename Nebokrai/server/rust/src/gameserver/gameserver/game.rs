@@ -16594,8 +16594,15 @@ impl CGame {
         gate_id: i32,
         operation: i32,
     ) -> bool {
-        let Some(ServerRegionOwner::City(mut region)) = self.take_region_owner(region_id) else {
+        let Some(owner) = self.take_region_owner(region_id) else {
             return false;
+        };
+        let mut region = match owner {
+            ServerRegionOwner::City(region) => region,
+            owner => {
+                self.restore_region_owner(owner);
+                return false;
+            }
         };
         let operated = region.operator_city_gate(gate_id, operation);
         let publication = operated
