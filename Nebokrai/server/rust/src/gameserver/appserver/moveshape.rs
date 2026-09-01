@@ -31,9 +31,11 @@
 //! `CNotDisappearAfterDead` использует точный client-time override
 //! `CExStateNew::GetRemainedTime`: нулевой срок и достигнутый wrapping deadline
 //! дают `0`, иначе публикуется оставшийся DWORD.
-//! Расходуемые восстановления HP/MP также входят в общий DB-кодек: их
-//! 16-байтные записи материализуются при загрузке, активируются при входе и
-//! удаляются из wire вместе с живым состоянием, не обрывая следующий record.
+//! Расходуемые и автоматические восстановления HP/MP также входят в общий
+//! DB-кодек. 16-байтные расходуемые записи материализуются при загрузке,
+//! активируются при входе и удаляются из wire вместе с живым состоянием, не
+//! обрывая следующий record. Четыре 12-байтных автоматических записи при
+//! `RestoreHpMp` атомарно заменяются значениями актуальных свойств игрока.
 //! Доступ к старому кодеку с порядком байтов от младшего к старшему выполняют
 //! общие `LegacyReader` и `LegacyWriter`; размещение записей и их смещения
 //! остаются у этого владельца.
@@ -201,7 +203,9 @@ use crate::gameserver::appserver::skills::godblessstate2::GOD_BLESS_STATE_2_ID;
 use crate::gameserver::appserver::skills::soulcollectstate::{
     SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
 };
-use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
+use crate::gameserver::appserver::states::automaticrestore::{
+    AUTOMATIC_RESTORE_STATE_BYTES, AutomaticRestoreState, is_automatic_restore_state_id,
+};
 use crate::gameserver::appserver::states::state::{
     default_additional_data, default_client_state_time,
 };
@@ -817,7 +821,6 @@ impl CMoveShape {
             return None;
         }
         let total_count = declared_count
-            .checked_add(self.automatic_restore_states.len())?
             .checked_add(self.particular_states.len())?
             .checked_add(self.team_recruitment_states.len())?;
         let mut payload = Vec::new();
@@ -852,11 +855,6 @@ impl CMoveShape {
                 &mut timed_state_now_milliseconds,
             )?);
             writer.write_u32(self.client_state_additional_data(state_id as u32));
-        }
-        for state in &self.automatic_restore_states {
-            writer.write_u32(state.state_id());
-            writer.write_i32(state.client_state_time());
-            writer.write_u32(default_additional_data());
         }
         if restore_index != self.consumable_restore_states.len() {
             return None;
@@ -909,7 +907,8 @@ impl CMoveShape {
                 | ENLARGE_MAX_MP_SKILL_ID
                 | ORIGIN_SKILL_ID
                 | RIDE_STATE_ID
-        ) || PersistentAgilityFamilyState::is_known_skill(state_id);
+        ) || PersistentAgilityFamilyState::is_known_skill(state_id)
+            || is_automatic_restore_state_id(state_id);
         if permanent {
             return Some(default_client_state_time());
         }
@@ -1343,6 +1342,11 @@ impl CMoveShape {
         let state_owner = self.shape.identity();
         self.consumable_restore_states =
             ConsumableRestoreStateStorage::decode_known(&states, &known_offsets);
+        self.automatic_restore_states = known_offsets
+            .iter()
+            .copied()
+            .filter_map(|offset| AutomaticRestoreState::decode(&states, offset))
+            .collect();
         self.change_body_states = ChangeBodyState::decode_all(&states, 0);
         self.change_body_states.retain(|state| {
             state
@@ -1837,7 +1841,26 @@ impl CMoveShape {
         &mut self,
         properties: super::player::PlayerCombatProperties,
     ) {
-        self.automatic_restore_states = AutomaticRestoreState::restored(properties).into();
+        while let Some(offset) = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .find(|offset| {
+                read_u32(&self.ex_states, *offset).is_some_and(is_automatic_restore_state_id)
+            })
+        {
+            let _ = self.remove_serialized_state_record_at(offset, AUTOMATIC_RESTORE_STATE_BYTES);
+        }
+        let states = AutomaticRestoreState::restored(properties);
+        for state in states {
+            self.append_serialized_state_record(&state.encoded_for_install());
+        }
+        self.automatic_restore_states = states.into();
+    }
+
+    pub(crate) fn activate_loaded_automatic_restore_states(&mut self, now_ms: u32) -> usize {
+        for state in &mut self.automatic_restore_states {
+            *state = state.activate_loaded(now_ms);
+        }
+        self.automatic_restore_states.len()
     }
 
     pub(crate) fn begin_consumable_health_restore(
@@ -5269,6 +5292,7 @@ fn known_state_record_offsets(payload: &[u8]) -> Vec<usize> {
             | super::skills::superheal2::SUPER_HEAL_2_SKILL_ID => HEAL_STATE_BYTES,
             state_id if state_id == RESTORE_HP_STATE_ID as u32 => RESTORE_HP_STATE_BYTES,
             state_id if state_id == RESTORE_MP_STATE_ID as u32 => RESTORE_MP_STATE_BYTES,
+            state_id if is_automatic_restore_state_id(state_id) => AUTOMATIC_RESTORE_STATE_BYTES,
             CURE_STATE_SKILL_ID => CURE_STATE_BYTES,
             super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID => ENLARGE_FULL_MISS_STATE_BYTES,
             TAIJI_SKILL_ID => TAIJI_STATE_BYTES,

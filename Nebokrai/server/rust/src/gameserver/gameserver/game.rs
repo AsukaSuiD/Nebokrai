@@ -30446,6 +30446,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_consumable_restore_states(login_tick_ms);
+        let _loaded_automatic_restore_states = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_automatic_restore_states(login_tick_ms);
         let loaded_change_body_states = self
             .players
             .get_mut(&expected_player_id)

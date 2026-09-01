@@ -8,15 +8,31 @@
 //! часов, которым фиксируется момент срабатывания. Объём восстановления
 //! читается из живого `PlayerCombatProperties`, как в исходных `AI`. Все
 //! четыре бессрочных состояния входят в полный клиентский снимок с базовым
-//! нулевым client-time.
+//! нулевым client-time. Общие `Unserialize/Serialize` по адресам
+//! `0x004F9D80/0x005ECE70` задают 12-байтную DB-запись из ID, частоты и
+//! сохранённого объёма. `CPlayer::RestoreHpMp` заменяет прежние записи четырьмя
+//! свежими в указанном порядке; peace-варианты сохраняют объём как биты
+//! `float`, fight-варианты — как исходный `DWORD`. Живой `AI` по-прежнему
+//! читает актуальный объём из свойств игрока.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
-use crate::gameserver::appserver::states::state::default_client_state_time;
 
+pub(crate) const AUTOMATIC_RESTORE_STATE_BYTES: usize = 12;
 pub(crate) const AUTOMATIC_RESTORE_HP_PEACE_STATE_ID: u32 = 0x186a2;
 pub(crate) const AUTOMATIC_RESTORE_MP_PEACE_STATE_ID: u32 = 0x186a3;
 pub(crate) const AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID: u32 = 0x186ad;
 pub(crate) const AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID: u32 = 0x186ae;
+
+pub(crate) const fn is_automatic_restore_state_id(state_id: u32) -> bool {
+    matches!(
+        state_id,
+        AUTOMATIC_RESTORE_HP_PEACE_STATE_ID
+            | AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID
+            | AUTOMATIC_RESTORE_MP_PEACE_STATE_ID
+            | AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AutomaticRestoreKind {
@@ -36,25 +52,80 @@ pub(crate) enum AutomaticRestoreMutation {
 pub(crate) struct AutomaticRestoreState {
     kind: AutomaticRestoreKind,
     frequency_ms: u32,
+    persisted_volume: u32,
     last_tick_ms: u32,
 }
 
 impl AutomaticRestoreState {
-    const fn new(kind: AutomaticRestoreKind, frequency_ms: i32) -> Self {
+    const fn new(
+        kind: AutomaticRestoreKind,
+        frequency_ms: u32,
+        persisted_volume: u32,
+    ) -> Self {
         Self {
             kind,
-            frequency_ms: frequency_ms as u32,
+            frequency_ms,
+            persisted_volume,
             last_tick_ms: 0,
         }
     }
 
     pub(crate) const fn restored(properties: PlayerCombatProperties) -> [Self; 4] {
         [
-            Self::new(AutomaticRestoreKind::HealthPeace, properties.resume_hp_peace),
-            Self::new(AutomaticRestoreKind::HealthFight, properties.resume_hp_fight),
-            Self::new(AutomaticRestoreKind::ManaPeace, properties.resume_mp_peace),
-            Self::new(AutomaticRestoreKind::ManaFight, properties.resume_mp_fight),
+            Self::new(
+                AutomaticRestoreKind::HealthPeace,
+                properties.resume_hp_peace as u32,
+                (properties.restored_hp_peace as f32).to_bits(),
+            ),
+            Self::new(
+                AutomaticRestoreKind::HealthFight,
+                properties.resume_hp_fight as u32,
+                properties.restored_hp_fight as u32,
+            ),
+            Self::new(
+                AutomaticRestoreKind::ManaPeace,
+                properties.resume_mp_peace as u32,
+                (properties.restored_mp_peace as f32).to_bits(),
+            ),
+            Self::new(
+                AutomaticRestoreKind::ManaFight,
+                properties.resume_mp_fight as u32,
+                properties.restored_mp_fight as u32,
+            ),
         ]
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Option<Self> {
+        let mut reader = LegacyReader::at(payload, offset).ok()?;
+        let state_id = reader.read_u32().ok()?;
+        let kind = match state_id {
+            AUTOMATIC_RESTORE_HP_PEACE_STATE_ID => AutomaticRestoreKind::HealthPeace,
+            AUTOMATIC_RESTORE_HP_FIGHT_STATE_ID => AutomaticRestoreKind::HealthFight,
+            AUTOMATIC_RESTORE_MP_PEACE_STATE_ID => AutomaticRestoreKind::ManaPeace,
+            AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID => AutomaticRestoreKind::ManaFight,
+            _ => return None,
+        };
+        Some(Self::new(
+            kind,
+            reader.read_u32().ok()?,
+            reader.read_u32().ok()?,
+        ))
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; AUTOMATIC_RESTORE_STATE_BYTES] {
+        let mut bytes = Vec::with_capacity(AUTOMATIC_RESTORE_STATE_BYTES);
+        let mut writer = LegacyWriter::new(&mut bytes);
+        writer.write_u32(self.state_id());
+        writer.write_u32(self.frequency_ms);
+        writer.write_u32(self.persisted_volume);
+        bytes
+            .try_into()
+            .expect("размер автоматического состояния восстановления фиксирован")
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
+        self.last_tick_ms = now_ms;
+        self
     }
 
     pub(crate) const fn state_id(self) -> u32 {
@@ -64,10 +135,6 @@ impl AutomaticRestoreState {
             AutomaticRestoreKind::ManaPeace => AUTOMATIC_RESTORE_MP_PEACE_STATE_ID,
             AutomaticRestoreKind::ManaFight => AUTOMATIC_RESTORE_MP_FIGHT_STATE_ID,
         }
-    }
-
-    pub(crate) const fn client_state_time(self) -> i32 {
-        default_client_state_time()
     }
 
     pub(crate) const fn should_check(
