@@ -6,11 +6,13 @@
 //! `CBlindState` таймер, `End` и реакция на защиту снимают оба запрета и
 //! публикуют `0xBFE04`; беззнаковая строгая проверка срока и порядок вставки
 //! сохраняются каноническим хранилищем. Exact vtable также подтверждает
-//! 8-байтовую persisted-запись `ID + remaining time`; её размер подключён к
-//! общему codec без выдуманного player lifecycle. Конструктор по умолчанию и
+//! 8-байтовую persisted-запись `ID + remaining time`; codec подключён к
+//! общему `CMoveShape` storage и восстанавливает унаследованный blind lifecycle.
+//! Конструктор по умолчанию и
 //! координатные перегрузки остаются в RAW ниже. Унаследованный клиентский срок
 //! использует общее тело `CBlindState` по `0x005F2CD0`.
 
+use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -35,6 +37,30 @@ impl SealState {
 
     pub(crate) const fn skill_id(self) -> u32 {
         SEAL_STATE_ID
+    }
+
+    pub(crate) fn decode(payload: &[u8], offset: usize) -> Result<Self, LegacyReadBlock> {
+        let mut reader = LegacyReader::at(payload, offset)?;
+        if reader.read_u32()? != SEAL_STATE_ID {
+            return Err(LegacyReadBlock {
+                offset,
+                needed: 4,
+                available: payload.len().saturating_sub(offset),
+            });
+        }
+        Ok(Self::new(0, reader.read_u32()?))
+    }
+
+    pub(crate) const fn activate_loaded(mut self, now_ms: u32) -> Self {
+        self.started_at_ms = now_ms;
+        self
+    }
+
+    pub(crate) fn encoded_for_install(self) -> [u8; SEAL_STATE_BYTES] {
+        let mut bytes = [0; SEAL_STATE_BYTES];
+        bytes[..4].copy_from_slice(&SEAL_STATE_ID.to_le_bytes());
+        bytes[4..].copy_from_slice(&self.keep_time_ms.to_le_bytes());
+        bytes
     }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {

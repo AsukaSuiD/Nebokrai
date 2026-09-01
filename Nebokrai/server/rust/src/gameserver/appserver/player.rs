@@ -5529,6 +5529,13 @@ impl CPlayer {
         self.move_shape.activate_loaded_blind_state(now_ms)
     }
 
+    pub(crate) fn activate_loaded_seal_state(
+        &mut self,
+        now_ms: u32,
+    ) -> Option<super::skills::sealstate::SealState> {
+        self.move_shape.activate_loaded_seal_state(now_ms)
+    }
+
     pub(crate) fn activate_loaded_knock_out_state(
         &mut self,
         now_ms: u32,

@@ -1288,6 +1288,7 @@ use crate::gameserver::appserver::skills::knockoutstate::{
     send_knock_out_state_visual,
 };
 use crate::gameserver::appserver::skills::blindstate::send_blind_state_visual;
+use crate::gameserver::appserver::skills::sealstate::send_seal_state_visual;
 use crate::gameserver::appserver::skills::spiderwebstate::send_spider_web_state_visual;
 use crate::gameserver::appserver::skills::boalockstate::{
     expire_monster_boa_lock_state, expire_player_boa_lock_state,
@@ -30552,6 +30553,11 @@ impl CGame {
             .get_mut(&expected_player_id)
             .expect("spatial login сохраняет player map owner")
             .activate_loaded_blind_state(login_tick_ms);
+        let loaded_seal_state = self
+            .players
+            .get_mut(&expected_player_id)
+            .expect("spatial login сохраняет player map owner")
+            .activate_loaded_seal_state(login_tick_ms);
         let loaded_boa_lock_state = self
             .players
             .get_mut(&expected_player_id)
@@ -30781,6 +30787,25 @@ impl CGame {
             && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
         {
             send_blind_state_visual(
+                self,
+                region_id,
+                ShapeIdentity {
+                    object_type: PLAYER_TYPE,
+                    id: expected_player_id,
+                    ex_id: CGuid::GUID_INVALID,
+                },
+                x,
+                y,
+                state,
+                true,
+                || context.now_milliseconds(),
+            );
+        }
+        if let Some(state) = loaded_seal_state
+            && let Some(player) = self.find_player(expected_player_id)
+            && let (Ok(x), Ok(y)) = (player.shape().get_tile_x(), player.shape().get_tile_y())
+        {
+            send_seal_state_visual(
                 self,
                 region_id,
                 ShapeIdentity {

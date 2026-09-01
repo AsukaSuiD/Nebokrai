@@ -1155,6 +1155,17 @@ impl CMoveShape {
                 );
             }
         }
+        if let Some(state) = self.seal_state {
+            update_known_state_record(
+                &mut payload,
+                state.skill_id(),
+                &[
+                    state.skill_id().to_le_bytes(),
+                    (state.client_time(&mut timed_state_now_milliseconds) as u32).to_le_bytes(),
+                ]
+                .concat(),
+            );
+        }
         let strike_offsets: Vec<_> = known_state_record_offsets(&payload)
             .into_iter()
             .filter(|offset| read_u32(&payload, *offset) == Some(STRIKE_STATE_ID))
@@ -1464,6 +1475,17 @@ impl CMoveShape {
             .find(|offset| read_u32(&states, *offset) == Some(super::skills::spiderweb::SPIDER_WEB_SKILL_ID))
             .and_then(|offset| SpiderWebState::decode(&states, offset).ok());
         if let Some(state) = self.spider_web_state {
+            self.blind_state_order.insert(state.skill_id());
+            self.curable_state_order.insert(state.skill_id());
+        }
+        self.blind_state_order.shift_remove(&SEAL_STATE_ID);
+        self.curable_state_order.shift_remove(&SEAL_STATE_ID);
+        self.seal_state = known_offsets
+            .iter()
+            .copied()
+            .find(|offset| read_u32(&states, *offset) == Some(SEAL_STATE_ID))
+            .and_then(|offset| SealState::decode(&states, offset).ok());
+        if let Some(state) = self.seal_state {
             self.blind_state_order.insert(state.skill_id());
             self.curable_state_order.insert(state.skill_id());
         }
@@ -3211,9 +3233,19 @@ impl CMoveShape {
     }
 
     pub(crate) fn replace_seal_state(&mut self, state: SealState) -> Option<SealState> {
+        self.remove_serialized_state_record(state.skill_id(), SEAL_STATE_BYTES);
+        self.append_serialized_state_record(&state.encoded_for_install());
         self.blind_state_order.insert(state.skill_id());
         self.curable_state_order.insert(state.skill_id());
         self.seal_state.replace(state)
+    }
+
+    pub(crate) fn activate_loaded_seal_state(&mut self, now_ms: u32) -> Option<SealState> {
+        let state = self.seal_state?.activate_loaded(now_ms);
+        self.seal_state = Some(state);
+        self.set_moveable(false);
+        self.set_fightable(false);
+        Some(state)
     }
 
     pub(crate) fn take_expired_seal_state(&mut self, now_ms: u32) -> Option<SealState> {
@@ -3221,6 +3253,7 @@ impl CMoveShape {
         self.seal_state = None;
         self.blind_state_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), SEAL_STATE_BYTES);
         Some(state)
     }
 
@@ -3228,6 +3261,7 @@ impl CMoveShape {
         let state = self.seal_state.take()?;
         self.blind_state_order.shift_remove(&state.skill_id());
         self.curable_state_order.shift_remove(&state.skill_id());
+        self.remove_serialized_state_record(state.skill_id(), SEAL_STATE_BYTES);
         Some(state)
     }
 
