@@ -11,7 +11,7 @@ use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
     BUILD_OBJECT_TYPE, CITY_GATE_OBJECT_TYPE,
     BaseAttackExecutionState, CGame, CGuid, CMessage, CMonster, CPlayer, CPlayerAI,
-    GAP_WEAPON_DAMAGE_LEVEL, GameMainLoopRuntime, MONSTER_TYPE,
+    GameMainLoopRuntime, MONSTER_TYPE,
     MonsterKillingAttack, PLAYER_TYPE, PlayerKillingBlow, PlayerSkillDispatch,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -302,20 +302,16 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             attacker_properties.critical_rate_bits =
                 game.globe_setup.critical_rate().max(1.0).to_bits();
         }
-        let weapon_level = game
-            .find_player(player_id)
-            .and_then(|player| player.equipment().get_goods(2))
-            .map_or(0, |goods| {
-                goods.addon_property_value(&game.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
-            });
         let (weapon_divisor, weapon_minimum) = game.globe_setup.weapon_damage_factors();
-        let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-        let mut damage_factor = if weapon_divisor == 0.0 {
-            1.0
-        } else {
-            delta as f32 / weapon_divisor
-        };
-        damage_factor = damage_factor.min(1.0).max(weapon_minimum);
+        let damage_factor = game
+            .find_player(player_id)
+            .expect("базовая атака сохраняет player owner до расчёта")
+            .weapon_modifier(
+                &game.goods_factory,
+                i32::from(target_level),
+                weapon_divisor,
+                weapon_minimum,
+            );
         let minimum = attacker_properties.minimum_attack as i32;
         let maximum = attacker_properties.maximum_attack as i32;
         let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
@@ -575,22 +571,16 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         let maximum = attacker_properties.maximum_attack as i32;
         let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
         let physical = minimum.wrapping_add(game_legacy_random(&mut game.random_state, span));
-        let weapon_level = game
-            .find_player(player_id)
-            .and_then(|player| player.equipment().get_goods(2))
-            .map_or(0, |goods| {
-                goods.addon_property_value(&game.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
-            });
         let (weapon_divisor, weapon_minimum) = game.globe_setup.weapon_damage_factors();
-        let delta = weapon_level
-            .wrapping_sub(i32::from(monster_properties.level))
-            .max(0);
-        let mut damage_factor = if weapon_divisor == 0.0 {
-            1.0
-        } else {
-            delta as f32 / weapon_divisor
-        };
-        damage_factor = damage_factor.min(1.0).max(weapon_minimum);
+        let damage_factor = game
+            .find_player(player_id)
+            .expect("базовая атака сохраняет player owner до расчёта")
+            .weapon_modifier(
+                &game.goods_factory,
+                i32::from(monster_properties.level),
+                weapon_divisor,
+                weapon_minimum,
+            );
         let mut attack = AttackInformation {
             skill_id: BASE_ATTACK_SKILL_ID,
             skill_level: skill_level as u8,
@@ -975,19 +965,16 @@ fn execute_player_stationary_attack<Runtime: GameMainLoopRuntime>(
             game.globe_setup.critical_rate().max(1.0).to_bits();
     }
 
-    let weapon_level = game
-        .find_player(player_id)
-        .and_then(|player| player.equipment().get_goods(2))
-        .map_or(0, |goods| {
-            goods.addon_property_value(&game.goods_factory, GAP_WEAPON_DAMAGE_LEVEL, 1)
-        });
     let (weapon_divisor, weapon_minimum) = game.globe_setup.weapon_damage_factors();
-    let mut damage_factor = if weapon_divisor == 0.0 {
-        1.0
-    } else {
-        weapon_level.max(0) as f32 / weapon_divisor
-    };
-    damage_factor = damage_factor.min(1.0).max(weapon_minimum);
+    let damage_factor = game
+        .find_player(player_id)
+        .expect("стационарная атака сохраняет player owner до расчёта")
+        .weapon_modifier(
+            &game.goods_factory,
+            0,
+            weapon_divisor,
+            weapon_minimum,
+        );
     let minimum = attacker_properties.minimum_attack as i32;
     let maximum = attacker_properties.maximum_attack as i32;
     let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
