@@ -19,6 +19,8 @@
 //! wire строго на первом false, как исходная цепочка. После чтения base-wire
 //! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
 //! принимается как независимый persisted fact.
+//! Quest-map decoder сохраняет signed legacy count: отрицательное значение
+//! очищает карту и не отклоняет остальной player handoff.
 //! Exact virtual tail этого decoder-а вызывает `CPlayer::InitSkills`: он
 //! гарантирует базовую защиту и профессии 0/1/2 их базовые attack-owner-ы, не
 //! заменяет уже загруженные записи и завершает вход `SetHP(GetMaxHP)`.
@@ -2875,8 +2877,8 @@ impl CPlayer {
             player.city_war_died_state_time_ms > 0 && player.base_properties.occupation != 6;
 
         player.quest_states.clear();
-        let quest_count = read_player_game_save_count(source, cursor, "m_PlayerQuests")?;
-        for _ in 0..quest_count {
+        let quest_count = read_player_game_save_i32(source, cursor, "m_PlayerQuests")?;
+        for _ in 0..quest_count.max(0) {
             let quest_id = read_player_game_save_u16(source, cursor, "tagPlayerQuest.wQuestID")?;
             let state = read_player_game_save_u8(source, cursor, "tagPlayerQuest.byComplete")?;
             player.quest_states.insert(quest_id, state);
@@ -17155,20 +17157,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // IMPLEMENTED: `CPlayer::OnObjectAdded` связан с packet/equipment add и
 // particular-state owner-ом; покрытый raw-блок удалён.
 
-// ============================================================================
-// FUNCTION: CPlayer::DecordQuestDataFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:11278
-// RVA: 0x000452D0
-// ADDRESS: 004452d0
-// PROTOTYPE: bool __thiscall DecordQuestDataFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
+// IMPLEMENTED: `CPlayer::DecordQuestDataFromByteArray` входит в полный
+// GameSave decoder; покрытый raw-блок удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::AutoAddAuctionGoods
