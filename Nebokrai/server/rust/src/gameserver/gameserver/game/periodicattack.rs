@@ -308,6 +308,14 @@ impl CGame {
         }
         if current_health != 0 && attack.full_miss == 0 {
             let _ = self.queue_player_hurt_ai(target_id, damage, runtime);
+            let _ = self.retarget_passive_pets_after_player_hurt(
+                target_id,
+                ShapeIdentity {
+                    object_type: master.master_type,
+                    id: master.master_id,
+                    ex_id: CGuid::GUID_INVALID,
+                },
+            );
             let _ = super::finish_player_blind_states_on_defense(self, target_id, 0);
         }
         if current_health == 0 {

@@ -4936,6 +4936,37 @@ impl CGame {
         true
     }
 
+    /// Exact pet-tail `CPlayer::OnBeenHurted`: только прирученные питомцы в
+    /// пассивном режиме, ещё не имеющие цели, принимают identity нападавшего.
+    /// Порядок сохранённого player pet-list определяет порядок мутаций.
+    pub(crate) fn retarget_passive_pets_after_player_hurt(
+        &mut self,
+        player_id: i32,
+        attacker: ShapeIdentity,
+    ) -> usize {
+        let Some((region_id, pets)) = self.find_player(player_id).and_then(|player| {
+            Some((player.server_region_id()?, player.active_pets().to_vec()))
+        }) else {
+            return 0;
+        };
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return 0;
+        };
+        let mut retargeted = 0usize;
+        for pet in pets {
+            if pet.object_type == MONSTER_TYPE
+                && owner
+                    .base_mut()
+                    .find_monster_by_id_mut(pet.id)
+                    .is_some_and(|pet| pet.retarget_passive_pet(attacker))
+            {
+                retargeted = retargeted.wrapping_add(1);
+            }
+        }
+        self.restore_region_owner(owner);
+        retargeted
+    }
+
     pub(crate) fn with_legacy_random_stream<Output>(
         &mut self,
         operation: impl FnOnce(&mut Self, &mut GameLegacyRandomStream) -> Output,
@@ -45124,6 +45155,14 @@ impl CGame {
         }
         if current_health != 0 && attack.full_miss == 0 {
             let _ = self.queue_player_hurt_ai(target_id, damage, runtime);
+            let _ = self.retarget_passive_pets_after_player_hurt(
+                target_id,
+                ShapeIdentity {
+                    object_type: master.master_type,
+                    id: master.master_id,
+                    ex_id: CGuid::GUID_INVALID,
+                },
+            );
             let _ = finish_player_blind_states_on_defense(self, target_id, 0);
         }
         if current_health == 0 {
