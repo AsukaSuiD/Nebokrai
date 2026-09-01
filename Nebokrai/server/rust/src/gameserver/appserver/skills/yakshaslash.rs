@@ -12,7 +12,7 @@
 //! `End(true)` фиксирует обновление свойств и cooldown после удара;
 //! `End(false)` прекращает полёт без отката уже применённой атаки.
 
-use super::baseattack::{real_distance, time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
+use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::{MonsterAttackDeath, owned_monster_attackable, resolve_owned_monster_attack_target};
@@ -23,7 +23,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
@@ -92,8 +92,8 @@ fn fail(game: &CGame, player_id: i32, code: u8) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, code);
 }
 
-fn target_position(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<(i32, i32)> {
-    game.base_magic_target_view(region_id, target).map(|view| (view.tile_x, view.tile_y))
+fn target_view(game: &CGame, region_id: i32, target: ShapeIdentity) -> Option<ShapeView> {
+    game.base_magic_target_view(region_id, target)
 }
 
 fn send_cast(game: &mut CGame, player_id: i32, level: i32, target: ShapeIdentity, position: (i32, i32), flying_time: Option<u32>) {
@@ -132,7 +132,7 @@ fn send_monster_cast(game: &CGame, region: &CServerRegion, monster_id: i32, leve
 /// по числу клеток и общий monster defence/death tail.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, region: &mut CServerRegion, monster_id: i32, target_identity: ShapeIdentity, skill_level: u16, properties: &CSkillBaseProperties, property: &MonsterProperties, now_ms: u32, runtime: &mut Runtime, deaths: &mut Vec<MonsterAttackDeath>) -> bool {
-    let Some((source, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).map(|monster| (monster.move_shape().shape().clone(), monster.master_info(), monster.is_tamed(), monster.base_attack_cast(), monster.monster_projectile_progress())) else { return false };
+    let Some((source, source_view, master, tamed, cast, progress)) = region.find_monster_by_id(monster_id).and_then(|monster| Some((monster.move_shape().shape().clone(), monster.shape_view(property)?, monster.master_info(), monster.is_tamed(), monster.base_attack_cast(), monster.monster_projectile_progress()))) else { return false };
     let Some(target) = resolve_owned_monster_attack_target(game, region, target_identity) else {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.move_shape_mut().set_moveable(true); monster.clear_ai_target(); }
         return true;
@@ -150,7 +150,7 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(YAKSHA_SLASH_SKILL_ID)).unwrap_or_default();
         if last_used != 0 && !time_reached(now_ms, last_used, reuse) { return true; }
         let maximum = properties.query_property(TARGET_MAX_DISTANCE);
-        if (maximum != 0 && real_distance(source_x, source_y, target_x, target_y) > maximum as i32) || path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
+        if (maximum != 0 && source_view.real_distance(Some(target.view)) > maximum as i32) || path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }
             return true;
         }
@@ -201,21 +201,23 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, h
 pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_yaksha_slash_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let PlayerSkillDispatch::Object { target, .. } = dispatch else { unreachable!() };
-    let Some((region_id, source_x, source_y, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID)))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some((region_id, source_view, level)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape_view()?, player.learned_skill_level(YAKSHA_SLASH_SKILL_ID)))) else { return terminal(QueuedSkillExecutionState::Rejected) };
+    let (source_x, source_y) = (source_view.tile_x, source_view.tile_y);
     let Some(properties) = game.skill_base_properties(YAKSHA_SLASH_SKILL_ID, level) else { fail(game, player_id, 2); if ai.yaksha_slash().is_some() { abort_player_yaksha_slash(game, player_id); } return terminal(QueuedSkillExecutionState::Rejected) };
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_step = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.yaksha_slash().is_none() {
         let now = runtime.now_milliseconds();
         if ai.yaksha_slash_last_used_ms() != 0 && !time_reached(now, ai.yaksha_slash_last_used_ms(), reuse) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
-        let Some(position) = target_position(game, region_id, target) else { fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) };
-        if maximum != 0 && real_distance(source_x, source_y, position.0, position.1) > maximum as i32 { fail(game, player_id, 0x0b); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
-        if game.base_magic_path(region_id, source_x, source_y, position.0, position.1, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        let Some(target_view) = target_view(game, region_id, target) else { fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) };
+        if maximum != 0 && source_view.real_distance(Some(target_view)) > maximum as i32 { fail(game, player_id, 0x0b); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        if game.base_magic_path(region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(YAKSHA_SLASH_SKILL_ID)); }
         ai.begin_yaksha_slash(YakshaSlashExecutionState::begin(dispatch, now));
     } else if ai.yaksha_slash().is_none_or(|state| state.kernel.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     if game.periodic_state_target_dead(region_id, target) || (target.object_type == PLAYER_TYPE && target.id == player_id) { fail(game, player_id, 10); abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
     if ai.yaksha_slash().is_some_and(|state| !state.condition_checked) {
-        let Some(position) = target_position(game, region_id, target) else { abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+        let Some(target_view) = target_view(game, region_id, target) else { abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+        let position = (target_view.tile_x, target_view.tile_y);
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, position.0, position.1)); }
         send_cast(game, player_id, level, target, position, None);
         if let Some(state) = ai.yaksha_slash_mut() { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
@@ -224,7 +226,8 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
     if !ai.yaksha_slash().is_some_and(|state| state.attacking_started) {
         if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-        let Some(position) = target_position(game, region_id, target) else { abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+        let Some(target_view) = target_view(game, region_id, target) else { abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
+        let position = (target_view.tile_x, target_view.tile_y);
         let path = game.base_magic_path(region_id, source_x, source_y, position.0, position.1, None);
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); abort_player_yaksha_slash(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }
         let flying_time = missile_step.wrapping_mul(path.len() as u32);
