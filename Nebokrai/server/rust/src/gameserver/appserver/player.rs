@@ -2045,6 +2045,7 @@ fn apply_equipment_goods_properties(
     factory: &CGoodsFactory,
     coefficients: GlobePlayerPropertyCoefficients,
     occupation: usize,
+    include_fairy_properties: bool,
 ) {
     fn add_u32(target: &mut u32, delta: i32) {
         *target = (i64::from(*target) + i64::from(delta)).clamp(0, i64::from(i32::MAX)) as u32;
@@ -2160,7 +2161,7 @@ fn apply_equipment_goods_properties(
                     add_u16(&mut value, delta);
                     properties.blast_element_attack = value;
                 }
-                GAP_FAIRY_STRENGTH => {
+                GAP_FAIRY_STRENGTH if include_fairy_properties => {
                     let player_delta = derived(delta, coefficients.fairy_strength_to_player);
                     add_u32(&mut properties.strength, player_delta);
                     add_u32(
@@ -2172,7 +2173,7 @@ fn apply_equipment_goods_properties(
                         derived(player_delta, coefficients.str_to_burden[occupation]),
                     );
                 }
-                GAP_FAIRY_AGILITY => {
+                GAP_FAIRY_AGILITY if include_fairy_properties => {
                     let player_delta = derived(delta, coefficients.fairy_agility_to_player);
                     add_u32(&mut properties.dexterity, player_delta);
                     add_u32(
@@ -2184,7 +2185,7 @@ fn apply_equipment_goods_properties(
                         derived(player_delta, coefficients.dex_to_stiff[occupation]),
                     );
                 }
-                GAP_FAIRY_WAKAN => {
+                GAP_FAIRY_WAKAN if include_fairy_properties => {
                     let player_delta = derived(delta, coefficients.fairy_wakan_to_player);
                     add_u32(&mut properties.intelligence, player_delta);
                     properties.element_modify = properties.element_modify.wrapping_add(derived(
@@ -2203,7 +2204,7 @@ fn apply_equipment_goods_properties(
                         derived(player_delta, coefficients.int_to_resistant[occupation]),
                     );
                 }
-                GAP_FAIRY_HP => add_u32(
+                GAP_FAIRY_HP if include_fairy_properties => add_u32(
                     &mut properties.maximum_hp,
                     derived(delta, coefficients.fairy_hp_to_player),
                 ),
@@ -5114,6 +5115,7 @@ impl CPlayer {
                 goods_factory,
                 coefficients,
                 occupation,
+                true,
             );
         }
         if include_ci_qing {
@@ -5133,6 +5135,7 @@ impl CPlayer {
                     goods_factory,
                     coefficients,
                     occupation,
+                    true,
                 );
             }
         }
@@ -6432,6 +6435,7 @@ impl CPlayer {
                 goods_factory,
                 coefficients,
                 usize::from(self.base_properties.occupation).min(2),
+                false,
             );
         }
         if let Some(state) = self.move_shape.rage_break_state() {
