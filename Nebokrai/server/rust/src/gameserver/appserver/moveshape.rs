@@ -197,6 +197,7 @@ use crate::gameserver::appserver::skills::soulcollectstate::{
     SOUL_COLLECT_STATE_BYTES, SOUL_COLLECT_STATE_ID, SoulCollectState,
 };
 use crate::gameserver::appserver::states::automaticrestore::AutomaticRestoreState;
+use crate::gameserver::appserver::states::state::default_additional_data;
 use crate::nets::netserver::message::{CMessage, GameServerAroundRuntime};
 use crate::public::tools::get_line_direction;
 
@@ -797,9 +798,10 @@ impl CMoveShape {
         writer.write_u8(u8::from(is_dead));
         writer.write_i32(i32::try_from(total_count).ok()?);
         for offset in offsets {
-            writer.write_i32(read_i32(&states, offset)?);
+            let state_id = read_i32(&states, offset)?;
+            writer.write_i32(state_id);
             writer.write_i32(read_i32(&states, offset + 4)?);
-            writer.write_i32(read_i32(&states, offset + 8)?);
+            writer.write_u32(self.client_state_additional_data(state_id as u32));
         }
         for state in &self.team_recruitment_states {
             writer.write_i32(state.state_id());
@@ -808,6 +810,23 @@ impl CMoveShape {
             writer.write_c_string(state.team_name());
         }
         Some(payload)
+    }
+
+    /// Exact virtual `CState::GetAdditionalData`: persisted tail не является
+    /// client-проекцией. Из состояний общего codec собственные override-ы
+    /// имеют только запас метеорных стрел и верховая езда; остальные
+    /// используют нулевую базовую реализацию.
+    fn client_state_additional_data(&self, state_id: u32) -> u32 {
+        match state_id {
+            METEOR_ARROW_MASS_SKILL_ID => self
+                .meteor_arrow_state
+                .map_or(default_additional_data(), |state| state.additional_data() as u32),
+            RIDE_STATE_ID => self
+                .ride_state
+                .as_ref()
+                .map_or(default_additional_data(), RideState::additional_data),
+            _ => default_additional_data(),
+        }
     }
 
     /// Exact inline `CMoveShape::God`: runtime-only invulnerability flag не
