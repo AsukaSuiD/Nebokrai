@@ -55,7 +55,7 @@
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    SKILL_USAGE_USER_HIT_MODIFIER, real_distance, time_reached,
+    SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
 use super::monsterfastattack::{
     MONSTER_FAST_ATTACK_SKILL_ID, SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME,
@@ -1418,9 +1418,11 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let hit_modifier = skill_properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let target_snapshot = match target.object_type {
         PLAYER_TYPE => game.find_player(target.id).and_then(|player| {
+            let target_view = player.shape_view()?;
             (player.server_region_id() == Some(region.id)).then(|| {
                 (
                     player.shape().clone(),
+                    target_view,
                     player.health(),
                     player.mana(),
                     player.war_soul_mana(game.goods_factory()),
@@ -1444,6 +1446,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 )?;
                 let carriage = target_monster.is_carriage(target_property);
                 let target_master = target_monster.master_info();
+                let target_view = target_monster.shape_view(target_property)?;
                 let target_attackable = if carriage {
                     game.carriage_attackable_by_monster(
                         &property,
@@ -1467,6 +1470,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 target_attackable.then(|| {
                     (
                         target_monster.move_shape().shape().clone(),
+                        target_view,
                         target_monster.hit_points(),
                         0,
                         None,
@@ -1486,6 +1490,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     };
     let Some((
         target_shape,
+        target_view,
         mut target_health,
         mut target_mana,
         target_war_soul_mana,
@@ -1615,7 +1620,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
 
     if tamed && pet_action == 2 && cast.is_none() {
-        let distance = real_distance(monster_x, monster_y, target_x, target_y);
+        let distance = monster_view.real_distance(Some(target_view));
         let minimum_distance = skill_properties.query_property(5_004) as i32;
         if distance < minimum_distance || distance > maximum_distance as i32 {
             lose_pet_target_and_search(region, monster_id, stop_frame, runtime);
