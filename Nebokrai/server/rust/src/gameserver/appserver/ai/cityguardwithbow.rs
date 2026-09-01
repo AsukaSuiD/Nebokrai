@@ -50,7 +50,6 @@
 use super::cityguardwithsword::select_city_guard_enemy;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeView;
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::CGame;
 use crate::setup::monsterlist::MonsterProperties;
 
@@ -60,20 +59,19 @@ use crate::setup::monsterlist::MonsterProperties;
 pub(crate) fn stationary_bow_target_ready(
     region: &CServerRegion,
     owner: ShapeView,
-    target_x: i32,
-    target_y: i32,
+    target: ShapeView,
     minimum_distance: i32,
     maximum_distance: i32,
 ) -> bool {
-    let distance = real_distance(owner.tile_x, owner.tile_y, target_x, target_y);
+    let distance = owner.real_distance(Some(target));
     minimum_distance <= distance
         && distance <= maximum_distance
         && !region
             .straight_skill_path(
                 owner.tile_x,
                 owner.tile_y,
-                target_x,
-                target_y,
+                target.tile_x,
+                target.tile_y,
                 None,
             )
             .iter()

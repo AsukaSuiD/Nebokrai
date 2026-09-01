@@ -43,7 +43,6 @@ use super::guardtarget::{
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
@@ -293,14 +292,14 @@ pub(crate) fn trace_city_sword_target<Runtime: GameMainLoopRuntime>(
     region: &mut CServerRegion,
     monster_id: i32,
     owner: ShapeView,
-    target_x: i32,
-    target_y: i32,
+    target: ShapeView,
     minimum_distance: i32,
     maximum_distance: i32,
     chase_range: i32,
     runtime: &mut Runtime,
 ) -> CitySwordTraceOutcome {
-    let distance = real_distance(owner.tile_x, owner.tile_y, target_x, target_y);
+    let distance = owner.real_distance(Some(target));
+    let (target_x, target_y) = (target.tile_x, target.tile_y);
     if minimum_distance <= distance && distance <= maximum_distance {
         return CitySwordTraceOutcome::Ready;
     }

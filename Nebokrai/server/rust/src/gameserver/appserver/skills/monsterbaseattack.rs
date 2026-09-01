@@ -1586,8 +1586,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         && !stationary_bow_target_ready(
             region,
             monster_view,
-            target_x,
-            target_y,
+            target_view,
             skill_properties.query_property(5_004) as i32,
             maximum_distance as i32,
         )
@@ -1606,8 +1605,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             region,
             monster_id,
             monster_view,
-            target_x,
-            target_y,
+            target_view,
             skill_properties.query_property(5_004) as i32,
             maximum_distance as i32,
             property.chase_range as i32,
