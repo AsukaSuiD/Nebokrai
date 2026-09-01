@@ -1335,13 +1335,22 @@ impl CMonster {
         let pet_search = self.tamed
             && alive
             && self.move_shape.current_skill_id().is_none();
+        let passive_gladiator_search = ai_type == 1
+            && alive
+            && self
+                .passive_gladiator_ai
+                .as_ref()
+                .is_some_and(PassiveGladiatorState::has_enemy_players);
         // `CGuardWithSword::OnMoving` RVA `0x0020E260` добавляет SearchEnemy
         // после успешного общего OnMoving и наследуется AI10/12/16; базовый
         // factory type AI9 обязан проходить тот же путь. Отдельный
         // `CGuardCountry::OnMoving` RVA `0x0020C4F0` делает то же для живых
         // factory-типов AI17/100, но не для самостоятельного AI101.
+        // `CPassiveGladiator::OnMoving` RVA `0x00210E70` дополнительно требует
+        // непустой `m_vEnemy`, которой соответствует owned IndexSet AI1.
         if (alive && matches!(ai_type, 4 | 17 | 100))
             || matches!(ai_type, 9 | 10 | 12 | 16)
+            || passive_gladiator_search
             || pet_search
         {
             self.base_ai.begin_active_search_enemy(now_ms);

@@ -29,6 +29,10 @@ pub(crate) struct PassiveGladiatorState {
 }
 
 impl PassiveGladiatorState {
+    pub(crate) fn has_enemy_players(&self) -> bool {
+        !self.enemy_player_ids.is_empty()
+    }
+
     pub(crate) fn record_player_attack(&mut self, player_id: i32) {
         if self.enemy_player_ids.insert(player_id)
             && self.enemy_player_ids.len() > MAXIMUM_ENEMY_PLAYERS
