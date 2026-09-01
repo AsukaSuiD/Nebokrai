@@ -350,7 +350,15 @@ pub(crate) fn complete_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut
 pub(crate) fn cancel_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.knock_out().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_knock_out(game, player_id); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
 pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
-    let identity = match dispatch { PlayerSkillDispatch::Object { skill_id: KNOCK_OUT_SKILL_ID, target } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target, _ => return result(QueuedSkillExecutionState::Rejected) };
+    let identity = match dispatch {
+        PlayerSkillDispatch::SelfTarget { skill_id: KNOCK_OUT_SKILL_ID, .. }
+        | PlayerSkillDispatch::Point { skill_id: KNOCK_OUT_SKILL_ID, .. } => {
+            failure(game, player_id, 2);
+            return result(QueuedSkillExecutionState::Rejected);
+        }
+        PlayerSkillDispatch::Object { skill_id: KNOCK_OUT_SKILL_ID, target } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
+        _ => return result(QueuedSkillExecutionState::Rejected),
+    };
     let Some((region_id, sx, sy, level)) = game.find_player(player_id).and_then(|p| Some((p.server_region_id()?, p.shape().get_tile_x().ok()?, p.shape().get_tile_y().ok()?, p.learned_skill_level(KNOCK_OUT_SKILL_ID)))) else { return result(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(KNOCK_OUT_SKILL_ID, level) else { failure(game, player_id, 2); return result(QueuedSkillExecutionState::Rejected) };
     let delay = properties.query_property(DELAY); let persist = properties.query_property(PERSIST);

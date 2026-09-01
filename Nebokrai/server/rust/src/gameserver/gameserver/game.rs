@@ -1280,6 +1280,7 @@ use crate::gameserver::appserver::skills::knockoutruntime::{
     cancel_player_knock_out, complete_player_knock_out, execute_player_knock_out,
     KNOCK_OUT_SKILL_ID,
 };
+use crate::gameserver::appserver::skills::knockout::is_knock_out_dispatch;
 use crate::gameserver::appserver::skills::knockoutstate::{
     expire_monster_blind_states, expire_player_blind_states,
     finish_blind_states_on_defense, finish_player_blind_states_on_defense,
@@ -40840,13 +40841,7 @@ impl CGame {
                     skill_id == MONSTER_TAMING_SKILL_ID
                 }
             };
-            let concrete_knock_out = matches!(
-                dispatch,
-                PlayerSkillDispatch::Object {
-                    skill_id: KNOCK_OUT_SKILL_ID,
-                    target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
-                }
-            );
+            let concrete_knock_out = is_knock_out_dispatch(dispatch);
             let concrete_snow_storm = is_snow_storm_target(dispatch);
             let concrete_weak = is_weak_target(dispatch);
             let concrete_yin_yang = is_yin_yang_target(dispatch);
