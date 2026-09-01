@@ -16214,7 +16214,11 @@ impl CGame {
             }
             if let Some(current) = self.find_player(player_id).map(CPlayer::money) {
                 let requested = pending.required_money as u32;
-                let _ = self.decrease_player_money(player_id, requested.min(current));
+                if let Some(change) =
+                    self.decrease_player_money(player_id, requested.min(current))
+                {
+                    let _ = self.send_player_money_decrease(player_id, &change.outcome);
+                }
             }
         }
         if let Some(player) = self.find_player_mut(player_id) {
@@ -16502,7 +16506,9 @@ impl CGame {
         pending.declaration_pending = false;
         if money > 0 {
             let current = self.find_player(player_id)?.money();
-            let _ = self.decrease_player_money(player_id, money.min(current));
+            if let Some(change) = self.decrease_player_money(player_id, money.min(current)) {
+                let _ = self.send_player_money_decrease(player_id, &change.outcome);
+            }
         }
         let mut response = CMessage::new(0x000b_ff31);
         response.add_long(i32::from(money > 0));
