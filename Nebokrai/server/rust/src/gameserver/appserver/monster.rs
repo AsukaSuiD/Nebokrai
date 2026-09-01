@@ -931,29 +931,11 @@ impl CMonster {
         &self,
         property: &MonsterProperties,
     ) -> MonsterCombatProperties {
-        let factor = |index: usize| f32::from_bits(self.factors[index]);
-        let scaled =
-            |value: u32, index: usize| ((value as f32) * factor(index)).round_ties_even() as u32;
-        let mut element_resistance = property.element_resistant;
-        if let Some(state) = self.move_shape.taiji_state() {
-            element_resistance = state.apply_to_monster(element_resistance);
-        }
-        element_resistance = if element_resistance as i32 > 0 {
-            element_resistance
-        } else {
-            1
-        };
-        if self.tamed
-            && self.master_info.master_type == 400
-            && self.master_info.master_id != 0
-        {
-            element_resistance = scaled(element_resistance, 3);
-        }
         let mut properties = MonsterCombatProperties {
             level: property.level as u8,
-            defense: scaled(property.defence, 5),
-            dodge: property.dodge,
-            element_resistance,
+            defense: self.defense(property),
+            dodge: u32::from(self.dodge(property)),
+            element_resistance: self.element_resistance(property),
             soul_resistance: property.soul_resistant as u16,
             attack_avoid: property.attack_avoid,
             element_avoid: property.element_avoid,
@@ -967,14 +949,40 @@ impl CMonster {
     /// а приручённый monster-owner применяет свой pet-level factor до
     /// сужения результата к `ushort`.
     pub(crate) fn dodge(&self, property: &MonsterProperties) -> u16 {
-        let base = property.dodge.max(1);
-        if self.tamed
-            && self.master_info.master_type == 400
-            && self.master_info.master_id != 0
-        {
-            return ((base as f32) * f32::from_bits(self.factors[4])).round_ties_even() as u16;
+        let base = (property.dodge as i32).max(1) as u16;
+        if self.has_player_pet_master() {
+            let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[4]));
+            return scaled.trunc() as i32 as u16;
         }
-        base as u16
+        base
+    }
+
+    /// Exact `CMonster::GetDef` (RVA `0x000E6780`): отрицательная сумма
+    /// свойства и runtime modifier сначала становится нулём, затем pet factor
+    /// `5` усекается x87 к signed DWORD.
+    pub(crate) fn defense(&self, property: &MonsterProperties) -> u32 {
+        let base = (property.defence as i32).max(0) as u32;
+        if !self.has_player_pet_master() {
+            return base;
+        }
+        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[5]));
+        scaled.trunc() as i32 as u32
+    }
+
+    /// Exact `CMonster::GetElementResistant` (RVA `0x000E6880`): runtime
+    /// modifier (достигнутый Taiji state) входит до нижней границы и pet
+    /// factor `3`; последующие defense states применяются к готовому getter-у.
+    pub(crate) fn element_resistance(&self, property: &MonsterProperties) -> u32 {
+        let mut value = property.element_resistant;
+        if let Some(state) = self.move_shape.taiji_state() {
+            value = state.apply_to_monster(value);
+        }
+        let base = (value as i32).max(1) as u32;
+        if !self.has_player_pet_master() {
+            return base;
+        }
+        let scaled = f64::from(base) * f64::from(f32::from_bits(self.factors[3]));
+        scaled.trunc() as i32 as u32
     }
 
     /// Exact `CMonster::GetStopFrame` (RVA `0x000E6A40`): только приручённый
@@ -1818,7 +1826,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetDef
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1474
@@ -1826,13 +1834,12 @@ impl CMonster {
 // ADDRESS: 004e6780
 // PROTOTYPE: ulong __thiscall GetDef(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `defense`.
 //
 
 // ============================================================================
 // FUNCTION: CMonster::GetDodge
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1489
@@ -1840,8 +1847,7 @@ impl CMonster {
 // ADDRESS: 004e6800
 // PROTOTYPE: ushort __thiscall GetDodge(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `dodge`.
 //
 
 // ============================================================================
@@ -1860,7 +1866,7 @@ impl CMonster {
 
 // ============================================================================
 // FUNCTION: CMonster::GetElementResistant
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\monster.cpp:1510
@@ -1868,8 +1874,7 @@ impl CMonster {
 // ADDRESS: 004e6880
 // PROTOTYPE: ulong __thiscall GetElementResistant(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `element_resistance`.
 //
 
 // ============================================================================
