@@ -177,11 +177,13 @@ fn calculate_player_attack(
     let player = game.find_player(player_id)?;
     let combat = player.combat_properties();
     let master = master_info(player);
-    let weapon_level = player.weapon_damage_level(game.goods_factory());
     let (divisor, floor) = game.globe_setup().weapon_damage_factors();
-    let delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let damage_factor = (if divisor == 0.0 { 1.0 } else { delta as f32 / divisor })
-        .min(1.0).max(floor);
+    let damage_factor = player.weapon_modifier(
+        game.goods_factory(),
+        i32::from(target_level),
+        divisor,
+        floor,
+    );
     let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
     let random_damage = game.skill_random_below(width);
     let modifier = (element_modifier as f32 * 0.01 * combat.element_modify as f32)

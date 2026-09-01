@@ -131,10 +131,13 @@ fn attack(game: &mut CGame, player_id: i32, target_level: u8) -> Option<(MasterI
     let player = game.find_player(player_id)?;
     let combat = player.combat_properties();
     let master = master(player);
-    let weapon = player.weapon_damage_level(game.goods_factory());
     let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
-    let delta = weapon.wrapping_sub(i32::from(target_level)).max(0);
-    let factor = (if divisor == 0.0 { 1.0 } else { delta as f32 / divisor }).min(1.0).max(minimum_factor);
+    let factor = player.weapon_modifier(
+        game.goods_factory(),
+        i32::from(target_level),
+        divisor,
+        minimum_factor,
+    );
     let difference = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32);
     let span = if difference < 0 { difference.wrapping_neg() } else { difference }.wrapping_add(1);
     let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(span)).max(0);

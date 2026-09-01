@@ -204,16 +204,13 @@ pub(crate) fn calculate_attack_with_multiplier(
     let player = game.find_player(player_id)?;
     let combat = player.combat_properties();
     let master = master_info(player);
-    let weapon_level = player.weapon_damage_level(game.goods_factory());
     let (weapon_divisor, weapon_minimum) = game.globe_setup().weapon_damage_factors();
-    let level_delta = weapon_level.wrapping_sub(i32::from(target_level)).max(0);
-    let weapon_factor = if weapon_divisor == 0.0 {
-        1.0
-    } else {
-        (level_delta as f32 / weapon_divisor)
-            .min(1.0)
-            .max(weapon_minimum)
-    };
+    let weapon_factor = player.weapon_modifier(
+        game.goods_factory(),
+        i32::from(target_level),
+        weapon_divisor,
+        weapon_minimum,
+    );
     let minimum = combat.minimum_attack as i32;
     let maximum = combat.maximum_attack as i32;
     let width = maximum
