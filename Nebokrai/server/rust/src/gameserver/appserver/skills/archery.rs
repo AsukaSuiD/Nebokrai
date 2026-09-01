@@ -143,7 +143,7 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
             game.send_base_magic_failure(player_id, 0x0d);
             return rejected();
         }
-        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+        let Some(_target_view) = game.base_magic_target_view(region_id, target) else {
             game.send_base_magic_failure(player_id, 10);
             return rejected();
         };
@@ -154,12 +154,18 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
             (Ok(x), Ok(y)) => (x, y),
             _ => return rejected(),
         };
+        let Some((target_x, target_y)) =
+            game.base_magic_target_point(region_id, source_x, source_y, target)
+        else {
+            game.send_base_magic_failure(player_id, 10);
+            return rejected();
+        };
         let path = game.base_magic_path(
             region_id,
             source_x,
             source_y,
-            target_view.tile_x,
-            target_view.tile_y,
+            target_x,
+            target_y,
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize + 1 {
@@ -208,8 +214,8 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
             player.movement_shape_mut().set_direction(get_line_direction(
                 source_x,
                 source_y,
-                target_view.tile_x,
-                target_view.tile_y,
+                target_x,
+                target_y,
             ));
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(ARCHERY_SKILL_ID));
@@ -253,7 +259,7 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+    let Some(_target_view) = game.base_magic_target_view(region_id, target) else {
         game.send_base_magic_failure(player_id, 10);
         finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
@@ -270,11 +276,20 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
         finish_player_archery(game, player_id, player_ai, runtime);
         return rejected();
     };
+    let Some((target_x, target_y)) = game.base_magic_target_point(
+        region_id,
+        source_view.tile_x,
+        source_view.tile_y,
+        target,
+    ) else {
+        finish_player_archery(game, player_id, player_ai, runtime);
+        return rejected();
+    };
     let attack_time = real_distance(
         source_view.tile_x,
         source_view.tile_y,
-        target_view.tile_x,
-        target_view.tile_y,
+        target_x,
+        target_y,
     )
     .wrapping_mul(summoned_speed as i32);
     let mut fire = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
@@ -285,23 +300,23 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
     fire.add_long(player_id);
     fire.add_long(target.object_type);
     fire.add_long(target.id);
-    fire.add_long(target_view.tile_x);
-    fire.add_long(target_view.tile_y);
+    fire.add_long(target_x);
+    fire.add_long(target_y);
     fire.add_long(attack_time);
     let _ = game.send_player_shape_around(player_id, None, &fire);
 
     let forced_distance = real_distance(
         source_view.tile_x,
         source_view.tile_y,
-        target_view.tile_x,
-        target_view.tile_y,
+        target_x,
+        target_y,
     ) as u32;
     let path = game.base_magic_path(
         region_id,
         source_view.tile_x,
         source_view.tile_y,
-        target_view.tile_x,
-        target_view.tile_y,
+        target_x,
+        target_y,
         Some(forced_distance),
     );
     if !path.is_empty() && path.iter().all(|cell| cell.2 != 2) {

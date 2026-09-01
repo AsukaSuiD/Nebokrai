@@ -21,8 +21,9 @@
 //! serializer использует тот же canonical `CMoveShape`, а не
 //! повторно собранный shadow-prefix. Достигнутая базовая атака также использует
 //! этого owner-а для attackability, свойств защиты, HP/death mutation и точного
-//! освобождения footprint. Автономный AI и остальная поверхность ниже остаются
-//! `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! освобождения footprint. Унаследованный `CSkill::GetTargetPath` достигает
+//! точной ближайшей точки этого footprint перед расчётом projectile path.
+//! Автономный AI и остальная поверхность ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use super::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::moveshape::CMoveShape;
@@ -251,6 +252,43 @@ impl CBuild {
         }
     }
 
+    /// Exact `CBuild::GetBeAttackedPoint` (RVA `0x001DD350`): выбирает
+    /// ближайшую к атакующему клетку прямоугольного footprint. При равной
+    /// Chebyshev-дистанции диагональное направление уступает прямому.
+    pub(crate) fn be_attacked_point(&self, attacker_x: i32, attacker_y: i32) -> (i32, i32) {
+        let horizontal = i32::from(self.width_increment as u8);
+        let vertical = i32::from(self.height_increment as u8);
+        let mut best_point = (self.tile_x, self.tile_y);
+        let mut best_distance = 10_000_000;
+        let mut best_direction: i32 = 0;
+
+        for offset_x in -horizontal..=horizontal {
+            let candidate_x = self.tile_x.wrapping_add(offset_x);
+            for offset_y in -vertical..=vertical {
+                let candidate_y = self.tile_y.wrapping_add(offset_y);
+                let distance_x = candidate_x.wrapping_sub(attacker_x).unsigned_abs() as i32;
+                let distance_y = candidate_y.wrapping_sub(attacker_y).unsigned_abs() as i32;
+                let distance = distance_x.max(distance_y);
+                let direction = CMoveShape::get_dest_direction(
+                    attacker_x,
+                    attacker_y,
+                    candidate_x,
+                    candidate_y,
+                );
+                if distance < best_distance
+                    || (distance == best_distance
+                        && best_direction.rem_euclid(2) == 1
+                        && direction.rem_euclid(2) == 0)
+                {
+                    best_point = (candidate_x, candidate_y);
+                    best_distance = distance;
+                    best_direction = direction;
+                }
+            }
+        }
+        best_point
+    }
+
     pub(crate) fn current_block_update(&self) -> BuildBlockUpdate {
         BuildBlockUpdate {
             region_id: self.region_id(),
@@ -469,7 +507,7 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 
 // ============================================================================
 // FUNCTION: CBuild::GetBeAttackedPoint
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:309
@@ -477,8 +515,7 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 // ADDRESS: 005dd350
 // PROTOTYPE: void __thiscall GetBeAttackedPoint(long param_1, long param_2, long * param_3, long * param_4)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Реализовано выше как `be_attacked_point`.
 //
 
 // ============================================================================

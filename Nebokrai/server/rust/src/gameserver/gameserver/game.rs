@@ -39166,6 +39166,28 @@ impl CGame {
         }
     }
 
+    /// Точка назначения унаследованного `CSkill::GetTargetPath`. Обычные
+    /// shapes используют центральную tile-позицию, а `CBuild/CCityGate` —
+    /// ближайшую клетку их footprint через virtual `GetBeAttackedPoint`.
+    pub(crate) fn base_magic_target_point(
+        &self,
+        region_id: i32,
+        source_x: i32,
+        source_y: i32,
+        target: ShapeIdentity,
+    ) -> Option<(i32, i32)> {
+        if target.object_type == BUILD_OBJECT_TYPE as i32
+            || target.object_type == CITY_GATE_OBJECT_TYPE as i32
+        {
+            return self
+                .find_region(region_id)?
+                .stationary_build(target)
+                .map(|build| build.be_attacked_point(source_x, source_y));
+        }
+        self.base_magic_target_view(region_id, target)
+            .map(|view| (view.tile_x, view.tile_y))
+    }
+
     /// Общий точный `CState::GetSufferer`-факт для навыков с объектной целью.
     /// `CNpc::LossHP` всегда возвращает ноль, поэтому его combat HP остаётся
     /// нулевым и `CMoveShape::IsDied` отклоняет NPC до создания снаряда.

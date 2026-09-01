@@ -185,7 +185,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             send_end(game, player_id, skill_level);
             return rejected();
         }
-        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+        let Some(_target_view) = game.base_magic_target_view(region_id, target) else {
             game.send_battle_fairy_skill_failure(player_id, 10);
             game.send_skill_system_info(player_id, b"ZHGS0050");
             send_end(game, player_id, skill_level);
@@ -198,12 +198,20 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             (Ok(x), Ok(y)) => (x, y),
             _ => return rejected(),
         };
+        let Some((target_x, target_y)) =
+            game.base_magic_target_point(region_id, source_x, source_y, target)
+        else {
+            game.send_battle_fairy_skill_failure(player_id, 10);
+            game.send_skill_system_info(player_id, b"ZHGS0050");
+            send_end(game, player_id, skill_level);
+            return rejected();
+        };
         let path = game.base_magic_path(
             region_id,
             source_x,
             source_y,
-            target_view.tile_x,
-            target_view.tile_y,
+            target_x,
+            target_y,
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
@@ -256,7 +264,7 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
         return pending();
     }
 
-    let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+    let Some(_target_view) = game.base_magic_target_view(region_id, target) else {
         game.send_battle_fairy_skill_failure(player_id, 10);
         game.send_skill_system_info(player_id, b"ZHGS0050");
         send_end(game, player_id, skill_level);
@@ -272,11 +280,20 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
     let Some(source_view) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
         return rejected();
     };
+    let Some((target_x, target_y)) = game.base_magic_target_point(
+        region_id,
+        source_view.tile_x,
+        source_view.tile_y,
+        target,
+    ) else {
+        send_end(game, player_id, skill_level);
+        return rejected();
+    };
     let attack_time = real_distance(
         source_view.tile_x,
         source_view.tile_y,
-        target_view.tile_x,
-        target_view.tile_y,
+        target_x,
+        target_y,
     )
     .wrapping_mul(summoned_speed as i32);
     let mut fire = CMessage::new(BASE_MAGIC_EFFECT_MESSAGE);
@@ -287,23 +304,23 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
     fire.add_long(player_id);
     fire.add_long(target.object_type);
     fire.add_long(target.id);
-    fire.add_long(target_view.tile_x);
-    fire.add_long(target_view.tile_y);
+    fire.add_long(target_x);
+    fire.add_long(target_y);
     fire.add_long(attack_time);
     let _ = game.send_player_shape_around(player_id, None, &fire);
 
     let forced_distance = real_distance(
         source_view.tile_x,
         source_view.tile_y,
-        target_view.tile_x,
-        target_view.tile_y,
+        target_x,
+        target_y,
     ) as u32;
     let path = game.base_magic_path(
         region_id,
         source_view.tile_x,
         source_view.tile_y,
-        target_view.tile_x,
-        target_view.tile_y,
+        target_x,
+        target_y,
         Some(forced_distance),
     );
     let has_war_soul = game
