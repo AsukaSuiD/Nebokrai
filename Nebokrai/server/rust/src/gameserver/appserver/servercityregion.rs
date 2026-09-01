@@ -62,9 +62,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::build::{
-    BuildBlockUpdate, BuildClientPublication, BuildClientUpdate, BuildRuntimeContext,
-};
+use super::build::{BuildBlockUpdate, BuildClientPublication, BuildClientUpdate};
 use super::citygate::{CCityGate, CityGateHurtOwnerUpdate, CityGateInit};
 use super::country::countryparam::CCountryParam;
 use super::legacycodec::LegacyReader;
@@ -205,10 +203,6 @@ impl<Context: ServerRegionDecodeEffectsContext> ServerRegionDecodeEffectsContext
         self.context.now_millis()
     }
 }
-
-pub(crate) trait CityGateRuntimeContext: BuildRuntimeContext {}
-
-impl<Context: BuildRuntimeContext + ?Sized> CityGateRuntimeContext for Context {}
 
 pub(crate) trait CityReturnPointContext {
     /// Сохраняет первый отброшенный virtual `CShape::GetTileY`.

@@ -43683,7 +43683,7 @@ impl CGame {
         identity: ShapeIdentity,
         damage: u32,
     ) -> Option<BuildCombatMutation> {
-        let attacker_country = self.find_player(player_id).map(CPlayer::country)?;
+        self.find_player(player_id)?;
         let mut owner = self.take_region_owner(region_id)?;
         let mutation = owner.stationary_build_mut(identity).map(|build| {
             let script = build.script.clone();
@@ -43700,15 +43700,10 @@ impl CGame {
         {
             let _ = region.city_gate_on_been_hurted(identity.id, PLAYER_TYPE, player_id);
         }
-        if died
-            && identity.object_type == BUILD_OBJECT_TYPE as i32
-            && let ServerRegionOwner::Country(region) = &mut owner
-        {
-            // Country override `OnSymbolDestroy` завершает активную войну через
-            // уже восстановленный `OnFlagDestroy`; победившая сторона берётся
-            // от реального player-attacker-а.
-            region.on_flag_destroy(region_id, i32::from(attacker_country));
-        }
+        // `CBuild::OnDied` вызывает region-vtable `+0x68`, но у
+        // `ServerCountryRegion` этот слот остаётся пустым
+        // `CServerRegion::OnSymbolDestroy`. Победный `OnFlagDestroy` приходит
+        // отдельным сообщением `0x7FF22` владельцу `CountryWarSys`.
         self.restore_region_owner(owner);
         Some(BuildCombatMutation {
             current_hp,

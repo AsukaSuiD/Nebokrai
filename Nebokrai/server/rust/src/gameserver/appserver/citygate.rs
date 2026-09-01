@@ -12,8 +12,9 @@
 //! оставляет изменение карты владельцу региона, но сохраняет момент эффекта:
 //! action и `m_lChangeState` меняются до вызова старого `SetBlock`. Inherited
 //! client serializer и damage принадлежат `CBuild`; достигнутая базовая атака
-//! сохраняет derived attackability и hurt callback. Автономный AI ниже пока
-//! остаётся `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! сохраняет derived attackability и hurt callback. Все три action-ветви
+//! `CCityGate::AI` вызывают один `AI_BeAttack`, который в точном EXE является
+//! нулевым no-op; отдельный runtime ворот не требуется.
 
 use super::build::{BuildBlockUpdate, BuildInit, CBuild};
 use super::moveshape::CMoveShape;
@@ -251,22 +252,23 @@ impl CCityGate {
 //
 
 // ============================================================================
-// FUNCTION: CCityGate::AI_Stand
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// FUNCTION: CCityGate::AI_BeAttack
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\citygate.cpp:68
 // RVA: 0x001DDB80
 // ADDRESS: 005ddb80
-// PROTOTYPE: long __thiscall AI_Stand(void)
+// PROTOTYPE: long __thiscall AI_BeAttack(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// PDB-символ `AI_BeAttack` по `0x005DDB80` — tail-jump в общий
+// `0x00601200` (`xor eax,eax; ret`). Старое имя `AI_Stand` было ошибкой
+// декомпилятора.
 //
 
 // ============================================================================
 // FUNCTION: CCityGate::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\citygate.cpp:48
@@ -274,8 +276,8 @@ impl CCityGate {
 // ADDRESS: 005ddbb0
 // PROTOTYPE: void __thiscall AI(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Vtable `0x0065E8C4`: slots `+0x1A4/+0x1A8/+0x1AC` все указывают на
+// `AI_BeAttack` выше. Action-dispatch не имеет наблюдаемого side effect.
 //
 
 // ============================================================================

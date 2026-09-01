@@ -23,7 +23,10 @@
 //! этого owner-а для attackability, свойств защиты, HP/death mutation и точного
 //! освобождения footprint. Унаследованный `CSkill::GetTargetPath` достигает
 //! точной ближайшей точки этого footprint перед расчётом projectile path.
-//! Автономный AI и остальная поверхность ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! Точный vtable показывает, что все три action-callback `CBuild::AI` сведены
+//! к общему нулевому no-op. `OnDied` не завершает country-war напрямую:
+//! region-slot `+0x68` у `ServerCountryRegion` также остаётся базовым no-op;
+//! победная цепочка принадлежит отдельному сообщению `CountryWarSys`.
 
 use super::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use super::moveshape::CMoveShape;
@@ -80,11 +83,6 @@ pub(crate) enum BuildDecodeError {
     Shape(ShapeDecodeError),
     Property(LegacyReadBlock),
     Coordinate(ShapeCoordinateBlock),
-}
-
-pub(crate) trait BuildRuntimeContext {
-    /// Кодирует `0xBF60F(type, id, action, max_hp, hp)` и шлёт вокруг build.
-    fn send_build_update(&mut self, region_id: i32, build_id: i32, update: BuildClientUpdate);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -427,7 +425,7 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 
 // ============================================================================
 // FUNCTION: CBuild::AI
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\build.cpp:67
@@ -435,8 +433,9 @@ pub(crate) fn legacy_build_title_tile(value: i32) -> i32 {
 // ADDRESS: 005dd210
 // PROTOTYPE: void __thiscall AI(void)
 //
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
+// Vtable `0x0065E704`: slots `+0x1A4/+0x1A8/+0x1AC` все указывают на
+// `0x00601200`, общий `xor eax,eax; ret`. Поэтому достигнутый region scan
+// корректно не создаёт для обычной постройки отдельного action-runtime.
 //
 
 // ============================================================================
