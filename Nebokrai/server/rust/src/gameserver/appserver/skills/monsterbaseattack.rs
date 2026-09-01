@@ -11,6 +11,9 @@
 //! межвладельческие последствия смерти. Неиспользуемые координатный и
 //! типизированно-координатный варианты `Begin` сохранены как RAW: их реальный
 //! вызывающий путь и отличия от достигнутого объектного пути пока не подтверждены.
+//! Назначенный питомцу NPC остаётся допустимым `CMoveShape` на входе команды,
+//! но `CMonster::IsAttackAble` отвергает любой тип кроме игрока и монстра;
+//! расписание поэтому выполняет обычный `OnLoseTarget` и ставит поиск заново.
 //! Конструктор и ветвь `SKILL_MONSTER_BASE_ATTACK` фабрики подтверждают ID
 //! `0x2bd`; навык игрока `1` принадлежит другому модулю и не подменяет этот ID.
 
@@ -977,9 +980,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
     let fast_attack = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID);
     let target = cast.map(|cast| cast.dispatch().target).or(target);
-    let Some(target) =
-        target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE))
-    else {
+    let Some(target) = target else {
         return false;
     };
     if cast.is_none() {
