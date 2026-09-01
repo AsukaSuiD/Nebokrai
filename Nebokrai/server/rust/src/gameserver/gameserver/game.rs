@@ -43700,12 +43700,6 @@ impl CGame {
             self.restore_region_owner(owner);
             return None;
         };
-        if !died
-            && identity.object_type == CITY_GATE_OBJECT_TYPE as i32
-            && let ServerRegionOwner::City(region) = &mut owner
-        {
-            let _ = region.city_gate_on_been_hurted(identity.id, PLAYER_TYPE, player_id);
-        }
         // `CBuild::OnDied` вызывает region-vtable `+0x68`, но у
         // `ServerCountryRegion` этот слот остаётся пустым
         // `CServerRegion::OnSymbolDestroy`. Победный `OnFlagDestroy` приходит
@@ -43809,6 +43803,16 @@ impl CGame {
         hurt.add_ulong(mutation.current_hp);
         Self::append_base_attack_tail(&mut hurt, attack);
         let _ = self.send_shape_position_around(region_id, target_x, target_y, &hurt);
+        if identity.object_type == CITY_GATE_OBJECT_TYPE as i32 {
+            // Exact `CBuild::OnBeenAttacked`: derived callback `+0x180`
+            // исполняется только после завершённого `SendToAround`.
+            let _ = self.city_gate_on_been_hurted(
+                region_id,
+                identity.id,
+                PLAYER_TYPE,
+                player_id,
+            );
+        }
         true
     }
 
