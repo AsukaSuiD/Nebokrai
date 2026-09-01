@@ -7,6 +7,8 @@
 //! все экземпляры, а AI после исходной двухсекундной границы проверяет наличие
 //! предмета. Нулевая отметка проверки намеренно не продвигается: после первой
 //! границы оригинал обходит оба контейнера на каждом вызове AI.
+//! Полный клиентский снимок сохраняет каждый экземпляр отдельной state-тройкой
+//! с тем же particular attribute в virtual additional-data.
 //!
 //! Состояниями владеет `CanonicalStateStorage`; `CGame` только доставляет
 //! точные `0xBFE03/0xBFE04`. Координатный и object-identity overload-ы `Begin`
@@ -39,6 +41,14 @@ impl ParticularState {
         self.additional_data
     }
 
+    pub(crate) const fn state_id(self) -> i32 {
+        PARTICULAR_STATE_ID as i32
+    }
+
+    pub(crate) const fn client_state_time(self) -> i32 {
+        default_client_state_time()
+    }
+
     pub(crate) const fn due(self, now_ms: u32) -> bool {
         PARTICULAR_STATE_CHECK_INTERVAL_MS <= now_ms
     }
@@ -57,9 +67,9 @@ pub(crate) fn particular_state_visual_message(
     });
     message.add_long(identity.object_type);
     message.add_long(identity.id);
-    message.add_long(PARTICULAR_STATE_ID as i32);
+    message.add_long(state.state_id());
     if begin {
-        message.add_long(default_client_state_time());
+        message.add_long(state.client_state_time());
         message.add_long(state.additional_data() as i32);
     }
     message

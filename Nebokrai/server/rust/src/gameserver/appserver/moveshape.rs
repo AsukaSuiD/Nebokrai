@@ -811,7 +811,9 @@ impl CMoveShape {
         if offsets.len() != declared_count {
             return None;
         }
-        let total_count = declared_count.checked_add(self.team_recruitment_states.len())?;
+        let total_count = declared_count
+            .checked_add(self.particular_states.len())?
+            .checked_add(self.team_recruitment_states.len())?;
         let mut payload = Vec::new();
         self.shape
             .add_to_byte_array(&mut payload, include_child)
@@ -830,6 +832,11 @@ impl CMoveShape {
                 &mut timed_state_now_milliseconds,
             )?);
             writer.write_u32(self.client_state_additional_data(state_id as u32));
+        }
+        for state in &self.particular_states {
+            writer.write_i32(state.state_id());
+            writer.write_i32(state.client_state_time());
+            writer.write_u32(state.additional_data());
         }
         for state in &self.team_recruitment_states {
             writer.write_i32(state.state_id());
