@@ -42117,9 +42117,14 @@ impl CGame {
                         != Some(murderer.union_id())
             })
         {
+            let counts = self.find_player(murderer_id)?.honor_snapshot();
             let mut honor = CMessage::new(0x0005_fd0d);
             honor.add_long(murderer_id);
             honor.add_long(blow.victim_id);
+            honor.add_ulong(counts.days_eliminate);
+            honor.add_ulong(counts.weeks_eliminate);
+            honor.add_ulong(counts.months_eliminate);
+            honor.add_ulong(counts.total_eliminate);
             record_world_delivery!(honor.send(self, false));
         }
 
