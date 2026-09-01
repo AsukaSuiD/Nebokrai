@@ -396,10 +396,9 @@ fn select_and_store_monster_attack_skill<Runtime: GameMainLoopRuntime>(
 /// Выполняет точный `CMonsterAI::OnChangeSkill` отдельным FIFO-тактом. После
 /// единственного weighted RNG выбранный concrete skill проверяется через
 /// `CSkill::IsRestored`; отсутствующий или ещё не восстановленный навык общего
-/// monster AI заменяется `GetDefaultAttackSkillID`. Стационарная guard-ветвь,
-/// наследующая `CFixedPositionArcher::OnChangeSkill`, сохраняет существующий
-/// навык на cooldown и ставит полный restore delay в хвост FIFO. Boss-specific
-/// пороги остаются в своих selector-owner-ах.
+/// monster AI заменяется `GetDefaultAttackSkillID`. AI5 и наследующий его
+/// AI103 сохраняют существующий навык на cooldown и ставят полный restore
+/// delay в хвост FIFO. Boss-specific пороги остаются в своих selector-owner-ах.
 pub(crate) fn change_owned_monster_attack_skill<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     region: &mut CServerRegion,
