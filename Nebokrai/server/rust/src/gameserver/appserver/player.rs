@@ -107,6 +107,10 @@
 //! player combat state через setup scales `+0x8AC..+0x8B8`, затем повторно
 //! используют occupation-derived STR/DEX/INT формулы; signed pass и clamp
 //! совпадают с остальными equipment addon-ами.
+//! Battle-fairy cases `0x9B/0x9C/0x9E..0xA1` исполняются после slot-10
+//! prelude: base fallback мутирует canonical goods, живая BF HP разрешает
+//! масштабированный `0.0001` вклад в player properties, а BF HP/MP зажимаются
+//! к обновлённым максимумам до общего state pass-а.
 //! Periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
@@ -5202,6 +5206,186 @@ impl CPlayer {
         let _ = goods.set_addon_property_value_core(GAP_BF_MAX_HP, 1, maximum_hp);
         let _ = goods.set_addon_property_value_core(GAP_BF_MAX_MP, 1, maximum_mp);
         let _ = goods.set_instance_addon_modifier(GAP_BF_CUT_HURT_SCALE, 1, 0);
+    }
+
+    /// `MountEquip` cases `0x9B/0x9C/0x9E..0xA1` после battle-fairy prelude.
+    /// Текущие BF-атрибуты хранятся в масштабе 1/10000; нулевое производное
+    /// значение восстанавливает base addon-ы, как native positive pass.
+    pub(crate) fn apply_battle_fairy_equipment_properties(
+        &mut self,
+        mut properties: PlayerCombatProperties,
+        coefficients: GlobePlayerPropertyCoefficients,
+        factory: &CGoodsFactory,
+    ) -> PlayerCombatProperties {
+        fn add_u32(target: &mut u32, delta: i64) {
+            *target = (i64::from(*target) + delta).clamp(0, i64::from(i32::MAX)) as u32;
+        }
+        fn add_u16(target: &mut u16, delta: i64) {
+            let value = i64::from(*target) + delta;
+            *target = if value < 0 { 0 } else { value as u16 };
+        }
+        fn rounded(value: i32, coefficient: f32) -> i32 {
+            (f64::from(value) * f64::from(coefficient)).round() as i32
+        }
+        fn scaled(value: i32) -> f64 {
+            f64::from(value) * 0.0001_f64
+        }
+
+        let occupation = usize::from(self.base_properties.occupation).min(2);
+        let Some(goods) = self.equipment.get_goods_mut(10) else {
+            return properties;
+        };
+        if goods.addon_property_value(factory, GAP_BF_BATTLE_FAIRY, 1) == 0 {
+            return properties;
+        }
+        let enabled = goods.enabled_addon_properties(factory);
+        for property in enabled {
+            match property {
+                GAP_BF_ATTACK => {
+                    if goods.addon_property_value(factory, GAP_BF_ATTACK, 1) == 0 {
+                        let base = goods.addon_property_value(factory, GAP_BF_ATTACK_BASE, 1);
+                        let _ = goods.set_addon_property_value_core(GAP_BF_ATTACK, 1, base);
+                    }
+                }
+                GAP_BF_SPRITE => {
+                    if goods.addon_property_value(factory, GAP_BF_SPRITE, 1) == 0 {
+                        let base = goods.addon_property_value(factory, GAP_BF_SPRITE_BASE, 1);
+                        let _ = goods.set_addon_property_value_core(GAP_BF_SPRITE, 1, base);
+                    }
+                }
+                GAP_BF_BRAVE => {
+                    let base = goods.addon_property_value(factory, GAP_BF_BRAVE_BASE, 1);
+                    let current = goods.addon_property_value(factory, GAP_BF_BRAVE, 1);
+                    let base_effect = rounded(base, coefficients.battle_fairy_brave_to_player);
+                    let current_effect = rounded(current, coefficients.battle_fairy_brave_to_player);
+                    if current_effect == 0 {
+                        let _ = goods.set_addon_property_value_core(GAP_BF_BRAVE, 1, base);
+                        add_u32(&mut properties.strength, i64::from(base_effect));
+                        continue;
+                    }
+                    if goods.addon_property_value(factory, GAP_BF_HP, 1) == 0 {
+                        continue;
+                    }
+                    let effect = scaled(current_effect);
+                    add_u32(&mut properties.strength, effect.round() as i64);
+                    add_u32(
+                        &mut properties.maximum_attack,
+                        (effect * f64::from(coefficients.str_to_max_attack[occupation])).round()
+                            as i64,
+                    );
+                    add_u16(
+                        &mut properties.burden,
+                        (effect * f64::from(coefficients.str_to_burden[occupation])).round() as i64,
+                    );
+                }
+                GAP_BF_AGILITY => {
+                    let base = goods.addon_property_value(factory, GAP_BF_AGILITY_BASE, 1);
+                    let current = goods.addon_property_value(factory, GAP_BF_AGILITY, 1);
+                    let base_effect = rounded(base, coefficients.battle_fairy_agility_to_player);
+                    let current_effect = rounded(current, coefficients.battle_fairy_agility_to_player);
+                    if current_effect == 0 {
+                        let _ = goods.set_addon_property_value_core(GAP_BF_AGILITY, 1, base);
+                        add_u32(&mut properties.dexterity, i64::from(base_effect));
+                        continue;
+                    }
+                    if goods.addon_property_value(factory, GAP_BF_HP, 1) == 0 {
+                        continue;
+                    }
+                    let effect = scaled(current_effect);
+                    add_u32(&mut properties.dexterity, effect.round() as i64);
+                    add_u32(
+                        &mut properties.minimum_attack,
+                        (effect * f64::from(coefficients.dex_to_min_attack[occupation])).round()
+                            as i64,
+                    );
+                    add_u16(
+                        &mut properties.reank,
+                        (effect * f64::from(coefficients.dex_to_stiff[occupation])).round() as i64,
+                    );
+                }
+                GAP_BF_SPRITUALISM => {
+                    let base = goods.addon_property_value(factory, GAP_BF_SPRITUALISM_BASE, 1);
+                    let current = goods.addon_property_value(factory, GAP_BF_SPRITUALISM, 1);
+                    let base_effect =
+                        rounded(base, coefficients.battle_fairy_spiritualism_to_player);
+                    let current_effect =
+                        rounded(current, coefficients.battle_fairy_spiritualism_to_player);
+                    if current_effect == 0 {
+                        let _ = goods.set_addon_property_value_core(GAP_BF_SPRITUALISM, 1, base);
+                        let _ = goods.set_addon_property_value_core(GAP_BF_MAX_MP, 1, base);
+                        let _ = goods.set_addon_property_value_core(GAP_BF_MP, 1, base);
+                        add_u32(&mut properties.intelligence, i64::from(base_effect));
+                        continue;
+                    }
+                    if goods.addon_property_value(factory, GAP_BF_HP, 1) == 0 {
+                        continue;
+                    }
+                    let effect = scaled(current_effect);
+                    add_u32(&mut properties.intelligence, effect.round() as i64);
+                    properties.element_modify = (i64::from(properties.element_modify)
+                        + (effect * f64::from(coefficients.int_to_element[occupation])).round()
+                            as i64)
+                        .clamp(0, i64::from(i32::MAX)) as i32;
+                    add_u32(
+                        &mut properties.maximum_mp,
+                        (effect * f64::from(coefficients.int_to_max_mp[occupation])).round() as i64,
+                    );
+                    add_u32(
+                        &mut properties.element_resistance,
+                        (effect * f64::from(coefficients.int_to_resistant[occupation])).round()
+                            as i64,
+                    );
+                    clamp_battle_fairy_current(goods, factory, GAP_BF_MP, GAP_BF_MAX_MP);
+                }
+                GAP_BF_STRENGH => {
+                    let base = goods.addon_property_value(factory, GAP_BF_STRENGH_BASE, 1);
+                    let current = goods.addon_property_value(factory, GAP_BF_STRENGH, 1);
+                    let base_effect = rounded(base, coefficients.battle_fairy_strength_to_hp);
+                    let current_effect = rounded(current, coefficients.battle_fairy_strength_to_hp);
+                    let effect = if current_effect == 0 {
+                        let _ = goods.set_addon_property_value_core(GAP_BF_STRENGH, 1, base);
+                        let _ = goods.set_addon_property_value_core(GAP_BF_MAX_HP, 1, base);
+                        let _ = goods.set_addon_property_value_core(GAP_BF_HP, 1, base);
+                        i64::from(base_effect)
+                    } else if goods.addon_property_value(factory, GAP_BF_HP, 1) != 0 {
+                        scaled(current_effect).round() as i64
+                    } else {
+                        continue;
+                    };
+                    add_u32(&mut properties.maximum_hp, effect);
+                    clamp_battle_fairy_current(goods, factory, GAP_BF_HP, GAP_BF_MAX_HP);
+                }
+                _ => {}
+            }
+        }
+        properties
+    }
+
+    /// Два снимка `UpdateCiQingProperty` должны видеть один и тот же
+    /// pre-Mount BF goods state. Первый property-pass выполняется на clone,
+    /// второй оставляет canonical zero-init/clamp mutations в slot 10.
+    pub(crate) fn apply_battle_fairy_equipment_property_pair(
+        &mut self,
+        previous: PlayerCombatProperties,
+        current: PlayerCombatProperties,
+        coefficients: GlobePlayerPropertyCoefficients,
+        factory: &CGoodsFactory,
+    ) -> (PlayerCombatProperties, PlayerCombatProperties) {
+        let saved = self.equipment.get_goods(10).cloned();
+        let previous = self.apply_battle_fairy_equipment_properties(
+            previous,
+            coefficients,
+            factory,
+        );
+        if let (Some(saved), Some(goods)) = (saved, self.equipment.get_goods_mut(10)) {
+            *goods = saved;
+        }
+        let current = self.apply_battle_fairy_equipment_properties(
+            current,
+            coefficients,
+            factory,
+        );
+        (previous, current)
     }
 
     /// Применяет все уже материализованные семейства общего

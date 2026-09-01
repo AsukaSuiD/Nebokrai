@@ -570,10 +570,15 @@ macro_rules! player_property_recompute {
         let goods_factory = $game.goods_factory.clone();
         move |player: &mut CPlayer| {
             player.refresh_battle_fairy_equipment_properties(&goods_factory);
-            player.recompute_base_and_equipment_properties(
+            let properties = player.recompute_base_and_equipment_properties(
                 coefficients,
                 base_combat_scales,
                 critical_rate,
+                &goods_factory,
+            );
+            player.apply_battle_fairy_equipment_properties(
+                properties,
+                coefficients,
                 &goods_factory,
             )
         }
@@ -6022,10 +6027,15 @@ impl CGame {
         let goods_factory = self.goods_factory.clone();
         let player = self.players.get_mut(&player_id)?;
         player.refresh_battle_fairy_equipment_properties(&goods_factory);
-        Some(player.recompute_base_and_equipment_properties(
+        let properties = player.recompute_base_and_equipment_properties(
             coefficients,
             base_combat_scales,
             critical_rate,
+            &goods_factory,
+        );
+        Some(player.apply_battle_fairy_equipment_properties(
+            properties,
+            coefficients,
             &goods_factory,
         ))
     }
@@ -24420,6 +24430,12 @@ impl CGame {
                 coefficients,
                 base_combat_scales,
                 critical_rate,
+                &goods_factory,
+            );
+            let (previous, current) = player.apply_battle_fairy_equipment_property_pair(
+                previous,
+                current,
+                coefficients,
                 &goods_factory,
             );
             let (_, tao_zhuang_add_values, tao_zhuang_id) =

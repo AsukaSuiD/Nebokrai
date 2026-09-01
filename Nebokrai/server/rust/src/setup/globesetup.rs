@@ -12,7 +12,8 @@
 //! BattleFairy и CiQing feature gates, а также ordinary-fairy setup
 //! `+0x85C..+0x8B8` читаются из подтверждённых byte offsets. Exact
 //! `CPlayer::MountEquip` VA `0x443CB6/0x443E5C/0x444002/0x44426B`
-//! подтверждают четыре player-scale коэффициента `+0x8AC..+0x8B8`.
+//! подтверждают ordinary player-scale коэффициенты `+0x8AC..+0x8B8`, а
+//! absolute reads `0xEF4694..0xEF46A0` — battle-fairy `+0x8D4..+0x8E0`.
 //! Public-talk projection читает оба fixed goods-name, stack-count/money и
 //! chat intervals, включая team `+0x850`, прямо из тех же setup-полей. Абсолютные
 //! reads `0xEF4528/68/6C/70/B0/B4` и `0xEF4604/08` в `OnOtherMessage`
@@ -254,6 +255,10 @@ pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) fairy_agility_to_player: f32,
     pub(crate) fairy_wakan_to_player: f32,
     pub(crate) fairy_hp_to_player: f32,
+    pub(crate) battle_fairy_brave_to_player: f32,
+    pub(crate) battle_fairy_agility_to_player: f32,
+    pub(crate) battle_fairy_spiritualism_to_player: f32,
+    pub(crate) battle_fairy_strength_to_hp: f32,
     pub(crate) resume_hp_peace: i32,
     pub(crate) resume_mp_peace: i32,
     pub(crate) resume_hp_fight: i32,
@@ -1055,6 +1060,10 @@ impl GlobeSetupSnapshot {
             fairy_agility_to_player: self.read_f32(0x8B0),
             fairy_wakan_to_player: self.read_f32(0x8B4),
             fairy_hp_to_player: self.read_f32(0x8B8),
+            battle_fairy_brave_to_player: self.read_f32(0x8D4),
+            battle_fairy_agility_to_player: self.read_f32(0x8D8),
+            battle_fairy_spiritualism_to_player: self.read_f32(0x8DC),
+            battle_fairy_strength_to_hp: self.read_f32(0x8E0),
             resume_hp_peace: self.read_i32(RESUME_HP_PEACE_OFFSET),
             resume_mp_peace: self.read_i32(RESUME_MP_PEACE_OFFSET),
             resume_hp_fight: self.read_i32(RESUME_HP_FIGHT_OFFSET),
