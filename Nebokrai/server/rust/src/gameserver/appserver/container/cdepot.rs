@@ -14,8 +14,9 @@
 //! `OT_SWITCH_OBJECT` проходит через depot guard и общий volume swap. Persisted
 //! restore очищает исходные 96 ячеек, при `bToAdd` расширяет их на 65,
 //! размечает extension-anchor и загружает goods через depot-specific Add;
-//! lock возвращается при любом результате. Вне-клиентский extension-remove
-//! callback остаётся RAW.
+//! lock возвращается при любом результате. Extension-remove listener после
+//! базовой message-разметки лишь повторно запрашивает позицию и не добавляет
+//! observable mutation.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsCleared, AmountLimitGoodsCodecError, AmountLimitGoodsRelease,
