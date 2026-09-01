@@ -22,7 +22,9 @@ use crate::gameserver::appserver::ai::monsterai::{
 };
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::send_owned_state_visual;
+use crate::gameserver::appserver::states::state::{
+    resolve_coordinate_sufferer, send_owned_state_visual,
+};
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::abort_skill;
@@ -215,19 +217,8 @@ fn player_target(game: &CGame, region_id: i32, dispatch: PlayerSkillDispatch) ->
     match dispatch {
         PlayerSkillDispatch::Object { target, .. } => Some(target),
         PlayerSkillDispatch::Point { skill_id, x, y } if skill_id == SPIDER_WEB_SKILL_ID => {
-            if x == 0 && y == 0 {
-                return None;
-            }
-            let region = game.find_region(region_id)?.base();
-            let (area_width, area_height) = game.area_dimensions();
-            let mut shapes = Vec::new();
-            region
-                .get_shapes(x, y, area_width, area_height, game, &mut shapes)
-                .ok()?;
-            shapes
-                .into_iter()
-                .map(|shape| shape.identity)
-                .find(|identity| matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE))
+            let target = resolve_coordinate_sufferer(game, region_id, x, y)?;
+            matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE).then_some(target)
         }
         _ => None,
     }

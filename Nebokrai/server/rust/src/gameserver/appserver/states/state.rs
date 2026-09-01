@@ -8,11 +8,12 @@
 //! значения, а динамический remaining-time и additional-data остаются у
 //! конкретных владельцев. Стандартные визуальные пакеты состояния отправляются
 //! через уже заимствованного владельца региона, чтобы owner-проход не зависел от
-//! повторного поиска временно вынутого региона. Остальной корпус сохранён ниже
-//! как `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! повторного поиска временно вынутого региона. Координатная ветвь точного
+//! `GetSufferer` выбирает первый `CMoveShape` клетки в региональном порядке;
+//! identity-ветви и остальной корпус сохранены ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
-use crate::gameserver::appserver::shape::CShape;
+use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
 
@@ -35,6 +36,36 @@ pub(crate) fn send_owned_state_visual(
         message.add_long(additional_data as i32);
     }
     let _ = game.send_game_shape_around(region, shape, None, &message);
+}
+
+/// Координатная ветвь точного `CState::GetSufferer`: `(0, 0)` означает
+/// отсутствие цели, иначе выбирается первый `CMoveShape` в порядке региона.
+pub(crate) fn resolve_coordinate_sufferer(
+    game: &CGame,
+    region_id: i32,
+    tile_x: i32,
+    tile_y: i32,
+) -> Option<ShapeIdentity> {
+    if tile_x == 0 && tile_y == 0 {
+        return None;
+    }
+    let region = game.find_region(region_id)?.base();
+    let (area_width, area_height) = game.area_dimensions();
+    let mut shapes = Vec::new();
+    region
+        .get_shapes(
+            tile_x,
+            tile_y,
+            area_width,
+            area_height,
+            game,
+            &mut shapes,
+        )
+        .ok()?;
+    shapes
+        .into_iter()
+        .map(|shape| shape.identity)
+        .find(|identity| matches!(identity.object_type, 400 | 500 | 600 | 1_100 | 1_200))
 }
 
 /// Exact базовый `CState::GetClientStateTime` для классов без override-а.
