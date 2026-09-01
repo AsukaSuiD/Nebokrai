@@ -1337,8 +1337,13 @@ impl CMonster {
             && self.move_shape.current_skill_id().is_none();
         // `CGuardWithSword::OnMoving` RVA `0x0020E260` добавляет SearchEnemy
         // после успешного общего OnMoving и наследуется AI10/12/16; базовый
-        // factory type AI9 обязан проходить тот же путь.
-        if (alive && ai_type == 4) || matches!(ai_type, 9 | 10 | 12 | 16) || pet_search {
+        // factory type AI9 обязан проходить тот же путь. Отдельный
+        // `CGuardCountry::OnMoving` RVA `0x0020C4F0` делает то же для живых
+        // factory-типов AI17/100, но не для самостоятельного AI101.
+        if (alive && matches!(ai_type, 4 | 17 | 100))
+            || matches!(ai_type, 9 | 10 | 12 | 16)
+            || pet_search
+        {
             self.base_ai.begin_active_search_enemy(now_ms);
         }
     }
