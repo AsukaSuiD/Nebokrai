@@ -7,9 +7,11 @@
 //! удара устанавливает выжившей цели канонический `Rush2State`. Длительность
 //! состояния уменьшается по исходной разнице уровней; само состояние не
 //! перемещает цель. `CGame` только разрешает владельцев, применяет готовый
-//! результат и выполняет доставку.
-//! `End(true)` фиксирует обновление свойств и cooldown после удара и состояния;
-//! `End(false)` прекращает полёт, не откатывая уже выполненные эффекты.
+//! результат и выполняет доставку. `Attack` и `AI` не изнашивают оружие в
+//! точке удара: унаследованный `AfterUseSkill` делает это один раз из
+//! `End(true)`, после атаки и установки состояния вместе с обновлением свойств
+//! и cooldown. `End(false)` прекращает полёт без износа, не откатывая уже
+//! выполненные эффекты.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -57,6 +59,7 @@ pub(crate) const fn is_strike_dispatch(dispatch: PlayerSkillDispatch) -> bool { 
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_strike<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
+    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_strike_used(now_ms));
 }
 fn abort_player_strike(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
@@ -90,7 +93,7 @@ pub(crate) fn execute_player_strike<Runtime: GameMainLoopRuntime>(game: &mut CGa
     if ai.strike().is_some_and(|state| !state.condition_checked) { let current = game.find_player(player_id).map_or(0, CPlayer::mana); if (current.wrapping_sub(mp_loss) as i32) < 0 { fail(game, player_id, 7, mp_loss, b"GS0288"); abort_player_strike(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); let Some(position) = target_view(game, region_id, target) else { abort_player_strike(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, position.0, position.1)); } send_start(game, player_id, level); if let Some(state) = ai.strike_mut() { state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); } }
     let started = ai.strike().map(|state| state.kernel.started_at_ms()).unwrap_or_default(); if !ai.strike().is_some_and(|state| state.attacking_started) { if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } let Some(position) = target_view(game, region_id, target) else { abort_player_strike(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) }; let path = game.base_magic_path(region_id, source_x, source_y, position.0, position.1, None); if maximum != 0 && path.len() as u32 > maximum { fail(game, player_id, 0x0b, mp_loss, b"GS0290"); abort_player_strike(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 0x0f); let name = game.periodic_state_target_name(region_id, target).to_vec(); game.send_skill_system_info_with_text(player_id, b"GS0296", &name); abort_player_strike(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) } let flying_time = missile_step.wrapping_mul(path.len() as u32); send_fire(game, player_id, level, target, position, flying_time); if let Some(state) = ai.strike_mut() { state.missile_flying_time_ms = flying_time; state.attacking_started = true; let _ = state.kernel.advance(SkillStage::Check, SkillStage::Calculate); } }
     let flying_time = ai.strike().map_or(0, |state| state.missile_flying_time_ms); if !time_reached(runtime.now_milliseconds(), started, delay.wrapping_add(flying_time)) { return terminal(QueuedSkillExecutionState::Pending) }
-    if let Some((master, attack)) = calculate_attack(game, player_id, region_id, target, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } game.damage_player_weapon(player_id, runtime); }
+    if let Some((master, attack)) = calculate_attack(game, player_id, region_id, target, level, factor, hit) { match target.object_type { PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, target.id, region_id, attack, runtime), MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime), _ => {} } }
     if !game.periodic_state_target_dead(region_id, target) && game.find_player(player_id).map(master_info).is_some_and(|master| game.owned_player_skill_target_attackable(master, target, region_id)) { let target_level = target_level(game, region_id, target).unwrap_or(1); let keep = scaled_state_time(source_level, target_level, state_time); if keep != 0 { let now = runtime.now_milliseconds(); let _ = game.install_rush_2_state(region_id, target, Rush2State::new(now, keep), now); } }
     if let Some(state) = ai.strike_mut() { let _ = state.kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel.advance(SkillStage::Attack, SkillStage::Apply); } finish_player_strike(game, player_id, ai, runtime); terminal(QueuedSkillExecutionState::Completed)
 }
