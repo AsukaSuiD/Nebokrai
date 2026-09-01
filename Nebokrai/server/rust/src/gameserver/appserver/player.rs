@@ -19,10 +19,12 @@
 //! wire строго на первом false, как исходная цепочка. После чтения base-wire
 //! `bBFSummon` намеренно снова выводится из локального `m_dwWarSoulState`, а не
 //! принимается как независимый persisted fact.
-//! Quest-map, skill-list и friend-list decoder-ы сохраняют signed legacy
-//! count: отрицательное значение очищает коллекцию и не отклоняет остальной
-//! handoff. CiQing/pet loops исходника на отрицательном count патологически
-//! обходили бы весь `u32`; безопасная Rust-граница такие данные отклоняет.
+//! Quest-map, skill-list, friend-list и три organization-list decoder-а
+//! сохраняют signed legacy count: отрицательное значение очищает коллекцию и
+//! не отклоняет остальной handoff. CiQing/pet loops исходника на отрицательном
+//! count патологически обходили бы весь `u32`; безопасная Rust-граница такие
+//! данные отклоняет. Organization force/contribute читаются как `i32`, но
+//! нормализуются в `0/1`, поскольку persisted owner хранит их как `bool`.
 //! Exact virtual tail этого decoder-а вызывает `CPlayer::InitSkills`: он
 //! гарантирует базовую защиту и профессии 0/1/2 их базовые attack-owner-ы, не
 //! заменяет уже загруженные записи и завершает вход `SetHP(GetMaxHP)`.
@@ -3444,9 +3446,12 @@ impl CPlayer {
             self.faction_level = read_player_game_save_u16(source, cursor, "m_wFactionLevel")?;
             self.faction_experience =
                 read_player_game_save_i32(source, cursor, "m_lFactionExperience")?;
-            self.faction_force = read_player_game_save_i32(source, cursor, "m_lForce")?;
-            self.faction_contribute =
-                read_player_game_save_u32(source, cursor, "m_bFactionContribute")?;
+            self.faction_force = i32::from(
+                read_player_game_save_i32(source, cursor, "m_lForce")? != 0,
+            );
+            self.faction_contribute = u32::from(
+                read_player_game_save_i32(source, cursor, "m_bFactionContribute")? != 0,
+            );
             self.faction_name =
                 read_player_game_save_string(source, cursor, "m_strFactionName", 0x100)?;
             self.faction_title =
@@ -3460,15 +3465,15 @@ impl CPlayer {
                 ("m_EnemyFactions", &mut self.enemy_factions),
                 ("m_CityWarEnemyFactions", &mut self.city_war_enemy_factions),
             ] {
-                let count = read_player_game_save_count(source, cursor, field)?;
+                let count = read_player_game_save_i32(source, cursor, field)?;
                 destination.clear();
-                for _ in 0..count {
+                for _ in 0..count.max(0) {
                     destination.insert(read_player_game_save_i32(source, cursor, field)?);
                 }
             }
-            let count = read_player_game_save_count(source, cursor, "m_OwnedRegions")?;
+            let count = read_player_game_save_i32(source, cursor, "m_OwnedRegions")?;
             self.faction_owned_regions.clear();
-            for _ in 0..count {
+            for _ in 0..count.max(0) {
                 let wire = read_player_game_save_slice(source, cursor, "m_OwnedRegions", 8)?;
                 self.faction_owned_regions.push(wire.try_into().expect("размер проверен"));
             }
@@ -4033,8 +4038,8 @@ impl CPlayer {
         self.faction_logo_id = faction_logo_id;
         self.faction_level = faction_level;
         self.faction_experience = faction_experience;
-        self.faction_force = faction_force;
-        self.faction_contribute = faction_contribute;
+        self.faction_force = i32::from(faction_force != 0);
+        self.faction_contribute = u32::from(faction_contribute != 0);
         self.faction_master_id = faction_master_id;
         self.faction_name.clear();
         self.faction_name.extend_from_slice(faction_name);
@@ -16745,19 +16750,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 //
 
-// ============================================================================
-// FUNCTION: CPlayer::DecordOrgSysFromByteArray
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:1459
-// RVA: 0x0003C230
-// ADDRESS: 0043c230
-// PROTOTYPE: bool __thiscall DecordOrgSysFromByteArray(uchar * param_1, long * param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_PSEUDOCODE: `DecordOrgSysFromByteArray` достигнут
+// единым GameSave decoder-ом выше; покрытый RAW удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::MountEquipRide
