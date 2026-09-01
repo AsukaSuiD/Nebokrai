@@ -25433,22 +25433,6 @@ impl CGame {
                         "захват битвы богов заблокирован оставшимися стражами"
                     );
                     "остались стражи"
-                } else if region.npc_faction(npc_id) == Some(gods_faction) {
-                    let text = format_legacy_mixed(
-                        self.get_string_by_id(b"SZLGS7"),
-                        &[LegacyFormatArgument::Bytes(&npc_name)],
-                        0xff,
-                    );
-                    let delivery = colored_player_notice_message(0xffff_ffff, 0xffff_0000, &text)
-                        .send_to_player(self.net_server(), player_id);
-                    tracing::trace!(
-                        region_id,
-                        player_id,
-                        npc_id,
-                        delivery,
-                        "сторона игрока уже владеет NPC битвы богов"
-                    );
-                    "сторона уже владеет NPC"
                 } else if region.is_player_contending_symbol(player_id, npc_id) {
                     "игрок уже захватывает NPC"
                 } else {

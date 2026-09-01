@@ -22,6 +22,10 @@
 //! `0x000A9270`, а не исправлено по более позднему C++-донору. Найденный
 //! `CancelContendByPlayerID` также удаляет запись без player reset/time; reset
 //! происходит только в ветви отсутствующей записи, как в точном EXE.
+//! `CGodsBattleMgr::OnEnterContend` аналогично сравнивает индекс NPC-set
+//! `0..2` с player faction `5/6`: для допустимого игрока ветвь `SZLGS7`
+//! недостижима, поэтому после гибели всех стражей собственный символ тоже
+//! начинает contend. Это подтверждённое различие представлений не нормализуется.
 //! Faction-specific die-back lookup сохраняет ordered first-match, обязательный
 //! registered-region gate и direction `-1`; concrete caller делегирует miss
 //! подтверждённому `CServerRegion::GetReturnPoint`. Дизассемблирование RVA
