@@ -19,7 +19,6 @@ use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{
     CShape, ShapeAreaCoordinates, ShapeIdentity, ShapeView,
 };
-use crate::gameserver::appserver::skills::baseattack::real_distance;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::public::tools::get_line_direction;
 use crate::setup::monsterlist::MonsterProperties;
@@ -150,7 +149,7 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
     }) else {
         return true;
     };
-    if real_distance(owner.tile_x, owner.tile_y, twin.tile_x, twin.tile_y) <= 5 {
+    if owner.real_distance(Some(twin)) <= 5 {
         return true;
     }
 
@@ -164,8 +163,7 @@ pub(crate) fn maintain_jiumai_twin<Runtime: GameMainLoopRuntime>(
         _ => None,
     });
     if target.is_some_and(|target| {
-        real_distance(target.tile_x, target.tile_y, owner.tile_x, owner.tile_y)
-            <= real_distance(target.tile_x, target.tile_y, twin.tile_x, twin.tile_y)
+        target.real_distance(Some(owner)) <= target.real_distance(Some(twin))
     }) {
         return true;
     }
@@ -439,12 +437,7 @@ fn nearest_jiumai_view(
 ) -> Option<ShapeView> {
     candidates
         .fold(None, |nearest, candidate| {
-            let distance = real_distance(
-                owner.tile_x,
-                owner.tile_y,
-                candidate.tile_x,
-                candidate.tile_y,
-            );
+            let distance = owner.real_distance(Some(candidate));
             match nearest {
                 Some((_, current_distance)) if current_distance <= distance => nearest,
                 _ => Some((candidate, distance)),
