@@ -45,7 +45,8 @@
 //! участника берутся из того же авторитетного World `0x7FE06`.
 //! Достигнутые GodsBattle scripts связывают `5413 / GetAreaID` с настоящим
 //! login-server ID, `11124/11128` — с persisted player SZL и уже существующим
-//! `CGame::UpdateSZL` effect-проходом, `11125/11126` — с faction XYD World
+//! `CGame::UpdateSZL` effect-проходом, `11121` — с чтением player faction и
+//! sentinel-fallback на текущего игрока, `11125/11126` — с faction XYD World
 //! round-trip и region-guarded чтением, `11127` — с player faction mutation
 //! и `0xBF80C` around-publication, `11129` — с single-requester top-ten
 //! запросом, а точный case `11130` — с NPC-contend текущего
@@ -782,6 +783,7 @@ pub(crate) const SCRIPT_FUNCTION_IS_HOMELAND: i32 = 9301;
 pub(crate) const SCRIPT_FUNCTION_GET_REGION_COUNTRY: i32 = 9302;
 pub(crate) const SCRIPT_FUNCTION_IS_REGIONAL_PROTECTED: i32 = 9303;
 pub(crate) const SCRIPT_FUNCTION_ADD_KING_POINT: i32 = 9317;
+pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION: i32 = 11121;
 pub(crate) const SCRIPT_FUNCTION_GET_PLAYER_SZL: i32 = 11124;
 pub(crate) const SCRIPT_FUNCTION_SET_GODS_BATTLE_FACTION_XYD: i32 = 11125;
 pub(crate) const SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD: i32 = 11126;
@@ -1204,6 +1206,7 @@ pub(crate) fn run_war_contend_script_function<Runtime: GameClockContext>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GodsBattleScriptKind {
     AreaId,
+    PlayerFaction,
     PlayerSzl,
     SetFactionXyd,
     FactionXyd,
@@ -1271,6 +1274,7 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
 ) -> GodsBattleScriptFunctionOutcome {
     let kind = match function_id {
         SCRIPT_FUNCTION_GET_AREA_ID => GodsBattleScriptKind::AreaId,
+        SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION => GodsBattleScriptKind::PlayerFaction,
         SCRIPT_FUNCTION_GET_PLAYER_SZL => GodsBattleScriptKind::PlayerSzl,
         SCRIPT_FUNCTION_SET_GODS_BATTLE_FACTION_XYD => GodsBattleScriptKind::SetFactionXyd,
         SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD => GodsBattleScriptKind::FactionXyd,
@@ -1291,6 +1295,26 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
                 value,
                 GodsBattleScriptDisposition::Scalar {
                     player_id: script_player_id,
+                    value,
+                },
+            )
+        }
+        GodsBattleScriptKind::PlayerFaction => {
+            let current_player_id = script_player_id
+                .filter(|player_id| game.find_player(*player_id).is_some());
+            let target_player_id = current_player_id.and_then(|current_player_id| {
+                match evaluated_arguments[0] {
+                    Some(SCRIPT_INT_PARAMETER_ERROR) | None => Some(current_player_id),
+                    Some(player_id) => Some(player_id),
+                }
+            });
+            let value = target_player_id
+                .and_then(|player_id| game.find_player(player_id))
+                .map_or(0, CPlayer::gods_battle_faction);
+            handled(
+                value,
+                GodsBattleScriptDisposition::Scalar {
+                    player_id: target_player_id,
                     value,
                 },
             )
@@ -1341,11 +1365,11 @@ pub(crate) fn run_gods_battle_script_function<Runtime: ScriptFunctionRuntime>(
             )
         }
         GodsBattleScriptKind::FactionXyd => {
-            let caller_is_live = script_player_id
-                .is_some_and(|player_id| game.find_player(player_id).is_some())
-                && script_region_id
-                    .and_then(|region_id| game.find_region(region_id))
-                    .is_some_and(|region| matches!(region, ServerRegionOwner::GodsBattle(_)));
+            let caller_is_live = gods_battle_region_script_caller_is_live(
+                game,
+                script_player_id,
+                script_region_id,
+            );
             let (faction_a, faction_b) = game.gods_battle_mgr().configuration().faction_xyd();
             let value = if caller_is_live {
                 match evaluated_arguments[0] {
@@ -2278,6 +2302,17 @@ pub(crate) fn owned_region_script_caller_is_live(
 ) -> bool {
     script_player_id.is_some_and(|player_id| game.find_player(player_id).is_some())
         && script_region_id.is_some_and(|region_id| game.find_region(region_id).is_some())
+}
+
+pub(crate) fn gods_battle_region_script_caller_is_live(
+    game: &CGame,
+    script_player_id: Option<i32>,
+    script_region_id: Option<i32>,
+) -> bool {
+    script_player_id.is_some_and(|player_id| game.find_player(player_id).is_some())
+        && script_region_id
+            .and_then(|region_id| game.find_region(region_id))
+            .is_some_and(|region| matches!(region, ServerRegionOwner::GodsBattle(_)))
 }
 
 pub(crate) fn script_player_npc_caller_exists(
@@ -3772,6 +3807,10 @@ pub(crate) fn script_function_parameter_kind(
         | SCRIPT_FUNCTION_GOD_MODE
         | SCRIPT_FUNCTION_RESIDENT_MODE
         | SCRIPT_FUNCTION_GM_MODE => Unused,
+        SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION => match index {
+            0 => Integer,
+            _ => Unused,
+        },
         SCRIPT_FUNCTION_SET_GODS_BATTLE_FACTION_XYD => match index {
             0 | 1 => Integer,
             _ => Unused,

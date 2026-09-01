@@ -26,8 +26,10 @@
 //! монстров. Группа `5411/5412/5414/5420` читает единый загруженный
 //! `CPlayerList`, текущий опыт игрока и начальные идентификаторы; виртуальная
 //! машина не вычисляет аргументы, которых не касается точный selector.
-//! GodsBattle `11130` проверяет наличие script NPC до вычисления секунд, после
-//! чего общий dispatcher связывает вызов с текущим регионом игрока.
+//! GodsBattle `11121/11126` проверяют соответственно live player и пару
+//! live player/GodsBattle region до вычисления аргумента; `11130` проверяет
+//! наличие script NPC до вычисления секунд, после чего общий dispatcher
+//! связывает вызов с текущим регионом игрока.
 //!
 //! `wait 6` и `RunTime 22` хранят срок ожидания в том же `ActiveScript`.
 //! Первый продолжает выполнение с сохранённой позиции, второй раз в секунду
@@ -53,9 +55,10 @@ use super::function::{
     SCRIPT_FUNCTION_ARGUMENT_CAPACITY, SCRIPT_FUNCTION_CITY_WAR_DECLARE,
     SCRIPT_FUNCTION_DEL_APPELLATION_STATE, SCRIPT_FUNCTION_GET_APPELLATION_STATE,
     SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND, SCRIPT_FUNCTION_GET_COPY_NUMBER,
-    SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE,
+    SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD, SCRIPT_FUNCTION_GET_LEVEL_EXPERIENCE,
     SCRIPT_FUNCTION_GET_NAME, SCRIPT_FUNCTION_GET_OWNED_REGION_FACTION_ID,
     SCRIPT_FUNCTION_GET_OWNED_REGION_UNION_ID, SCRIPT_FUNCTION_GET_STRING_BY_ID,
+    SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION,
     SCRIPT_FUNCTION_GET_TEAMER_NAME, SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_APPLY_TIME,
     SCRIPT_FUNCTION_IS_ARRIVE_VILLAGE_WAR_TIME, SCRIPT_FUNCTION_IS_CITY_WAR_DECLARE_TIME,
     SCRIPT_FUNCTION_IS_CITY_WAR_FIGHT_TIME, SCRIPT_FUNCTION_LIST_BANNED_PLAYER,
@@ -63,7 +66,8 @@ use super::function::{
     SCRIPT_FUNCTION_PLAYER_MESSAGE, SCRIPT_FUNCTION_PLAYER_TALK,
     SCRIPT_FUNCTION_REQUEST_PLAYER_RANKS, ScriptFunctionDispatchOutcome,
     ScriptFunctionParameterKind, ScriptFunctionRuntime, ScriptStringFunctionDispatchOutcome,
-    dispatch_script_function, dispatch_script_string_function, owned_region_script_caller_is_live,
+    dispatch_script_function, dispatch_script_string_function,
+    gods_battle_region_script_caller_is_live, owned_region_script_caller_is_live,
     run_add_time_goods_script_function, script_function_parameter_kind,
     script_player_npc_caller_exists, village_war_script_caller_is_live,
 };
@@ -665,6 +669,29 @@ impl<'a> CScript<'a> {
         }
         if function_id == SCRIPT_FUNCTION_ENTER_GODS_BATTLE_CONTEND
             && self.context.npc_id.is_none()
+        {
+            return ScriptCommandOutcome::Handled {
+                function_id,
+                legacy_return: 0,
+            };
+        }
+        if function_id == SCRIPT_FUNCTION_GET_PLAYER_GODS_BATTLE_FACTION
+            && !self
+                .context
+                .player_id
+                .is_some_and(|player_id| game.find_player(player_id).is_some())
+        {
+            return ScriptCommandOutcome::Handled {
+                function_id,
+                legacy_return: 0,
+            };
+        }
+        if function_id == SCRIPT_FUNCTION_GET_GODS_BATTLE_FACTION_XYD
+            && !gods_battle_region_script_caller_is_live(
+                game,
+                self.context.player_id,
+                self.context.region_id,
+            )
         {
             return ScriptCommandOutcome::Handled {
                 function_id,
