@@ -5,6 +5,8 @@
 //! пакеты ранения и смерти и семантические хвосты. Смерть игрока передаётся
 //! наружу после возврата владельца региона; смерть любого монстра остаётся
 //! в его `CBaseAI` как пассивный `Died` и завершается runtime-владельцем AI.
+//! Производные hurt-owner-ы вызываются после освобождения mutation-заимствования;
+//! в частности AI100 сохраняет поиск summon-формы и принимает monster-attacker-а.
 
 use super::fightdefense::{
     defend_monster_from_monster_base_attack, defend_player_from_monster_base_attack,
@@ -14,6 +16,9 @@ use crate::gameserver::appserver::ai::cityguardwithbow::retarget_city_bow_guard_
 use crate::gameserver::appserver::ai::guardcountry::retarget_special_guard_after_hurt;
 use crate::gameserver::appserver::ai::smartgladiator::apply_monster_hurt_response;
 use crate::gameserver::appserver::ai::jiumai::retarget_jiumai_after_hurt;
+use crate::gameserver::appserver::ai::lord::{
+    apply_lord_hurt_response, plan_lord_hurt_response_in_region,
+};
 use crate::gameserver::appserver::ai::vilcouguardwithbow::retarget_village_bow_guard_after_hurt;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::monster::{MonsterCombatProperties, MonsterKillingAttack};
@@ -345,6 +350,10 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
         return;
     }
     let current_health = target_health - damage;
+    let lord_hurt_plan = target_monster_property
+        .as_ref()
+        .filter(|property| property.ai == 100 && current_health != 0)
+        .map(|property| plan_lord_hurt_response_in_region(game, region, target.id, property));
     let (attacker_is_tamed, passive_attacker_is_owned_creature) = region
         .find_monster_by_id(monster_id)
         .and_then(|attacker| {
@@ -412,6 +421,12 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
             {
                 // AI101 разрешает атакующего и связывает близнеца после
                 // освобождения изменяемого заимствования цели.
+            } else if target_monster_property
+                .as_ref()
+                .is_some_and(|property| property.ai == 100)
+            {
+                // AI100 применяет Defense, spatial-step и выбор цели после
+                // освобождения изменяемого заимствования монстра.
             } else if target_monster_property
                 .as_ref()
                 .is_some_and(|property| property.ai == 1)
@@ -485,6 +500,26 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                 ex_id: CGuid::GUID_INVALID,
             },
             now_ms,
+        );
+    }
+    if current_health != 0
+        && !target_tamed
+        && let (Some(property), Some(plan)) =
+            (target_monster_property.as_ref(), lord_hurt_plan)
+        && property.ai == 100
+    {
+        let _ = apply_lord_hurt_response(
+            game,
+            region,
+            target.id,
+            property,
+            ShapeIdentity {
+                object_type: MONSTER_TYPE,
+                id: monster_id,
+                ex_id: CGuid::GUID_INVALID,
+            },
+            now_ms,
+            plan,
         );
     }
     if current_health != 0

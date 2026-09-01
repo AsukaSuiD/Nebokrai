@@ -52,6 +52,17 @@ pub(crate) fn plan_lord_hurt_response(
     let Some(region) = game.find_region(region_id).map(|owner| owner.base()) else {
         return LordHurtPlan::default();
     };
+    plan_lord_hurt_response_in_region(game, region, monster_id, property)
+}
+
+/// Тот же неизменяющий проход для caller-а, который уже временно владеет
+/// регионом и поэтому не может повторно найти его в `CGame`.
+pub(crate) fn plan_lord_hurt_response_in_region(
+    game: &CGame,
+    region: &CServerRegion,
+    monster_id: i32,
+    property: &MonsterProperties,
+) -> LordHurtPlan {
     let Some(owner) = region
         .find_monster_by_id(monster_id)
         .and_then(|monster| monster.shape_view(property))
