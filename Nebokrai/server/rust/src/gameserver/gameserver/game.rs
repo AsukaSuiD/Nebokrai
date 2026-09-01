@@ -40863,14 +40863,12 @@ impl CGame {
                 }
             };
             let concrete_promotion = match dispatch {
-                PlayerSkillDispatch::SelfTarget { skill_id, .. } => {
-                    skill_id == PROMOTION_SKILL_ID
-                }
+                PlayerSkillDispatch::SelfTarget { skill_id, .. }
+                | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == PROMOTION_SKILL_ID,
                 PlayerSkillDispatch::Object { skill_id, target } => {
                     skill_id == PROMOTION_SKILL_ID
                         && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)
                 }
-                PlayerSkillDispatch::Point { .. } => false,
             };
             let concrete_heal = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }

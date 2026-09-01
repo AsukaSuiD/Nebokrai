@@ -9,8 +9,9 @@
 //! остаются в этом модуле. Monster-ветвь использует объектную цель обычного
 //! боевого ИИ, сохраняет delay/reuse/range и после применения публикует
 //! состояния source-монстра, как исходный virtual `OnChangeStates`.
-//! Координатная перегрузка сохранена ниже как RAW,
-//! потому что её исходный выбор цели состояния ещё не достигнут цепочкой выполнения.
+//! Координатная перегрузка по точному EXE сохраняет точку и через
+//! `CState::GetSufferer` выбирает первый `CMoveShape` клетки; Rust-разрешение
+//! повторяет этот порядок через региональный spatial owner.
 
 use super::baseattack::time_reached;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
@@ -93,7 +94,24 @@ pub(crate) fn cancel_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut C
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
-fn requested_target(player_id: i32, dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> {
+fn is_promotion_dispatch(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(
+        dispatch,
+        PlayerSkillDispatch::SelfTarget { skill_id: PROMOTION_SKILL_ID, .. }
+            | PlayerSkillDispatch::Point { skill_id: PROMOTION_SKILL_ID, .. }
+            | PlayerSkillDispatch::Object {
+                skill_id: PROMOTION_SKILL_ID,
+                target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+            }
+    )
+}
+
+fn requested_target(
+    game: &CGame,
+    region_id: i32,
+    player_id: i32,
+    dispatch: PlayerSkillDispatch,
+) -> Option<ShapeIdentity> {
     match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id, .. } if skill_id == PROMOTION_SKILL_ID => {
             Some(ShapeIdentity {
@@ -107,6 +125,21 @@ fn requested_target(player_id: i32, dispatch: PlayerSkillDispatch) -> Option<Sha
                 && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) =>
         {
             Some(target)
+        }
+        PlayerSkillDispatch::Point { skill_id, x, y } if skill_id == PROMOTION_SKILL_ID => {
+            if x == 0 && y == 0 {
+                return None;
+            }
+            let region = game.find_region(region_id)?.base();
+            let (area_width, area_height) = game.area_dimensions();
+            let mut shapes = Vec::new();
+            region
+                .get_shapes(x, y, area_width, area_height, game, &mut shapes)
+                .ok()?;
+            shapes
+                .into_iter()
+                .map(|shape| shape.identity)
+                .find(|identity| matches!(identity.object_type, PLAYER_TYPE | MONSTER_TYPE))
         }
         _ => None,
     }
@@ -430,9 +463,9 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let Some(target_identity) = requested_target(player_id, dispatch) else {
+    if !is_promotion_dispatch(dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
-    };
+    }
     let Some((region_id, source_x, source_y, skill_level, initial_mana)) = game
         .find_player(player_id)
         .and_then(|player| {
@@ -447,7 +480,8 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
     else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let target = target_snapshot(game, region_id, target_identity);
+    let target_identity = requested_target(game, region_id, player_id, dispatch);
+    let target = target_identity.and_then(|identity| target_snapshot(game, region_id, identity));
     let Some(properties) = game.skill_base_properties(PROMOTION_SKILL_ID, skill_level) else {
         send_failure(game, player_id, 2);
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -524,7 +558,9 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    let Some(target) = target_snapshot(game, region_id, target_identity) else {
+    let Some(target) = requested_target(game, region_id, player_id, dispatch)
+        .and_then(|identity| target_snapshot(game, region_id, identity))
+    else {
         abort_player_promotion(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -601,16 +637,3 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
     finish_player_promotion(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }
-
-// Остаётся недостигнутой координатная перегрузка выбора цели состояния.
-// ============================================================================
-// FUNCTION: CPromotion::Begin
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\skills\promotion.cpp:172
-// RVA: 0x001686A0
-// ADDRESS: 005686a0
-// PROTOTYPE: int __thiscall Begin(CMoveShape * param_1,long param_2,long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
