@@ -5,7 +5,8 @@
 //! exact-пару `CBlindState::Serialize/Unserialize` `0x005F51E0/0x005EAAC0`:
 //! идентификатор и остаток срока занимают восемь байт. Player-login повторно
 //! начинает срок, восстанавливает вложенные запреты движения/боя и публикует
-//! begin-визуал. Создание и снятие остаются RAW до настоящего runtime-caller-а.
+//! begin-визуал, а logout сохраняет отдельный остаток для каждого экземпляра
+//! состояния. Создание и снятие остаются RAW до настоящего runtime-caller-а.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;

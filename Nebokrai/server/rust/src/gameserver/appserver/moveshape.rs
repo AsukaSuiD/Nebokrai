@@ -928,6 +928,17 @@ impl CMoveShape {
                 );
             }
         }
+        let strike_offsets: Vec<_> = known_state_record_offsets(&payload)
+            .into_iter()
+            .filter(|offset| read_u32(&payload, *offset) == Some(STRIKE_STATE_ID))
+            .collect();
+        for (state, offset) in self.strike_states.iter().zip(strike_offsets) {
+            write_u32(
+                &mut payload,
+                offset + 4,
+                state.client_time(&mut timed_state_now_milliseconds),
+            );
+        }
         if let Some(state) = self.knock_out_state {
             if let Some(offset) = known_state_record_offsets(&payload)
                 .into_iter()
