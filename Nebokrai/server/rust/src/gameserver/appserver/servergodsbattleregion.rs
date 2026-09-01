@@ -1,5 +1,6 @@
-//! Статус корпуса: MIXED (`CGodsBattleMgr` startup snapshot реализован,
-//! остальной owner сохранён как RAW pseudocode).
+//! Статус корпуса: MIXED (startup, gameplay lifecycle и manager round-trips
+//! реализованы; ниже сохранены ещё не нужные runtime-цепочке constructors,
+//! singleton plumbing, split-helper и compiler funclets).
 //! Декомпилятор: Ghidra 12.1.2
 //! Сырой C++ ниже после typed owner-а является комментарием, а не
 //! Rust-реализацией.
@@ -10,14 +11,15 @@
 //! подтверждённому `CServerWarRegion` wire-owner-у.
 //! Безразмерный pointer и 256-байтный временный C-string buffer заменены
 //! bounded slice/cursor и owned bytes; обрыв возвращает typed error после уже
-//! завершённого prefix-а вместо неназначаемого legacy UB. Gameplay lifecycle
-//! и остальные методы manager-а пока остаются RAW ниже. Top-ten SZL exchange
+//! завершённого prefix-а вместо неназначаемого legacy UB. Top-ten SZL exchange
 //! хранит единственный overwrite-able requester, exact World request и
 //! terminal-marker decoder; client publication выполняет dispatcher-owner.
 //! XYD round-trip использует configuration-owned slots, ordered region set и
 //! faction player/NPC sets. NPC guard/counter lifecycle и GodsBattle-contend
 //! исполняет `CGame`; точный script case `11130` является живым caller-ом, а
 //! byte-owned имя contender сохраняет исходную GBK.
+//! Monster-death tail проверяет AI `0x17`, повторно разрешает killer identity
+//! в owning region и только затем изменяет manager kill-counter.
 //! Проверка first-contender намеренно сравнивает normal `m_lFactionID` с
 //! сохранённым GodsBattle faction: это несовпадение подтверждено RVA
 //! `0x000A9270`, а не исправлено по более позднему C++-донору. Найденный
@@ -962,7 +964,7 @@ fn gods_battle_faction_index(faction: i32) -> Option<usize> {
 
 // ============================================================================
 // FUNCTION: CServerGodsBattleRegion::OnMonsterDie
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\servergodsbattleregion.cpp:698

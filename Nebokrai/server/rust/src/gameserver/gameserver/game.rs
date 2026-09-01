@@ -25312,6 +25312,9 @@ impl CGame {
         Some(())
     }
 
+    /// Живой virtual-tail `CServerGodsBattleRegion::OnMonsterDie`: после AI
+    /// `0x17` killer identity повторно разрешается через owning region, и лишь
+    /// затем `CGodsBattleMgr::OnNpcMonsterDie` меняет kill-counter.
     pub(crate) fn gods_battle_monster_died(
         &mut self,
         region_id: i32,
@@ -25337,6 +25340,15 @@ impl CGame {
             .find_monster_property_by_origin_name(&original_name)
             .is_none_or(|property| property.ai != 0x17)
         {
+            return None;
+        }
+        let killer_exists = self.find_region(region_id).is_some_and(|owner| {
+            owner
+                .base()
+                .find_child_object(killer_type, killer_id, CGuid::GUID_INVALID, self)
+                .is_some()
+        });
+        if !killer_exists {
             return None;
         }
         let Some(npc_name) = self
