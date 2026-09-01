@@ -51,20 +51,19 @@
 //! `INT_MIN / -1` и недоказанные invalid x87 conversions остаются локальными
 //! typed-границами.
 //! `GetSecurity` до cell lookup проверяет исходный war-byte: false и
-//! out-of-bounds дают `SAFE=2`, true возвращает packed base security, а ещё не
-//! записанный constructor-byte и несогласованный cell storage остаются
-//! раздельными typed-границами.
+//! out-of-bounds дают `SAFE=2`, true возвращает packed base security;
+//! несогласованный cell storage остаётся отдельной typed-границей.
 //!
 //! Writer `CountryWarSys::update_apply_war` записывает defend/attack до
 //! `UpdateContendPlayer`, а phase chain материализует declare/prepare/war
 //! callbacks и clear. Victory callback `OnFlagDestroy` RVA `0x001CAD50`
 //! независимо от исходного war-byte оставляет его false при совпавшем region
 //! ID; переданный country long не читает. Constructor RVA `0x001CE5D0` не
-//! инициализирует эти два `long` и три phase bool; Rust хранит их как `Option`
-//! до доказанного writer-а.
+//! инициализирует эти два `long` и три phase bool; Rust безопасно задаёт
+//! нейтральные `0/false` до доказанных writer/callback-ов.
 //! Точный EXE подтвердил исходную странность `OnPrepareBegin/End`: оба проверяют
-//! `_state_prepare`, но меняют `_state_declare`, поэтому неизвестный prepare-byte
-//! остаётся локальной typed-границей. `CancelContendByPlayer` содержит отдельный
+//! `_state_prepare`, но меняют `_state_declare`; безопасный исходный gate закрыт.
+//! `CancelContendByPlayer` содержит отдельный
 //! исходный дефект: non-null player немедленно получает `false`, а null-ветка
 //! читает absolute `0x8` и вызывает метод с null; safe Rust не придумывает ей
 //! результат. Отдельные тела STL collection internals, `Catch/Unwind` и
@@ -305,7 +304,7 @@ pub(crate) struct CountryMoveShape {
     pub(crate) id: i32,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CServerCountryRegion {
     pub(crate) base: CServerRegion,
     pub(crate) contenders: Vec<ContendState>,
@@ -325,6 +324,34 @@ pub(crate) struct CServerCountryRegion {
     pub(crate) declare_active: Option<bool>,
     pub(crate) prepare_active: Option<bool>,
     pub(crate) war_active: Option<bool>,
+}
+
+impl Default for CServerCountryRegion {
+    fn default() -> Self {
+        Self {
+            base: CServerRegion::default(),
+            contenders: Vec::new(),
+            symbol_hold: BTreeMap::new(),
+            defend_gates: BTreeMap::new(),
+            attack_gates: BTreeMap::new(),
+            defend_flags: BTreeMap::new(),
+            attack_flags: BTreeMap::new(),
+            defend_areas: BTreeMap::new(),
+            attack_areas: BTreeMap::new(),
+            defend_guards: BTreeSet::new(),
+            defend_guard_indices: BTreeSet::new(),
+            attack_guards: BTreeSet::new(),
+            attack_guard_indices: BTreeSet::new(),
+            // Exact ctor не инициализирует эти primitive-поля. Нулевые стороны
+            // и закрытые фазы — безопасное нейтральное состояние до первых
+            // доказанных CountryWarSys writer/callback-ов, без чтения UB.
+            defend_country: Some(0),
+            attack_country: Some(0),
+            declare_active: Some(false),
+            prepare_active: Some(false),
+            war_active: Some(false),
+        }
+    }
 }
 
 impl CServerCountryRegion {
@@ -477,9 +504,8 @@ impl CServerCountryRegion {
                 .map_err(CountryReturnPointError::Base);
         }
 
-        // BLOCKED_MISSING_FACT: constructor RVA 0x001CE5D0 не инициализирует
-        // primitive `_defend_country/_attack_country`; до доказанного вызова
-        // `CountryWarSys::update_apply_war` Safe Rust не назначает им нули.
+        // Нулевые стороны заданы safe constructor-ом до первого
+        // `CountryWarSys::update_apply_war`; exact ctor оставлял здесь UB.
         let defend_country = self
             .defend_country
             .ok_or(CountryReturnPointError::BattleState(
@@ -987,9 +1013,8 @@ impl CServerCountryRegion {
         if attacker.object_type != 400 {
             return Ok(false);
         }
-        // BLOCKED_MISSING_FACT: constructor RVA 0x001CE5D0 оставляет
-        // `_state_war` без значения до первого доказанного `OnStart/OnTimeOut`.
-        // Проверенные до этого false-ветви поле не читают.
+        // Safe constructor задаёт закрытую фазу до первого OnStart; exact ctor
+        // оставлял byte неинициализированным.
         let war_active = self.war_active.ok_or(CountryBattleStateBlock::WarActive)?;
         if !war_active {
             return Ok(false);

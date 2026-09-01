@@ -17,7 +17,7 @@
 //! умножения сохраняют wrapping. Единственный неопределённый x86-край
 //! `INT_MIN / -1` не получает придуманной реакции и возвращает локальный
 //! `BLOCKED_MISSING_FACT`. Player/message/string-table owners остаются узким
-//! context-контрактом; city weekly membership продолжает возвращать `Result`.
+//! context-контрактом; city membership использует переданный faction-list.
 //! Base AI также возвращает typed monster-spawn block: при нём weather и
 //! contender tail не выполняются.
 //! `OnPlayerDamage` сохраняет исходную f32/x87 цепочку
