@@ -8,9 +8,10 @@
 //! значения, а динамический remaining-time и additional-data остаются у
 //! конкретных владельцев. Стандартные визуальные пакеты состояния отправляются
 //! через уже заимствованного владельца региона, чтобы owner-проход не зависел от
-//! повторного поиска временно вынутого региона. Координатная ветвь точного
-//! `GetSufferer` выбирает первый `CMoveShape` клетки в региональном порядке;
-//! identity-ветви и остальной корпус сохранены ниже как `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! повторного поиска временно вынутого региона. Точный `GetSufferer` разрешает
+//! identity типов `400/500/600/1100/1200`, а при неудаче выбирает первый
+//! `CMoveShape` клетки в региональном порядке. Остальной корпус сохранён ниже
+//! как `UNKNOWN` (исследовательский декомпилят хранится локально).
 
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
@@ -66,6 +67,22 @@ pub(crate) fn resolve_coordinate_sufferer(
         .into_iter()
         .map(|shape| shape.identity)
         .find(|identity| matches!(identity.object_type, 400 | 500 | 600 | 1_100 | 1_200))
+}
+
+/// Identity-ветвь точного `CState::GetSufferer`: игрок разрешается глобально,
+/// остальные поддержанные `CMoveShape` — через сохранённый регион состояния.
+pub(crate) fn resolve_identity_sufferer(
+    game: &CGame,
+    region_id: i32,
+    identity: ShapeIdentity,
+) -> Option<ShapeIdentity> {
+    match identity.object_type {
+        400 => game.find_player(identity.id).map(|_| identity),
+        500 | 600 | 1_100 | 1_200 => game
+            .find_shape_in_region(region_id, identity)
+            .map(|_| identity),
+        _ => None,
+    }
 }
 
 /// Exact базовый `CState::GetClientStateTime` для классов без override-а.
@@ -250,20 +267,6 @@ pub(crate) fn timed_client_state_time(
 // RVA: 0x001DBEF0
 // ADDRESS: 005dbef0
 // PROTOTYPE: CMoveShape * __thiscall GetUser(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CState::GetSufferer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\states\state.cpp:80
-// RVA: 0x001DBFD0
-// ADDRESS: 005dbfd0
-// PROTOTYPE: CMoveShape * __thiscall GetSufferer(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

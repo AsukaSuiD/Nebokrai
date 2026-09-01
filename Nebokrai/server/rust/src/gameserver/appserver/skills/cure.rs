@@ -56,7 +56,9 @@ use super::rushstate2::{RUSH_2_STATE_ID, Rush2State, send_rush_2_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
-use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
+use crate::gameserver::appserver::states::state::{
+    resolve_coordinate_sufferer, resolve_identity_sufferer,
+};
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
@@ -99,10 +101,11 @@ fn caster_identity(player_id: i32) -> ShapeIdentity {
 }
 
 fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Option<CureTarget> {
-    let (tile_x, tile_y) = game.move_shape_target_tile(Some(region_id), identity)?;
     match identity.object_type {
         PLAYER_TYPE => {
             let player = game.find_player(identity.id)?;
+            let tile_x = player.shape().get_tile_x().ok()?;
+            let tile_y = player.shape().get_tile_y().ok()?;
             Some(CureTarget {
                 identity,
                 tile_x,
@@ -113,6 +116,8 @@ fn target_snapshot(game: &CGame, region_id: i32, identity: ShapeIdentity) -> Opt
         }
         MONSTER_TYPE => {
             let monster = game.find_region(region_id)?.base().find_monster_by_id(identity.id)?;
+            let tile_x = monster.move_shape().shape().get_tile_x().ok()?;
+            let tile_y = monster.move_shape().shape().get_tile_y().ok()?;
             let property = game.find_monster_property_by_origin_name(monster.base_property_key()?)?;
             if !monster.is_carriage(property) {
                 return None;
@@ -142,8 +147,8 @@ fn requested_target(
                 .or_else(|| Some(caster_identity(player_id)))
         }
         PlayerSkillDispatch::Object { skill_id: CURE_SKILL_ID, target: target @ ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } } => {
-            game.move_shape_target_tile(Some(region_id), target)
-                .map_or_else(|| Some(caster_identity(player_id)), |_| Some(target))
+            resolve_identity_sufferer(game, region_id, target)
+                .or_else(|| Some(caster_identity(player_id)))
         }
         _ => None,
     }
