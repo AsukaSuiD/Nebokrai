@@ -16,6 +16,7 @@
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillTermination};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
@@ -177,7 +178,8 @@ fn calculate_player_attack(game: &mut CGame, player_id: i32) -> Option<(MasterIn
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(rate));
         }
     }
     Some((master, attack))
