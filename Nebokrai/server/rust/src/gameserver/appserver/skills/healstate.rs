@@ -13,7 +13,11 @@
 //! целью снова становится владелец записи, как в исходном `Unserialize`.
 //! Vtable exact EXE направляет клиентский срок семейства на общее тело
 //! `CBlindState::GetRemainedTime` по `0x005F2CD0`.
+//! Периодическая прибавка загружает полный unsigned `hp_gain` в x87,
+//! умножает на сохранённый `f32` Promotion-множитель и усекается `FISTP dword`
+//! без промежуточного `f32` и без округления дробной части.
 
+use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::player::CPlayer;
@@ -145,7 +149,9 @@ impl HealState {
         if due {
             self.heal_count = self.heal_count.wrapping_add(1);
             let multiplier = promotion_factor.map_or(1.0, |factor| f32::from(factor) * 0.001);
-            let gain = round_original(unsigned_float(self.hp_gain) * multiplier) as u32;
+            let gain = truncate_original(
+                f64::from(self.hp_gain) * f64::from(multiplier),
+            ) as u32;
             let next = health.wrapping_add(gain).min(maximum_health);
             // Исходный `AI` вызывает `OnChangeStates` на каждом сработавшем
             // интервале, даже когда ограничение максимума оставило HP прежним.
