@@ -6,6 +6,8 @@
 //! атакует только первый объект собственной клетки. Ошибка конструктора EXE
 //! сохранена: оба края физического урона получают прежний максимум, но RNG
 //! диапазона всё равно вызывается перед проверкой критического удара.
+//! Коэффициент урона вычисляется в x87 из полного unsigned `u32` и
+//! `0.01_f32`, после чего единожды сохраняется как `f32`.
 //! Критический множитель применяется в расширенной точности x87 и усекается к
 //! нулю при записи результата в `i32`.
 
@@ -88,7 +90,8 @@ pub(crate) fn calculate_owned_thunder_slash_attack(
 ) -> Option<(AttackInformation, PlayerCombatProperties, u8, u8)> {
     let properties = game.skill_base_properties(THUNDER_SLASH_SKILL_ID, phalanx.skill_level)?;
     let hit_modifier = properties.query_property(20_001) as i32;
-    let damage_factor = properties.query_property(20_003) as f32 * 0.01;
+    let damage_factor = (f64::from(properties.query_property(20_003))
+        * f64::from(0.01_f32)) as f32;
     let mut combat = game.find_player(phalanx.master.master_id)
         .map_or_else(PlayerCombatProperties::default, |player| player.combat_properties());
     let occupation = game.find_player(phalanx.master.master_id).map_or(0, |player| player.occupation());
