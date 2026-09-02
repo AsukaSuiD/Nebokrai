@@ -41444,9 +41444,14 @@ impl CGame {
             if outcome.state == QueuedSkillExecutionState::Rejected
                 && removed_from_queue
                 && let Some(default_attack_skill_id) = lost_materialized_object_target_default
-                && let Some(player) = self.find_player_mut(player_id)
             {
-                player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
+                // После уже начатого object-skill native `OnLoseTarget`
+                // добавляет общий отказ вслед за concrete `End(1)`, даже если
+                // сам owner ранее сообщил более точную причину.
+                let _ = self.send_base_attack_failure(player_id, 2);
+                if let Some(player) = self.find_player_mut(player_id) {
+                    player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
+                }
             }
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
@@ -41656,6 +41661,7 @@ impl CGame {
                     player_id,
                     dispatch,
                     player_ai,
+                    outcome.state == QueuedSkillExecutionState::Rejected,
                     runtime,
                 );
             }

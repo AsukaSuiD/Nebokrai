@@ -41,12 +41,14 @@ impl CGame {
     }
 
     /// Общий хвост `End(true)` уже материализованного war-soul skill. Concrete
-    /// owner к этому моменту отправил action `3` и очистил собственные поля.
+    /// owner к этому моменту отправил action `3` и очистил собственные поля;
+    /// `OnLoseTargetWarSoul` добавляет общий отказ `4,2` после полного `End`.
     pub(crate) fn finish_battle_fairy_skill_end_tail<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
         dispatch: BattleFairySkillDispatch,
         player_ai: &mut CPlayerAI,
+        reject_request: bool,
         runtime: &mut Runtime,
     ) {
         self.damage_player_weapon(player_id, runtime);
@@ -55,6 +57,9 @@ impl CGame {
             dispatch.skill_id(),
             runtime.now_milliseconds(),
         );
+        if reject_request {
+            self.send_battle_fairy_skill_failure(player_id, 2);
+        }
     }
 
     pub(crate) fn send_battle_fairy_skill_failure(&self, player_id: i32, action: u8) {
