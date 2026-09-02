@@ -15,9 +15,10 @@
 //! `InitAI` и `GetAI` материализованы типизированным binding-ом из
 //! `ai/aifactory.rs`; `InitSkills` использует канонические `CSkillFactory` и
 //! `CMoveShape`. Auto-start очередь при первом AI-проходе исполняет
-//! подтверждённые monster-ветви `TaiJi`/`Origin`, не поглощая остальные ещё
-//! не материализованные state owner-ы. Сериализация и полный автономный ИИ
-//! остаются ниже в исходном материале. Достигнутая цепочка базовой атаки
+//! подтверждённые monster-ветви `TaiJi`/`Origin` и три состояния увеличения
+//! `601..603`, не поглощая остальные ещё не материализованные state owner-ы.
+//! Сериализация и полный автономный ИИ остаются ниже в исходном материале.
+//! Достигнутая цепочка базовой атаки
 //! хранит канонические
 //! HP, защиту первого нападающего, снимок смертельной атаки и цель боевого ИИ;
 //! `CGame` координирует урон и смерть, `Nation/GodsBattle`, награду, добычу,
@@ -115,6 +116,9 @@ use super::shape::{SHAPE_CHANGE_DELETE, ShapeFigure, ShapeIdentity, ShapeView};
 use super::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::skills::energybolt::PathProjectileProgress;
 use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
+use super::skills::enlargefullmiss::ENLARGE_FULL_MISS_SKILL_ID;
+use super::skills::enlargemaxhp::ENLARGE_MAX_HP_SKILL_ID;
+use super::skills::enlargemaxmp::ENLARGE_MAX_MP_SKILL_ID;
 use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::monsterprojectile::MonsterProjectileProgress;
@@ -602,12 +606,19 @@ impl CMonster {
     }
 
     /// `CBaseAI::OnExecuteBackStageSkills` для подтверждённых monster-ветвей
-    /// `CTaiJi::AI` и `COrigin::AI`. Остальные auto-start state ID остаются в
-    /// очереди до материализации их собственного monster owner-а.
+    /// пяти немедленных state-owner-ов. Остальные auto-start state ID остаются
+    /// в очереди до материализации их собственного monster owner-а.
     pub(crate) fn take_reached_back_stage_skills(&mut self) -> Vec<(u32, i32)> {
         self.move_shape
             .take_matching_back_stage_skill_ids(|skill_id| {
-                matches!(skill_id, TAIJI_SKILL_ID | ORIGIN_SKILL_ID)
+                matches!(
+                    skill_id,
+                    TAIJI_SKILL_ID
+                        | ORIGIN_SKILL_ID
+                        | ENLARGE_MAX_HP_SKILL_ID
+                        | ENLARGE_MAX_MP_SKILL_ID
+                        | ENLARGE_FULL_MISS_SKILL_ID
+                )
             })
             .into_iter()
             .map(|skill_id| (skill_id, self.move_shape.skill_level(skill_id)))

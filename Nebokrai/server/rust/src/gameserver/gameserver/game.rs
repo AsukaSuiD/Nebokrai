@@ -40876,8 +40876,9 @@ impl CGame {
 
     /// Проводит `CMoveShape::AutoStartPassiveSkill → CBaseAI::Run →
     /// OnExecuteBackStageSkills` для уже подтверждённых monster-владельцев
-    /// `TaiJi`/`Origin`. Region временно извлекается только для согласованного
-    /// доступа к canonical monster и around-публикации состояния.
+    /// `TaiJi`/`Origin` и `EnlargeFullMiss/MaxHp/MaxMp`. Region временно
+    /// извлекается только для согласованного доступа к canonical monster и
+    /// around-публикации состояния.
     fn execute_owned_monster_back_stage_skills(
         &self,
         region: &mut CServerRegion,

@@ -1,12 +1,16 @@
-//! Общий короткий runtime немедленных состояний игрока и подтверждённых
-//! monster-ветвей `TaiJi`/`Origin`.
+//! Общий короткий runtime немедленных состояний игрока и монстра.
 //!
 //! Владелец объединяет только подтверждённую одинаковую последовательность
 //! `Begin → Check → Calculate → Attack → Apply`. Идентификатор usage,
 //! формула значения и конкретное каноническое состояние остаются у пяти
 //! навыков семейства; завершение сохраняет общий для конкретного skill ID
-//! reuse-clock. `CGame` предоставляет canonical shape owner, свойства навыка,
-//! пересчёт производных характеристик и фактическую публикацию состояния.
+//! reuse-clock. Точные `CEnlargeFullMiss/MaxMp/MaxHp::AI` RVA
+//! `0x00115720/0x001159B0/0x00115BF0` принимают и target, и sufferer owner-а,
+//! заменяют одноимённое состояние и публикуют `OnChangeStates`; их
+//! `OnUpdateProperties` меняет характеристики только при type `400`, поэтому
+//! monster хранит и сериализует состояние без придуманного property-effect.
+//! `CGame` предоставляет canonical shape owner, свойства навыка, пересчёт
+//! производных характеристик и фактическую публикацию состояния.
 //! Входной reuse-gate сохраняет общий `CSkill::IsRestored`, включая нулевой
 //! timestamp нового экземпляра навыка.
 
@@ -40,10 +44,10 @@ enum ImmediateStateKind {
     Origin,
 }
 
-/// Monster-ветвь смешанных `CTaiJi::AI`/`COrigin::AI`: owner навыка является
-/// sufferer-ом, поэтому состояние заменяется на самом монстре и немедленно
-/// участвует в его combat properties. Остальные immediate-state family здесь
-/// намеренно не принимаются без подтверждённого monster caller-а.
+/// Monster-ветвь пяти подтверждённых immediate-state `AI`: owner навыка
+/// является sufferer-ом, поэтому состояние заменяется на самом монстре.
+/// `TaiJi/Origin` участвуют в monster combat getters; `601..603` сохраняют
+/// исходный player-only property gate, но остаются видимы в state snapshot.
 pub(crate) fn execute_monster_immediate_state(
     game: &CGame,
     region: &mut CServerRegion,
@@ -64,6 +68,24 @@ pub(crate) fn execute_monster_immediate_state(
             let _ = monster
                 .move_shape_mut()
                 .replace_taiji_state(TaiJiState::new(gain));
+        }
+        ENLARGE_FULL_MISS_SKILL_ID => {
+            let gain = properties.query_property(SKILL_USAGE_FULL_MISS_GAIN) as i32;
+            let _ = monster
+                .move_shape_mut()
+                .replace_enlarge_full_miss_state(EnlargeFullMissState::new(gain));
+        }
+        ENLARGE_MAX_HP_SKILL_ID => {
+            let gain = properties.query_property(SKILL_USAGE_MAX_HP_GAIN) as i32;
+            let _ = monster
+                .move_shape_mut()
+                .replace_enlarge_max_hp_state(EnlargeMaxHpState::new(gain));
+        }
+        ENLARGE_MAX_MP_SKILL_ID => {
+            let gain = properties.query_property(SKILL_USAGE_MAX_MP_GAIN) as i32;
+            let _ = monster
+                .move_shape_mut()
+                .replace_enlarge_max_mp_state(EnlargeMaxMpState::new(gain));
         }
         ORIGIN_SKILL_ID => {
             let gain = properties.query_property(SKILL_USAGE_ELEMENT_MODIFY_GAIN) as i32;
