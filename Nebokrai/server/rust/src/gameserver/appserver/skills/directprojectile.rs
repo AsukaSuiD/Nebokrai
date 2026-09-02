@@ -10,10 +10,12 @@
 //! RNG-порядок; у NPC `GetHP == 0`, и `CFightDefense` завершает вызов без урона.
 //! Конкретные владельцы задают только идентификатор навыка. `CGame` разрешает
 //! владельцев, применяет рассчитанные удары и доставляет готовые пакеты.
-//! Оба владельца усекают критический float-множитель к нулю перед `int`.
+//! Оба владельца вычисляют критический множитель в расширенной точности x87 и
+//! усекают его к нулю при записи в `int`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::poisonmoth::{MONSTER_TYPE, PLAYER_TYPE};
@@ -171,7 +173,9 @@ fn calculate_attack(game: &mut CGame, player_id: i32, skill_id: u32, level: i32,
     if game.skill_random_below(100) < i32::from(combat.cch) {
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate) as i32; }
+        for power in &mut attack.damages {
+            power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate));
+        }
     }
     Some((master, attack))
 }
