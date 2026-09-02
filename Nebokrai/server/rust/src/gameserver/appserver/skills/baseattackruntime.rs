@@ -8,6 +8,9 @@
 //! к нулю перед записью каждого компонента в `int`: exact
 //! `CBaseAttack::CalculateAttackPower` `0x005B380B..0x005B3835` держит
 //! произведение в x87 до `FISTP`, не округляя его предварительно до `float`.
+//! Физический RNG получает `max(maximum - minimum, 0)` без `+1`, поэтому
+//! верхняя граница исходной базовой атаки остаётся исключённой; player,
+//! monster и stationary build-ветви используют один и тот же контракт.
 //! Maximum-distance gate использует `RealDistance(CShape*)` для разрешённой
 //! объектной цели и координатный overload только для point-target без формы.
 
@@ -329,7 +332,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             );
         let minimum = attacker_properties.minimum_attack as i32;
         let maximum = attacker_properties.maximum_attack as i32;
-        let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
+        let span = maximum.wrapping_sub(minimum).max(0);
         let physical = minimum.wrapping_add(game_legacy_random(&mut game.random_state, span));
         let mut attack = AttackInformation {
             skill_id: BASE_ATTACK_SKILL_ID,
@@ -612,7 +615,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
         }
         let minimum = attacker_properties.minimum_attack as i32;
         let maximum = attacker_properties.maximum_attack as i32;
-        let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
+        let span = maximum.wrapping_sub(minimum).max(0);
         let physical = minimum.wrapping_add(game_legacy_random(&mut game.random_state, span));
         let (weapon_divisor, weapon_minimum) = game.globe_setup.weapon_damage_factors();
         let damage_factor = game
@@ -1038,7 +1041,7 @@ fn execute_player_stationary_attack<Runtime: GameMainLoopRuntime>(
         );
     let minimum = attacker_properties.minimum_attack as i32;
     let maximum = attacker_properties.maximum_attack as i32;
-    let span = maximum.wrapping_sub(minimum).max(0).wrapping_add(1);
+    let span = maximum.wrapping_sub(minimum).max(0);
     let physical = minimum.wrapping_add(game_legacy_random(&mut game.random_state, span));
     let mut attack = AttackInformation {
         skill_id: BASE_ATTACK_SKILL_ID,
