@@ -8,12 +8,14 @@
 //! `CGame` оставляет только доступ к владельцам, применение и доставку.
 //! Каждая прибавка сохраняет обе исходные точки округления до `float`, после
 //! чего x87 усекает итог к нулю перед созданием состояния.
+//! Семейный reuse-gate использует exact `CSkill::IsRestored`, отдельно от
+//! elapsed-задержки каста.
 
 use super::baseattack::time_reached;
 use super::godblessstate::GodBlessState;
 use super::godbless2::GOD_BLESS_2_SKILL_ID;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -120,7 +122,14 @@ pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut 
     if player_ai.god_bless().is_none() {
         let started = runtime.now_milliseconds();
         let cooldown_now = runtime.now_milliseconds();
-        if player_ai.god_bless_last_used_ms(family_index) != 0 && !time_reached(cooldown_now, player_ai.god_bless_last_used_ms(family_index), cooldown) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
+        if !skill_is_restored(
+            player_ai.god_bless_last_used_ms(family_index),
+            cooldown,
+            cooldown_now,
+        ) {
+            send_failure(game, player_id, 0x0d, mp_loss);
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
         if mp_loss == 0 || initial_mana < mp_loss { if mp_loss != 0 { send_failure(game, player_id, 7, mp_loss); } return terminal(QueuedSkillExecutionState::Rejected); }
         if requested_target(game, region_id, player_id, skill_id, dispatch).is_none() { return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }

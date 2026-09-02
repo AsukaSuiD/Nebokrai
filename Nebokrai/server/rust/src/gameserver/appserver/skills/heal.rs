@@ -16,6 +16,8 @@
 //! отдельно хранит владельца эффекта. Координатный `Begin` после базовой записи
 //! точки получает нулевую object-target и тем же virtual fallback выбирает
 //! заклинателя, поэтому точечный клиентский dispatch проходит как self-target.
+//! Семейный reuse-gate использует exact `CSkill::IsRestored`; cast delay и
+//! частота периодического лечения сохраняют elapsed-семантику.
 
 use super::baseattack::time_reached;
 use super::heal2::HEAL_2_SKILL_ID;
@@ -26,7 +28,7 @@ use super::superheal::SUPER_HEAL_SKILL_ID;
 use super::superheal2::SUPER_HEAL_2_SKILL_ID;
 use super::superhealstate::SuperHealState;
 use super::superhealstate2::SuperHealState2;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -303,13 +305,11 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.heal_family_last_used_ms(index) != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.heal_family_last_used_ms(index),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.heal_family_last_used_ms(index),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             send_failure(game, player_id, 2);
