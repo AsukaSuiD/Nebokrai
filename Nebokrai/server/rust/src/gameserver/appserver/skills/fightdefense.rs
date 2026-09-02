@@ -12,7 +12,8 @@
 //! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
 //! добавления состояний. Коэффициент `PillarState` применяется в прежней
 //! поздней точке `PostDefense`, после обычного расчёта и PvP-множителя;
-//! прочие ещё не восстановленные состояния не
+//! произведение целого урона и сохранённого `f32`-коэффициента усекается к нулю
+//! при записи обратно в целое поле. Прочие ещё не восстановленные состояния не
 //! подменяются этой реализацией.
 
 use crate::gameserver::appserver::monster::MonsterCombatProperties;
@@ -76,7 +77,7 @@ fn apply_pillar_post_defense(
         return damage;
     }
     pillar_damage_factor.map_or(damage, |factor| {
-        (damage as f32 * factor).round_ties_even() as i32
+        truncate_original(f64::from(damage) * f64::from(factor))
     })
 }
 
