@@ -611,7 +611,13 @@ pub(crate) fn execute_owned_spider_web(
             return true;
         }
         let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_SKILL_DELAY_TIME);
-        if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay) {
+        if last_used_ms != 0
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+                last_used_ms,
+                reuse_delay,
+                now_ms,
+            )
+        {
             return true;
         }
         let direction = get_line_direction(source_x, source_y, target_x, target_y);

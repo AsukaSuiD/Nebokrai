@@ -609,10 +609,10 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             }
         }
         if last_used_ms != 0
-            && !time_reached(
-                now_ms,
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used_ms,
                 properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+                now_ms,
             )
         {
             return true;

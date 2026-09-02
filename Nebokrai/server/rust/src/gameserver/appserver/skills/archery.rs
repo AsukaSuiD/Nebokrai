@@ -206,7 +206,13 @@ pub(crate) fn execute_owned_monster_base_projectile<Runtime: GameMainLoopRuntime
             return true;
         }
         let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-        if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay_ms) {
+        if last_used_ms != 0
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+                last_used_ms,
+                reuse_delay_ms,
+                now_ms,
+            )
+        {
             return true;
         }
         let path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);

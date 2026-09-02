@@ -102,7 +102,13 @@ pub(crate) fn execute_owned_monster_snow_storm<Runtime: GameMainLoopRuntime>(gam
         if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
         let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
         let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(SNOW_STORM_SKILL_ID)).unwrap_or_default();
-        if last_used != 0 && !time_reached(now_ms, last_used, reuse) { return true; }
+        if last_used != 0
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+                last_used, reuse, now_ms,
+            )
+        {
+            return true;
+        }
         let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
         if (maximum != 0 && path.len() > maximum as usize) || path.iter().any(|cell| cell.2 == 2) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }

@@ -150,7 +150,13 @@ pub(crate) fn execute_owned_monster_yaksha_slash<Runtime: GameMainLoopRuntime>(g
         if schedule_attack_interval(property.ai, attack_interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
         let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
         let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(YAKSHA_SLASH_SKILL_ID)).unwrap_or_default();
-        if last_used != 0 && !time_reached(now_ms, last_used, reuse) { return true; }
+        if last_used != 0
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+                last_used, reuse, now_ms,
+            )
+        {
+            return true;
+        }
         let maximum = properties.query_property(TARGET_MAX_DISTANCE);
         if (maximum != 0 && source_view.real_distance(Some(target.view)) > maximum as i32) || path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) { monster.clear_ai_target(); }

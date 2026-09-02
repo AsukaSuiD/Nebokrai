@@ -924,10 +924,10 @@ pub(crate) fn execute_owned_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             return true;
         }
         if last_used_ms != 0
-            && !time_reached(
-                now_ms,
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used_ms,
                 properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+                now_ms,
             )
         {
             return true;

@@ -835,7 +835,15 @@ pub(crate) fn execute_owned_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         ) {
             return true;
         }
-        if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME)) { return true; }
+        if last_used_ms != 0
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+                last_used_ms,
+                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+                now_ms,
+            )
+        {
+            return true;
+        }
         let direction = get_line_direction(source.get_tile_x().unwrap_or_default(), source.get_tile_y().unwrap_or_default(), target_x, target_y);
         let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {

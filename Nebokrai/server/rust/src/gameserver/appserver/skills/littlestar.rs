@@ -613,7 +613,11 @@ pub(crate) fn execute_owned_little_star<Runtime: GameMainLoopRuntime>(
             }
         }
         if last_used_ms != 0
-            && !time_reached(now_ms, last_used_ms, properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME))
+            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+                last_used_ms,
+                properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME),
+                now_ms,
+            )
         {
             return true;
         }
