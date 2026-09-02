@@ -4,7 +4,9 @@
 //! `appserver/skills/bossbluefury.cpp`. Владелец сохраняет обе проверки RP
 //! игрока, необратимый расход, действия `0/1`, задержку, перезарядку и замену
 //! собственного `BossBlueFuryState`. Состояние остаётся каноническим в
-//! `CMoveShape`; `CGame` только координирует владельца и доставку.
+//! `CMoveShape`; `CGame` только координирует владельца и доставку. Обе ветви
+//! используют абсолютный срок `CSkill::IsRestored`; cast-delay остаётся
+//! elapsed-проверкой.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -25,7 +27,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination,
+    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
 use crate::gameserver::appserver::states::state::send_owned_state_visual;
@@ -216,13 +218,11 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
     if player_ai.boss_blue_fury().is_none() {
-        if player_ai.boss_blue_fury_last_used_ms() != 0
-            && !time_reached(
-                now_ms,
-                player_ai.boss_blue_fury_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.boss_blue_fury_last_used_ms(),
+            reuse_delay_ms,
+            now_ms,
+        ) {
             send_player_failure(game, player_id, 0x0d, rp_loss);
             send_player_failure(game, player_id, 2, rp_loss);
             return player_terminal(QueuedSkillExecutionState::Rejected);

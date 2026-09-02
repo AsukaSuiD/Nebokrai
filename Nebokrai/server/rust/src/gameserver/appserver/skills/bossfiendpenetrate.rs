@@ -12,14 +12,16 @@
 //! Формула монстра вызывает нулевой `GetAddElementAtk` между физическим уроном
 //! и уроном души, не продвигая RNG до отдельного критического броска.
 //! `SkillExecutionKernel` хранит стадии игрока, а `CGame` только разрешает
-//! владельцев, применяет рассчитанную атаку и доставляет пакеты.
+//! владельцев, применяет рассчитанную атаку и доставляет пакеты. Player и
+//! monster ветви используют абсолютный срок `CSkill::IsRestored`; стадийные и
+//! клеточные задержки остаются elapsed-проверками.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
 };
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillTermination};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable, resolve_owned_monster_attack_target,
@@ -442,13 +444,11 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
             return player_terminal(QueuedSkillExecutionState::Rejected);
         };
         let now_ms = runtime.now_milliseconds();
-        if player_ai.boss_fiend_penetrate_last_used_ms() != 0
-            && !time_reached(
-                now_ms,
-                player_ai.boss_fiend_penetrate_last_used_ms(),
-                reuse_delay,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.boss_fiend_penetrate_last_used_ms(),
+            reuse_delay,
+            now_ms,
+        ) {
             send_player_failure(game, player_id, 0x0d, mp_loss);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

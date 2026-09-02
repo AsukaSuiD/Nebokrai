@@ -10,12 +10,14 @@
 //! Монстровая ветвь снимает доступные typed-состояния exact conflict-набора
 //! через текущий region owner и публикует их завершение до `CCureState`.
 //! Игровая ветвь игрока завершается общим `CSummonSkill::End(1)`; монстровый
-//! lifecycle остаётся отдельным и не использует этот хвост.
+//! lifecycle остаётся отдельным и не использует этот хвост. Обе ветви
+//! используют абсолютный срок `CSkill::IsRestored`, сохраняя elapsed-семантику
+//! общей задержки.
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_in_region};
 use super::furystate::{FuryState, send_fury_state_visual, send_fury_state_visual_in_region};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::skillbaseproperties::CSkillBaseProperties;
 use crate::gameserver::appserver::ai::monsterai::{
@@ -372,9 +374,7 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
 
     if player_ai.fury().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.fury_last_used_ms() != 0
-            && now_ms < player_ai.fury_last_used_ms().wrapping_add(reuse_ms)
-        {
+        if !skill_is_restored(player_ai.fury_last_used_ms(), reuse_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d, rp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

@@ -8,6 +8,8 @@
 //! централизованно заменяется канонический `SpiderPoisonState`. `CGame`
 //! временно передаёт region-owner, а формирование состояния и пакетов остаётся
 //! в skill-owner-е. Нулевой MP-loss сохраняет исходный отказ player-cast.
+//! Обе ветви проверяют восстановление абсолютным сроком `CSkill::IsRestored`,
+//! а общую задержку — отдельной elapsed-проверкой.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED};
@@ -25,7 +27,7 @@ use crate::gameserver::appserver::ai::monsterai::{
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::CShape;
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::states::summonskill::{
@@ -254,7 +256,7 @@ pub(crate) fn execute_player_corpse_ptomaine<Runtime: GameMainLoopRuntime>(game:
     let Some((region_id, center_x, center_y, level, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(CORPSE_PTOMAINE_SKILL_ID), player.mana()))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(CORPSE_PTOMAINE_SKILL_ID, level).cloned() else { if ai.corpse_ptomaine().is_some() { restore_player(game, player_id); abort_skill(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) };
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE); let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED); let now = runtime.now_milliseconds();
-    if ai.corpse_ptomaine().is_none() { if ai.corpse_ptomaine_last_used_ms() != 0 && !time_reached(now, ai.corpse_ptomaine_last_used_ms(), reuse) { send_player_failure(game, player_id, 0x0d); return player_terminal(QueuedSkillExecutionState::Rejected) } if mp_loss == 0 { return player_terminal(QueuedSkillExecutionState::Rejected) } if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(CORPSE_PTOMAINE_SKILL_ID)); } ai.begin_corpse_ptomaine(SkillExecutionKernel::begin(dispatch, now)); }
+    if ai.corpse_ptomaine().is_none() { if !skill_is_restored(ai.corpse_ptomaine_last_used_ms(), reuse, now) { send_player_failure(game, player_id, 0x0d); return player_terminal(QueuedSkillExecutionState::Rejected) } if mp_loss == 0 { return player_terminal(QueuedSkillExecutionState::Rejected) } if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(CORPSE_PTOMAINE_SKILL_ID)); } ai.begin_corpse_ptomaine(SkillExecutionKernel::begin(dispatch, now)); }
     if ai.corpse_ptomaine().is_none_or(|state| state.dispatch() != dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
     if ai.corpse_ptomaine().is_some_and(|state| state.stage() == SkillStage::Begin) { let current = game.find_player(player_id).map_or(0, CPlayer::mana); if (current.wrapping_sub(mp_loss) as i32) < 0 { send_player_failure(game, player_id, 7); restore_player(game, player_id); abort_skill(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) } if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current.wrapping_sub(mp_loss)); } let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); send_player_start(game, player_id, level); if let Some(state) = ai.corpse_ptomaine_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); } }
     let started = ai.corpse_ptomaine().map(SkillExecutionKernel::started_at_ms).unwrap_or_default(); if !time_reached(now, started, delay) { return player_terminal(QueuedSkillExecutionState::Pending) }

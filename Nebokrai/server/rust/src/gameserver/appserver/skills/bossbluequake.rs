@@ -18,7 +18,9 @@
 //! Путь монстра сохраняет собственную формулу и тот же порядок состояния и `ForceMove`;
 //! `CGame` только координирует временное владение регионом и доставку.
 //! Для monster-цели `time_percent` отдельно сохраняется в `f32`, после чего
-//! unsigned duration масштабируется в x87 и усекается к нулю.
+//! unsigned duration масштабируется в x87 и усекается к нулю. Обе ветви
+//! проверяют восстановление абсолютным сроком `CSkill::IsRestored`, сохраняя
+//! elapsed-семантику общей задержки.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -43,7 +45,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeAreaCoordinates, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination,
+    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::state::send_owned_state_visual;
@@ -426,13 +428,11 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     let now_ms = runtime.now_milliseconds();
 
     if player_ai.boss_blue_quake().is_none() {
-        if player_ai.boss_blue_quake_last_used_ms() != 0
-            && !time_reached(
-                now_ms,
-                player_ai.boss_blue_quake_last_used_ms(),
-                reuse_delay,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.boss_blue_quake_last_used_ms(),
+            reuse_delay,
+            now_ms,
+        ) {
             send_player_failure(game, player_id, 0x0d, 0);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
