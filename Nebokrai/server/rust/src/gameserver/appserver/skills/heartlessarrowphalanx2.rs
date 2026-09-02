@@ -7,7 +7,10 @@
 //! сканирует одну клетку в региональном порядке и исчезает после первого
 //! допустимого попадания. Урон читает текущие свойства игрока-владельца и
 //! сохраняет ровно два вызова генератора: физический урон и критический шанс.
+//! Процентный damage factor сохраняется в `f32` после расширенного x87-
+//! умножения, а критический урон усекается к нулю при записи в `i32`.
 
+use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
@@ -152,7 +155,7 @@ pub(crate) fn calculate_owned_heartless_arrow_attack(
         attacker_faction_id: phalanx.master.master_guild_id,
         attacker_union_id: phalanx.master.master_union_id,
         hit_modifier: 0,
-        damage_factor: phalanx.damage_factor as f32 * 0.01,
+        damage_factor: (f64::from(phalanx.damage_factor) * f64::from(0.01_f32)) as f32,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,
@@ -167,7 +170,9 @@ pub(crate) fn calculate_owned_heartless_arrow_attack(
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(rate),
+            );
         }
     }
     Some((attack, combat, occupation, level))

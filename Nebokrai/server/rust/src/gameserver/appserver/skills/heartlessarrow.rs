@@ -11,9 +11,12 @@
 //! выпуска он завершает `CAttackSkill::End(1)` с единичным оружейным
 //! `AfterUseSkill`. Внутреннее прерывание всегда использует `End(0)` без износа,
 //! cooldown и применения отложенной атаки.
+//! Процентный damage factor сохраняется в `f32` только после расширенного
+//! x87-умножения; критический урон усекается к нулю при записи в `i32`.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
+use super::fightdefense::truncate_original;
 use super::healstate::unsigned_float;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::spiderpoison::{install_spider_poison_state, target_has_cure};
@@ -158,7 +161,7 @@ fn send_fire(game: &mut CGame, player_id: i32, level: i32, target: ShapeIdentity
 fn damage_factor(hold_time_ms: u32, interval_ms: u32, factors: [u32; 4]) -> f32 {
     if interval_ms == 0 { return 1.0; }
     let value = match hold_time_ms.wrapping_mul(2) / interval_ms { 1 => factors[0], 2 => factors[1], 3 => factors[2], 4 => factors[3], _ => return 1.0 };
-    unsigned_float(value) * 0.01
+    (f64::from(value) * f64::from(0.01_f32)) as f32
 }
 
 fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, hit_modifier: i32, factor: f32) -> Option<(MasterInfo, AttackInformation)> {
@@ -183,7 +186,7 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, hit_modifier: 
     if game.skill_random_below(100) < i32::from(combat.cch) {
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; }
+        for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); }
     }
     Some((master, attack))
 }
