@@ -41652,8 +41652,9 @@ impl CGame {
                 .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending => false,
-                QueuedSkillExecutionState::Completed => player_ai
-                    .finish_battle_fairy_skill(dispatch, SkillTermination::Completed),
+                QueuedSkillExecutionState::Completed => {
+                    player_ai.complete_battle_fairy_skill(dispatch)
+                }
                 QueuedSkillExecutionState::Rejected => {
                     player_ai.reject_battle_fairy_skill(dispatch)
                 }

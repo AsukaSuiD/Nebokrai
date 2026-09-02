@@ -62,11 +62,11 @@
 //! меняет выбранный навык. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
-//! следующий навык продвигается только после завершения текущего. Выбранный
-//! ID при этом переживает `End`, как исходный `m_tgCurrentWarSoulSkill`, и
-//! отдельно связывает восстановление завершённого навыка с периодическим
-//! следованием. Обычная очередь действий игрока и очередь боевой феи
-//! исполняются независимо: движение игрока не приостанавливает стадии феи.
+//! следующий навык продвигается только после завершения текущего. Отмена
+//! сохраняет выбранный ID, а успешный `OnChangeSkillWithWarSoul` и потеря цели
+//! возвращают его к базовой атаке `0x224`. Обычная очередь действий игрока и
+//! очередь боевой феи исполняются независимо: движение игрока не
+//! приостанавливает стадии феи.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -2330,6 +2330,20 @@ impl CPlayerAI {
         true
     }
 
+    /// Точный успешный хвост `OnChangeSkillWithWarSoul`: concrete skill уже
+    /// получил `End(true)`, после чего выбранный ID возвращается к базовой
+    /// атаке боевой феи. Ожидающий FIFO при этом не изменяется.
+    pub(crate) fn complete_battle_fairy_skill(
+        &mut self,
+        expected: BattleFairySkillDispatch,
+    ) -> bool {
+        if !self.finish_battle_fairy_skill(expected, SkillTermination::Completed) {
+            return false;
+        }
+        self.selected_battle_fairy_skill_id = 0;
+        true
+    }
+
     pub(crate) const fn battle_fairy_skill_is_active(&self) -> bool {
         self.current_battle_fairy_skill.is_some()
     }
@@ -2909,7 +2923,9 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkillWithWarSoul
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// MATERIALIZED: `CPlayerAI::complete_battle_fairy_skill` завершает concrete
+// owner и выбирает базовую атаку `0x224`, не затрагивая ожидающий FIFO.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:629
