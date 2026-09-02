@@ -6,7 +6,10 @@
 //! духа. `Initialize` сохраняет пары MSVCRT RNG по окнам; AI для каждой
 //! выбранной клетки обрабатывает сначала упорядоченный war-soul index, затем
 //! обычные фигуры. Повтор клетки и четыре RNG-вызова на две атаки сохраняются.
+//! Критический множитель применяется в расширенной точности x87 и усекается к
+//! нулю при записи урона обратно в `i32`.
 
+use super::fightdefense::truncate_original;
 use super::godthunder2::GOD_THUNDER_2_SKILL_ID;
 use super::thunderphalanx::{THUNDER_SCOPE, THUNDER_SCOPE_SIDE};
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
@@ -133,7 +136,7 @@ impl CGodThunderPhalanx2 {
             attacker_union_id: self.master.master_union_id, hit_modifier: 100, damage_factor: factor,
             damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0,
             damages: vec![AttackPower { kind: AttackPowerType::Element, hp_damage: damage, mp_damage: 0 }] };
-        if random(100) < self.cch { attack.critical = true; for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32; } }
+        if random(100) < self.cch { attack.critical = true; for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(critical_rate)); } }
         (attack, combat, occupation, level)
     }
 }

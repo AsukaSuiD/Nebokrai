@@ -6,7 +6,10 @@
 //! `Initialize` заранее расходует два значения MSVCRT RNG на каждую цель каждого
 //! окна и допускает повтор клетки. AI читает только текущее окно с шагом девять;
 //! формула затем расходует RNG на урон и критический удар для каждой цели.
+//! Критический множитель применяется в расширенной точности x87 и усекается к
+//! нулю при записи урона обратно в `i32`.
 
+use super::fightdefense::truncate_original;
 use super::godthunder::GOD_THUNDER_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -182,7 +185,9 @@ impl CGodThunderPhalanx {
         if random_below(100) < self.cch {
             attack.critical = true;
             for power in &mut attack.damages {
-                power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32;
+                power.hp_damage = truncate_original(
+                    f64::from(power.hp_damage) * f64::from(critical_rate),
+                );
             }
         }
         (attack, combat, occupation, attacker_level)
