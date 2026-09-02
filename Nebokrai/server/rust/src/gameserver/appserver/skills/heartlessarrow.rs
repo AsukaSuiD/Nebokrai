@@ -13,11 +13,13 @@
 //! cooldown и применения отложенной атаки.
 //! Процентный damage factor сохраняется в `f32` только после расширенного
 //! x87-умножения; критический урон усекается к нулю при записи в `i32`.
+//! При переносе яда DWORD-произведение уровня оружия и модификатора остаётся
+//! точным unsigned-значением в x87 вплоть до умножения на `-0.01f` и прямого
+//! `FISTP dword`; промежуточного сохранения в `f32` нет.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::fightdefense::truncate_original;
-use super::healstate::unsigned_float;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::spiderpoison::{install_spider_poison_state, target_has_cure};
 use super::spiderpoisonstate::SpiderPoisonState;
@@ -208,8 +210,10 @@ pub(crate) fn apply_daub_poison_with_master(game: &mut CGame, player_id: i32, ma
     let constant = properties.query_property(POISON_CONSTANT);
     let modifier = properties.query_property(WEAPON_DAMAGE_LEVEL_MODIFIER);
     let scaled = (weapon_level as u32).wrapping_mul(modifier);
-    let negative_bonus = unsigned_float(scaled) * -0.01;
-    let hp_loss = constant.wrapping_sub(negative_bonus.trunc() as i32 as u32);
+    let negative_bonus = truncate_original(
+        f64::from(scaled) * f64::from(-0.01_f32),
+    );
+    let hp_loss = constant.wrapping_sub(negative_bonus as u32);
     let Some(mut owner) = game.take_region_owner(region_id) else { return };
     if !target_has_cure(game, owner.base(), target) {
         install_spider_poison_state(game, owner.base_mut(), target, SpiderPoisonState::new(master, now_ms, keep_time_ms, frequency_ms, hp_loss), now_ms);

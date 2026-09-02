@@ -166,16 +166,6 @@ impl HealState {
     }
 }
 
-pub(crate) fn unsigned_float(value: u32) -> f32 {
-    let signed = value as i32;
-    let value = signed as f32;
-    if signed < 0 {
-        value + 4_294_967_296.0
-    } else {
-        value
-    }
-}
-
 pub(crate) fn send_heal_state_visual(
     game: &mut CGame,
     region_id: i32,
