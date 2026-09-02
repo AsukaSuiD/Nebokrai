@@ -5,7 +5,10 @@
 //! стрелка, заранее выбирает по два значения MSVCRT RNG на каждую попытку
 //! клетки и раз в заданную частоту обрабатывает одну клетку. `CGame` оставляет
 //! за собой только разрешение региональных identity и применение удара.
+//! Критический множитель вычисляется в расширенной точности x87 и усекается к
+//! нулю при записи результата в `i32`.
 
+use super::fightdefense::truncate_original;
 use super::meteorarrow::METEOR_ARROW_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -124,7 +127,7 @@ pub(crate) fn calculate_meteor_arrow_attack(game: &mut CGame, phalanx: &CMeteorA
             AttackPower { kind: AttackPowerType::Soul, hp_damage: phalanx.soul_attack().max(0), mp_damage: 0 },
         ] };
     if game.skill_random_below(100) < phalanx.critical_chance() { attack.critical = true; let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; } }
+        for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } }
     let combat = game.find_player(master.master_id).map_or_else(PlayerCombatProperties::default, |player| player.combat_properties());
     let occupation = game.find_player(master.master_id).map_or(0, |player| player.occupation());
     let level = game.find_player(master.master_id).map_or(0, |player| player.level());
