@@ -11,13 +11,15 @@
 //! обновляет свойства игрока и фиксирует cooldown; он не повторяет уже
 //! выполненные перемещение, состояние или отбрасывание.
 //! Коэффициент сокращения времени сохраняется в `f32`, после чего unsigned
-//! базовая длительность умножается в x87 и усекается к нулю.
+//! базовая длительность умножается в x87 и усекается к нулю. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; движение и состояние
+//! сохраняют elapsed-сроки.
 
-use super::baseattack::{SKILL_USAGE_REUSE_DELAY_TIME, real_distance, time_reached};
+use super::baseattack::{SKILL_USAGE_REUSE_DELAY_TIME, real_distance};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::rushstate::RushState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -333,7 +335,7 @@ pub(crate) fn execute_player_rush<Runtime: GameMainLoopRuntime>(
 
     if ai.rush().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if ai.rush_last_used_ms() != 0 && !time_reached(now_ms, ai.rush_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.rush_last_used_ms(), reuse, now_ms) {
             failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

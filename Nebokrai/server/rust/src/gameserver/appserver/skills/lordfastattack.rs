@@ -13,7 +13,8 @@
 //! Player `End` сбрасывает execution-флаги, возвращает движение и завершает
 //! `CAttackSkill::End(1)` после второго удара с единичным оружейным
 //! `AfterUseSkill`; сами два `Attack` оружие не изнашивают. Отмена использует
-//! `End(0)` без износа, обновления свойств и cooldown.
+//! `End(0)` без износа, обновления свойств и cooldown. Player и monster ветви
+//! используют абсолютный срок `CSkill::IsRestored`; сроки двух ударов остаются elapsed.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -21,7 +22,7 @@ use super::baseattack::{
 };
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterfastattack::{SKILL_USAGE_FIRST_TIME, SKILL_USAGE_SECOND_TIME};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -357,13 +358,11 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             send_failure(game, player_id, 2);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
-        if player_ai.lord_fast_attack_last_used_ms() != 0
-            && !time_reached(
-                now_ms,
-                player_ai.lord_fast_attack_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.lord_fast_attack_last_used_ms(),
+            reuse_delay_ms,
+            now_ms,
+        ) {
             send_failure(game, player_id, 0x0d);
             send_failure(game, player_id, 2);
             return terminal(QueuedSkillExecutionState::Rejected);

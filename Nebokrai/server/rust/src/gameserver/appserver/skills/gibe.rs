@@ -8,10 +8,10 @@
 //! `CMonster::IsAttackAble`, строгая граница расстояния и возможная повторная
 //! смена цели более поздним кандидатом сохранены. `CGame` предоставляет и
 //! возвращает владельца региона; выбор питомца и правила назначения цели
-//! принадлежат этому модулю.
+//! принадлежат этому модулю. Восстановление использует абсолютный срок
+//! `CSkill::IsRestored`; стадийная задержка остаётся elapsed.
 
-use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::monster_attackable_by_monster;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -172,9 +172,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let now_ms = runtime.now_milliseconds();
-    if player_ai.gibe_last_used_ms() != 0
-        && !time_reached(now_ms, player_ai.gibe_last_used_ms(), reuse_delay_ms)
-    {
+    if !skill_is_restored(player_ai.gibe_last_used_ms(), reuse_delay_ms, now_ms) {
         game.restore_region_owner(region);
         return terminal(QueuedSkillExecutionState::Rejected);
     }

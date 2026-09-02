@@ -10,13 +10,14 @@
 //! `AI` не изнашивают оружие на отдельных целях: унаследованный
 //! `AfterUseSkill` делает это один раз через подтверждённый общий `End(1)`.
 //! Критический множитель вычисляется в расширенной точности x87 и усекается к
-//! нулю перед записью `int`.
+//! нулю перед записью `int`. Восстановление использует абсолютный срок
+//! `CSkill::IsRestored`; задержка и длительность оглушения остаются elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::CURE_SKILL_ID;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -232,9 +233,11 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
     if player_ai.mosou().is_none() {
-        if player_ai.mosou_last_used_ms() != 0
-            && !time_reached(runtime.now_milliseconds(), player_ai.mosou_last_used_ms(), cooldown_ms)
-        { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(
+            player_ai.mosou_last_used_ms(),
+            cooldown_ms,
+            runtime.now_milliseconds(),
+        ) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_sword(game, player) {
             send_failure(game, player_id, 0x0e, mp_loss);

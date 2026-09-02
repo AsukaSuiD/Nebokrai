@@ -7,6 +7,8 @@
 //! `CFatalBlowPhalanx`. `CGame` предоставляет владельцев, регион, регистрацию
 //! снаряда и доставку. Координатный и пустой `Begin` сохраняют исходный отказ
 //! `10 + ZHGS0045` и завершающий visual action `3` без generic failure `2`.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`; подготовка
+//! и lifetime снаряда остаются elapsed.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -16,7 +18,9 @@ use super::basemagic::{
 };
 use super::battlefairytransfer::send_goods_update;
 use super::fatalblowphalanx::CFatalBlowPhalanx;
-use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
+use super::kernel::{
+    battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
@@ -191,9 +195,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.fatal_blow_last_used_ms() != 0
-            && !time_reached(cooldown_now_ms, player_ai.fatal_blow_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(player_ai.fatal_blow_last_used_ms(), cooldown_ms, cooldown_now_ms) {
             return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {

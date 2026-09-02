@@ -9,12 +9,13 @@
 //! `tagAttackInformation`. `CGame` только связывает каноническое состояние,
 //! пространство, боевой owner и доставку. Завершение
 //! использует подтверждённый семейный хвост `CRush::End`, но сохраняет
-//! отдельный cooldown второго навыка.
+//! отдельный cooldown второго навыка. Он проверяется абсолютным сроком
+//! `CSkill::IsRestored`; перемещение и состояние сохраняют elapsed-сроки.
 
-use super::baseattack::{SKILL_USAGE_REUSE_DELAY_TIME, real_distance, time_reached};
+use super::baseattack::{SKILL_USAGE_REUSE_DELAY_TIME, real_distance};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::rush::{
     build_path, destination, failure, finish_rush_owner, knockback_destination,
     scaled_state_time, send_visual, skill_id, target_identity, terminal, weapon_is_valid,
@@ -169,7 +170,7 @@ pub(crate) fn execute_player_rush_2<Runtime: GameMainLoopRuntime>(
 
     if ai.rush_2().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if ai.rush_2_last_used_ms() != 0 && !time_reached(now_ms, ai.rush_2_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.rush_2_last_used_ms(), reuse, now_ms) {
             failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

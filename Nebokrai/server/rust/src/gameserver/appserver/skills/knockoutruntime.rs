@@ -10,12 +10,14 @@
 //! защиты, жизненного цикла цели и доставки.
 //! Шанс попадания отдельно сохраняет level-компонент в `f32`, затем складывает
 //! его с расширенным x87 hit-компонентом и усекает результат к нулю.
-//! Критический урон также усекается при исходной записи в `i32`.
+//! Критический урон также усекается при исходной записи в `i32`. Player и
+//! monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
+//! контакта и длительность состояния остаются elapsed.
 
 use super::baseattack::time_reached;
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knockoutstate::{
     KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
 };
@@ -408,7 +410,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     if ai.knock_out().is_none() {
         let now = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
-        if ai.knock_out_last_used_ms() != 0 && !time_reached(now, ai.knock_out_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.knock_out_last_used_ms(), reuse, now) {
             failure(game, player_id, 0x0d); failure(game, player_id, 2);
             return result(QueuedSkillExecutionState::Rejected);
         }

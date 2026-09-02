@@ -14,7 +14,9 @@
 //! `AfterUseSkill` делает это один раз через общий `End`, после возврата
 //! движения и перед cooldown соответствующего идентификатора. Коэффициент
 //! урона вычисляется в расширенной точности x87 из `u32` и `0.01_f32`, а
-//! критический float-множитель усекается к нулю перед записью `int`.
+//! критический float-множитель усекается к нулю перед записью `int`. Player и
+//! monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
+//! исполнения остаётся elapsed.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -38,7 +40,7 @@ use crate::gameserver::appserver::monster::{CMonster, PetAttackProperties};
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
@@ -278,9 +280,11 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             send_player_failure(game, player_id, 2);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         };
-        if player_ai.wide_arc_attack_last_used_ms(skill_id) != 0
-            && !time_reached(now_ms, player_ai.wide_arc_attack_last_used_ms(skill_id), reuse_delay_ms)
-        {
+        if !skill_is_restored(
+            player_ai.wide_arc_attack_last_used_ms(skill_id),
+            reuse_delay_ms,
+            now_ms,
+        ) {
             send_player_failure(game, player_id, 0x0d);
             send_player_failure(game, player_id, 2);
             return player_terminal(QueuedSkillExecutionState::Rejected);
