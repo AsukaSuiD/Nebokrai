@@ -2,10 +2,15 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/poisonfogstate.cpp`. Сохранены 36-байтовая DB-запись,
-//! строгая граница срока и legacy-преобразования через `float`. Поле
-//! `dodge_loss` сохраняется в двоичной записи, хотя достигнутый русский вариант
-//! использует для `CMonster` округлённую потерю defense, а для `CPlayer` это
-//! поле не читает.
+//! строгая граница срока и разные legacy-преобразования свойств игрока и
+//! монстра. Поле `dodge_loss` сохраняется в двоичной записи, хотя достигнутый
+//! русский вариант не читает его ни в одной ветви: обе цели теряют defense и
+//! element resistance.
+//! Для монстра разница уровней сначала сохраняется во `float`, а произведение
+//! defense остаётся в x87 до усечения; произведение сопротивления сохраняется
+//! во `float`. Для игрока разница остаётся в x87, оба произведения сохраняются
+//! во `float`, ограничиваются текущим свойством и после усечения сужаются до
+//! младших 16 бит.
 //! Собственный `GetRemainedTime` по `0x00607E00` сохраняет условное второе
 //! чтение wrapping clock; DB-кодек по-прежнему принимает единый sampled tick.
 
@@ -14,6 +19,7 @@ use crate::gameserver::appserver::monster::MonsterCombatProperties;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
@@ -42,9 +48,63 @@ impl PoisonFogState {
     pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { match self.serialized_offset { Some(offset) => Some((offset, POISON_FOG_STATE_BYTES)), None => None } }
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; }
-    fn scaled_loss(self, target_level: u8, coefficient: u32, maximum: u32) -> f32 { if coefficient == 0 { return 0.0; } maximum as f32 * ((self.weapon_damage_level as f32 - f32::from(target_level)) / coefficient as f32).clamp(0.0, 1.0) }
-    pub(crate) fn apply_to_player(self, target_level: u8, mut properties: PlayerCombatProperties) -> PlayerCombatProperties { let defense = self.scaled_loss(target_level, self.defense_loss_coefficient, self.defense_loss) as u32 & 0xffff; let resistance = self.scaled_loss(target_level, self.element_resistance_loss_coefficient, self.element_resistance_loss) as u32 & 0xffff; properties.defense = properties.defense.wrapping_sub(defense).min(i32::MAX as u32); properties.element_resistance = properties.element_resistance.wrapping_sub(resistance).min(i32::MAX as u32); properties }
-    pub(crate) fn apply_to_monster(self, mut properties: MonsterCombatProperties) -> MonsterCombatProperties { let loss = self.scaled_loss(properties.level, self.defense_loss_coefficient, self.defense_loss).round_ties_even() as u32; properties.defense = properties.defense.wrapping_sub(loss); properties.dodge = properties.dodge.wrapping_sub(loss); properties }
+    fn player_loss(self, target_level: u8, coefficient: u32, maximum: u32, current: u32) -> u32 {
+        let scaled = if coefficient == 0 {
+            0.0
+        } else {
+            let difference = f64::from(self.weapon_damage_level) - f64::from(target_level);
+            let ratio = (difference / f64::from(coefficient)).clamp(0.0, 1.0);
+            (f64::from(maximum) * ratio) as f32
+        };
+        let capped = if f64::from(current) < f64::from(scaled) {
+            f64::from(current) as f32
+        } else {
+            scaled
+        };
+        truncate_original(f64::from(capped)) as u32 & 0xffff
+    }
+
+    fn monster_losses(self, target_level: u8) -> (u32, u32) {
+        let difference = (f64::from(self.weapon_damage_level) - f64::from(target_level)) as f32;
+        let ratio = |coefficient: u32| {
+            if coefficient == 0 {
+                0.0
+            } else {
+                (f64::from(difference) / f64::from(coefficient)).clamp(0.0, 1.0)
+            }
+        };
+        let defense = truncate_original(
+            f64::from(self.defense_loss) * ratio(self.defense_loss_coefficient),
+        ) as u32;
+        let resistance = (f64::from(self.element_resistance_loss)
+            * ratio(self.element_resistance_loss_coefficient)) as f32;
+        (defense, truncate_original(f64::from(resistance)) as u32)
+    }
+
+    pub(crate) fn apply_to_player(self, target_level: u8, mut properties: PlayerCombatProperties) -> PlayerCombatProperties {
+        let defense = self.player_loss(
+            target_level,
+            self.defense_loss_coefficient,
+            self.defense_loss,
+            properties.defense,
+        );
+        let resistance = self.player_loss(
+            target_level,
+            self.element_resistance_loss_coefficient,
+            self.element_resistance_loss,
+            properties.element_resistance,
+        );
+        properties.defense = properties.defense.wrapping_sub(defense).min(i32::MAX as u32);
+        properties.element_resistance = properties.element_resistance.wrapping_sub(resistance).min(i32::MAX as u32);
+        properties
+    }
+
+    pub(crate) fn apply_to_monster(self, mut properties: MonsterCombatProperties) -> MonsterCombatProperties {
+        let (defense, resistance) = self.monster_losses(properties.level);
+        properties.defense = properties.defense.wrapping_sub(defense);
+        properties.element_resistance = properties.element_resistance.wrapping_sub(resistance);
+        properties
+    }
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> { let mut reader = LegacyReader::at(payload, offset)?; if reader.read_u32()? != POISON_FOG_STATE_ID { return Err(LegacyReadBlock { offset, needed: 4, available: payload.len().saturating_sub(offset) }); } Ok(Self { skill_level: reader.read_i32()?, started_at_ms: now_ms, keep_time_ms: reader.read_u32()?, defense_loss: reader.read_u32()?, defense_loss_coefficient: reader.read_u32()?, dodge_loss: reader.read_u32()?, element_resistance_loss: reader.read_u32()?, element_resistance_loss_coefficient: reader.read_u32()?, weapon_damage_level: reader.read_u32()?, serialized_offset: Some(offset) }) }
     fn encoded(self, now_ms: u32) -> Vec<u8> { let mut record = Vec::with_capacity(POISON_FOG_STATE_BYTES); let mut writer = LegacyWriter::new(&mut record); writer.write_u32(POISON_FOG_STATE_ID); writer.write_i32(self.skill_level); writer.write_u32(self.sampled_remaining_time(now_ms)); writer.write_u32(self.defense_loss); writer.write_u32(self.defense_loss_coefficient); writer.write_u32(self.dodge_loss); writer.write_u32(self.element_resistance_loss); writer.write_u32(self.element_resistance_loss_coefficient); writer.write_u32(self.weapon_damage_level); record }
     pub(crate) fn append_serialized(&mut self, payload: &mut Vec<u8>, now_ms: u32) { let offset = payload.len(); payload.extend_from_slice(&self.encoded(now_ms)); self.serialized_offset = Some(offset); }
