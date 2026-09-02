@@ -7,6 +7,8 @@
 //! игрока или монстра; последующие периодические удары принадлежат
 //! `bloodlossstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
 //! object-target он проходит точный отказ `10 → ZHGS0045 → 2 → End`.
+//! Модификатор урона сохраняет исходное усечение x87 через 64-битное целое,
+//! младшие 32 бита которого затем переводятся в `float` как беззнаковое число.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -17,6 +19,7 @@ use super::basemagic::{
 use super::battlefairytransfer::send_goods_update;
 use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use super::bloodlossstate::{BloodLossState, send_blood_loss_state_visual};
+use super::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
@@ -354,7 +357,10 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     let damage_modifier = game
         .find_player(player_id)
         .and_then(|player| player.war_soul_attack(game.goods_factory()))
-        .map(|value| (f64::from(value) * 0.0001).round_ties_even() as i32 as f32)
+        .map(|value| {
+            let scaled = truncate_original_i64_low(f64::from(value) * 0.0001);
+            f64::from(scaled as u32) as f32
+        })
         .unwrap_or_default();
     let state = BloodLossState::new(
         master,

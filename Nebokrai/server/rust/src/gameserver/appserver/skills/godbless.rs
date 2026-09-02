@@ -6,10 +6,13 @@
 //! формулы трёх прибавок и replacement `GodBlessState`. Обычный неприручённый
 //! и не транспортный монстр подтверждённо заменяется самим заклинателем.
 //! `CGame` оставляет только доступ к владельцам, применение и доставку.
+//! Каждая прибавка сохраняет обе исходные точки округления до `float`, после
+//! чего x87 усекает итог к нулю перед созданием состояния.
 
 use super::baseattack::time_reached;
 use super::godblessstate::GodBlessState;
 use super::godbless2::GOD_BLESS_2_SKILL_ID;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -87,8 +90,10 @@ pub(crate) fn complete_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut
 pub(crate) fn cancel_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.god_bless().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_god_bless(game, player_id); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
 fn gains(base: u32, coefficient: u32, weapon: u32) -> u32 {
-    let scaled = coefficient.wrapping_mul(weapon);
-    ((base as f32) + (scaled as f32) * 0.01).round_ties_even() as u32
+    let scaled_bits = coefficient.wrapping_mul(weapon);
+    let scaled = (f64::from(scaled_bits) * f64::from(0.01_f32)) as f32;
+    let gain = (f64::from(base) + f64::from(scaled)) as f32;
+    truncate_original(f64::from(gain)) as u32
 }
 
 pub(crate) fn execute_player_god_bless<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
