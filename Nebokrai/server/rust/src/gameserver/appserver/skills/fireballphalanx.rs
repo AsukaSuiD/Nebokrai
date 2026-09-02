@@ -5,14 +5,18 @@
 //! проходит путь по одной клетке через заданный интервал и в каждой достигнутой
 //! клетке с блоком `3` обходит подтверждённую маску 3×3 в порядке X→Y.
 //! Боевой дух клетки обрабатывается перед обычными фигурами. Формула хранится
-//! здесь и сохраняет два вызова генератора MSVCRT на каждую рассчитанную атаку;
-//! усиление душами и критический множитель усекаются к нулю.
+//! здесь и сохраняет два вызова генератора MSVCRT на каждую рассчитанную атаку.
+//! `CalculateAttackPower` `0x005F7DF0..0x005F8037` считает усиление душами
+//! целиком в x87, причём `soul_variable` загружается `FILD dword` как signed,
+//! а затем усекает результат к нулю; critical делает такое же `FISTP` после
+//! умножения целого урона на `float` rate.
 
 use super::fireball::FIRE_BALL_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::appserver::summonshape::{
     SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
 };
@@ -163,8 +167,14 @@ pub(crate) fn calculate_owned_fire_ball_attack(
         .wrapping_add(game.skill_random_below(width))
         .wrapping_add(phalanx.minimum_attack);
     if phalanx.soul_count != 0 && phalanx.soul_variable != 0 {
-        damage = ((phalanx.soul_variable as f32 * phalanx.soul_count as f32 * 0.01 + 1.0)
-            * damage as f32) as i32;
+        let soul_variable = phalanx.soul_variable as i32;
+        damage = truncate_original(
+            (f64::from(soul_variable)
+                * f64::from(phalanx.soul_count)
+                * f64::from(0.01_f32)
+                + 1.0)
+                * f64::from(damage),
+        );
     }
     damage = damage.max(0);
     let mut attack = AttackInformation {
@@ -187,7 +197,9 @@ pub(crate) fn calculate_owned_fire_ball_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] = game.globe_setup().base_combat_scales();
