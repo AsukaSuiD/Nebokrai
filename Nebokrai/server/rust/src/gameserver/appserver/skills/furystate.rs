@@ -3,8 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает добавление без
 //! замены, строгую проверку истечения и последовательное
 //! процентное увеличение только максимальной атаки игрока или монстра.
-//! Округление использует исходное
-//! правило дробной части `> 0.5`, а визуальные начало/завершение сохраняют
+//! Произведение signed-прибавки, `0.01_f32` и полного unsigned-максимума
+//! вычисляется в x87, после чего `__ftol2` усекает его к нулю; игрок использует
+//! младшие 16 бит результата. Визуальные начало/завершение сохраняют
 //! `0xBFE03/04`.
 //! `GetRemainedTime` разделяет exact-тело `CFuryState` по `0x00605E10`:
 //! положительный остаток вычисляется после отдельного второго чтения часов.
@@ -17,6 +18,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -75,13 +77,11 @@ impl FuryState {
     }
 
     pub(crate) fn apply_to_monster_max_attack(self, maximum: u32) -> u32 {
-        let scaled = self.attack_gain_percent as f32 * 0.01 * maximum as f32;
-        let truncated = scaled.trunc() as i32;
-        let gain = if scaled - truncated as f32 > 0.5 {
-            truncated.wrapping_add(1)
-        } else {
-            truncated
-        };
+        let gain = truncate_original_i64_low(
+            f64::from(self.attack_gain_percent)
+                * f64::from(0.01_f32)
+                * f64::from(maximum),
+        );
         let result = maximum.wrapping_add(gain as u32);
         if result as i32 <= 0 {
             1
@@ -91,14 +91,11 @@ impl FuryState {
     }
 
     pub(crate) fn apply_to_player_maximum_attack(self, maximum: u32) -> u32 {
-        let scaled = self.attack_gain_percent as f32 * 0.01 * maximum as f32;
-        let truncated = scaled.trunc() as i32;
-        let rounded = if scaled - truncated as f32 > 0.5 {
-            truncated.wrapping_add(1)
-        } else {
-            truncated
-        };
-        let mut gain = rounded as u16 as u32;
+        let mut gain = truncate_original_i64_low(
+            f64::from(self.attack_gain_percent)
+                * f64::from(0.01_f32)
+                * f64::from(maximum),
+        ) as u16 as u32;
         if maximum.wrapping_add(gain) > u16::MAX as u32 {
             gain = (u16::MAX as u32).wrapping_sub(maximum);
         }
