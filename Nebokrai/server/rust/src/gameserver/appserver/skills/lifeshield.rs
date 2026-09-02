@@ -213,7 +213,6 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_life_shield_used(runtime.now_milliseconds());
     send_cast(game, player_id, skill_level, 3);
     terminal(QueuedSkillExecutionState::Completed)
 }

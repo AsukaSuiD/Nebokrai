@@ -360,9 +360,6 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if summoned {
-        player_ai.mark_fatal_blow_used(runtime.now_milliseconds());
-    }
     send_end(game, player_id, skill_level);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed

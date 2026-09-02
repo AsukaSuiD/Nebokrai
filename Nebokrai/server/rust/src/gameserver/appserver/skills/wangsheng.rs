@@ -177,7 +177,6 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_wangsheng_used(runtime.now_milliseconds());
     send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
     terminal(QueuedSkillExecutionState::Completed)
 }

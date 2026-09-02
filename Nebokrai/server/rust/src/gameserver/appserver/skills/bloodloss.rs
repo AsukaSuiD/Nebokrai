@@ -389,7 +389,6 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_blood_loss_used(runtime.now_milliseconds());
     send_cast(game, player_id, skill_level, 3, None);
     terminal(QueuedSkillExecutionState::Completed)
 }

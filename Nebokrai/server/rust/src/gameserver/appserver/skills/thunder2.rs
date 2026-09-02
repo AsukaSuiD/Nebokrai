@@ -273,9 +273,6 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if summoned {
-        player_ai.mark_leiming2_used(runtime.now_milliseconds());
-    }
     send_thunder_family_cast(
         game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
     );

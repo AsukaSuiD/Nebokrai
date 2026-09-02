@@ -292,7 +292,6 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_battle_fairy_transfer_used(kind, runtime.now_milliseconds());
     send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -2332,6 +2332,69 @@ impl CPlayerAI {
         true
     }
 
+    /// `true` означает, что выбранная war-soul команда уже прошла concrete
+    /// `Begin` и её терминальный путь обязан выполнить унаследованный `End`.
+    /// Одна только извлечённая команда не эквивалентна native skill execution.
+    pub(crate) const fn battle_fairy_skill_execution_is_materialized(&self) -> bool {
+        self.battle_fairy_base_magic.is_some()
+            || self.life_shield.is_some()
+            || self.battle_fairy_transfer.is_some()
+            || self.wangsheng.is_some()
+            || self.poison_arrow.is_some()
+            || self.blood_loss.is_some()
+            || self.fatal_blow.is_some()
+            || self.thunder.is_some()
+            || self.leiming2.is_some()
+            || self.tianhuo.is_some()
+            || self.battle_fairy_attribute.is_some()
+    }
+
+    /// Общая запись `CSkill::End(true)` после оружейного эффекта и
+    /// `UpdateProperty`. Диапазон `0x212..=0x224` полностью материализован
+    /// типизированными владельцами, поэтому неизвестный ID остаётся без часов.
+    pub(crate) fn mark_battle_fairy_skill_used(
+        &mut self,
+        skill_id: u32,
+        now_ms: u32,
+    ) -> bool {
+        match skill_id {
+            0x212..=0x219 => self.mark_battle_fairy_attribute_used(skill_id, now_ms),
+            crate::gameserver::appserver::skills::tianhuo::TIANHUO_SKILL_ID => {
+                self.mark_tianhuo_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::thunder2::LEIMING2_SKILL_ID => {
+                self.mark_leiming2_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::fatalblow::FATAL_BLOW_SKILL_ID => {
+                self.mark_fatal_blow_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::bloodloss::BLOOD_LOSS_SKILL_ID => {
+                self.mark_blood_loss_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::poisonarrow::POISON_ARROW_SKILL_ID => {
+                self.mark_poison_arrow_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::thunder::THUNDER_SKILL_ID => {
+                self.mark_thunder_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::lifeshield::LIFE_SHIELD_SKILL_ID => {
+                self.mark_life_shield_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::wangsheng::WANGSHENG_SKILL_ID => {
+                self.mark_wangsheng_used(now_ms)
+            }
+            crate::gameserver::appserver::skills::huoxieshu::HUOXIESHU_SKILL_ID => self
+                .mark_battle_fairy_transfer_used(BattleFairyTransferKind::Health, now_ms),
+            crate::gameserver::appserver::skills::lingzhishu::LINGZHISHU_SKILL_ID => self
+                .mark_battle_fairy_transfer_used(BattleFairyTransferKind::Mana, now_ms),
+            crate::gameserver::appserver::skills::battlefairybasemagic::BATTLE_FAIRY_BASE_MAGIC_SKILL_ID => {
+                self.mark_battle_fairy_base_magic_used(now_ms)
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Точный успешный хвост `OnChangeSkillWithWarSoul`: concrete skill уже
     /// получил `End(true)`, после чего выбранный ID возвращается к базовой
     /// атаке боевой феи. Ожидающий FIFO при этом не изменяется.

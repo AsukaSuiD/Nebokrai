@@ -387,9 +387,6 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             .kernel_mut()
             .advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if summoned {
-        player_ai.mark_battle_fairy_base_magic_used(runtime.now_milliseconds());
-    }
     send_end(game, player_id, skill_level);
     QueuedSkillExecutionOutcome {
         state: if summoned {

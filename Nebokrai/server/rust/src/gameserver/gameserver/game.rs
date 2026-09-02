@@ -19341,12 +19341,7 @@ impl CGame {
                     .or_default();
                 team_id
             });
-        let interrupted_war_soul_skill = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.player_ai_mut().cancel_active_battle_fairy_skill());
-        if let Some(dispatch) = interrupted_war_soul_skill {
-            self.send_battle_fairy_skill_end(player_id, dispatch);
-        }
+        let interrupted_war_soul_skill = self.cancel_active_battle_fairy_skill(player_id);
         let war_soul = self
             .find_player_mut(player_id)
             .and_then(CPlayer::prepare_war_soul_region_entry);
@@ -35143,17 +35138,10 @@ impl CGame {
             player.summon_battle_fairy(battle_fairy_enabled, mode, &self.goods_factory)
         };
         let interrupted_skill = if report.outcome == BattleFairySummonOutcome::Recalled {
-            self.find_player_mut(player_id).and_then(|player| {
-                player
-                    .player_ai_mut()
-                    .cancel_active_battle_fairy_skill()
-            })
+            self.cancel_active_battle_fairy_skill(player_id)
         } else {
             None
         };
-        if let Some(dispatch) = interrupted_skill {
-            self.send_battle_fairy_skill_end(player_id, dispatch);
-        }
         if let Some(action) = report.spatial_action {
             let spatial_applied = report.region_id.is_some_and(|region_id| {
                 let Some(region) = self.regions.get_mut(&region_id) else {
@@ -37156,14 +37144,7 @@ impl CGame {
                         .player_ai_mut()
                         .queue_battle_fairy_skill(dispatch);
                     if outcome == BattleFairySkillQueueOutcome::ActiveRejected {
-                        let interrupted = self.players
-                            .get_mut(&player_id)
-                            .expect("активный навык боевой феи сохраняет canonical player")
-                            .player_ai_mut()
-                            .cancel_active_battle_fairy_skill();
-                        if let Some(active) = interrupted {
-                            self.send_battle_fairy_skill_end(player_id, active);
-                        }
+                        let _interrupted = self.cancel_active_battle_fairy_skill(player_id);
                         self.send_battle_fairy_skill_failure(player_id, 2);
                     }
                     trace!(
@@ -41635,6 +41616,8 @@ impl CGame {
                     killing_blow: None,
                 }
             };
+            let materialized_end = outcome.state != QueuedSkillExecutionState::Pending
+                && player_ai.battle_fairy_skill_execution_is_materialized();
             if outcome.first_contact {
                 match dispatch {
                     BattleFairySkillDispatch::Object { target, .. }
@@ -41666,6 +41649,14 @@ impl CGame {
                     player_ai.reject_battle_fairy_skill(dispatch)
                 }
             };
+            if removed_from_queue && materialized_end {
+                self.finish_battle_fairy_skill_end_tail(
+                    player_id,
+                    dispatch,
+                    player_ai,
+                    runtime,
+                );
+            }
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка боевой феи");
         }

@@ -365,7 +365,6 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_poison_arrow_used(runtime.now_milliseconds());
     send_cast(game, player_id, skill_level, 3, None);
     terminal(QueuedSkillExecutionState::Completed)
 }

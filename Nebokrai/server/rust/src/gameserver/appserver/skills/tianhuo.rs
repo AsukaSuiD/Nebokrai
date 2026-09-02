@@ -331,9 +331,6 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if summoned {
-        player_ai.mark_tianhuo_used(runtime.now_milliseconds());
-    }
     send_visual(game, player_id, skill_level, 3, None);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed

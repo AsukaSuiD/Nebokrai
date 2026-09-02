@@ -352,9 +352,6 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if summoned {
-        player_ai.mark_thunder_used(runtime.now_milliseconds());
-    }
     send_thunder_family_cast(game, player_id, THUNDER_SKILL_ID, skill_level, 3, None);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed
