@@ -3,7 +3,7 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`; исходный owner
 //! `server/gameserver/appserver/goods/fairyproperties.cpp`. Constructor и
 //! `ExpUp/LevelUp` перенесены целиком: wrapping experience, границы egg/ripe
-//! level, числовой приоритет result, четыре main-ability формулы на `f32` и
+//! level, числовой приоритет result, четыре main-ability формулы и
 //! упорядоченный эффект журнала роста. Его точное World-сообщение `0x60210`
 //! исполняет канонический `CGame` после завершения изменения.
 //!
@@ -11,8 +11,10 @@
 //! Rust хранит linked value как `Option<i32>` и возвращает typed block только
 //! когда exact loop действительно попытался бы разыменовать null; adapter
 //! загрузки/сохранения товара остаётся владельцем синхронизации. Таблица опыта,
-//! globe setup и log setup передаются явно. MSVC `ROUND -> long long -> int`
-//! заменён `f32::round -> i64 -> i32`, включая truncation младших 32 бит.
+//! globe setup и log setup передаются явно. `LevelUp` масштабирует base и
+//! growing rate double-константой `0.0001`, оставляет upgrade rate исходным
+//! `float`, а FISTP усекает результат к нулю в `long long`; в свойство
+//! прибавляются его младшие 32 бита.
 
 use crate::gameserver::appserver::gameeffectjournal::GameEffectJournal;
 
@@ -258,13 +260,13 @@ impl CFairyProperties {
 }
 
 fn growth_delta(base: u32, growing_rate: u32, upgrade_rate: f32, main: bool) -> u32 {
-    let growth = growing_rate as f32 * 0.0001_f32;
-    let mut value = base as f32 * 0.0001_f32;
+    let growth = f64::from(growing_rate) * 0.0001_f64;
+    let mut value = f64::from(base) * 0.0001_f64;
     if !main {
-        value *= upgrade_rate;
+        value *= f64::from(upgrade_rate);
     }
     value *= growth;
-    (value.round() as i64 as i32) as u32
+    (value.trunc() as i64 as i32) as u32
 }
 
 fn visible_c_bytes(bytes: &[u8]) -> Vec<u8> {
