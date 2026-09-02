@@ -3,6 +3,8 @@
 //! Точная пара `GameServer/gameserver.exe + GameServer/GameServer.pdb` и
 //! исходный владелец `appserver/ai/lord.cpp` подтверждают один RNG-бросок и
 //! зависимое от доли HP сжатие его шкалы перед упорядоченным выбором навыка.
+//! HP сначала сохраняется как `f32`, деление и сравнения остаются на
+//! x87-подобной ширине, а масштабированный бросок усекается к нулю.
 //! Этот владелец выбирает навык и ближайшую живую цель, реальный путь
 //! `monsterbaseattack` назначает результат, а `lordfastattack` и
 //! `lordwiderangingattack` исполняют конкретные стадии и эффекты.
@@ -153,7 +155,7 @@ pub(crate) fn select_lord_enemy(
 }
 
 /// Сохраняет единственный исходный бросок и зависимое от HP сжатие его шкалы:
-/// в диапазоне `[20%, 50%)` применяется `ROUND(roll * 0.6666667)`, ниже 20% —
+/// в диапазоне `[20%, 50%)` применяется `TRUNC(roll * float(0.6666667))`, ниже 20% —
 /// целочисленное деление на два. Исключённые ID продолжают накапливать `odds`.
 pub(crate) fn select_lord_attack_skill(
     hit_points: u32,
@@ -162,10 +164,11 @@ pub(crate) fn select_lord_attack_skill(
     roll: i32,
     default_skill_id: u16,
 ) -> u16 {
-    let health_rate = hit_points as f32 / maximum_hit_points as f32;
-    let adjusted_roll = if health_rate >= 0.2 {
-        if health_rate < 0.5 {
-            (roll as f32 * 0.666_666_7).round_ties_even() as i32
+    let stored_hit_points = hit_points as f32;
+    let health_rate = f64::from(stored_hit_points) / f64::from(maximum_hit_points);
+    let adjusted_roll = if health_rate >= f64::from(0.2_f32) {
+        if health_rate < f64::from(0.5_f32) {
+            (f64::from(roll) * f64::from(0.666_666_7_f32)).trunc() as i32
         } else {
             roll
         }
