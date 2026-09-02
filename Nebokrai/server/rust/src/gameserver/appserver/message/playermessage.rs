@@ -16,6 +16,8 @@
 //! `CGame::run_script_file` получает фактический контекст игрока, NPC и региона.
 //! `0x8FA04` сохраняет порядок проверок, проход свойств предмета, мутации
 //! навыков и состояний, а затем расход и публикации `0xBF709/0xC0101/0xC0102`.
+//! Процентный HP recovery сохраняет промежуточный `float`, процентный MP —
+//! x87-произведение без такого сохранения; оба результата усекаются к нулю.
 //! `0x8FA06/07/0B/0C` сохраняют границы частичных изменений сессии обмена.
 //! `0x8FA15` завершает первый `CHBYState`, затем пересчитывает и публикует
 //! свойства игрока. `0x8FA19` сохраняет порядок
@@ -805,8 +807,9 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 .find_player(player_id)
                                 .expect("restore-hp player сохранён")
                                 .maximum_health();
-                            let amount =
-                                (f64::from(maximum) * f64::from(value(1)) * 0.01).round() as u32;
+                            let percent = value(1) as f32 * 0.01_f32;
+                            let amount = (f64::from(maximum) * f64::from(percent)).trunc()
+                                as i32 as u32;
                             consume = game.begin_player_consumable_health_restore(
                                 player_id,
                                 amount,
@@ -834,8 +837,10 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 .find_player(player_id)
                                 .expect("restore-mp player сохранён")
                                 .maximum_mana();
-                            let amount =
-                                (f64::from(maximum) * f64::from(value(1)) * 0.01).round() as u32;
+                            let amount = (f64::from(maximum)
+                                * f64::from(value(1))
+                                * f64::from(0.01_f32))
+                            .trunc() as i32 as u32;
                             consume = game.begin_player_consumable_mana_restore(
                                 player_id,
                                 amount,
