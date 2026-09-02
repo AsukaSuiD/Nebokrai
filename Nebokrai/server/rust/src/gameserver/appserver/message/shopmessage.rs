@@ -10,9 +10,9 @@
 //!
 //! Владельцы Rust заменяют служебный код allocator/RTTI/visitor. Повреждённый
 //! wire становится типизированной ошибкой; исходные wrapping, целочисленное
-//! отношение прочности, округление к ближайшему чётному, налоговый множитель
-//! ремонта и отсутствие rollback уже добавленного префикса покупки сохранены
-//! явно. Синхронные эффекты не дублируются отчётами; их диагностические итоги
+//! отношение прочности, x87-усечение налогов, налоговый множитель ремонта и
+//! отсутствие rollback уже добавленного префикса покупки сохранены явно.
+//! Синхронные эффекты не дублируются отчётами; их диагностические итоги
 //! публикуются через `tracing`.
 
 use crate::gameserver::appserver::container::camountlimitgoodscontainer::AmountLimitGoodsRemoved;
@@ -193,8 +193,9 @@ fn handle_buy(
         .expect("region checked")
         .base()
         .tax_rate();
-    let tax = (tax_rate as f64 * gross as f64 * 0.01).round_ties_even() as u32;
-    let charged_f64 = tax as f64 + gross as f64;
+    let gross_f64 = f64::from(unit_price) * f64::from(amount);
+    let tax = (f64::from(tax_rate) * gross_f64 * 0.01_f64).trunc() as i64 as u32;
+    let charged_f64 = f64::from(tax as i32) + gross_f64;
     let money = game
         .find_player(player_id)
         .expect("shop player live")
@@ -207,7 +208,7 @@ fn handle_buy(
         notice(game, player_id, "GS0081");
         return Ok(());
     }
-    let charged = charged_f64.round_ties_even() as u32;
+    let charged = charged_f64.trunc() as i64 as u32;
     let created = game.create_goods_batch(entry.goods_id, amount);
     if created.is_empty()
         || !game
@@ -326,7 +327,10 @@ fn handle_sell(
         .expect("region checked")
         .base()
         .tax_rate();
-    let proceeds = ((1.0 - tax_rate as f32 * 0.01) * gross as f32).round_ties_even() as u32;
+    let gross_float = gross as f32;
+    let proceeds = ((1.0 - f64::from(tax_rate) * f64::from(0.01_f32))
+        * f64::from(gross_float))
+    .trunc() as i32 as u32;
     let maximum = game
         .goods_factory()
         .query_goods_max_stack_number(game.goods_factory().get_gold_coin_index());
@@ -352,7 +356,8 @@ fn handle_sell(
     let _ = game
         .increase_player_money(player_id, proceeds)
         .expect("shop player live");
-    let tax = gross.wrapping_sub(proceeds);
+    let tax_product = (tax_rate as u32).wrapping_mul(gross);
+    let tax = (f64::from(tax_product) * f64::from(0.01_f32)).trunc() as i32 as u32;
     let _ = game.add_region_tax(region_id, tax);
     if game.log_system().goods_sell_to_npc_log_enabled() {
         send_audit(
