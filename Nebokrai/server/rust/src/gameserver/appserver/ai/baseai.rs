@@ -11,7 +11,9 @@
 //! `VecDeque` заменяет внутренности `std::queue<std::deque<...>>`, сохраняя
 //! FIFO и `push_back`. Время среды выполнения передаётся точным `now_ms` в
 //! момент вызова: так владелец Linux не копирует `timeGetTime`, а `u32`
-//! сохраняет исходное переполнение. `STIFFEN/DIED/OPEN/DEFENSE` всегда идут
+//! сохраняет исходное переполнение. Deadline событий сравнивается после
+//! wrapping DWORD-сложения `begin + delay`, включая раннее завершение рядом
+//! с переполнением часов. `STIFFEN/DIED/OPEN/DEFENSE` всегда идут
 //! в `passive_actions`, остальные — в `active_war_soul_actions` при любом
 //! ненулевом флаге и иначе в `active_actions`.
 //!
@@ -61,6 +63,14 @@ pub(crate) struct AiEvent {
     pub(crate) beginning_time_ms: u32,
     pub(crate) delay_ms: u32,
     pub(crate) handling: i32,
+}
+
+/// Exact unsigned deadline из `ProcessActiveAction/ProcessPassiveAction`:
+/// исходник сначала складывает два DWORD, затем сравнивает результат с
+/// текущими часами. Это намеренно не эквивалентно elapsed-сравнению в момент
+/// переполнения `timeGetTime`.
+const fn ai_event_deadline_reached(event: &AiEvent, now_ms: u32) -> bool {
+    event.beginning_time_ms.wrapping_add(event.delay_ms) <= now_ms
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -246,7 +256,7 @@ impl CBaseAI {
             .passive_actions
             .front()
             .expect("Stiffen остаётся первым passive-событием");
-        if now_ms < event.beginning_time_ms.wrapping_add(event.delay_ms) {
+        if !ai_event_deadline_reached(event, now_ms) {
             return if interrupt_attack {
                 PassiveStiffenAction::InterruptAttack
             } else if started {
@@ -323,7 +333,7 @@ impl CBaseAI {
             return false;
         }
         if event.handling == 1 {
-            if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+            if ai_event_deadline_reached(event, now_ms) {
                 self.active_actions.pop_front();
                 return self.active_actions.is_empty();
             }
@@ -333,7 +343,7 @@ impl CBaseAI {
             return false;
         }
         event.handling = 1;
-        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+        if ai_event_deadline_reached(event, now_ms) {
             self.active_actions.pop_front();
         }
         false
@@ -423,9 +433,7 @@ impl CBaseAI {
         if event.handling == 0 {
             event.handling = 1;
         }
-        if event.handling == 1
-            && now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms
-        {
+        if event.handling == 1 && ai_event_deadline_reached(event, now_ms) {
             self.active_actions.pop_front();
         }
         true
@@ -442,7 +450,7 @@ impl CBaseAI {
             return;
         }
         event.handling = 1;
-        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+        if ai_event_deadline_reached(event, now_ms) {
             self.active_actions.pop_front();
         }
     }
@@ -458,7 +466,7 @@ impl CBaseAI {
             return;
         }
         event.handling = 1;
-        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+        if ai_event_deadline_reached(event, now_ms) {
             self.active_actions.pop_front();
         }
     }
@@ -471,7 +479,7 @@ impl CBaseAI {
             return;
         }
         event.handling = 1;
-        if now_ms.wrapping_sub(event.beginning_time_ms) >= event.delay_ms {
+        if ai_event_deadline_reached(event, now_ms) {
             self.active_actions.pop_front();
         }
     }
