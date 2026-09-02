@@ -6,10 +6,11 @@
 //! повторно проверяет оружие. После общей задержки он строит прямой путь,
 //! прекращает поражение перед первой клеткой `BLOCK_UNFLY` и обрабатывает не
 //! более одной клетки за проход ИИ. Каждая фигура поражается не более одного
-//! раза; формула игрока сохраняет два RNG-вызова и поправку уровня оружия,
-//! а критический множитель усекает каждый компонент к нулю. Формула монстра
-//! вызывает нулевой `GetAddElementAtk` между физическим уроном и уроном души,
-//! не продвигая RNG до отдельного критического броска.
+//! раза; формула игрока сохраняет два RNG-вызова и поправку уровня оружия.
+//! Коэффициент урона вычисляется в расширенной точности x87 из `u32` и
+//! сохранённых `f32`, а критический множитель усекает каждый компонент к нулю.
+//! Формула монстра вызывает нулевой `GetAddElementAtk` между физическим уроном
+//! и уроном души, не продвигая RNG до отдельного критического броска.
 //! `SkillExecutionKernel` хранит стадии игрока, а `CGame` только разрешает
 //! владельцев, применяет рассчитанную атаку и доставляет пакеты.
 
@@ -17,6 +18,7 @@ use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
 };
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillTermination};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
@@ -299,7 +301,9 @@ fn calculate_player_attack(
         attacker_faction_id: master.master_guild_id,
         attacker_union_id: master.master_union_id,
         hit_modifier,
-        damage_factor: damage_factor_percent as f32 * weapon_factor * 0.01,
+        damage_factor: (f64::from(damage_factor_percent)
+            * f64::from(weapon_factor)
+            * f64::from(0.01_f32)) as f32,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,
@@ -326,7 +330,9 @@ fn calculate_player_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     Some((master, attack))
@@ -798,7 +804,9 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
         attacker_faction_id: 0,
         attacker_union_id: 0,
         hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
-        damage_factor: properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01,
+        damage_factor: (f64::from(
+            properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
+        ) * f64::from(0.01_f32)) as f32,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,
