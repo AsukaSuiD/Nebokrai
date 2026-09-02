@@ -12,8 +12,9 @@
 //! Player-варианты обоих владельцев не изнашивают оружие в `Attack` или `AI`:
 //! унаследованный
 //! `AfterUseSkill` делает это один раз через общий `End`, после возврата
-//! движения и перед cooldown соответствующего идентификатора.
-//! Критический float-множитель усекается к нулю перед записью `int`.
+//! движения и перед cooldown соответствующего идентификатора. Коэффициент
+//! урона вычисляется в расширенной точности x87 из `u32` и `0.01_f32`, а
+//! критический float-множитель усекается к нулю перед записью `int`.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -21,6 +22,7 @@ use super::baseattack::{
 };
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
+use super::fightdefense::truncate_original;
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     monster_attack_cell_candidates, owned_monster_attackable,
@@ -185,7 +187,9 @@ fn calculate_player_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     Some((master, attack))
@@ -264,7 +268,9 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
-    let damage_factor = properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01;
+    let damage_factor = (f64::from(
+        properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
+    ) * f64::from(0.01_f32)) as f32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
     if player_ai.wide_arc_attack().is_none() {
@@ -711,7 +717,11 @@ fn wide_arc_attack(
         attacker_faction_id: 0,
         attacker_union_id: 0,
         hit_modifier: dispatch.properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
-        damage_factor: dispatch.properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01,
+        damage_factor: (f64::from(
+            dispatch
+                .properties
+                .query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
+        ) * f64::from(0.01_f32)) as f32,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,
