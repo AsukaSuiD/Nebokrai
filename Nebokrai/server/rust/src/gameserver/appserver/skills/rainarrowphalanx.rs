@@ -5,6 +5,8 @@
 //! прекращает каждый из них после первой клетки хотя бы с одной допустимой
 //! целью; внутри клетки сохраняется порядок `GetShape` и атакуются все цели.
 //! Формула читает живой боевой снимок стрелка и сохраняет два RNG-вызова.
+//! Знаковый процент коэффициента умножается через `FIMUL` в x87 на оружейный
+//! `f32`, и только итог сохраняется как `f32`.
 //! Критический множитель вычисляется в расширенной точности x87 и усекается к
 //! нулю при записи результата в `i32`.
 
@@ -93,7 +95,9 @@ pub(crate) fn calculate_rain_arrow_attack(game: &mut CGame, phalanx: &CRainArrow
     let mut attack = AttackInformation { skill_id: RAIN_ARROW_SKILL_ID, skill_level: phalanx.skill_level() as u8,
         attacker_type: master.master_type, attacker_id: master.master_id, attacker_team_id: master.master_team_id,
         attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id,
-        hit_modifier: phalanx.hit_modifier(), damage_factor: weapon_factor * phalanx.damage_factor_percent() as f32 * 0.01,
+        hit_modifier: phalanx.hit_modifier(), damage_factor: (f64::from(weapon_factor)
+            * f64::from(phalanx.damage_factor_percent())
+            * f64::from(0.01_f32)) as f32,
         damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![
             AttackPower { kind: AttackPowerType::Physical, hp_damage: physical.max(0), mp_damage: 0 },
             AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 },
