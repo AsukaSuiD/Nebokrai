@@ -13,7 +13,8 @@
 //! подтверждённом `End`, после освобождения пути и возврата движения.
 //! Все три варианта сохраняют беззнаковый коэффициент в исходной x87-цепочке
 //! до единственной записи в `float` и усекают критический множитель к нулю
-//! перед `int`.
+//! перед `int`. Физический RNG у всех трёх получает исходную DWORD-ширину
+//! `maximum - minimum + 1` без нормализации перевёрнутых границ.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -119,8 +120,9 @@ fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, skill_id
     let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player);
     let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors();
     let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum_factor);
-    let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1);
-    let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
+    let minimum = combat.minimum_attack as i32;
+    let width = (combat.maximum_attack as i32).wrapping_sub(minimum).wrapping_add(1);
+    let physical = minimum.wrapping_add(game.skill_random_below(width)).max(0);
     let damage_factor = (f64::from(target_damage_factor)
         * f64::from(weapon_factor)
         * f64::from(0.01_f32)) as f32;
