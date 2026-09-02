@@ -8,7 +8,8 @@
 //! physical, element и soul записи; monster-формула сохраняет нулевые element
 //! и soul записи и обязательный второй RNG. `CGame` только разрешает владельцев,
 //! применяет защиту/смерть и доставляет готовые visual packets.
-//! Player-критический множитель усекается к нулю перед записью `int`.
+//! Player-критический множитель вычисляется в расширенной точности x87 и
+//! усекается к нулю перед записью `int`.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -16,6 +17,7 @@ use super::baseattack::{
 };
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::master_info;
+use super::fightdefense::truncate_original;
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
@@ -327,7 +329,7 @@ fn send_player_visual(game: &mut CGame, player_id: i32, level: i32, action: u8, 
 fn restore_player(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) { restore_player(game, player_id); finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_monster_thorn_used(now_ms)); }
 pub(crate) fn cancel_player_monster_thorn<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.monster_thorn().map(|state| state.kernel().dispatch()) else { return false }; finish_player(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
-fn calculate_player_attack(game: &mut CGame, player_id: i32, level: i32, hit: i32) -> Option<(MasterInfo, AttackInformation)> { let (combat, master) = game.find_player(player_id).map(|player| (player.combat_properties(), master_info(player)))?; let minimum = combat.minimum_attack as i32; let span = (combat.maximum_attack as i32).wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32; let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0); let mut attack = AttackInformation { skill_id: MONSTER_THORN_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] }; if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate) as i32; } } Some((master, attack)) }
+fn calculate_player_attack(game: &mut CGame, player_id: i32, level: i32, hit: i32) -> Option<(MasterInfo, AttackInformation)> { let (combat, master) = game.find_player(player_id).map(|player| (player.combat_properties(), master_info(player)))?; let minimum = combat.minimum_attack as i32; let span = (combat.maximum_attack as i32).wrapping_sub(minimum).unsigned_abs().wrapping_add(1) as i32; let physical = minimum.wrapping_add(game.skill_random_below(span)).max(0); let mut attack = AttackInformation { skill_id: MONSTER_THORN_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] }; if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } } Some((master, attack)) }
 
 pub(crate) fn execute_player_monster_thorn<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_player_monster_thorn_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
