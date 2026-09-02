@@ -14,6 +14,9 @@
 //! усекает только итоговое произведение с целым уроном.
 //! Стихийный множитель `Promotion` сначала перемножает два целых операнда,
 //! затем применяет исходную `0.001_f32` и также усекает лишь конечный результат.
+//! Беззнаковые `defense` и `element resistance` сохраняются как `u32`: перед
+//! x87 оригинал корректирует старший бит через `+2^32`, а обычную половину
+//! вычисляет логическим `SHR` до преобразования в целое повреждение.
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
 //! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
 //! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
@@ -123,7 +126,7 @@ pub(crate) fn defend_monster_base_attack(
         );
         match power.kind {
             AttackPowerType::Physical => {
-                let defense = target.defense as i32;
+                let defense = target.defense;
                 if random(100) < i32::from(attacker.blast_attack) {
                     power.hp_damage = truncate_original(
                         f64::from(power.hp_damage) * f64::from(attacker.blast_attack_scale()),
@@ -146,12 +149,12 @@ pub(crate) fn defend_monster_base_attack(
                         f64::from(defense) * f64::from(attacker.critical_rate()) * -0.5,
                     ));
                 } else {
-                    power.hp_damage = power.hp_damage.wrapping_sub(defense / 2);
+                    power.hp_damage = power.hp_damage.wrapping_sub((defense / 2) as i32);
                 }
                 power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(1);
             }
             AttackPowerType::Element => {
-                let resistance = target.element_resistance as i32;
+                let resistance = target.element_resistance;
                 if random(100) < i32::from(attacker.blast_element_attack) {
                     power.hp_damage = truncate_original(
                         f64::from(power.hp_damage)
@@ -176,7 +179,7 @@ pub(crate) fn defend_monster_base_attack(
                         f64::from(resistance) * f64::from(attacker.critical_rate()) * -0.5,
                     ));
                 } else {
-                    power.hp_damage = power.hp_damage.wrapping_sub(resistance / 2);
+                    power.hp_damage = power.hp_damage.wrapping_sub((resistance / 2) as i32);
                 }
                 power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(1);
             }
@@ -251,7 +254,7 @@ pub(crate) fn defend_build_base_attack(
                         f64::from(defense) * f64::from(attacker.critical_rate()) * -0.5,
                     ));
                 } else {
-                    power.hp_damage = power.hp_damage.wrapping_sub(defense as i32 / 2);
+                    power.hp_damage = power.hp_damage.wrapping_sub((defense / 2) as i32);
                 }
                 power.hp_damage = power.hp_damage.max(1);
             }
@@ -284,7 +287,7 @@ pub(crate) fn defend_build_base_attack(
                 } else {
                     power.hp_damage = power
                         .hp_damage
-                        .wrapping_sub(element_resistance as i32 / 2);
+                        .wrapping_sub((element_resistance / 2) as i32);
                 }
                 power.hp_damage = power.hp_damage.max(1);
             }
@@ -350,7 +353,7 @@ pub(crate) fn defend_player_base_attack(
         }
         match power.kind {
             AttackPowerType::Physical => {
-                let defense = target.defense as i32;
+                let defense = target.defense;
                 if random(100) < i32::from(attacker.blast_attack) {
                     power.hp_damage = truncate_original(
                         f64::from(power.hp_damage) * f64::from(attacker.blast_attack_scale()),
@@ -371,12 +374,12 @@ pub(crate) fn defend_player_base_attack(
                         f64::from(defense) * f64::from(attacker.critical_rate()) * -0.5,
                     ));
                 } else {
-                    power.hp_damage = power.hp_damage.wrapping_sub(defense / 2);
+                    power.hp_damage = power.hp_damage.wrapping_sub((defense / 2) as i32);
                 }
                 power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(1);
             }
             AttackPowerType::Element => {
-                let resistance = target.element_resistance as i32;
+                let resistance = target.element_resistance;
                 if random(100) < i32::from(attacker.blast_element_attack) {
                     power.hp_damage = truncate_original(
                         f64::from(power.hp_damage)
@@ -401,7 +404,7 @@ pub(crate) fn defend_player_base_attack(
                         f64::from(resistance) * f64::from(attacker.critical_rate()) * -0.5,
                     ));
                 } else {
-                    power.hp_damage = power.hp_damage.wrapping_sub(resistance / 2);
+                    power.hp_damage = power.hp_damage.wrapping_sub((resistance / 2) as i32);
                 }
                 power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(1);
             }
@@ -466,13 +469,13 @@ pub(crate) fn defend_player_from_monster_base_attack(
         }
         match power.kind {
             AttackPowerType::Physical => {
-                power.hp_damage = power.hp_damage.wrapping_sub(target.defense as i32 / 2);
+                power.hp_damage = power.hp_damage.wrapping_sub((target.defense / 2) as i32);
                 power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(0);
             }
             AttackPowerType::Element => {
                 power.hp_damage = power
                     .hp_damage
-                    .wrapping_sub(target.element_resistance as i32 / 2);
+                    .wrapping_sub((target.element_resistance / 2) as i32);
                 power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(0);
             }
             AttackPowerType::Soul => {
@@ -521,13 +524,13 @@ pub(crate) fn defend_monster_from_monster_base_attack(
         );
         match power.kind {
             AttackPowerType::Physical => {
-                power.hp_damage = power.hp_damage.wrapping_sub(target.defense as i32 / 2);
+                power.hp_damage = power.hp_damage.wrapping_sub((target.defense / 2) as i32);
                 power.hp_damage = avoid_damage(power.hp_damage, target.attack_avoid).max(0);
             }
             AttackPowerType::Element => {
                 power.hp_damage = power
                     .hp_damage
-                    .wrapping_sub(target.element_resistance as i32 / 2);
+                    .wrapping_sub((target.element_resistance / 2) as i32);
                 power.hp_damage = avoid_damage(power.hp_damage, target.element_avoid).max(0);
             }
             AttackPowerType::Soul => {
