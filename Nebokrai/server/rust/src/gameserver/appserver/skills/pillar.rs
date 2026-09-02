@@ -9,6 +9,8 @@
 //! `CSummonSkill::End(1)` после replacement возвращает движение, обновляет
 //! свойства игрока и фиксирует cooldown; отказ после `Begin` и клиентская
 //! отмена используют тот же хвост без создания нового состояния.
+//! Беззнаковый коэффициент состояния умножается на сохранённую `f32`-константу
+//! `0.001` в расширенной точности x87 и только затем записывается в `float`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
@@ -84,7 +86,8 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
     let Some(properties) = game.skill_base_properties(PILLAR_SKILL_ID, level) else { if ai.pillar().is_some() { finish_player_pillar(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let keep = properties.query_property(STATE_PERSIST_TIME);
-    let damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR) as f32 * 0.001;
+    let damage_factor = (f64::from(properties.query_property(TARGET_DAMAGE_FACTOR))
+        * f64::from(0.001_f32)) as f32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.pillar().is_none() {
         let started_at_ms = runtime.now_milliseconds(); let cooldown_now_ms = runtime.now_milliseconds();
