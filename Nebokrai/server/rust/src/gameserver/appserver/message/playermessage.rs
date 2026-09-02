@@ -1001,12 +1001,13 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                                 .max(0) as u32;
                             let last_used = game
                                 .find_player(player_id)
-                                .map_or(0, |player| player.last_skill_item_use_ms(base_index));
+                                .and_then(|player| player.last_skill_item_use_ms(base_index));
                             let reusable = goods.addon_property_value(
                                 game.goods_factory(), GAP_TRIGGER_SKILL, 1,
                             ) != 0
-                                && (last_used == 0
-                                    || facts.tick_ms.wrapping_sub(last_used) > reuse_time);
+                                && last_used.is_none_or(|last_used| {
+                                    facts.tick_ms.wrapping_sub(last_used) > reuse_time
+                                });
                             if reusable {
                                 let skill_factory = game.skill_factory().clone();
                                 let replaced = game

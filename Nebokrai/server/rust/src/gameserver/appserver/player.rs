@@ -7785,8 +7785,10 @@ impl CPlayer {
         self.move_shape.skill(skill_id).map(MoveShapeSkill::item_position)
     }
 
-    pub(crate) fn last_skill_item_use_ms(&self, item_index: u32) -> u32 {
-        self.last_skill_item_use_ms.get(&item_index).copied().unwrap_or(0)
+    /// `CPlayer::ReUseSkillItem` различает отсутствующий map-ключ и сохранённый
+    /// нулевой timestamp после переполнения `timeGetTime`.
+    pub(crate) fn last_skill_item_use_ms(&self, item_index: u32) -> Option<u32> {
+        self.last_skill_item_use_ms.get(&item_index).copied()
     }
 
     pub(crate) fn mark_skill_item_used(&mut self, item_index: u32, now_ms: u32) {
