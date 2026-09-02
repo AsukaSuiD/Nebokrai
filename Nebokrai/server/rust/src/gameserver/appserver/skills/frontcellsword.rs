@@ -3,8 +3,9 @@
 //! `CJuCut`, четыре варианта `CLightningSword` и `CInverseChopped` совпадают
 //! в packet layout и физико-элементно-духовной формуле. Обратный рубящий удар
 //! отдельно умножает каждый компонент на накопленную энергию: оригинал усекает
-//! `double` в 64-битное целое и сохраняет младшие 32 бита. Все варианты также
-//! усекают результат критического множителя `float` к `i32`. Этот owner не
+//! `double` в 64-битное целое и сохраняет младшие 32 бита. Общий беззнаковый
+//! коэффициент остаётся в x87 до записи в `float`, а все варианты усекают
+//! критический множитель из расширенной точности к `i32`. Этот owner не
 //! хранит execution-state и не выбирает момент списания ресурсов: различающиеся
 //! lifecycle, выбор целей и ошибки остаются в конкретных skill-owner-ах.
 //! Общий `End` возвращает движение, один раз выполняет унаследованный
@@ -15,6 +16,8 @@ use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGO
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
+use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
@@ -221,7 +224,12 @@ pub(crate) fn calculate_attack_with_multiplier(
         .wrapping_add(game.skill_random_below(width))
         .wrapping_add(combat.dexterity as i32)
         .max(0);
-    let scale = |damage: i32| (f64::from(damage) * damage_multiplier) as i64 as i32;
+    let scale = |damage: i32| {
+        truncate_original_i64_low(f64::from(damage) * damage_multiplier)
+    };
+    let damage_factor = (f64::from(target_damage_factor)
+        * f64::from(weapon_factor)
+        * f64::from(0.01_f32)) as f32;
     let mut attack = AttackInformation {
         skill_id: definition.skill_id,
         skill_level: level as u8,
@@ -231,7 +239,7 @@ pub(crate) fn calculate_attack_with_multiplier(
         attacker_faction_id: master.master_guild_id,
         attacker_union_id: master.master_union_id,
         hit_modifier,
-        damage_factor: target_damage_factor as f32 * weapon_factor * 0.01,
+        damage_factor,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,
@@ -258,7 +266,8 @@ pub(crate) fn calculate_attack_with_multiplier(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(critical_rate));
         }
     }
     Some((master, attack))
