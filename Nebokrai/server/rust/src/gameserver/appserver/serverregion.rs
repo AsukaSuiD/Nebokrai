@@ -995,13 +995,18 @@ impl CServerRegion {
         &self.current_weather
     }
 
-    /// State-owner `AddTaxMoney`: доля superior вычитается до доставки,
-    /// локальный дневной итог clamp-ится к legacy 4_000_000_000.
+    /// State-owner `AddTaxMoney`: доля superior использует исходное signed
+    /// wrapping-произведение и x87-усечение, вычитается до доставки, а локальный
+    /// дневной итог clamp-ится к legacy 4_000_000_000.
     pub(crate) fn add_tax_money(&mut self, amount: u32) -> RegionTaxAddition {
         let superior_region_id =
             (0 < self.param.superior_region_id).then_some(self.param.superior_region_id);
         let superior_share = superior_region_id.map_or(0, |_| {
-            (self.param.turn_in_tax_rate as f32 * amount as f32 * 0.01).round_ties_even() as u32
+            let product = self
+                .param
+                .turn_in_tax_rate
+                .wrapping_mul(amount as i32);
+            (f64::from(product) * f64::from(0.01_f32)).trunc() as i32 as u32
         });
         let retained = amount.wrapping_sub(superior_share);
         self.param.today_total_tax = self
