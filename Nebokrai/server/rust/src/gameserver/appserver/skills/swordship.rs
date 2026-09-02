@@ -10,9 +10,11 @@
 //! и отдельного сетевого эффекта в подтверждённом пути нет.
 
 use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::stateskill::finish_state_skill;
 use super::swordshipstate::SwordshipState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -104,10 +106,7 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(true);
-            player.set_current_skill_id(None);
-        }
+        abort_skill(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let minimum_attack_gain = properties.query_property(SKILL_USAGE_TARGET_MIN_ATK_GAIN) as i32;
@@ -125,9 +124,6 @@ pub(crate) fn execute_player_swordship<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
+    finish_state_skill(game, player_id, player_ai, runtime, |_, _| {});
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -16,6 +16,7 @@ use super::enlargemaxhpstate::EnlargeMaxHpState;
 use super::enlargemaxmp::{ENLARGE_MAX_MP_SKILL_ID, SKILL_USAGE_MAX_MP_GAIN};
 use super::enlargemaxmpstate::EnlargeMaxMpState;
 use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::stateskill::finish_state_skill;
 use super::origin::{ORIGIN_SKILL_ID, SKILL_USAGE_ELEMENT_MODIFY_GAIN};
 use super::originstate::OriginState;
 use super::taiji::{SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN, TAIJI_SKILL_ID};
@@ -24,6 +25,7 @@ use super::taijistate::TaiJiState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -167,10 +169,7 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
         if player_ai.immediate_state().is_some() {
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.set_skill_moveable(true);
-                player.set_current_skill_id(None);
-            }
+            abort_skill(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -240,10 +239,8 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
-    player_ai.mark_immediate_state_used(skill_id, runtime.now_milliseconds());
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_immediate_state_used(skill_id, now_ms);
+    });
     terminal(QueuedSkillExecutionState::Completed)
 }

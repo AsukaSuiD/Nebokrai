@@ -8,6 +8,7 @@
 
 use super::baseattack::{time_reached, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::stateskill::finish_state_skill;
 use super::wuxingearth::WUXING_EARTH_SKILL_ID;
 use super::wuxingfire::WUXING_FIRE_SKILL_ID;
 use super::wuxingmetal::WUXING_METAL_SKILL_ID;
@@ -17,6 +18,7 @@ use super::wuxingwood::WUXING_WOOD_SKILL_ID;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::skills::skillbaseproperties::CSkillBaseProperties;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -156,7 +158,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
         if player_ai.immediate_state().is_some() {
-            finish_player(game, player_id);
+            abort_skill(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -196,14 +198,8 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player(game, player_id);
-    player_ai.mark_immediate_state_used(skill_id, runtime.now_milliseconds());
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_immediate_state_used(skill_id, now_ms);
+    });
     terminal(QueuedSkillExecutionState::Completed)
-}
-
-fn finish_player(game: &mut CGame, player_id: i32) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
 }
