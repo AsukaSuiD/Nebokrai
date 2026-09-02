@@ -10,6 +10,8 @@
 //! PvP full-miss со стихийным уроном сравнивает целый RNG непосредственно с
 //! x87-произведением `FILD u16 * FMUL f32`: дробная часть порога не усекается
 //! и не округляется промежуточной записью в `f32`.
+//! Уклонение аналогично загружает исходную константу `0.01_f32` в x87 и
+//! усекает только итоговое произведение с целым уроном.
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
 //! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
 //! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
@@ -36,7 +38,7 @@ pub(crate) fn truncate_original(value: f64) -> i32 {
 fn avoid_damage(damage: i32, avoid: u16) -> i32 {
     let passed = 100i32.wrapping_sub(i32::from(avoid));
     if (1..100).contains(&passed) {
-        truncate_original(f64::from(passed) * 0.01 * f64::from(damage))
+        truncate_original(f64::from(passed) * f64::from(0.01_f32) * f64::from(damage))
     } else {
         damage
     }
