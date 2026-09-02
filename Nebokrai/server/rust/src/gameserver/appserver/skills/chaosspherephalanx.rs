@@ -10,6 +10,7 @@
 //! критический элементальный урон к нулю.
 
 use super::chaossphere::CHAOS_SPHERE_SKILL_ID;
+use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -191,7 +192,9 @@ pub(crate) fn calculate_owned_chaos_sphere_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     Some((attack, combat, occupation, attacker_level))
