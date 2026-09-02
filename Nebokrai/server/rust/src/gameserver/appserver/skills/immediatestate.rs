@@ -7,15 +7,17 @@
 //! навыков семейства; завершение сохраняет общий для конкретного skill ID
 //! reuse-clock. `CGame` предоставляет canonical shape owner, свойства навыка,
 //! пересчёт производных характеристик и фактическую публикацию состояния.
+//! Входной reuse-gate сохраняет общий `CSkill::IsRestored`, включая нулевой
+//! timestamp нового экземпляра навыка.
 
-use super::baseattack::{time_reached, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
 use super::enlargefullmissstate::EnlargeFullMissState;
 use super::enlargemaxhp::{ENLARGE_MAX_HP_SKILL_ID, SKILL_USAGE_MAX_HP_GAIN};
 use super::enlargemaxhpstate::EnlargeMaxHpState;
 use super::enlargemaxmp::{ENLARGE_MAX_MP_SKILL_ID, SKILL_USAGE_MAX_MP_GAIN};
 use super::enlargemaxmpstate::EnlargeMaxMpState;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use super::origin::{ORIGIN_SKILL_ID, SKILL_USAGE_ELEMENT_MODIFY_GAIN};
 use super::originstate::OriginState;
@@ -178,9 +180,7 @@ pub(crate) fn execute_player_immediate_state<Runtime: GameMainLoopRuntime>(
     if player_ai.immediate_state().is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
         let last_used_ms = player_ai.immediate_state_last_used_ms(skill_id);
-        if last_used_ms != 0
-            && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms)
-        {
+        if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
             game.send_base_magic_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

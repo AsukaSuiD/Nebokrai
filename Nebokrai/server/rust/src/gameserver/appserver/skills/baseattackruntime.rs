@@ -13,6 +13,8 @@
 //! monster и stationary build-ветви используют один и тот же контракт.
 //! Maximum-distance gate использует `RealDistance(CShape*)` для разрешённой
 //! объектной цели и координатный overload только для point-target без формы.
+//! Reuse проверяется общим absolute DWORD deadline `CSkill::IsRestored`, тогда
+//! как задержки стадий ниже остаются elapsed-интервалами.
 
 use super::{
     AttackInformation, AttackPower, AttackPowerType, BASE_ATTACK_SKILL_ID,
@@ -101,7 +103,11 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             return rejected();
         }
         let last_used_ms = player_ai.base_attack_last_used_ms();
-        if last_used_ms != 0 && !time_reached(now_ms, last_used_ms, reuse_delay_ms) {
+        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+            last_used_ms,
+            reuse_delay_ms,
+            now_ms,
+        ) {
             let _ = game.send_base_attack_failure(player_id, 2);
             return rejected();
         }

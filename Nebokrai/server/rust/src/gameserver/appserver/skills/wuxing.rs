@@ -4,10 +4,11 @@
 //! `wuxing{metal,wood,water,fire,earth}.cpp`. Навык всегда предпочитает
 //! собственного user-а sufferer-у, заменяет состояние того же ID в прежней
 //! позиции, затем вызывает полный `UpdateProperty` и `RestoreHpMp`; базовое
-//! завершение сохраняет отдельный reuse-clock конкретного элемента.
+//! завершение сохраняет отдельный reuse-clock конкретного элемента. Входной
+//! gate использует общий absolute DWORD deadline `CSkill::IsRestored`.
 
-use super::baseattack::{time_reached, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use super::wuxingearth::WUXING_EARTH_SKILL_ID;
 use super::wuxingfire::WUXING_FIRE_SKILL_ID;
@@ -167,9 +168,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
     if player_ai.immediate_state().is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
         let last_used_ms = player_ai.immediate_state_last_used_ms(skill_id);
-        if last_used_ms != 0
-            && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms)
-        {
+        if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
             game.send_base_magic_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);
