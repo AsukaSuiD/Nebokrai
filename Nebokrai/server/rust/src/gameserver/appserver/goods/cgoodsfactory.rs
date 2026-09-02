@@ -16,7 +16,8 @@
 //! CiQing сохраняет дробление расходуемых и бесполезных предметов по пределу
 //! стопки и поштучное создание остальных типов; обычное улучшение ниже
 //! сохраняется как RAW. Магазин NPC замыкает формулы ремонта и продажи с
-//! коэффициентами настройки; целочисленное отношение долговечности при продаже
+//! коэффициентами настройки, явными промежуточными `f32`-записями и итоговым
+//! усечением к нулю; целочисленное отношение долговечности при продаже
 //! сохранено как наблюдаемая семантика x86.
 //! `EquipmentWaste` RVA `0x00063E50` сохраняет отдельные base/modifier:
 //! вычитает fray из итоговой прочности, но записывает результат в `base_value`.
@@ -133,12 +134,16 @@ impl CGoodsFactory {
         let maximum = goods.addon_property_value(self, GAP_GOODS_MAXIMUM_DURABILITY, 1);
         let quality = goods.addon_property_value(self, GAP_ITEM_QUALITY, 1);
         let factor = if 0 < quality {
-            (quality.wrapping_mul(50).wrapping_add(150)) as f32 * 0.01 * repair_factor
+            (f64::from(quality.wrapping_mul(50).wrapping_add(150))
+                * 0.01_f64
+                * f64::from(repair_factor)) as f32
         } else {
             repair_factor
         };
-        let damage = ((maximum.wrapping_sub(current)) as f32 / maximum as f32).max(0.0);
-        (goods.price() as f32 * damage * factor).round_ties_even() as u32
+        let damage = ((f64::from(maximum.wrapping_sub(current)) / f64::from(maximum)) as f32)
+            .max(0.0);
+        (f64::from(goods.price()) * f64::from(damage) * f64::from(factor)).trunc()
+            as i32 as u32
     }
 
     pub(crate) fn calculate_vend_price(
@@ -150,7 +155,8 @@ impl CGoodsFactory {
         if goods.price() == 0 {
             return 0;
         }
-        let mut price = goods.price() as f32;
+        let stored_price = goods.price() as f32;
+        let mut price = f64::from(stored_price);
         if self
             .query_goods_base_properties(goods.base_properties_index())
             .is_some_and(|properties| properties.goods_type() == GOODS_TYPE_EQUIPMENT)
@@ -160,11 +166,15 @@ impl CGoodsFactory {
             if maximum != 0 {
                 // Primary x86 делит integer durability до преобразования во float.
                 let durability = current.min(maximum) / maximum;
-                price = goods.price() as f32 * base_price_rate
-                    + (1.0 - base_price_rate) * durability as f32 * goods.price() as f32;
+                let durability_component = (f64::from(goods.price())
+                    * f64::from(durability)
+                    * (1.0 - f64::from(base_price_rate)))
+                    as f32;
+                price = f64::from(goods.price()) * f64::from(base_price_rate)
+                    + f64::from(durability_component);
             }
         }
-        (trade_in_rate * price).round_ties_even() as u32
+        (f64::from(trade_in_rate) * price).trunc() as i32 as u32
     }
 
     pub(crate) fn repair_equipment(&self, goods: &mut CGoods) -> bool {
