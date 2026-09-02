@@ -8,8 +8,11 @@
 //! `0x005F2CD0` с условным вторым чтением clock.
 //! Все преобразования absorbed damage используют x87-усечение к нулю;
 //! `mp_factor` сохраняется в `f32` перед умножением, а `hp_factor` — нет.
+//! Первичное масштабирование через `damage_factor` выполняется `FISTP dword`
+//! до поиска war-soul goods; ноль единицей не подменяется.
 
 use super::curestate::{send_cure_state_visual, CureState};
+use super::fightdefense::truncate_original;
 use super::lifeshield::{
     LIFE_SHIELD_SKILL_ID, SKILL_USAGE_STATE_PERSIST_TIME,
 };
@@ -32,10 +35,6 @@ pub(crate) struct LifeShieldState {
     hp_factor: u16,
     mp_factor: u16,
     skill_level: i32,
-}
-
-fn truncate_original(value: f64) -> i32 {
-    value.trunc() as i64 as i32
 }
 
 impl LifeShieldState {
@@ -149,45 +148,40 @@ impl LifeShieldState {
         war_soul_mana: Option<i32>,
         power: &mut AttackPower,
     ) {
+        power.hp_damage = truncate_original(
+            f64::from(power.hp_damage) * f64::from(damage_factor),
+        );
         let Some(war_soul_mana) = war_soul_mana else {
             return;
         };
-        if self.life <= 0 || war_soul_mana <= 0 || power.hp_damage <= 0 {
-            return;
+        if self.life > 0 && war_soul_mana > 0 && power.hp_damage > 0 {
+            let hp_factor = f64::from(self.hp_factor) * f64::from(0.01_f32);
+            let mp_factor = self.mp_factor as f32 * 0.01_f32;
+            let hp_shield = truncate_original(hp_factor * f64::from(power.hp_damage));
+            let mp_damage =
+                truncate_original(f64::from(mp_factor) * f64::from(power.hp_damage));
+            if self.life < hp_shield {
+                let old_life = self.life;
+                self.life = 0;
+                power.mp_damage = mp_damage;
+                power.hp_damage =
+                    truncate_original(f64::from(hp_shield.wrapping_sub(old_life)) / hp_factor);
+            } else if (war_soul_mana & 0xffff) < mp_damage {
+                let available_mana = war_soul_mana & 0xffff;
+                self.life = 0;
+                power.mp_damage = mp_damage;
+                power.hp_damage = truncate_original(
+                    f64::from(mp_damage.wrapping_sub(available_mana)) / f64::from(mp_factor),
+                );
+            } else {
+                self.life = self.life.wrapping_sub(hp_shield);
+                power.hp_damage = 0;
+                power.mp_damage = mp_damage;
+            }
         }
-        let factor = if damage_factor == 0.0 {
-            1.0
-        } else {
-            damage_factor
-        };
-        power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(factor));
-        let hp_factor = f64::from(self.hp_factor) * f64::from(0.01_f32);
-        let mp_factor = self.mp_factor as f32 * 0.01_f32;
-        if hp_factor <= 0.0 || mp_factor <= 0.0 {
-            power.hp_damage = truncate_original(f64::from(power.hp_damage) / f64::from(factor));
-            return;
-        }
-        let hp_shield = truncate_original(hp_factor * f64::from(power.hp_damage));
-        let mp_damage = truncate_original(f64::from(mp_factor) * f64::from(power.hp_damage));
-        if self.life < hp_shield {
-            let old_life = self.life;
-            self.life = 0;
-            power.mp_damage = mp_damage;
-            power.hp_damage =
-                truncate_original(f64::from(hp_shield.wrapping_sub(old_life)) / hp_factor);
-        } else if (war_soul_mana & 0xffff) < mp_damage {
-            let available_mana = war_soul_mana & 0xffff;
-            self.life = 0;
-            power.mp_damage = mp_damage;
-            power.hp_damage = truncate_original(
-                f64::from(mp_damage.wrapping_sub(available_mana)) / f64::from(mp_factor),
-            );
-        } else {
-            self.life = self.life.wrapping_sub(hp_shield);
-            power.hp_damage = 0;
-            power.mp_damage = mp_damage;
-        }
-        power.hp_damage = truncate_original(f64::from(power.hp_damage) / f64::from(factor));
+        power.hp_damage = truncate_original(
+            f64::from(power.hp_damage) / f64::from(damage_factor),
+        );
     }
 }
 
