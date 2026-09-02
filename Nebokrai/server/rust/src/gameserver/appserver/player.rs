@@ -5420,6 +5420,7 @@ impl CPlayer {
     /// пересчитывает производные battle-fairy addon-ы до `MountAllEquip`.
     /// Значения `2` остаются instance-modifier-ами, а текущие HP/MP здесь
     /// намеренно не зажимаются — native owner обновляет только максимумы.
+    /// Шесть FISTP-конверсий усекают полную сумму к нулю.
     pub(crate) fn refresh_battle_fairy_equipment_properties(
         &mut self,
         factory: &CGoodsFactory,
@@ -5464,7 +5465,7 @@ impl CPlayer {
             let base = goods.addon_property_value(factory, base_property, 1) as f32;
             let potential = goods.addon_property_value(factory, potential_property, 1) as f32;
             let modifier = goods.addon_property_value(factory, value_property, 2) as f32;
-            let value = (modifier + potential + base * growth).round() as i32;
+            let value = (modifier + potential + base * growth).trunc() as i32;
             let _ = goods.set_addon_property_value_core(value_property, 1, value);
         }
         let blast = goods
@@ -17854,20 +17855,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x000589B0
 // ADDRESS: 004589b0
 // PROTOTYPE: undefined __thiscall CPlayer(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::UpdateProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:601
-// RVA: 0x000593E0
-// ADDRESS: 004593e0
-// PROTOTYPE: void __thiscall UpdateProperty(void)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
