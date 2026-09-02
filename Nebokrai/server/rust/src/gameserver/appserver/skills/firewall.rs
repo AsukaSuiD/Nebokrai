@@ -7,8 +7,11 @@
 //! пакеты визуального эффекта. После применения создаётся региональный
 //! `CFireWallPhalanx`; `CGame` только разрешает независимых владельцев,
 //! регистрирует область и выполняет фактическую доставку.
+//! Стихийная прибавка усекается из расширенного x87-результата; коэффициент
+//! времени жизни отдельно сохраняется в `f32` до умножения и усечения.
 
 use super::baseattack::time_reached;
+use super::fightdefense::truncate_original;
 use super::firewallphalanx::CFireWallPhalanx;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -253,11 +256,16 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
     }
     send_visual(game, player_id, level, 2, Some((target_x, target_y)));
 
-    let element_bonus =
-        (em_modifier as f32 * 0.01 * combat.element_modify as f32).round_ties_even() as i32;
+    let element_bonus = truncate_original(
+        f64::from(em_modifier)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
     let lifetime_scale = constant.wrapping_mul(element_bonus as u32).wrapping_add(100);
-    let lifetime_ms = (summoned_lifetime as f32 * lifetime_scale as f32 * 0.01)
-        .round_ties_even() as u32;
+    let lifetime_factor = (f64::from(lifetime_scale) * f64::from(0.01_f32)) as f32;
+    let lifetime_ms = truncate_original(
+        f64::from(summoned_lifetime) * f64::from(lifetime_factor),
+    ) as u32;
     let element_attack = (combat.add_element_attack as i32).wrapping_add(element_bonus);
     let summon_id = game.allocate_summon_shape_id();
     let summon_started_at_ms = runtime.now_milliseconds();

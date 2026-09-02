@@ -13,8 +13,11 @@
 //! `CState::GetSufferer` и fallback к `GetUser`, когда цель не найдена;
 //! `DoesTargetEffective` допускает игрока либо только carriage-монстра, не
 //! подменяя обычного или приручённого монстра заклинателем.
+//! Порог очищения сохраняет расширенное вычисление x87 и усечение к нулю
+//! перед исходным целочисленным умножением.
 
 use super::baseattack::time_reached;
+use super::fightdefense::truncate_original;
 use super::bossbluequakestate::{
     BOSS_BLUE_QUAKE_STATE_ID, BossBlueQuakeState,
     finish_player_boss_blue_quake_state_on_cure, send_boss_blue_quake_state_visual,
@@ -206,7 +209,9 @@ pub(crate) fn cancel_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame,
 }
 
 fn cure_threshold(element_modify: i32, base_probability: u32, constant: u32, em_modifier: u32) -> i32 {
-    let scaled = ((em_modifier as f32) * 0.01 * (element_modify as f32)).round_ties_even() as i32;
+    let scaled = truncate_original(
+        f64::from(em_modifier) * f64::from(0.01_f32) * f64::from(element_modify),
+    );
     (scaled as u32).wrapping_mul(constant).wrapping_add(base_probability) as i32
 }
 

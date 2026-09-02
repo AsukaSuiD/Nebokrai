@@ -7,8 +7,11 @@
 //! только разрешает независимых владельцев, регистрирует форму и доставляет.
 //! Общий для двух вариантов `End(1)` фиксирует только успешно созданную
 //! область; `End(0)` очищает отказ или отмену без обновления cooldown.
+//! Общая стихийная прибавка обоих вариантов сохраняет расширенное вычисление
+//! x87 из целых свойств и усечение результата к нулю.
 
 use super::baseattack::time_reached;
+use super::fightdefense::truncate_original;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME};
 use super::godthunderphalanx::CGodThunderPhalanx;
 use super::godthunderphalanx2::CGodThunderPhalanx2;
@@ -225,8 +228,12 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
     visual(game, player_id, skill_id, level, 2, Some((target_x, target_y)));
     let Some(player) = game.find_player(player_id) else { abort_player_god_thunder(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
     let combat = player.combat_properties();
-    let element = combat.add_element_attack as i32
-        + (element_property as f32 * 0.01 * combat.element_modify as f32).round_ties_even() as i32;
+    let element_bonus = truncate_original(
+        f64::from(element_property)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
+    let element = (combat.add_element_attack as i32).wrapping_add(element_bonus);
     let cch = i32::from(combat.cch);
     let master = master_info(player);
     let summon_id = game.allocate_summon_shape_id();

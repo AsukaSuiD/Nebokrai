@@ -8,8 +8,11 @@
 //! фактическую доставку.
 //! `End(1)` возвращает движение и завершает общий `CSummonSkill::End` после
 //! построения сферы; отмена использует `End(0)` без cooldown.
+//! Стихийная прибавка вычисляется в расширенной точности x87 из целых свойств
+//! и сохранённой `f32`-константы, затем усекается к нулю.
 
 use super::baseattack::time_reached;
+use super::fightdefense::truncate_original;
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -274,7 +277,11 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
             permitted_to_kill_guild_member: i32::from(permissions.guild_member),
             permitted_to_kill_criminal: i32::from(permissions.criminal),
         };
-        let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32).round_ties_even() as i32;
+        let element_bonus = truncate_original(
+            f64::from(element_modifier)
+                * f64::from(0.01_f32)
+                * f64::from(combat.element_modify),
+        );
         let path_xy: Vec<_> = path.iter().map(|&(x, y, _)| (x, y)).collect();
         let (tile_x, tile_y) = path_xy[0];
         let summon_id = game.allocate_summon_shape_id();

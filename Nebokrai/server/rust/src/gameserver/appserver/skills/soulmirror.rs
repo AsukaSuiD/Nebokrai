@@ -10,8 +10,11 @@
 //! атаку и временно извлекает регион только на время создания существа.
 //! `End(1)` фиксирует завершённую область и cooldown; `End(0)` только очищает
 //! отказ или отмену после восстановления движения.
+//! Стихийная прибавка сохраняет расширенное вычисление x87 из целых свойств и
+//! сохранённой `f32`-константы, затем усекается к нулю.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
+use super::fightdefense::truncate_original;
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -201,7 +204,11 @@ fn calculate_attack(
     let span_delta = maximum.wrapping_sub(minimum);
     let span = (if span_delta < 0 { span_delta.wrapping_neg() } else { span_delta }).wrapping_add(1);
     let random_damage = game.skill_random_below(span);
-    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32).round_ties_even() as i32;
+    let element_bonus = truncate_original(
+        f64::from(element_modifier)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
     let damage = (combat.add_element_attack as i32)
         .wrapping_add(random_damage)
         .wrapping_add(minimum)
