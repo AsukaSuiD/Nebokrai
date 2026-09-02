@@ -9,11 +9,13 @@
 //! и пространственное применение уже рассчитанного результата. `Attack` и
 //! `AI` не изнашивают оружие на отдельных целях: унаследованный
 //! `AfterUseSkill` делает это один раз через подтверждённый общий `End(1)`.
-//! Критический float-множитель усекается к нулю перед записью `int`.
+//! Критический множитель вычисляется в расширенной точности x87 и усекается к
+//! нулю перед записью `int`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::CURE_SKILL_ID;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knockoutstate::KnockOutState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -190,7 +192,8 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, hit_modifier: 
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(rate));
         }
     }
     Some((master, attack))
