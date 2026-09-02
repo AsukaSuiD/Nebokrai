@@ -6,9 +6,11 @@
 //! `random(10000)` и странную границу счётчика попыток. Успех переводит тот же
 //! региональный объект в жизненный цикл питомца без параллельной копии и рассылает
 //! `0xC0201`; `CGame` используется только для доступа к владельцам и доставки.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`; cast-delay
+//! и дальнейший lifecycle питомца остаются elapsed.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -264,9 +266,11 @@ pub(crate) fn execute_player_monster_taming<Runtime: GameMainLoopRuntime>(
         );
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
-        if player_ai.monster_taming_last_used_ms() != 0
-            && !time_reached(runtime.now_milliseconds(), player_ai.monster_taming_last_used_ms(), reuse_delay_ms)
-        {
+        if !skill_is_restored(
+            player_ai.monster_taming_last_used_ms(),
+            reuse_delay_ms,
+            runtime.now_milliseconds(),
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

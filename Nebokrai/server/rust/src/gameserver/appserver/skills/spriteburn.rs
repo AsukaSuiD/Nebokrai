@@ -10,7 +10,9 @@
 //! с отдельным чтением часов для каждой цели. `CGame` только разрешает
 //! независимых владельцев региона и цели и выполняет фактическую доставку.
 //! Player `End` возвращает движение и выполняет `CSummonSkill::End(1)`;
-//! установленное состояние цели живёт независимо от завершённого cast.
+//! установленное состояние цели живёт независимо от завершённого cast. Player
+//! и monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
+//! и срок состояния остаются elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
@@ -32,7 +34,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination,
+    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::summonskill::finish_summon_skill_without_weapon_wear;
 use crate::gameserver::gameserver::game::{
@@ -215,9 +217,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
 
     if player_ai.sprite_burn().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.sprite_burn_last_used_ms() != 0
-            && !time_reached(now_ms, player_ai.sprite_burn_last_used_ms(), reuse_delay_ms)
-        {
+        if !skill_is_restored(player_ai.sprite_burn_last_used_ms(), reuse_delay_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

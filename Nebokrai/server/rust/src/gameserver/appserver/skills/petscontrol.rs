@@ -7,10 +7,11 @@
 //! регионального владельца и передаёт цель всем принадлежащим игроку питомцам.
 //! Объектная перегрузка принимает любой отличный от владельца `CMoveShape`;
 //! поэтому NPC проходит cast и назначение, а уже monster AI отвергает его своим
-//! `IsAttackAble` и выполняет обычную потерю цели.
+//! `IsAttackAble` и выполняет обычную потерю цели. Восстановление использует
+//! абсолютный срок `CSkill::IsRestored`; стадийная задержка остаётся elapsed.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -140,13 +141,11 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
     if player_ai.pets_control().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
-        if player_ai.pets_control_last_used_ms() != 0
-            && !time_reached(
-                runtime.now_milliseconds(),
-                player_ai.pets_control_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.pets_control_last_used_ms(),
+            reuse_delay_ms,
+            runtime.now_milliseconds(),
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

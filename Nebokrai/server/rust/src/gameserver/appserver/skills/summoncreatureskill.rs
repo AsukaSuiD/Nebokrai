@@ -8,7 +8,9 @@
 //! сохранённой точке эффекта, задержку повторного применения и исполнения,
 //! пакеты `0xBFE01` и последовательность вызовов создания.
 //! Поиск владельцев и around-доставка остаются у `CGame`; создаваемая сущность
-//! сразу публикуется через `CServerRegion::add_summoned_creature`.
+//! сразу публикуется через `CServerRegion::add_summoned_creature`. Player и
+//! monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
+//! призыва остаётся elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
@@ -25,7 +27,7 @@ use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -147,7 +149,11 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
     if player_ai.summon_creature().is_none() {
-        if player_ai.summon_creature_last_used_ms(variant_index) != 0 && !time_reached(now_ms, player_ai.summon_creature_last_used_ms(variant_index), reuse_delay_ms) {
+        if !skill_is_restored(
+            player_ai.summon_creature_last_used_ms(variant_index),
+            reuse_delay_ms,
+            now_ms,
+        ) {
             game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
