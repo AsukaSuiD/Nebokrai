@@ -17,6 +17,9 @@
 //! идентификатора.
 //! Стихийная прибавка сохраняет расширенное вычисление x87 из целых свойств и
 //! сохранённой `f32`-константы, затем усекается к нулю.
+//! Множитель собранных душ также остаётся в x87: signed `souls` умножается на
+//! `0.7_f32`, к нему прибавляется `1.0_f32`, затем signed-база умножается без
+//! промежуточного `f32`; `__ftol2` отдаёт младшие 32 бита результата.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
@@ -29,6 +32,7 @@ use super::monsterattack::{
 };
 use super::skillbaseproperties::CSkillBaseProperties;
 use super::soulcollectstate::send_soul_collect_state_visual;
+use super::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
 };
@@ -383,7 +387,10 @@ fn calculate_player_projectile_attack(
         .wrapping_add(minimum)
         .wrapping_add(random_damage)
         .wrapping_add(element_bonus);
-    let damage = (base_damage as f32 * (1.0 + 0.7 * souls as f32)) as i32;
+    let damage = truncate_original_i64_low(
+        f64::from(base_damage)
+            * (f64::from(souls) * f64::from(0.7_f32) + f64::from(1.0_f32)),
+    );
     Some((master, AttackInformation {
         skill_id: spec.skill_id,
         skill_level: level as u8,
