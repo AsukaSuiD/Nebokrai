@@ -11,6 +11,8 @@
 //! пропуска публикуются через `tracing`; временные отчёты и списки результатов
 //! отправки не создаются. Отложенных эффектов и необработанных selector-ов у
 //! этого владельца нет.
+//! Комиссия успешной продажи сохраняет `CPlayer::GetOptMoneyJin`: произведение
+//! цены на `f32`-коэффициент и обе границы комиссии усекаются к нулю.
 
 use std::collections::BTreeMap;
 
@@ -1003,10 +1005,11 @@ pub(super) fn build_auction_buy_log_effects(
     let price = node.seller_money() as i32;
     let (fee, seller_money) = if node.money_type() == 0 {
         let setup = game.globe_setup();
-        let fee = ((price as f32) * setup.auction_factor_c())
-            .round()
-            .max(setup.auction_service_fee_minimum().round())
-            .min(setup.auction_service_fee_maximum().round()) as i32;
+        let fee = (f64::from(price) * f64::from(setup.auction_factor_c()))
+            .trunc() as i32;
+        let fee = fee
+            .max(setup.auction_service_fee_minimum().trunc() as i32)
+            .min(setup.auction_service_fee_maximum().trunc() as i32);
         if fee <= price {
             (fee, price.wrapping_sub(fee))
         } else {

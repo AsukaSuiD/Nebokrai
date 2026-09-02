@@ -13,6 +13,8 @@
 //! quest-complete script и помещает синтетический `0x8FB02` в хвост общего
 //! GameServer FIFO, поэтому продолжение исполняется только на следующем
 //! message snapshot. Остальных отложенных эффектов у владельца нет.
+//! Денежный порог и плата за выставление используют исходные `f32`
+//! коэффициенты, x87-подобный порядок и усечение к нулю на каждой границе.
 
 use crate::gameserver::appserver::goods::cgoods::CGoods;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_GOODS_PACKAGE_EXTENTION;
@@ -491,9 +493,10 @@ fn dispatch_auction_listing<Runtime, Tick>(
         };
 
         let setup = game.globe_setup();
-        let price_gate = ((seller_money_signed as f32) * setup.auction_factor_c())
-            .round()
-            .max(setup.auction_yuan_fee_minimum().round()) as i32;
+        let price_gate = (f64::from(seller_money_signed)
+            * f64::from(setup.auction_factor_c()))
+        .trunc() as i32;
+        let price_gate = price_gate.max(setup.auction_yuan_fee_minimum().trunc() as i32);
         if seller_money_signed < price_gate {
             trace_listing_rejection(player_id, &gate, "seller money below fee floor", None);
             return;
@@ -640,15 +643,15 @@ fn auction_yuan_listing_fee(
     setup: &crate::setup::globesetup::GlobeSetupSnapshot,
     auction_time: u32,
 ) -> u32 {
-    let mut fee = (((auction_time / 0xe10) as f32)
-        * setup.auction_factor_b()
-        * setup.auction_base_yuan_bao())
-    .round();
-    if fee < setup.auction_yuan_fee_minimum() {
-        fee = setup.auction_yuan_fee_minimum().round();
+    let mut fee = (f64::from(auction_time / 0xe10)
+        * f64::from(setup.auction_factor_b())
+        * f64::from(setup.auction_base_yuan_bao()))
+    .trunc() as i32;
+    if f64::from(fee) < f64::from(setup.auction_yuan_fee_minimum()) {
+        fee = setup.auction_yuan_fee_minimum().trunc() as i32;
     }
-    if setup.auction_yuan_fee_maximum() < fee {
-        fee = setup.auction_yuan_fee_maximum().round();
+    if f64::from(setup.auction_yuan_fee_maximum()) < f64::from(fee) {
+        fee = setup.auction_yuan_fee_maximum().trunc() as i32;
     }
     fee as u32
 }
