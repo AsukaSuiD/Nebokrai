@@ -8,8 +8,11 @@
 //! регистрирует область и выполняет фактическую доставку.
 //! Общий для двух вариантов `End(1)` возвращает движение и завершает
 //! зарегистрированную область; отмена использует `End(0)` без cooldown.
+//! Стихийная прибавка вычисляется в расширенной точности x87 из беззнакового
+//! свойства и знакового modifier-а игрока, затем усекается к нулю.
 
 use super::baseattack::time_reached;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::yinyangphalanx::CYinYangPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -148,7 +151,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     let lifetime_ms = properties.query_property(SKILL_USAGE_SUMMONED_LIFETIME);
     let minimum_attack = properties.query_property(SKILL_USAGE_MIN_ATTACK) as i32;
     let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as i32;
-    let element_scale = properties.query_property(SKILL_USAGE_EM_MODIFIER) as f32;
+    let element_scale = properties.query_property(SKILL_USAGE_EM_MODIFIER);
 
     if execution(player_ai, second).is_none() {
         let started_at_ms = runtime.now_milliseconds();
@@ -190,7 +193,11 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     let Some(player) = game.find_player(player_id) else { abort_player_yin_yang(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
     let master = MasterInfo { master_type: PLAYER_TYPE, master_id: player_id, master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(player.pk_permissions().player), permitted_to_kill_teammate: i32::from(player.pk_permissions().teammate), permitted_to_kill_guild_member: i32::from(player.pk_permissions().guild_member), permitted_to_kill_criminal: i32::from(player.pk_permissions().criminal) };
     let combat = player.combat_properties();
-    let scaled_element = (element_scale * 0.01 * combat.element_modify as f32).round_ties_even() as i32;
+    let scaled_element = truncate_original(
+        f64::from(element_scale)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
     let element_modifier = (combat.add_element_attack as i32).wrapping_add(scaled_element);
     let critical_chance = i32::from(combat.cch);
     let summon_id = game.allocate_summon_shape_id();
