@@ -37873,20 +37873,27 @@ impl CGame {
                 runtime,
             )
         });
-        let released = if materialized_end == Some(PlayerSkillEndRuntimeOutcome::Ended) {
-            true
+        let (released, interrupted) = if materialized_end
+            == Some(PlayerSkillEndRuntimeOutcome::Ended)
+        {
+            (true, true)
         } else {
-            self.find_player_mut(player_id).is_some_and(|player| {
+            self.find_player_mut(player_id).map_or((false, false), |player| {
                 let released = player.player_ai_mut().release_object_target(target);
                 if released && interrupted_active_skill {
                     player.set_skill_moveable(true);
                     player.set_current_skill_id(None);
                 }
-                released
+                (released, released && interrupted_active_skill)
             })
         };
         if released {
-            let _ = self.send_base_attack_failure(player_id, 2);
+            // Exact `OnLoseTarget` подтверждает отказный `0xBFE01` только
+            // рядом с `End(1)`. Одна ожидающая object-команда удаляется без
+            // ответа, но default attack восстанавливается в обоих случаях.
+            if interrupted {
+                let _ = self.send_base_attack_failure(player_id, 2);
+            }
             if let Some(player) = self.find_player_mut(player_id) {
                 player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
             }

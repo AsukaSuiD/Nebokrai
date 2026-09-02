@@ -57,6 +57,8 @@
 //! возвращают player-а к вычисленному default attack; death-tail делает это и
 //! без активного skill, а разорванный concrete owner больше не оставляет
 //! current-skill и запрет движения.
+//! Отказный `0xBFE01` при `OnLoseTarget` следует только за `End(1)` реально
+//! прерванного навыка; одна ожидающая object-команда удаляется без ответа.
 //! `OnChangeSkill` достигнут после завершения concrete owner-а: его `End`
 //! предшествует возврату к вычисленному default attack, а отказ до `Begin` не
 //! меняет выбранный навык. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
@@ -2860,11 +2862,12 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnLoseTarget
-// STATUS: PARTIALLY_IMPLEMENTED
+// STATUS: PARTIALLY_IMPLEMENTED, VERIFIED_DISASSEMBLY
 // IMPLEMENTED: достигнутый вызов из `CPet::ReleaseReciprocalTarget` завершает
-// начатый concrete skill через `End(1)`, а ещё не материализованную совпавшую
-// object-команду — через `SkillTermination::Cancelled`; независимая очередь
-// боевой феи не затрагивается. Остались иные недостигнутые вызывающие стороны.
+// начатый concrete skill через `End(1)` и только тогда отправляет отказный
+// `0xBFE01`; ещё не начатую совпавшую object-команду удаляет без ответа.
+// Default attack восстанавливается в обоих случаях, независимая очередь боевой
+// феи не затрагивается. Остались иные недостигнутые вызывающие стороны.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:450
