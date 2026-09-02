@@ -9,6 +9,7 @@
 //! `tagWuXingState`; два байта выравнивания после пяти `short` сохраняются
 //! как часть подтверждённого legacy layout.
 
+use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
@@ -281,7 +282,7 @@ fn capped_add_nonzero(value: u32, delta: i32) -> u32 {
 }
 
 fn derived(value: i32, coefficient: f32) -> i32 {
-    (f64::from(value) * f64::from(coefficient)).trunc() as i32
+    truncate_original(f64::from(value) * f64::from(coefficient))
 }
 
 fn apply_scale(bits: &mut u32, percent_bits: u32, minimum: f32) {
