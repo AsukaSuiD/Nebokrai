@@ -14128,11 +14128,9 @@ impl CPlayer {
         self.base_properties.vigour
     }
 
+    /// Exact `CPlayer::SetVigour`: вход сначала записывается в base property,
+    /// затем ограничивается текущим `dwMaxVigour` того же owner-а.
     pub(crate) const fn set_vigour(&mut self, value: u32) {
-        self.base_properties.vigour = value;
-    }
-
-    pub(crate) const fn set_vigour_clamped(&mut self, value: u32) {
         self.base_properties.vigour = if self.base_properties.maximum_vigour < value {
             self.base_properties.maximum_vigour
         } else {

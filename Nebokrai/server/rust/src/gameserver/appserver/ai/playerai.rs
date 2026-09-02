@@ -2730,7 +2730,7 @@ impl CPlayerAI {
         let previous_experience = player.experience();
         let previous_vigour = player.vigour();
         player.set_experience(previous_experience.wrapping_add(experience_gain));
-        player.set_vigour_clamped(previous_vigour.wrapping_add(vigour_gain));
+        player.set_vigour(previous_vigour.wrapping_add(vigour_gain));
         Some(PlayerAutoProgress {
             player_id: player.player_id(),
             sampled_at_ms,

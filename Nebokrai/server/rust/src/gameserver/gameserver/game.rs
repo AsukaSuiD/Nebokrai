@@ -38208,7 +38208,7 @@ impl CGame {
             return false;
         };
         player.set_experience(previous_experience.wrapping_add(experience_gain));
-        player.set_vigour_clamped(previous_vigour.wrapping_add(vigour_gain));
+        player.set_vigour(previous_vigour.wrapping_add(vigour_gain));
         let mutation = PlayerAutoProgress {
             player_id,
             sampled_at_ms: runtime.now_milliseconds(),
