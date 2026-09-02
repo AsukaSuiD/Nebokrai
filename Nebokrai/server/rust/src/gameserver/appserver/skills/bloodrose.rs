@@ -11,11 +11,13 @@
 //! `AfterUseSkill` делает это один раз из `End(true)`, после чего обновляются
 //! свойства и cooldown. `End(false)` только освобождает runtime-состояние и не
 //! откатывает попадания.
-//! Критический множитель переводится в `int` с подтверждённым x87 усечением
-//! к нулю отдельно для каждого боевого компонента.
+//! Damage factor сохраняет x87-порядок `u32 factor × f32 weapon × 0.01_f32`
+//! до единственной записи в `f32`. Критический множитель не округляет исходный
+//! урон в `f32` и усекается к нулю только при итоговой записи каждого компонента.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::poisonmoth::{MONSTER_TYPE, PLAYER_TYPE, cell_targets, master_info, target_level, target_position, weapon_is_crossbow};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -98,8 +100,9 @@ fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i
     let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player);
     let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors(); let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum_factor);
     let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
-    let mut attack = AttackInformation { skill_id: BLOOD_ROSE_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier, damage_factor: damage_factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).wrapping_add(element_addition as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
-    if game.skill_random_below(100) < i32::from(combat.blast_attack) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate) as i32; } } Some((master, attack))
+    let final_damage_factor = (f64::from(damage_factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32;
+    let mut attack = AttackInformation { skill_id: BLOOD_ROSE_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier, damage_factor: final_damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).wrapping_add(element_addition as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
+    if game.skill_random_below(100) < i32::from(combat.blast_attack) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } } Some((master, attack))
 }
 
 #[allow(clippy::too_many_arguments, reason = "граница сохраняет порядок области, уникальность целей и применение попаданий")]
