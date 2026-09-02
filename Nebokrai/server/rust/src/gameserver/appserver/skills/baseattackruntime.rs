@@ -413,6 +413,9 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                         .set_action(if current_health == 0 { 6 } else { 5 });
                 }
             }
+            if damage != 0 {
+                game.increase_owned_player_rp(target_id, false, damage as u16);
+            }
             if current_health != 0 && attack.full_miss == 0 {
                 let _ = game.queue_player_hurt_ai(target_id, damage, runtime);
                 let _ = game.retarget_passive_pets_after_player_hurt(
@@ -475,6 +478,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             missed.add_long(target_id);
             let _ = game.send_player_shape_around(target_id, None, &missed);
         }
+        game.increase_owned_player_rp(player_id, true, 0);
         if let Some(attacker) = game.find_player_mut(player_id) {
             attacker.movement_shape_mut().set_action(1);
         }
@@ -914,6 +918,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
                 }
             }
         }
+        game.increase_owned_player_rp(player_id, true, 0);
         if let Some(attacker) = game.find_player_mut(player_id) {
             attacker.movement_shape_mut().set_action(1);
         }
@@ -950,6 +955,7 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             return rejected();
         }
         first_contact = true;
+        game.increase_owned_player_rp(player_id, true, 0);
         if let Some(attacker) = game.find_player_mut(player_id) {
             attacker.movement_shape_mut().set_action(1);
         }

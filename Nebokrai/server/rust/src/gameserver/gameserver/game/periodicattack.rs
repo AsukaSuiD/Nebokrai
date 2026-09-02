@@ -187,7 +187,12 @@ impl CGame {
 
     /// Замыкает virtual `CPlayer::IncreaseRp -> PropertiesChanged` на
     /// canonical player и адресный `0xBF721`.
-    fn increase_owned_player_rp(&mut self, player_id: i32, attacking: bool, damage: u16) {
+    pub(crate) fn increase_owned_player_rp(
+        &mut self,
+        player_id: i32,
+        attacking: bool,
+        damage: u16,
+    ) {
         let changed = {
             let (players, globe_setup) = (&mut self.players, &self.globe_setup);
             players
