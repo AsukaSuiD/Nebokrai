@@ -13,11 +13,16 @@
 //! положительный остаток читают wrapping clock отдельно.
 //! Встроенный `tagAttackInformation` сохраняет конструкторные skill-id
 //! `0x7fffffff` и уровень `1`; `Clear` между тиками их не переопределяет.
+//! Базовый физический урон во всех трёх классах завершается через `__ftol2`:
+//! в DWORD урона попадает младшая половина усечённого `i64`, после чего её
+//! знаковое значение ограничивается снизу нулём. Критический пересчёт отдельно
+//! использует `FISTP dword` и сохраняет его собственную overflow-семантику.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::fightdefense::truncate_original;
+use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPower, AttackPowerType};
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
@@ -104,7 +109,7 @@ impl LeafCutState {
     }
 
     fn attack(self, critical_chance: u16, critical_rate: f32, random: &mut dyn FnMut(i32) -> i32) -> AttackInformation {
-        let minimum = i32::from(self.minimum_attack); let maximum = i32::from(self.maximum_attack); let span = minimum.abs_diff(maximum).wrapping_add(1) as i32; let mut physical = truncate_original(f64::from(random(span)) + f64::from(f32::from_bits(self.damage_modifier_bits)) + f64::from(minimum)); if physical < 0 { physical = 0; }
+        let minimum = i32::from(self.minimum_attack); let maximum = i32::from(self.maximum_attack); let span = minimum.abs_diff(maximum).wrapping_add(1) as i32; let mut physical = truncate_original_i64_low(f64::from(random(span)) + f64::from(f32::from_bits(self.damage_modifier_bits)) + f64::from(minimum)); if physical < 0 { physical = 0; }
         let critical = random(100) < i32::from(critical_chance); let mut damages = vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: i32::from(self.element_attack), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(self.soul_attack), mp_damage: 0 }]; if critical { for damage in &mut damages { damage.hp_damage = truncate_original(f64::from(damage.hp_damage) * f64::from(critical_rate)); } }
         AttackInformation { skill_id: DEFAULT_PERIODIC_SKILL_ID, skill_level: 1, attacker_type: self.master.master_type, attacker_id: self.master.master_id, attacker_team_id: self.master.master_team_id, attacker_faction_id: self.master.master_guild_id, attacker_union_id: self.master.master_union_id, hit_modifier: 0, damage_factor: f32::from_bits(self.damage_factor_bits), damage_modifier: 0, critical, blast_attack: false, full_miss: 0, damages }
     }
