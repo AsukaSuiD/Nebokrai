@@ -11,7 +11,8 @@
 //! `End(1)` фиксирует завершённую область и cooldown; `End(0)` только очищает
 //! отказ или отмену после восстановления движения.
 //! Стихийная прибавка сохраняет расширенное вычисление x87 из целых свойств и
-//! сохранённой `f32`-константы, затем усекается к нулю.
+//! сохранённой `f32`-константы, затем усекается к нулю. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; задержка области остаётся elapsed.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::fightdefense::truncate_original;
@@ -19,7 +20,7 @@ use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -283,7 +284,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
 
     if player_ai.soul_mirror().is_none() {
         let started = runtime.now_milliseconds();
-        if player_ai.soul_mirror_last_used_ms() != 0 && !time_reached(runtime.now_milliseconds(), player_ai.soul_mirror_last_used_ms(), cooldown) {
+        if !skill_is_restored(player_ai.soul_mirror_last_used_ms(), cooldown, runtime.now_milliseconds()) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

@@ -14,7 +14,8 @@
 //! `DoesTargetEffective` допускает игрока либо только carriage-монстра, не
 //! подменяя обычного или приручённого монстра заклинателем.
 //! Порог очищения сохраняет расширенное вычисление x87 и усечение к нулю
-//! перед исходным целочисленным умножением.
+//! перед исходным целочисленным умножением. Восстановление использует
+//! абсолютный срок `CSkill::IsRestored`; cast-delay остаётся elapsed.
 
 use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
@@ -26,7 +27,7 @@ use super::boalockstate::{
     BOA_LOCK_STATE_ID, BoaLockState, send_boa_lock_state_visual,
 };
 use super::curestate::{CureState, send_cure_state_visual, send_cure_state_visual_at};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::stateskill::finish_state_skill;
 use super::knockoutstate::{
     KNOCK_OUT_STATE_ID, KnockOutState, finish_player_knock_out_state_on_defense,
@@ -479,7 +480,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.cure_last_used_ms() != 0 && !time_reached(cooldown_now_ms, player_ai.cure_last_used_ms(), reuse_delay_ms) {
+        if !skill_is_restored(player_ai.cure_last_used_ms(), reuse_delay_ms, cooldown_now_ms) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

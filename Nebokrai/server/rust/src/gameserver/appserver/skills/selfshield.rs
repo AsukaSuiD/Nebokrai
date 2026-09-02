@@ -3,10 +3,11 @@
 //! Здесь объединён только подтверждённый одинаковый контракт двух навыков:
 //! двойная проверка MP, время восстановления, стадии каста, клиентская отмена
 //! и точный порядок полей пакета. Конкретный набор параметров и создание
-//! канонического состояния остаются у владельца навыка.
+//! канонического состояния остаются у владельца навыка. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; стадии каста остаются elapsed.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::machineshield::{MACHINE_SHIELD_SKILL_ID, MachineShieldOwner};
 use super::manashield::{MANA_SHIELD_SKILL_ID, ManaShieldOwner};
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -215,13 +216,11 @@ where
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
-        if Owner::last_used_ms(player_ai) != 0
-            && !time_reached(
-                cooldown_now_ms,
-                Owner::last_used_ms(player_ai),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            Owner::last_used_ms(player_ai),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             game.send_self_state_skill_failure(Owner::EFFECT_MESSAGE, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

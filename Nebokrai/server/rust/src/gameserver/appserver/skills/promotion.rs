@@ -11,10 +11,12 @@
 //! состояния source-монстра, как исходный virtual `OnChangeStates`.
 //! Координатная перегрузка по точному EXE сохраняет точку и через
 //! `CState::GetSufferer` выбирает первый `CMoveShape` клетки; Rust-разрешение
-//! повторяет этот порядок через региональный spatial owner.
+//! повторяет этот порядок через региональный spatial owner. Player и monster
+//! ветви используют абсолютный срок `CSkill::IsRestored`; задержка состояния
+//! остаётся elapsed.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::promotionstate::{PromotionState, send_promotion_state_begin};
 use super::skillbaseproperties::CSkillBaseProperties;
@@ -495,13 +497,11 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.promotion_last_used_ms() != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.promotion_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.promotion_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             send_failure(game, player_id, 2);

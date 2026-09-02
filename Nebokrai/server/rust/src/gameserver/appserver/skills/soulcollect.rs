@@ -10,10 +10,11 @@
 //! перегрузки `Begin` имели одинаковую семантику состояния владельца и сведены
 //! к одному типизированному `PlayerSkillDispatch` без параллельного пути.
 //! `End(1)` фиксирует применение и cooldown, а `End(0)` очищает отказ или
-//! смену команды без повторного применения состояния.
+//! смену команды без повторного применения состояния. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; накопление остаётся elapsed.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::soulcollectstate::{SoulCollectState, send_soul_collect_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -153,9 +154,7 @@ pub(crate) fn execute_player_soul_collect<Runtime: GameMainLoopRuntime>(
     if player_ai.soul_collect().is_none() {
         let started = runtime.now_milliseconds();
         let cooldown_now = runtime.now_milliseconds();
-        if player_ai.soul_collect_last_used_ms() != 0
-            && !time_reached(cooldown_now, player_ai.soul_collect_last_used_ms(), cooldown)
-        {
+        if !skill_is_restored(player_ai.soul_collect_last_used_ms(), cooldown, cooldown_now) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

@@ -7,10 +7,12 @@
 //! `RageExecutionState` хранит только жизненный цикл канала; `CGame`
 //! разрешает player-owner-а, обновляет общий боевой режим и доставляет пакеты.
 //! Замена команды и потеря цели вызывают тот же owner-`End` до очистки AI.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`; интервал
+//! канального списания сохраняет elapsed-семантику.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::gameserver::game::{
@@ -209,8 +211,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let now_ms = runtime.now_milliseconds();
-        let last_used_ms = ai.rage_last_used_ms();
-        if last_used_ms != 0 && now_ms.wrapping_sub(last_used_ms) < reuse_ms {
+        if !skill_is_restored(ai.rage_last_used_ms(), reuse_ms, now_ms) {
             send_failure(game, player_id, 0x0d, 0);
             end_player_rage(game, player_id, level);
             return terminal(QueuedSkillExecutionState::Rejected);
