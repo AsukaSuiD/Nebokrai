@@ -10,8 +10,9 @@
 //! `CalculateAttackPower` `0x005E3E30..0x005E3F82` держит сумму броска,
 //! минимального урона и `float`-модификатора в x87 до `__ftol2`, а critical
 //! умножает уже целый урон на `float` rate и делает `FISTP` с режимом
-//! усечения. Оба преобразования моделируются через `f64` без промежуточного
-//! округления Rust `f32`.
+//! усечения. Первый результат берётся как младший DWORD усечённого `i64`,
+//! тогда как critical сохраняет отдельную overflow-семантику `FISTP dword`;
+//! оба пути моделируются через `f64` без промежуточного округления Rust `f32`.
 //! Этот же владелец извлекает каноническое состояние на такте ИИ, возвращает
 //! его до применения удара и передаёт рассчитанную атаку координатору `CGame`.
 //! DB-запись буквально сохраняет десять DWORD `MasterInfo`, остаток срока,
@@ -30,6 +31,7 @@ use crate::gameserver::appserver::states::attackpower::{
 };
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::appserver::skills::fightdefense::truncate_original;
+use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -208,7 +210,7 @@ impl BloodLossState {
         let maximum = i32::from(self.maximum_attack);
         let span = minimum.abs_diff(maximum).wrapping_add(1) as i32;
         let rolled = minimum.wrapping_add(random(span));
-        let mut damage = truncate_original(
+        let mut damage = truncate_original_i64_low(
             f64::from(rolled) + f64::from(f32::from_bits(self.damage_modifier_bits)),
         );
         if damage < 0 {
