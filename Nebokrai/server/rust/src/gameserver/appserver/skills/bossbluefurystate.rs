@@ -4,9 +4,10 @@
 //! `appserver/skills/bossbluefurystate.cpp`. Достигнутые пути игрока и монстра
 //! заменяют прежнее состояние до установки нового, запрещают движение и бой на слабой
 //! фазе, а затем сохраняют состояние до общего срока. Только для монстра минимальная
-//! и максимальная атака заменяются указанной долей коэффициента с исходным округлением
-//! дробной части строго больше `0.5`; визуальные начало и завершение сохраняют
-//! `0xBFE03/04`. DB-запись содержит остаток срока и коэффициент атаки;
+//! и максимальная атака заменяются указанной долей коэффициента: полный unsigned
+//! attack и signed-коэффициент перемножаются в x87 с `0.01_f32`, затем результат
+//! усекается в `i32`. Визуальные начало и завершение сохраняют `0xBFE03/04`.
+//! DB-запись содержит остаток срока и коэффициент атаки;
 //! `weak_time` после загрузки остаётся нулевым, а `Begin` повторно не вызывается.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -188,6 +189,7 @@ use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, L
 
 // COMPONENT_VARIANT_END: GameServer
 
+use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::states::state::{
@@ -281,14 +283,11 @@ impl BossBlueFuryState {
     }
 
     pub(crate) fn apply_to_monster_attack(self, attack: u32) -> u32 {
-        let scaled = self.attack_factor_percent as f32 * 0.01 * attack as f32;
-        let truncated = scaled.trunc() as i32;
-        let rounded = if scaled - truncated as f32 > 0.5 {
-            truncated.wrapping_add(1)
-        } else {
-            truncated
-        };
-        rounded as u32
+        truncate_original(
+            f64::from(self.attack_factor_percent)
+                * f64::from(0.01_f32)
+                * f64::from(attack),
+        ) as u32
     }
 }
 
