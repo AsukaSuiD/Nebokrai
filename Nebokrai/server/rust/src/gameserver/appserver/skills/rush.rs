@@ -10,10 +10,13 @@
 //! Общий с `CRush2` хвост `End(1)` возвращает движение, освобождает путь,
 //! обновляет свойства игрока и фиксирует cooldown; он не повторяет уже
 //! выполненные перемещение, состояние или отбрасывание.
+//! Коэффициент сокращения времени сохраняется в `f32`, после чего unsigned
+//! базовая длительность умножается в x87 и усекается к нулю.
 
 use super::baseattack::{SKILL_USAGE_REUSE_DELAY_TIME, real_distance, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::rushstate::RushState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -196,7 +199,7 @@ pub(super) fn scaled_state_time(source_level: u8, target_level: u8, base_time: u
     }
     let difference = target_level.wrapping_sub(source_level).wrapping_sub(5);
     let factor = (1.0_f32 - f32::from(difference) * 0.25).max(0.0);
-    (base_time as f32 * factor).round_ties_even() as u32
+    truncate_original(f64::from(base_time) * f64::from(factor)) as u32
 }
 
 pub(super) fn knockback_destination(

@@ -7,10 +7,13 @@
 //! вычитается из длительности каждого состояния. `CGame` используется только
 //! для разрешения независимых владельцев, PK-перехода, `ForceMove` и доставки.
 //! Завершение использует подтверждённый общий хвост `CSummonSkill::End(1)`.
+//! Для monster-цели `time_percent` сначала сохраняется в `f32`, затем duration
+//! умножается в x87 на него и `0.01f32` и усекается к нулю.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::CURE_SKILL_ID;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knightcutstate::{KnightCutState, replace_monster_knight_cut_state, replace_player_knight_cut_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -237,7 +240,7 @@ pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut
             if safe_player_pair(game, region_id, source_x, source_y, target.x, target.y) { continue }
             let _ = game.player_on_first_skill(player_id, identity.id, Some(region_id), runtime);
         }
-        let raw_duration = if identity.object_type == PLAYER_TYPE { persist } else { (persist as f32 * time_percent as f32 * 0.01).round_ties_even() as u32 };
+        let raw_duration = if identity.object_type == PLAYER_TYPE { persist } else { let percent = f64::from(time_percent) as f32; truncate_original(f64::from(persist) * f64::from(percent) * f64::from(0.01_f32)) as u32 };
         let reduced = raw_duration.wrapping_sub(reank); let duration = if (reduced as i32) < 0 { 0 } else { reduced };
         let Some(destination) = knockback(game, region_id, source_x, source_y, target, back_steps) else { continue };
         let now_ms = runtime.now_milliseconds();

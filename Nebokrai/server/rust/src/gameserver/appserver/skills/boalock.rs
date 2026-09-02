@@ -11,10 +11,13 @@
 //! владельцев.
 //! Унаследованный `CSkill::End(true)` фиксирует cooldown после применения;
 //! `End(false)` не откатывает уже установленные состояния и контакт.
+//! Коэффициент сокращения времени сохраняется в `f32`, после чего unsigned
+//! базовая длительность умножается в x87 и усекается к нулю.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::boalockstate::BoaLockState;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knockoutstate::KnockOutState;
 use super::poisonmoth::{PLAYER_TYPE, master_info, target_level};
@@ -70,7 +73,7 @@ fn send_fire(game: &mut CGame, player_id: i32, level: i32, identity: ShapeIdenti
 fn reject_begin(game: &mut CGame, player_id: i32, code: Option<(u8, u32, Option<&[u8]>)>) -> QueuedSkillExecutionOutcome { if let Some((code, mp, text)) = code { send_failure(game, player_id, code, mp, text); } send_failure(game, player_id, 2, 0, None); abort_player_boa_lock(game, player_id); terminal(QueuedSkillExecutionState::Rejected) }
 fn reject_runtime(game: &mut CGame, player_id: i32, code: Option<(u8, u32, Option<&[u8]>)>) -> QueuedSkillExecutionOutcome { if let Some((code, mp, text)) = code { send_failure(game, player_id, code, mp, text); } abort_player_boa_lock(game, player_id); terminal(QueuedSkillExecutionState::Rejected) }
 fn contact(player: &CPlayer) -> AttackInformation { let master = master_info(player); AttackInformation { skill_id: DEFAULT_CONTACT_SKILL_ID, skill_level: 1, attacker_type: PLAYER_TYPE, attacker_id: player.player_id(), attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: 0, damage_factor: 1.0, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: Vec::new() } }
-fn adjusted_time(source: u8, target: u8, base: u32) -> u32 { if u32::from(source).wrapping_add(5) >= u32::from(target) { return base } let delta = u32::from(target).wrapping_sub(u32::from(source)).wrapping_sub(5) as f32; let factor = (1.0 - delta * 0.25).max(0.0); (base as f32 * factor).round_ties_even() as u32 }
+fn adjusted_time(source: u8, target: u8, base: u32) -> u32 { if u32::from(source).wrapping_add(5) >= u32::from(target) { return base } let delta = u32::from(target).wrapping_sub(u32::from(source)).wrapping_sub(5) as f32; let factor = (1.0 - delta * 0.25).max(0.0); truncate_original(f64::from(base) * f64::from(factor)) as u32 }
 
 pub(crate) fn execute_player_boa_lock<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_boa_lock_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) } let Some((region_id, source_x, source_y, level, source_level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(BOA_LOCK_SKILL_ID), player.level(), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) }; let Some(properties) = game.skill_base_properties(BOA_LOCK_SKILL_ID, level) else { return if player_ai.boa_lock().is_none() { reject_begin(game, player_id, None) } else { reject_runtime(game, player_id, None) } }; let mp = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let max_distance = properties.query_property(TARGET_MAX_DISTANCE); let missile_per_cell = properties.query_property(MISSILE_FLYING_TIME); let persist = properties.query_property(STATE_PERSIST_TIME); let _can_break = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);

@@ -6,9 +6,10 @@
 //! `SkillExecutionKernel`, визуальный пакет и построение `CWeakPhalanx`.
 //! `CGame` только разрешает владельцев, регистрирует область и доставляет
 //! уже сформированные сообщения. Формула срока сохраняет unsigned wrapping,
-//! float32-масштаб и MSVC-совместимое округление к ближайшему чётному.
+//! отдельно записанный `f32`-масштаб и исходное усечение x87 к нулю.
 
 use super::baseattack::time_reached;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::weakphalanx::CWeakPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -191,7 +192,9 @@ pub(crate) fn execute_player_weak<Runtime: GameMainLoopRuntime>(game: &mut CGame
     let Some(player) = game.find_player(player_id) else { abort_player_weak(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); };
     let master = MasterInfo { master_type: PLAYER_TYPE, master_id: player_id, master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(player.pk_permissions().player), permitted_to_kill_teammate: i32::from(player.pk_permissions().teammate), permitted_to_kill_guild_member: i32::from(player.pk_permissions().guild_member), permitted_to_kill_criminal: i32::from(player.pk_permissions().criminal) };
     let scale = lifetime_factor.wrapping_mul(player.combat_properties().element_modify as u32).wrapping_add(100);
-    let lifetime_ms = ((lifetime_base as f32) * (scale as f32 * 0.01)).round_ties_even() as u32;
+    let lifetime_scale = (f64::from(scale) * f64::from(0.01_f32)) as f32;
+    let lifetime_ms =
+        truncate_original(f64::from(lifetime_base) * f64::from(lifetime_scale)) as u32;
     let summon_id = game.allocate_summon_shape_id();
     let summon_started_at_ms = runtime.now_milliseconds();
     let mut phalanx = CWeakPhalanx::new(summon_id, master, summon_started_at_ms, lifetime_ms, skill_level, 1, 1, attack_loss);
