@@ -10,13 +10,16 @@
 //! Подтверждённый `End` не возвращает движение: он очищает внутренний путь,
 //! обновляет свойства через `CSummonSkill`, очищает текущий навык и фиксирует
 //! время восстановления.
-//! Element modifier и критический множитель усекаются к нулю перед `int`.
+//! Element modifier вычисляется в расширенной точности x87 из целых свойств и
+//! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
+//! перед `int`.
 
 use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -171,7 +174,11 @@ fn calculate_attack(
     let master = master_info(player);
     let width_delta = maximum.wrapping_sub(minimum);
     let width = if width_delta < 0 { width_delta.wrapping_neg() } else { width_delta }.wrapping_add(1);
-    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32) as i32;
+    let element_bonus = truncate_original(
+        f64::from(element_modifier)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
     let damage = (combat.add_element_attack as i32)
         .wrapping_add(game.skill_random_below(width))
         .wrapping_add(minimum)

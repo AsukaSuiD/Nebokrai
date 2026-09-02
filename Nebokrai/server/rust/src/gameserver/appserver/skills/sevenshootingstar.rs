@@ -7,13 +7,16 @@
 //! двойную проверку MP, строгие границы времени, точные визуальные пакеты и
 //! два вызова legacy RNG на рассчитанную атаку. `CGame` только разрешает
 //! владельцев, применяет готовую атаку и выполняет доставку.
-//! Element modifier и критический множитель усекаются к нулю перед `int`.
+//! Element modifier вычисляется в расширенной точности x87 из целых свойств и
+//! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
+//! перед `int`.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -203,7 +206,11 @@ fn calculate_attack(
     );
     let width = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
     let random_damage = game.skill_random_below(width);
-    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32) as i32;
+    let element_bonus = truncate_original(
+        f64::from(element_modifier)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
     let damage = (combat.add_element_attack as i32).wrapping_add(random_damage)
         .wrapping_add(minimum).wrapping_add(element_bonus).max(0);
     let mut attack = AttackInformation {

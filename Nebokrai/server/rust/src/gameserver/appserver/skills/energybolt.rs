@@ -15,9 +15,12 @@
 //! движения и `CAttackSkill::End(1)` с единичным `AfterUseSkill ->
 //! CPlayer::OnWeaponDamaged`, обновлением свойств и cooldown конкретного
 //! идентификатора.
+//! Стихийная прибавка сохраняет расширенное вычисление x87 из целых свойств и
+//! сохранённой `f32`-константы, затем усекается к нулю.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_ELEMENT_MODIFIER};
+use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info, target_level};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
@@ -371,7 +374,11 @@ fn calculate_player_projectile_attack(
     };
     let span = maximum.wrapping_sub(minimum).wrapping_abs().wrapping_add(1);
     let random_damage = game.skill_random_below(span);
-    let element_bonus = (element_modifier as f32 * 0.01 * combat.element_modify as f32) as i32;
+    let element_bonus = truncate_original(
+        f64::from(element_modifier)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
     let base_damage = (combat.add_element_attack as i32)
         .wrapping_add(minimum)
         .wrapping_add(random_damage)
