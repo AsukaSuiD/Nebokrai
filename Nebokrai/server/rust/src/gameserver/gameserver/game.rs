@@ -41642,12 +41642,14 @@ impl CGame {
                 .and_then(|blow| self.player_on_death(blow, runtime));
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending => false,
-                QueuedSkillExecutionState::Completed => {
-                    player_ai.complete_battle_fairy_skill(dispatch)
-                }
-                QueuedSkillExecutionState::Rejected => {
-                    player_ai.reject_battle_fairy_skill(dispatch)
-                }
+                QueuedSkillExecutionState::Completed => player_ai.finish_battle_fairy_skill(
+                    dispatch,
+                    SkillTermination::Completed,
+                ),
+                QueuedSkillExecutionState::Rejected => player_ai.finish_battle_fairy_skill(
+                    dispatch,
+                    SkillTermination::Rejected,
+                ),
             };
             if removed_from_queue && materialized_end {
                 self.finish_battle_fairy_skill_end_tail(
@@ -41656,6 +41658,9 @@ impl CGame {
                     player_ai,
                     runtime,
                 );
+            }
+            if removed_from_queue {
+                player_ai.restore_battle_fairy_base_attack_after_end();
             }
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка боевой феи");

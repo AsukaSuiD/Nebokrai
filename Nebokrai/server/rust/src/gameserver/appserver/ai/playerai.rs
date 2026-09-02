@@ -2395,18 +2395,11 @@ impl CPlayerAI {
         true
     }
 
-    /// Точный успешный хвост `OnChangeSkillWithWarSoul`: concrete skill уже
-    /// получил `End(true)`, после чего выбранный ID возвращается к базовой
-    /// атаке боевой феи. Ожидающий FIFO при этом не изменяется.
-    pub(crate) fn complete_battle_fairy_skill(
-        &mut self,
-        expected: BattleFairySkillDispatch,
-    ) -> bool {
-        if !self.finish_battle_fairy_skill(expected, SkillTermination::Completed) {
-            return false;
-        }
+    /// Точный последний side effect `OnChangeSkillWithWarSoul` и
+    /// `OnLoseTargetWarSoul`: ID `0x224` назначается только после полного
+    /// concrete `End(1)`, включая свойства и cooldown.
+    pub(crate) const fn restore_battle_fairy_base_attack_after_end(&mut self) {
         self.selected_battle_fairy_skill_id = 0;
-        true
     }
 
     pub(crate) const fn battle_fairy_skill_is_active(&self) -> bool {
@@ -2422,20 +2415,6 @@ impl CPlayerAI {
         let dispatch = self.current_battle_fairy_skill?;
         self.finish_battle_fairy_skill(dispatch, SkillTermination::Cancelled)
             .then_some(dispatch)
-    }
-
-    /// Терминальная ветвь `CPlayerAI::OnLoseTargetWarSoul`: в отличие от
-    /// обычного `End`, потеря цели после завершения execution сбрасывает
-    /// выбранный навык к установленной конструктором базовой атаке.
-    pub(crate) fn reject_battle_fairy_skill(
-        &mut self,
-        expected: BattleFairySkillDispatch,
-    ) -> bool {
-        if !self.finish_battle_fairy_skill(expected, SkillTermination::Rejected) {
-            return false;
-        }
-        self.selected_battle_fairy_skill_id = 0;
-        true
     }
 
     pub(crate) const fn battle_fairy_base_magic(
@@ -2989,9 +2968,9 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkillWithWarSoul
-// STATUS: IMPLEMENTED
-// MATERIALIZED: `CPlayerAI::complete_battle_fairy_skill` завершает concrete
-// owner и выбирает базовую атаку `0x224`, не затрагивая ожидающий FIFO.
+// STATUS: IMPLEMENTED, VERIFIED_DISASSEMBLY
+// MATERIALIZED: scheduler завершает concrete owner, выполняет общий `End(1)`
+// и только затем выбирает базовую атаку `0x224`, не затрагивая ожидающий FIFO.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:629
