@@ -383,6 +383,9 @@ pub(crate) fn apply_owned_monster_attack_hit<Runtime: GameMainLoopRuntime>(
                     .set_action(if current_health == 0 { 6 } else { 5 });
             }
         }
+        if damage != 0 {
+            game.increase_owned_player_rp(target.id, false, damage as u16);
+        }
         if attack.full_miss == 0 && damage != 0 && current_health != 0 {
             let _ = game.queue_player_hurt_ai(target.id, damage, runtime);
         }
