@@ -16,6 +16,8 @@
 //! выполненные remove/add и возвращают detached ownership на отказе. Достигнутые
 //! state/amount client packets и incubate/syncretize World logs исполняет
 //! canonical `CGame`, поэтому здесь остаются только ordered typed effects.
+//! Float-формулы state change и syncretize сохраняют точные целые операнды,
+//! `f32`-коэффициенты setup и исходное FISTP-усечение к нулю.
 
 use super::camountlimitgoodscontainer::{
     AmountLimitGoodsAdded, AmountLimitGoodsCleared, AmountLimitGoodsRelease, AmountLimitGoodsTaken,
@@ -1308,7 +1310,7 @@ impl CFairyContainer {
 }
 
 fn hatch_stat(value: u32, base: u32) -> u32 {
-    ((value as f64 + base as f64 * 0.0001_f64).round() as i64 as i32) as u32
+    ((f64::from(value) + f64::from(base) * 0.0001_f64).trunc() as i64 as i32) as u32
 }
 
 fn blend_syncretic_base(
@@ -1318,11 +1320,12 @@ fn blend_syncretic_base(
     primary_rate: f32,
     secondary_rate: f32,
 ) -> u32 {
-    let primary = primary as f32;
-    let secondary = secondary as f32;
-    round_syncretic(
-        primary + primary * primary_rate + secondary * secondary_times as f32 * secondary_rate,
-    )
+    let primary = f64::from(primary);
+    let secondary_term = f64::from(secondary)
+        * f64::from(secondary_times)
+        * f64::from(secondary_rate);
+    let primary_term = primary * f64::from(primary_rate);
+    trunc_syncretic(secondary_term + primary_term + primary)
 }
 
 fn blend_syncretic_visible(
@@ -1334,18 +1337,20 @@ fn blend_syncretic_visible(
     secondary_rate: f32,
     secondary_term_first: bool,
 ) -> u32 {
-    let primary_term = primary as f32 * primary_times as f32 * primary_rate;
-    let secondary_term = secondary as f32 * secondary_times as f32 * secondary_rate;
+    let primary_term =
+        f64::from(primary) * f64::from(primary_times) * f64::from(primary_rate);
+    let secondary_term =
+        f64::from(secondary) * f64::from(secondary_times) * f64::from(secondary_rate);
     let combined = if secondary_term_first {
         secondary_term + primary_term
     } else {
         primary_term + secondary_term
     };
-    round_syncretic(combined)
+    trunc_syncretic(combined + f64::from(primary))
 }
 
-fn round_syncretic(value: f32) -> u32 {
-    (value.round() as i64 as i32) as u32
+fn trunc_syncretic(value: f64) -> u32 {
+    (value.trunc() as i64 as i32) as u32
 }
 
 fn legacy_name_31(name: &[u8]) -> Vec<u8> {
