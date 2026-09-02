@@ -7,7 +7,10 @@
 //! удаляется. Формула сохраняет два вызова генератора MSVCRT: диапазон урона,
 //! затем критический удар. Снимок `CSoulCollectState`, потреблённый владельцем
 //! навыка при создании снаряда, применяется здесь без обращения к live state;
-//! результаты усиления душами и критического множителя усекаются к нулю.
+//! `CalculateAttackPower` `0x005FD970..0x005FDBB7` держит усиление душами
+//! целиком в x87 (`FILD/FIMUL/FMUL/FADD/FIMUL`) и затем усекает `FISTP`;
+//! критический множитель использует ту же x87-границу без промежуточного
+//! округления до Rust `f32`.
 
 use super::firebolt::FIRE_BOLT_SKILL_ID;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -16,6 +19,7 @@ use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIden
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::appserver::summonshape::{
     SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
 };
@@ -151,9 +155,13 @@ pub(crate) fn calculate_owned_fire_bolt_attack(
         .wrapping_add(random_damage)
         .wrapping_add(phalanx.minimum_attack);
     if phalanx.soul_count != 0 && phalanx.soul_variable != 0 {
-        damage = ((phalanx.soul_variable as f32 * phalanx.soul_count as f32 * 0.01 + 1.0)
-            * damage as f32)
-            as i32;
+        damage = truncate_original(
+            (f64::from(phalanx.soul_variable)
+                * f64::from(phalanx.soul_count)
+                * f64::from(0.01_f32)
+                + 1.0)
+                * f64::from(damage),
+        );
     }
     damage = damage.max(0);
     let mut attack = AttackInformation {
@@ -180,7 +188,9 @@ pub(crate) fn calculate_owned_fire_bolt_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
 
