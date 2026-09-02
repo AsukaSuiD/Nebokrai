@@ -6,6 +6,8 @@
 //! сохраняет уровень, остаток срока, прочность и два WORD-фактора. Vtable
 //! exact EXE направляет `GetRemainedTime` на общее тело `CBlindState` по
 //! `0x005F2CD0` с условным вторым чтением clock.
+//! Все преобразования absorbed damage используют x87-усечение к нулю;
+//! `mp_factor` сохраняется в `f32` перед умножением, а `hp_factor` — нет.
 
 use super::curestate::{send_cure_state_visual, CureState};
 use super::lifeshield::{
@@ -32,8 +34,8 @@ pub(crate) struct LifeShieldState {
     skill_level: i32,
 }
 
-fn round_original(value: f32) -> i32 {
-    value.round_ties_even() as i32
+fn truncate_original(value: f64) -> i32 {
+    value.trunc() as i64 as i32
 }
 
 impl LifeShieldState {
@@ -158,31 +160,34 @@ impl LifeShieldState {
         } else {
             damage_factor
         };
-        power.hp_damage = round_original(power.hp_damage as f32 * factor);
-        let hp_factor = self.hp_factor as f32 * 0.01;
-        let mp_factor = self.mp_factor as f32 * 0.01;
+        power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(factor));
+        let hp_factor = f64::from(self.hp_factor) * f64::from(0.01_f32);
+        let mp_factor = self.mp_factor as f32 * 0.01_f32;
         if hp_factor <= 0.0 || mp_factor <= 0.0 {
-            power.hp_damage = round_original(power.hp_damage as f32 / factor);
+            power.hp_damage = truncate_original(f64::from(power.hp_damage) / f64::from(factor));
             return;
         }
-        let hp_shield = round_original(hp_factor * power.hp_damage as f32);
-        let mp_damage = round_original(mp_factor * power.hp_damage as f32);
+        let hp_shield = truncate_original(hp_factor * f64::from(power.hp_damage));
+        let mp_damage = truncate_original(f64::from(mp_factor) * f64::from(power.hp_damage));
         if self.life < hp_shield {
             let old_life = self.life;
             self.life = 0;
             power.mp_damage = mp_damage;
-            power.hp_damage = round_original((hp_shield - old_life) as f32 / hp_factor);
+            power.hp_damage =
+                truncate_original(f64::from(hp_shield.wrapping_sub(old_life)) / hp_factor);
         } else if (war_soul_mana & 0xffff) < mp_damage {
             let available_mana = war_soul_mana & 0xffff;
             self.life = 0;
             power.mp_damage = mp_damage;
-            power.hp_damage = round_original((mp_damage - available_mana) as f32 / mp_factor);
+            power.hp_damage = truncate_original(
+                f64::from(mp_damage.wrapping_sub(available_mana)) / f64::from(mp_factor),
+            );
         } else {
             self.life = self.life.wrapping_sub(hp_shield);
             power.hp_damage = 0;
             power.mp_damage = mp_damage;
         }
-        power.hp_damage = round_original(power.hp_damage as f32 / factor);
+        power.hp_damage = truncate_original(f64::from(power.hp_damage) / f64::from(factor));
     }
 }
 
