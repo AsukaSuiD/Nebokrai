@@ -41435,10 +41435,7 @@ impl CGame {
                     .find_player_mut(player_id)
                     .zip(default_attack_skill_id)
                 {
-                    let _ = player.restore_default_attack_skill_after_completion(
-                        dispatch.skill_id(),
-                        default_attack_skill_id,
-                    );
+                    player.restore_default_attack_skill_after_completion(default_attack_skill_id);
                 }
             }
             if outcome.state == QueuedSkillExecutionState::Rejected
