@@ -16034,33 +16034,8 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // IMPLEMENTED, VERIFIED_PSEUDOCODE: парный `ReplacePlayerData/RestorePlayerData`
 // достигнут defense caller-ами выше; покрытый RAW удалён.
 
-// ============================================================================
-// FUNCTION: CPlayer::TellClientMove
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13315
-// RVA: 0x0002E4D0
-// ADDRESS: 0042e4d0
-// PROTOTYPE: void __thiscall TellClientMove(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::TellClient
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:13324
-// RVA: 0x0002E570
-// ADDRESS: 0042e570
-// PROTOTYPE: void __thiscall TellClient(ulong param_1, bool param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
+// IMPLEMENTED, VERIFIED_PSEUDOCODE: `TellClientMove/TellClient` достигнуты
+// через follow journal и общий skill-message builder; покрытый RAW удалён.
 
 // ============================================================================
 // FUNCTION: CPlayer::RejectUseSkillRequestWarSoul

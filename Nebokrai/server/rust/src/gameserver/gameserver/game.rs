@@ -49575,7 +49575,7 @@ pub(crate) fn player_skill_learned_message(
     let raw_cost = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
     let scale_cost = !player_tell_client || CSkillFactory::is_need_float(skill_id);
     let cost = if scale_cost {
-        (f64::from(raw_cost) * 0.0001_f64).round() as i32
+        (f64::from(raw_cost) * 0.0001_f64).round_ties_even() as i32
     } else {
         raw_cost as i32
     };
