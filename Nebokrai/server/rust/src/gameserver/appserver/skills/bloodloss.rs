@@ -7,6 +7,8 @@
 //! игрока или монстра; последующие периодические удары принадлежат
 //! `bloodlossstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
 //! object-target он проходит точный отказ `10 → ZHGS0045 → 2 → End`.
+//! Коэффициент периодического урона вычисляется в x87 из полного unsigned
+//! `u32` и `0.01_f32`, после чего единожды сохраняется как `f32`.
 //! Модификатор урона сохраняет исходное усечение x87 через 64-битное целое,
 //! младшие 32 бита которого затем переводятся в `float` как беззнаковое число.
 
@@ -150,8 +152,9 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     let frequency_ms = properties.query_property(SKILL_USAGE_TARGET_AFFECT_FREQUENCY);
     let minimum_attack = properties.query_property(SKILL_USAGE_MIN_ATTACK) as u16;
     let maximum_attack = properties.query_property(SKILL_USAGE_MAX_ATTACK) as u16;
-    let damage_factor =
-        properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01;
+    let damage_factor = (f64::from(
+        properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
+    ) * f64::from(0.01_f32)) as f32;
     let skill_name = properties.skill_name().to_vec();
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
