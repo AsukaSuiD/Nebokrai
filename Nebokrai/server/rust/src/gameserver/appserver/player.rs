@@ -11228,22 +11228,10 @@ impl CPlayer {
         }
     }
 
-    /// Native `OnLoseTarget` назначает завершённый default skill. Rust
-    /// хранит active concrete execution отдельно, поэтому его ended-состояние
-    /// выражается `None`, а выбранный default ID — отдельным idle-полем.
-    pub(crate) const fn restore_default_attack_skill_after_target_loss(
-        &mut self,
-        default_attack_skill_id: u32,
-    ) {
-        self.move_shape.set_current_skill_id(None);
-        self.idle_attack_skill_id = default_attack_skill_id;
-    }
-
-    /// Materialized `CPlayerAI::OnChangeSkill`: concrete `End` уже очистил
-    /// current skill и мог износом оружия изменить вычисляемую базовую атаку.
-    /// Поэтому scheduler назначает полученный после `End` default без проверки
-    /// прежнего ID; между этими двумя синхронными шагами новый skill не стартует.
-    pub(crate) const fn restore_default_attack_skill_after_completion(
+    /// Native `OnChangeSkill` и `OnLoseTarget` назначают вычисленный после
+    /// concrete `End` default skill. Rust хранит active execution отдельно,
+    /// поэтому ended-состояние выражается `None`, а выбранный ID — idle-полем.
+    pub(crate) const fn restore_default_attack_skill_after_end(
         &mut self,
         default_attack_skill_id: u32,
     ) {

@@ -37083,11 +37083,6 @@ impl CGame {
                         .expect("skill dispatch сохраняет canonical player")
                         .current_skill_id();
                     if current_skill_id == Some(dispatch.skill_id()) {
-                        let default_attack_skill_id = self
-                            .players
-                            .get(&player_id)
-                            .expect("активный навык сохраняет canonical player")
-                            .default_attack_skill_id(self.goods_factory());
                         let ended = self.end_materialized_player_skill(
                             player_id,
                             dispatch.skill_id(),
@@ -37100,10 +37095,8 @@ impl CGame {
                                     .player_ai_mut()
                                     .finish_player_skill(dispatch, SkillTermination::Cancelled);
                             }
-                            player.restore_default_attack_skill_after_target_loss(
-                                default_attack_skill_id,
-                            );
                         }
+                        self.restore_player_default_attack_after_skill_end(player_id);
                         let delivery = self.send_base_attack_failure(player_id, 2);
                         trace!(
                             player_id,
@@ -37795,6 +37788,21 @@ impl CGame {
         message.send_to_player(self.net_server(), player_id)
     }
 
+    /// Общий последний шаг `CPlayerAI::OnChangeSkill/OnLoseTarget` вычисляет
+    /// default attack после concrete `End`: унаследованный оружейный эффект
+    /// уже мог изменить допустимость базовой стрельбы.
+    fn restore_player_default_attack_after_skill_end(&mut self, player_id: i32) {
+        let default_attack_skill_id = self
+            .find_player(player_id)
+            .map(|player| player.default_attack_skill_id(self.goods_factory()));
+        if let Some((player, default_attack_skill_id)) = self
+            .find_player_mut(player_id)
+            .zip(default_attack_skill_id)
+        {
+            player.restore_default_attack_skill_after_end(default_attack_skill_id);
+        }
+    }
+
     /// Передаёт временно извлечённый `CPlayerAI` существующему общему
     /// `End`-dispatcher-у и возвращает того же владельца вызывающему AI-pass.
     /// Это только координация Rust-заимствований: конкретное завершение и его
@@ -37822,7 +37830,7 @@ impl CGame {
         target: ShapeIdentity,
         runtime: &mut Runtime,
     ) {
-        let Some((current_skill_id, interrupted_active_skill, default_attack_skill_id)) = self
+        let Some((current_skill_id, interrupted_active_skill)) = self
             .find_player(player_id)
             .and_then(|player| {
                 let matches_target = matches!(
@@ -37836,11 +37844,7 @@ impl CGame {
                     // адаптеров оставляло current skill и move-lock висеть
                     // после удаления его object-target.
                     let interrupted_active_skill = player.current_skill_id().is_some();
-                    (
-                        player.current_skill_id(),
-                        interrupted_active_skill,
-                        player.default_attack_skill_id(self.goods_factory()),
-                    )
+                    (player.current_skill_id(), interrupted_active_skill)
                 })
             })
         else {
@@ -37875,9 +37879,7 @@ impl CGame {
             if interrupted {
                 let _ = self.send_base_attack_failure(player_id, 2);
             }
-            if let Some(player) = self.find_player_mut(player_id) {
-                player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
-            }
+            self.restore_player_default_attack_after_skill_end(player_id);
         }
     }
 
@@ -37891,14 +37893,9 @@ impl CGame {
         player_id: i32,
         runtime: &mut Runtime,
     ) -> bool {
-        let Some((current_skill_id, default_attack_skill_id)) = self
+        let Some(current_skill_id) = self
             .find_player(player_id)
-            .map(|player| {
-                (
-                    player.current_skill_id(),
-                    player.default_attack_skill_id(self.goods_factory()),
-                )
-            })
+            .map(CPlayer::current_skill_id)
         else {
             return false;
         };
@@ -37932,9 +37929,7 @@ impl CGame {
         if interrupted {
             let _ = self.send_base_attack_failure(player_id, 2);
         }
-        if let Some(player) = self.find_player_mut(player_id) {
-            player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
-        }
+        self.restore_player_default_attack_after_skill_end(player_id);
         interrupted
     }
 
@@ -40899,17 +40894,16 @@ impl CGame {
             && can_schedule
             && let Some(dispatch) = player_ai.next_player_skill()
         {
-            let (is_rider, can_fight, current_skill_id, default_attack_skill_id) = self
+            let (is_rider, can_fight, current_skill_id) = self
                 .find_player(player_id)
                 .map(|player| {
                     (
                         player.is_rider(),
                         player.can_fight(),
                         player.current_skill_id(),
-                        Some(player.default_attack_skill_id(self.goods_factory())),
                     )
                 })
-                .unwrap_or((false, false, None, None));
+                .unwrap_or((false, false, None));
             let blocked_by_ride = !active_player_skill && is_rider;
             if blocked_by_ride || !can_fight {
                 let ended = if let Some(skill_id) = current_skill_id {
@@ -40936,13 +40930,7 @@ impl CGame {
                     }
                 }
                 let delivery = self.send_base_attack_failure(player_id, 2);
-                if let Some(default_attack_skill_id) = default_attack_skill_id
-                    && let Some(player) = self.find_player_mut(player_id)
-                {
-                    player.restore_default_attack_skill_after_target_loss(
-                        default_attack_skill_id,
-                    );
-                }
+                self.restore_player_default_attack_after_skill_end(player_id);
                 tracing::trace!(
                     player_id,
                     ?dispatch,
@@ -40963,19 +40951,15 @@ impl CGame {
             player_execution_count = 1;
             // В native `OnSchedule` только уже выбранная объектная цель доходит
             // до `OnLoseTarget`: отказ до `Begin` не должен менять idle-навык.
-            // Снимок берётся до concrete owner-а, поскольку его `End` очищает
-            // active skill перед возвратом отказного результата.
-            let lost_materialized_object_target_default = matches!(
+            // До concrete owner-а сохраняется только факт начатого навыка:
+            // default вычисляется после `End`, который мог сломать оружие.
+            let lost_materialized_object_target = matches!(
                 dispatch,
                 PlayerSkillDispatch::Object { .. }
             )
-            .then(|| {
-                self.find_player(player_id).and_then(|player| {
-                    (player.current_skill_id() == Some(dispatch.skill_id()))
-                        .then(|| player.default_attack_skill_id(self.goods_factory()))
-                })
-            })
-            .flatten();
+                && self.find_player(player_id).is_some_and(|player| {
+                    player.current_skill_id() == Some(dispatch.skill_id())
+                });
             let concrete_base_attack = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
@@ -41428,27 +41412,17 @@ impl CGame {
             if outcome.state == QueuedSkillExecutionState::Completed
                 && removed_from_queue
             {
-                let default_attack_skill_id = self
-                    .find_player(player_id)
-                    .map(|player| player.default_attack_skill_id(&self.goods_factory));
-                if let Some((player, default_attack_skill_id)) = self
-                    .find_player_mut(player_id)
-                    .zip(default_attack_skill_id)
-                {
-                    player.restore_default_attack_skill_after_completion(default_attack_skill_id);
-                }
+                self.restore_player_default_attack_after_skill_end(player_id);
             }
             if outcome.state == QueuedSkillExecutionState::Rejected
                 && removed_from_queue
-                && let Some(default_attack_skill_id) = lost_materialized_object_target_default
+                && lost_materialized_object_target
             {
                 // После уже начатого object-skill native `OnLoseTarget`
                 // добавляет общий отказ вслед за concrete `End(1)`, даже если
                 // сам owner ранее сообщил более точную причину.
                 let _ = self.send_base_attack_failure(player_id, 2);
-                if let Some(player) = self.find_player_mut(player_id) {
-                    player.restore_default_attack_skill_after_target_loss(default_attack_skill_id);
-                }
+                self.restore_player_default_attack_after_skill_end(player_id);
             }
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
