@@ -315,6 +315,9 @@
 //! удаляется его RemoveObject/DelObj-tail, не при восстановлении snapshot-а.
 //! `UpdateSZL` проходит через `CGame`: player property/notice предшествуют
 //! decrease-only appellation check и script-effect-у `RequestChangeAppellation`.
+//! `IncreaseRp` восстановлен в reached combat path: профессия/уровневые
+//! пороги, fixed attack gain, шесть damage/max-HP tiers, два последовательных
+//! clamp-а и каждый исходный `PropertiesChanged` сохраняются.
 //! Симметричный `OnObjectAdded` создаёт particular state только при ненулевом
 //! inherited `m_pFather`; затем сохраняет late-block partial mutations, после
 //! commit добавляет девять war-soul skills, пересчитывает свойства, публикует
@@ -420,7 +423,7 @@ use crate::nets::netserver::message::GameServerAroundRuntime;
 use crate::public::auctionnode::CGoodsNode;
 use crate::public::guid::CGuid;
 use crate::public::taozhuangsetup::CTaoZhuangSetup;
-use crate::setup::globesetup::GlobePlayerPropertyCoefficients;
+use crate::setup::globesetup::{GlobePlayerPropertyCoefficients, GlobeSetupSnapshot};
 use crate::setup::hitlevelsetup::HitLevelEntry;
 use crate::setup::questsystem::CQuestSystem;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -14561,6 +14564,46 @@ impl CPlayer {
         };
     }
 
+    /// Exact `CPlayer::IncreaseRp`: только профессия 0 и достигший первого
+    /// setup-порога игрок получают RP. За атаку прибавляется фиксированное
+    /// значение, а защитная ветвь идёт по шести порогам доли снятого HP с
+    /// конца массива. `true` означает исходный вызов `PropertiesChanged` даже
+    /// при нулевой прибавке или уже достигнутом пределе.
+    pub(crate) fn increase_rp(
+        &mut self,
+        attacking: bool,
+        damage: u16,
+        globe_setup: &GlobeSetupSnapshot,
+    ) -> bool {
+        if self.occupation() != 0 {
+            return false;
+        }
+        let Some(policy) = globe_setup.player_rp_gain_policy(self.level()) else {
+            return false;
+        };
+        let gain = if attacking {
+            policy.attack_gain
+        } else {
+            // Native сначала материализует ushort damage как f32, а деление
+            // выполняет в x87 перед FSTP dword. f64 сохраняет точный u32
+            // знаменатель до финального округления к тому же f32-result.
+            let ratio = (damage as f64 / self.maximum_health() as f64) as f32;
+            let mut gain = 0;
+            for index in (0..policy.damage_factors.len()).rev() {
+                if !(ratio <= policy.damage_factors[index]) {
+                    break;
+                }
+                gain = policy.damage_gains[index];
+            }
+            gain
+        };
+        let value = u32::from(self.rp())
+            .wrapping_add(u32::from(gain))
+            .min(u32::from(policy.maximum)) as u16;
+        self.set_rp(value);
+        true
+    }
+
     /// Player-owned scalar части `OnExit` return-point tail. Восстановление
     /// смерти выполняется до virtual `GetReturnPoint`, а destination location
     /// записывается только после успешного выбора точки.
@@ -16324,20 +16367,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x00030140
 // ADDRESS: 00430140
 // PROTOTYPE: void __thiscall PeriodicalUpdate(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::IncreaseRp
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:9417
-// RVA: 0x000302F0
-// ADDRESS: 004302f0
-// PROTOTYPE: void __thiscall IncreaseRp(int param_1, ushort param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //

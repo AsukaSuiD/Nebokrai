@@ -39,7 +39,10 @@
 //! `CGlobeSetup::tagSetup`, входят в player property projection и заново
 //! инициализируют `CPlayer::UpdateProperty` перед equipment/state addon-ами.
 //! `GetBaseMaxRp` сохраняет пороги только occupation 0, а auction formulas —
-//! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Nation contender damage
+//! исходные `fSxfJinMax/fSxfJinMin/fAuctionFactorC`. Соседний RP-блок
+//! `+0x3F0..+0x41F` также обслуживает reached
+//! `CPlayer::IncreaseRp`: два level-cap, fixed attack gain и шесть пар
+//! damage-factor/gain читаются из единого snapshot-а. Nation contender damage
 //! читает подтверждённый `fDecTimeParam +0x568`, а death penalty — signed
 //! `lDiedStateTime +0x56C` из того же snapshot. Смена региона обновляет
 //! `STATE_AUTO_PROTECT` с точной длительностью `dwAutoProtectTime +0x804`.
@@ -66,6 +69,10 @@ const BASE_RP_LEVEL_1_OFFSET: usize = 0x3F0;
 const BASE_RP_LEVEL_2_OFFSET: usize = 0x3F2;
 const BASE_MAX_RP_LEVEL_1_OFFSET: usize = 0x3F4;
 const BASE_MAX_RP_LEVEL_2_OFFSET: usize = 0x3F6;
+const BASE_ATTACK_RP_SWORD_OFFSET: usize = 0x3F8;
+const RP_DAMAGE_FACTOR_OFFSET: usize = 0x3FC;
+const RP_DAMAGE_GAIN_OFFSET: usize = 0x414;
+const RP_DAMAGE_TIER_COUNT: usize = 6;
 const PLAYER_SPEED_OFFSET: usize = 0x7F8;
 const AUTO_PROTECT_TIME_OFFSET: usize = 0x804;
 const MONSTER_NUMBER_SCALE_OFFSET: usize = 0x508;
@@ -267,6 +274,14 @@ pub(crate) struct GlobePlayerPropertyCoefficients {
     pub(crate) restored_mp_peace: i32,
     pub(crate) restored_hp_fight: i32,
     pub(crate) restored_mp_fight: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GlobeRpGainPolicy {
+    pub(crate) maximum: u16,
+    pub(crate) attack_gain: u16,
+    pub(crate) damage_factors: [f32; RP_DAMAGE_TIER_COUNT],
+    pub(crate) damage_gains: [u16; RP_DAMAGE_TIER_COUNT],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1164,6 +1179,31 @@ impl GlobeSetupSnapshot {
         read_u16(BASE_MAX_RP_LEVEL_2_OFFSET)
     }
 
+    /// Пороговая проекция `CPlayer::IncreaseRp`. PDB layout подтверждает
+    /// `wBaseAtcRp_Sword +0x3F8`, шесть `fRpAdd_Lv1 +0x3FC` и шесть
+    /// `wRpAdd_Lv1 +0x414`; выбор профессии остаётся в player-owner-е.
+    pub(crate) fn player_rp_gain_policy(&self, level: u8) -> Option<GlobeRpGainPolicy> {
+        let level = u16::from(level);
+        if level < self.read_u16(BASE_RP_LEVEL_1_OFFSET) {
+            return None;
+        }
+        let maximum = if level < self.read_u16(BASE_RP_LEVEL_2_OFFSET) {
+            self.read_u16(BASE_MAX_RP_LEVEL_1_OFFSET)
+        } else {
+            self.read_u16(BASE_MAX_RP_LEVEL_2_OFFSET)
+        };
+        Some(GlobeRpGainPolicy {
+            maximum,
+            attack_gain: self.read_u16(BASE_ATTACK_RP_SWORD_OFFSET),
+            damage_factors: std::array::from_fn(|index| {
+                self.read_f32(RP_DAMAGE_FACTOR_OFFSET + index * 4)
+            }),
+            damage_gains: std::array::from_fn(|index| {
+                self.read_u16(RP_DAMAGE_GAIN_OFFSET + index * 2)
+            }),
+        })
+    }
+
     pub(crate) fn country_name(&self, country_id: u8) -> Option<&[u8]> {
         let index = usize::from(country_id);
         if index >= COUNTRY_NAME_COUNT {
@@ -1293,6 +1333,14 @@ impl GlobeSetupSnapshot {
     fn read_f32(&self, offset: usize) -> f32 {
         f32::from_le_bytes(
             self.bytes[offset..offset + 4]
+                .try_into()
+                .expect("PDB-offset находится внутри globe snapshot"),
+        )
+    }
+
+    fn read_u16(&self, offset: usize) -> u16 {
+        u16::from_le_bytes(
+            self.bytes[offset..offset + 2]
                 .try_into()
                 .expect("PDB-offset находится внутри globe snapshot"),
         )
