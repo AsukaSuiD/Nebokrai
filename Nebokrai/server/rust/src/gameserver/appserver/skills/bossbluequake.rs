@@ -10,7 +10,8 @@
 //! успешном `End`. Для источника-игрока длительность состояния уменьшается на
 //! `reank` источника с насыщением до нуля. Критический множитель исходного
 //! `CalculateAttackPower` усекается к нулю отдельно для физического,
-//! элементального и духовного компонентов.
+//! элементального и духовного компонентов, а коэффициент урона вычисляется в
+//! расширенной точности x87 из `u32` и `0.01_f32` до единственной записи `f32`.
 //! Путь монстра сохраняет собственную формулу и тот же порядок состояния и `ForceMove`;
 //! `CGame` только координирует временное владение регионом и доставку.
 //! Для monster-цели `time_percent` отдельно сохраняется в `f32`, после чего
@@ -276,7 +277,9 @@ fn calculate_player_attack(
         attacker_faction_id: master.master_guild_id,
         attacker_union_id: master.master_union_id,
         hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
-        damage_factor: properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01,
+        damage_factor: (f64::from(
+            properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
+        ) * f64::from(0.01_f32)) as f32,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,
@@ -303,7 +306,9 @@ fn calculate_player_attack(
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(rate),
+            );
         }
     }
     Some((master, attack))
@@ -721,7 +726,9 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
         attacker_faction_id: 0,
         attacker_union_id: 0,
         hit_modifier: properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32,
-        damage_factor: properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) as f32 * 0.01,
+        damage_factor: (f64::from(
+            properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
+        ) * f64::from(0.01_f32)) as f32,
         damage_modifier: 0,
         critical: false,
         blast_attack: false,
