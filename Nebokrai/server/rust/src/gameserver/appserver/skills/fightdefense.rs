@@ -22,7 +22,7 @@ use crate::gameserver::appserver::skills::shieldstate::DefenseShieldState;
 use crate::gameserver::appserver::states::attackpower::{AttackInformation, AttackPowerType};
 use crate::setup::globesetup::GlobeSetupSnapshot;
 
-pub(super) fn truncate_original(value: f64) -> i32 {
+pub(crate) fn truncate_original(value: f64) -> i32 {
     if !value.is_finite() || value < i32::MIN as f64 || value > i32::MAX as f64 {
         i32::MIN
     } else {

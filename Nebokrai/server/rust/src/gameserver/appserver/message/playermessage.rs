@@ -22,7 +22,8 @@
 //! `0x8FA15` завершает первый `CHBYState`, затем пересчитывает и публикует
 //! свойства игрока. `0x8FA19` сохраняет порядок
 //! `0xBF73E -> 0x5FD10 -> reward script`. Преобразование времени снаряжения
-//! остаётся границей местного CRT. Четыре пустые ветви native switch явно
+//! остаётся границей местного CRT; ветвь `0x8FA16` усекает `difftime` к нулю
+//! перед знаковым делением на минуты. Четыре пустые ветви native switch явно
 //! поглощаются как no-op.
 
 use crate::gameserver::appserver::cs2ccontainerobjectamountchange::CS2CContainerObjectAmountChange;
@@ -38,6 +39,7 @@ use crate::gameserver::appserver::player::{
 };
 use crate::gameserver::appserver::script::function::ScriptFunctionRuntime;
 use crate::gameserver::appserver::script::script::ScriptExecutionContext;
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::gameserver::game::{
     CGame, GameContainerMessageRuntime, PlayerReliveContext, colored_player_notice_message,
     format_legacy_text_fields, game_wall_time_seconds,
@@ -1490,7 +1492,7 @@ pub(crate) fn dispatch_game_player_message<Runtime: GamePlayerMessageRuntime>(
                 );
                 return Some(Ok(()));
             };
-            let elapsed_seconds = elapsed_seconds.round() as i32;
+            let elapsed_seconds = truncate_original(elapsed_seconds);
             tracing::trace!(
                 message_type,
                 player_id,
