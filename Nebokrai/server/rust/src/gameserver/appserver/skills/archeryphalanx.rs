@@ -10,7 +10,8 @@
 //! Exact `CalculateAttackPower` безусловно ищет attacker ID в player-map;
 //! созданный монстром снаряд поэтому остаётся визуальным и не получает
 //! выдуманную monster-формулу. Критический float-множитель усекается к нулю
-//! перед записью `int`.
+//! перед записью `int`: `0x00601EAB..0x00601ED5` сохраняет произведение в
+//! x87 до `FISTP`, без промежуточной записи в `float`.
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -19,6 +20,7 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::skills::baseattack::SKILL_USAGE_USER_HIT_MODIFIER;
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::appserver::summonshape::{
     SUMMON_SHAPE_TYPE, encode_related_phalanx_snapshot,
 };
@@ -215,7 +217,9 @@ pub(crate) fn calculate_archery_attack(
     if random_below(100) < i32::from(combat.cch) {
         attack.critical = true;
         for power in &mut attack.damages {
-            power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
