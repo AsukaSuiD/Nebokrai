@@ -3,7 +3,8 @@
 //! Точная пара `gameserver.exe + GameServer.pdb` подтверждает общий
 //! 0x5c-байтный набор параметров и одинаковый `OnUpdateProperties` для пяти
 //! элементов. Только Metal дополнительно применяет `MAX_MP_GAIN`. Порядок
-//! состояний сохраняет исходную позицию при замене того же skill ID.
+//! состояний сохраняет исходную позицию при замене того же skill ID. Шесть
+//! производных базовых характеристик усекаются FISTP к нулю до сложения.
 //! Каждая DB-запись состоит из ID и исходного 0x5c-байтного
 //! `tagWuXingState`; два байта выравнивания после пяти `short` сохраняются
 //! как часть подтверждённого legacy layout.
@@ -280,7 +281,7 @@ fn capped_add_nonzero(value: u32, delta: i32) -> u32 {
 }
 
 fn derived(value: i32, coefficient: f32) -> i32 {
-    (value as f32 * coefficient).round() as i32
+    (f64::from(value) * f64::from(coefficient)).trunc() as i32
 }
 
 fn apply_scale(bits: &mut u32, percent_bits: u32, minimum: f32) {
