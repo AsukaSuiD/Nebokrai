@@ -11,7 +11,7 @@ use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::battlefairytransfer::{send_failure, send_goods_update, send_transfer_cast};
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{
     BattleFairyManaSpendOutcome, BattleFairySkillDispatch,
@@ -92,7 +92,7 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
                 .is_some_and(|current| mana_cost_unavailable(current, mp_loss))
         {
             send_failure(game, player_id, 7);
-            let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+            let text_cost = battle_fairy_mana_text_cost(mp_loss);
             game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
             send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -125,7 +125,7 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
         };
         if mana_cost_unavailable(current_mana, mp_loss) {
             send_failure(game, player_id, 7);
-            let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+            let text_cost = battle_fairy_mana_text_cost(mp_loss);
             game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
             send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
             return terminal(QueuedSkillExecutionState::Rejected);

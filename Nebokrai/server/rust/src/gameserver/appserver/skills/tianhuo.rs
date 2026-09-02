@@ -17,7 +17,7 @@ use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
     SKILL_USAGE_MIN_ATTACK,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use super::thunder::{dispatch_position, master_info, terminal};
 use super::tianhuophalanx::CTianhuoPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -193,7 +193,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info_with_unsigned(
                 player_id,
                 b"ZHGS0052",
-                (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+                battle_fairy_mana_text_cost(mp_loss),
             );
             send_visual(game, player_id, skill_level, 3, None);
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -221,7 +221,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
-                    (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+                    battle_fairy_mana_text_cost(mp_loss),
                 );
                 send_visual(game, player_id, skill_level, 3, None);
                 return terminal(QueuedSkillExecutionState::Rejected);

@@ -16,7 +16,7 @@ use super::basemagic::{
     SKILL_USAGE_MIN_ATTACK,
 };
 use super::battlefairytransfer::send_goods_update;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use super::thunder::{
     dispatch_position, master_info, reject_thunder_family, send_thunder_family_cast, terminal,
 };
@@ -148,7 +148,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info_with_unsigned(
                 player_id,
                 b"ZHGS0052",
-                (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+                battle_fairy_mana_text_cost(mp_loss),
             );
             send_thunder_family_cast(
                 game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
@@ -183,7 +183,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
-                    (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+                    battle_fairy_mana_text_cost(mp_loss),
                 );
                 send_thunder_family_cast(
                     game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,

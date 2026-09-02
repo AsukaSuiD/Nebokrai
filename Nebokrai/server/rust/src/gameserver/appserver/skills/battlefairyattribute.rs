@@ -12,7 +12,7 @@ use super::battlefairyattributestate::{
     send_battle_fairy_attribute_state_visual, BattleFairyAttributeKind,
     BattleFairyAttributeState,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{BattleFairyManaSpendOutcome, BattleFairySkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -179,7 +179,11 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         };
         if current.wrapping_sub(mp_loss as i32) < 0 {
             game.send_battle_fairy_skill_failure(player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", (f64::from(mp_loss) * 0.0001).round() as u32);
+            game.send_skill_system_info_with_unsigned(
+                player_id,
+                b"ZHGS0052",
+                battle_fairy_mana_text_cost(mp_loss),
+            );
             send_cast(game, player_id, target, skill_id, skill_level, 3);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
@@ -201,7 +205,11 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
         };
         if current.wrapping_sub(mp_loss as i32) < 0 {
             game.send_battle_fairy_skill_failure(player_id, 7);
-            game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", (f64::from(mp_loss) * 0.0001).round() as u32);
+            game.send_skill_system_info_with_unsigned(
+                player_id,
+                b"ZHGS0052",
+                battle_fairy_mana_text_cost(mp_loss),
+            );
             send_cast(game, player_id, target, skill_id, skill_level, 3);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

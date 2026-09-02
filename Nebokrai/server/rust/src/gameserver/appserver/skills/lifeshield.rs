@@ -17,7 +17,7 @@ pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
 pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use super::lifeshieldstate::{
     finish_life_shield_state, send_life_shield_state_visual, LifeShieldState,
 };
@@ -130,7 +130,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
             };
             if i64::from(current) - i64::from(mp_loss) < 0 {
                 game.send_battle_fairy_skill_failure(player_id, 7);
-                let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+                let text_cost = battle_fairy_mana_text_cost(mp_loss);
                 game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
                 game.send_battle_fairy_skill_failure(player_id, 2);
                 send_cast(game, player_id, skill_level, 3);
@@ -165,7 +165,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
         };
         if i64::from(current) - i64::from(mp_loss) < 0 {
             game.send_battle_fairy_skill_failure(player_id, 7);
-            let text_cost = (f64::from(mp_loss) * 0.0001).round() as i32 as u32;
+            let text_cost = battle_fairy_mana_text_cost(mp_loss);
             game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
             send_cast(game, player_id, skill_level, 3);
             return terminal(QueuedSkillExecutionState::Rejected);

@@ -16,7 +16,7 @@ use super::basemagic::{
 };
 use super::battlefairytransfer::send_goods_update;
 use super::fatalblowphalanx::CFatalBlowPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
@@ -235,7 +235,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
-                    (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+                    battle_fairy_mana_text_cost(mp_loss),
                 );
                 send_end(game, player_id, skill_level);
                 return terminal(QueuedSkillExecutionState::Rejected);
@@ -267,7 +267,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
-                    (f64::from(mp_loss) * 0.0001).round_ties_even() as u32,
+                    battle_fairy_mana_text_cost(mp_loss),
                 );
                 send_end(game, player_id, skill_level);
                 return terminal(QueuedSkillExecutionState::Rejected);

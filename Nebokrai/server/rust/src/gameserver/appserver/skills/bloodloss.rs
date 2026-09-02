@@ -15,7 +15,7 @@ use super::basemagic::{
     SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::battlefairytransfer::send_goods_update;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use super::bloodlossstate::{BloodLossState, send_blood_loss_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -239,7 +239,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
-                    (f64::from(mp_loss) * 0.0001).round() as u32,
+                    battle_fairy_mana_text_cost(mp_loss),
                 );
                 send_failure(game, player_id, 2);
                 send_cast(game, player_id, skill_level, 3, None);
@@ -277,7 +277,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
                 game.send_skill_system_info_with_unsigned(
                     player_id,
                     b"ZHGS0052",
-                    (f64::from(mp_loss) * 0.0001).round() as u32,
+                    battle_fairy_mana_text_cost(mp_loss),
                 );
                 send_cast(game, player_id, skill_level, 3, None);
                 return terminal(QueuedSkillExecutionState::Rejected);
