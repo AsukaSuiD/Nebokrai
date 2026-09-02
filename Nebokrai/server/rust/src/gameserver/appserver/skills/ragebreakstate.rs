@@ -3,9 +3,10 @@
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/ragebreakstate.cpp`. Состояние заменяет предыдущий
 //! экземпляр, строго истекает после `started + keep`, увеличивает только
-//! максимальную атаку и сохраняет исходное округление с границей дробной
-//! части `> 0.5`. Для игрока прибавка сужается до `WORD` и ограничивается
-//! суммой `0xFFFF`; начало и завершение публикуются как `0xBFE03/04`.
+//! максимальную атаку. Signed-прибавка, `0.01_f32` и полный unsigned-максимум
+//! перемножаются в x87, а общее с `CFuryState` тело `__ftol2` усекает результат
+//! к нулю. Для игрока прибавка сужается до `WORD` и ограничивается суммой
+//! `0xFFFF`; начало и завершение публикуются как `0xBFE03/04`.
 //! Клиентский `GetRemainedTime` подтверждён ссылкой vtable на общее тело
 //! `CFuryState` по `0x00605E10` и сохраняет два чтения wrapping clock.
 //! Общий serializer `0x005E7330` и exact `Unserialize` `0x005FD660`
@@ -14,6 +15,7 @@
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
+use crate::gameserver::appserver::skills::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::states::state::timed_client_state_time;
 use crate::gameserver::gameserver::game::CGame;
 use crate::nets::netserver::message::CMessage;
@@ -62,14 +64,16 @@ impl RageBreakState {
         timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) as i32
     }
 
-    fn rounded_gain(self, maximum: u32) -> i32 {
-        let scaled = self.attack_gain_percent as f32 * 0.01 * maximum as f32;
-        let truncated = scaled.trunc() as i32;
-        if scaled - truncated as f32 > 0.5 { truncated.wrapping_add(1) } else { truncated }
+    fn truncated_gain(self, maximum: u32) -> i32 {
+        truncate_original_i64_low(
+            f64::from(self.attack_gain_percent)
+                * f64::from(0.01_f32)
+                * f64::from(maximum),
+        )
     }
 
     pub(crate) fn apply_to_player_maximum_attack(self, maximum: u32) -> u32 {
-        let mut gain = self.rounded_gain(maximum) as u16 as u32;
+        let mut gain = self.truncated_gain(maximum) as u16 as u32;
         if maximum.wrapping_add(gain) > u16::MAX as u32 {
             gain = (u16::MAX as u32).wrapping_sub(maximum);
         }
