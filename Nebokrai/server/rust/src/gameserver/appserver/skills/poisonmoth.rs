@@ -16,12 +16,13 @@
 //! до записи в `f32`. Критический множитель не округляет исходный урон в
 //! `f32` и усекается к нулю лишь при итоговой записи каждого компонента.
 //! Физический RNG получает исходную DWORD-ширину
-//! `maximum - minimum + 1` без нормализации перевёрнутых границ.
+//! `maximum - minimum + 1` без нормализации перевёрнутых границ. Cooldown
+//! использует абсолютный срок `CSkill::IsRestored`; cast и полёт остаются elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -138,7 +139,7 @@ pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mu
             PlayerSkillDispatch::Point { .. } => false,
         };
         if targets_self { reject(game, 10); return terminal(QueuedSkillExecutionState::Rejected) }
-        if player_ai.poison_moth_last_used_ms() != 0 && !time_reached(now_ms, player_ai.poison_moth_last_used_ms(), reuse_delay_ms) { reject(game, 0x0d); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(player_ai.poison_moth_last_used_ms(), reuse_delay_ms, now_ms) { reject(game, 0x0d); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(destination) = target_position(game, region_id, player_id, dispatch) else { send_failure(game, player_id, 2, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) };
         let initial_path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);
         if maximum_distance != 0 && initial_path.len() as u32 > maximum_distance { reject(game, 0x0b); return terminal(QueuedSkillExecutionState::Rejected) }

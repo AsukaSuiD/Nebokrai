@@ -9,6 +9,8 @@
 //! независимых владельцев, выполняет dispatch и доставку. Координатный
 //! overload по точному EXE использует общий `CState::GetSufferer`: выбирает
 //! первый `CMoveShape` клетки и затем проходит тот же объектный pipeline.
+//! Player и monster ветви используют абсолютный срок `CSkill::IsRestored`,
+//! сохраняя elapsed-сроки cast-delay и полёта.
 //
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
@@ -26,7 +28,7 @@ use crate::gameserver::appserver::states::state::{
     resolve_coordinate_sufferer, send_owned_state_visual,
 };
 use crate::gameserver::appserver::player::PlayerSkillDispatch;
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState, game_tick_milliseconds};
@@ -361,9 +363,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         return reject_player_begin(game, player_id, None);
     };
     if player_ai.spider_web().is_none() {
-        if player_ai.spider_web_last_used_ms() != 0
-            && !time_reached(now_ms, player_ai.spider_web_last_used_ms(), reuse_delay_ms)
-        {
+        if !skill_is_restored(player_ai.spider_web_last_used_ms(), reuse_delay_ms, now_ms) {
             return reject_player_begin(game, player_id, Some(0x0d));
         }
         let path = game.base_magic_path(

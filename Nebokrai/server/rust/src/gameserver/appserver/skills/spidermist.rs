@@ -7,7 +7,9 @@
 //! `CSpiderMistPhalanx` с исходными lifetime/frequency/poison-параметрами;
 //! регистрация сначала завершает перекрывающийся `PoisonFog` в той же клетке.
 //! Monster/pet дополнительно сохраняют независимое attack-speed расписание.
-//! `CGame` только разрешает владельцев, выполняет dispatch и доставку.
+//! `CGame` только разрешает владельцев, выполняет dispatch и доставку. Player
+//! и monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
+//! и lifetime области остаются elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_TARGET_MAX_DISTANCE};
@@ -23,7 +25,7 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::ShapeIdentity;
 use crate::gameserver::appserver::skills::monsterattack::resolve_owned_monster_attack_target;
-use crate::gameserver::appserver::skills::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -248,9 +250,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
     let now_ms = runtime.now_milliseconds();
 
     if player_ai.spider_mist().is_none() {
-        if player_ai.spider_mist_last_used_ms() != 0
-            && !time_reached(now_ms, player_ai.spider_mist_last_used_ms(), reuse_delay_ms)
-        {
+        if !skill_is_restored(player_ai.spider_mist_last_used_ms(), reuse_delay_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
