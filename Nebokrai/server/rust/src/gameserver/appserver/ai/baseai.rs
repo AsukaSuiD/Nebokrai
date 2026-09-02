@@ -32,7 +32,9 @@
 //! движения. `WhenBeenHurted` сохраняет отдельные часы `Defense`/`Stiffen`, а
 //! достигнутый monster runtime прерывает атаку, теряет цель, сохраняет движение
 //! и удерживает passive FIFO до исходного stun deadline. Указатель владельца и
-//! остальные обработчики ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! остальные обработчики ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально). Публичный `MoveTo`
+//! сохраняет исходный промежуточный `float` времени шага и усекает сумму со
+//! stop-frame к нулю перед постановкой действия в очередь.
 
 use std::collections::VecDeque;
 
@@ -510,18 +512,18 @@ impl CBaseAI {
     }
 }
 
-/// Общая длительность одного шага `CBaseAI::MoveTo`: диагональ длиннее
-/// осевого шага, после чего прибавляется остановочный кадр владельца.
+/// Общая длительность одного шага `CBaseAI::MoveTo`: при исходном `g_ms = 80`
+/// доступная доля кадра равна `0.68`; путь сохраняется в `float`, после чего
+/// к нему прибавляется целый остановочный кадр владельца.
 pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32) -> u32 {
     let distance_units = if direction % 2 == 0 {
-        1_000_000.0
+        1_000_000.0_f32
     } else {
-        1_414_000.0
+        1_414_000.0_f32
     };
     if speed > 0.0 {
-        (distance_units * 0.68 / speed + stop_frame as f32)
-            .round()
-            .max(0.0) as u32
+        let travel_ms = (0.68_f32 / speed) * distance_units;
+        (f64::from(stop_frame) + f64::from(travel_ms)).trunc() as i32 as u32
     } else {
         0
     }
@@ -913,20 +915,6 @@ pub(crate) fn one_step_move_delay_ms(direction: i32, speed: f32, stop_frame: u32
 
 // IMPLEMENTED: `CBaseAI::AddAIEvent` материализован выше; покрытый raw-блок
 // удалён.
-
-// ============================================================================
-// FUNCTION: CBaseAI::MoveTo
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\baseai.cpp:397
-// RVA: 0x000C9020
-// ADDRESS: 004c9020
-// PROTOTYPE: void __thiscall MoveTo(CRegion * param_1, long param_2, long param_3, int param_4)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
 
 // ============================================================================
 // FUNCTION: CBaseAI::OnBeenKilled

@@ -383,20 +383,11 @@ pub(crate) fn approach_attack_range(
         destination.y,
         figure,
     ) {
-        let distance_units = if direction % 2 == 0 {
-            1_000_000.0
-        } else {
-            1_414_000.0
-        };
-        let delay_ms = if speed > 0.0 {
-            (distance_units * 0.68 / speed + stop_frame as f32)
-                .round()
-                .max(0.0) as u32
-        } else {
-            0
-        };
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.begin_active_ai_move(delay_ms, now_ms);
+            monster.begin_active_ai_move(
+                one_step_move_delay_ms(direction, speed, stop_frame),
+                now_ms,
+            );
         }
     }
     false
