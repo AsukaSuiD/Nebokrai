@@ -5,7 +5,9 @@
 //! принадлежат базовой атаке; `CGame` остаётся владельцем игроков, регионов
 //! и фактического применения урона.
 //! Общая формула для player/monster/build усекает критический float-множитель
-//! к нулю перед записью каждого компонента в `int`.
+//! к нулю перед записью каждого компонента в `int`: exact
+//! `CBaseAttack::CalculateAttackPower` `0x005B380B..0x005B3835` держит
+//! произведение в x87 до `FISTP`, не округляя его предварительно до `float`.
 //! Maximum-distance gate использует `RealDistance(CShape*)` для разрешённой
 //! объектной цели и координатный overload только для point-target без формы.
 
@@ -22,6 +24,7 @@ use super::{
     finish_blind_states_on_defense, finish_player_base_attack,
     finish_player_blind_states_on_defense, game_legacy_random, get_line_direction, real_distance,
     retarget_jiumai_after_hurt, time_reached,
+    truncate_original,
 };
 use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 
@@ -365,7 +368,9 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             attack.critical = true;
             let critical_rate = game.globe_setup.critical_rate();
             for power in &mut attack.damages {
-                power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
+                power.hp_damage = truncate_original(
+                    f64::from(power.hp_damage) * f64::from(critical_rate),
+                );
             }
         }
         let pillar_damage_factor = game.find_player(target_id)
@@ -656,7 +661,9 @@ pub(super) fn execute_player_base_attack<Runtime: GameMainLoopRuntime>(
             attack.critical = true;
             let critical_rate = game.globe_setup.critical_rate();
             for power in &mut attack.damages {
-                power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
+                power.hp_damage = truncate_original(
+                    f64::from(power.hp_damage) * f64::from(critical_rate),
+                );
             }
         }
         let mut random = |maximum| game_legacy_random(&mut game.random_state, maximum);
@@ -1069,7 +1076,9 @@ fn execute_player_stationary_attack<Runtime: GameMainLoopRuntime>(
         attack.critical = true;
         let critical_rate = game.globe_setup.critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     let mut random = |maximum| game_legacy_random(&mut game.random_state, maximum);
