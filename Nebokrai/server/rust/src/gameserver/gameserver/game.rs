@@ -322,6 +322,8 @@
 //! `0xBF704`, а grow/implant/incubate/syncretize публикуют exact World
 //! `0x60210` с подтипами `0/2/3/4`. Внешними остаются только tick, old-client
 //! codec и недостающие property facts достигнутого player virtual owner-а.
+//! Имплантация `0x8FC14` сохраняет x87-порядок расчёта масштаба и усечение к
+//! нулю для опыта, возвращаемой энергии и обоих количеств кристаллов.
 //! Synthesis `0x8FC17..0x8FC1B` продолжает packet/wallet owner: batch-space
 //! проверяется exact temporary container simulation, coins и ingredients — в
 //! исходной `uint64` арифметике, затем concrete wallet/packet remove/add wire
@@ -27004,7 +27006,10 @@ impl CGame {
         }
         let crystal_scale = self.globe_setup.fairy_vigour_crystal_scale();
         let exp_scale = self.globe_setup.fairy_exp_vigour_scale();
-        let initial_crystals = round_fairy_value(requested_vigour as f32 * crystal_scale + 0.999);
+        let requested_vigour_float = requested_vigour as f32;
+        let initial_crystals = truncate_fairy_value(
+            f64::from(requested_vigour_float) * f64::from(crystal_scale) + 0.999_f64,
+        );
         let crystal_index = self
             .goods_factory
             .query_goods_id_by_original_name(Some(b"FZ0965"));
@@ -27021,7 +27026,9 @@ impl CGame {
             return;
         }
 
-        let experience = round_fairy_value(requested_vigour as f32 * exp_scale);
+        let experience = truncate_fairy_value(
+            f64::from(requested_vigour_float) * f64::from(exp_scale),
+        );
         let egg_max_level = self.globe_setup.fairy_egg_max_level();
         let upgrade_rate = self.globe_setup.fairy_upgrade_rate();
         let grow_log_enabled = self.log_system.fairy_grow_enabled();
@@ -27092,8 +27099,9 @@ impl CGame {
             self.send_fairy_implantation_log(&log);
         }
         let consumed_vigour = if implantation.exp.remaining_experience != 0 && exp_scale != 0.0 {
-            requested_vigour.wrapping_sub(round_fairy_value(
-                implantation.exp.remaining_experience as f32 / exp_scale,
+            requested_vigour.wrapping_sub(truncate_fairy_value(
+                f64::from(implantation.exp.remaining_experience)
+                    / f64::from(exp_scale),
             ))
         } else {
             requested_vigour
@@ -27101,7 +27109,9 @@ impl CGame {
         let crystal_amount = if consumed_vigour == requested_vigour {
             initial_crystals
         } else {
-            round_fairy_value(consumed_vigour as f32 * crystal_scale + 1.0)
+            truncate_fairy_value(
+                f64::from(consumed_vigour) * f64::from(crystal_scale) + 1.0_f64,
+            )
         };
         {
             let player = self
@@ -49390,8 +49400,8 @@ pub(crate) fn colored_text_message(
     nation_colored_text_message(message_type, first_color, second_color, text)
 }
 
-fn round_fairy_value(value: f32) -> u32 {
-    value.round() as u32
+fn truncate_fairy_value(value: f64) -> u32 {
+    value.trunc() as i32 as u32
 }
 
 fn send_hotkey_response(
