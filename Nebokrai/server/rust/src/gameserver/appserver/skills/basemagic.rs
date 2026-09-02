@@ -13,7 +13,8 @@
 //! Это сохраняет исходные моменты действий, двух владельцев жизненного
 //! цикла и порядок пакетов. Обычное, отказное и клиентское завершение после
 //! `Begin` используют один хвост `End(1)` с износом оружия и временем
-//! восстановления. Все
+//! восстановления; входной reuse-gate вызывает exact `CSkill::IsRestored`.
+//! Все
 //! достигнутые перегрузки, проверки и визуальные пакеты реализованы этим
 //! владельцем; `CGame` оставляет только доступ к региону, владельцам целей и
 //! фактическую доставку. Общий `CState::GetSufferer` разрешает типы player
@@ -24,7 +25,7 @@
 
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagicphalanx::CBaseMagicPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::build::BUILD_OBJECT_TYPE;
 use crate::gameserver::appserver::citygate::CITY_GATE_OBJECT_TYPE;
@@ -191,13 +192,11 @@ pub(crate) fn execute_player_base_magic<Runtime: GameMainLoopRuntime>(
             return rejected();
         }
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.base_magic_last_used_ms() != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.base_magic_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.base_magic_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             game.send_base_magic_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return rejected();

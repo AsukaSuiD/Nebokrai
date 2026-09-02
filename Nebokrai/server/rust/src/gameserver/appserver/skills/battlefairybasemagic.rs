@@ -6,7 +6,8 @@
 //! Начало, выстрел и обязательное завершение используют визуальный тип `700`;
 //! ошибки используют отдельный префикс `4`. Проверки цели, cooldown, стадии,
 //! формирование пакетов и создание `CBattleFairyBaseMagicPhalanx` принадлежат
-//! этому owner-у. Общий `CState::GetSufferer` сохраняет player/NPC/monster/
+//! этому owner-у; cooldown использует exact `CSkill::IsRestored`. Общий
+//! `CState::GetSufferer` сохраняет player/NPC/monster/
 //! build/gate; NPC отклоняется как мёртвый, а постройки проходят собственный
 //! region-owned defence. `CGame` только предоставляет владельцев, регион и
 //! доставку.
@@ -19,7 +20,7 @@ use super::basemagic::{
     SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::battlefairybasemagicphalanx::CBattleFairyBaseMagicPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
@@ -173,13 +174,11 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             return rejected();
         }
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.battle_fairy_base_magic_last_used_ms() != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.battle_fairy_base_magic_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.battle_fairy_base_magic_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             game.send_battle_fairy_skill_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
             send_end(game, player_id, skill_level);

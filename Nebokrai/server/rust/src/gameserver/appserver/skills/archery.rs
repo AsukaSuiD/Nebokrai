@@ -10,14 +10,15 @@
 //! урон. Rust сохраняет этот наблюдаемый legacy-контракт без зависимости от
 //! случайного совпадения player/monster ID. Формулы и порядок RNG применяются только
 //! при достижении цели снарядом. Обычное, отказное и клиентское завершение
-//! после `Begin` используют общий подтверждённый `CBaseAttack`-хвост. Как и
+//! после `Begin` используют общий подтверждённый `CBaseAttack`-хвост, а reuse
+//! проверяется exact `CSkill::IsRestored`. Как и
 //! исходный `CState::GetSufferer`, owner принимает player/NPC/monster/build/gate;
 //! NPC отклоняется как мёртвый, а постройки проходят region-owned defence.
 
 use super::archeryphalanx::CArcheryPhalanx;
 use super::baseattack::{finish_delayed_base_attack, real_distance, time_reached};
 use super::basemagicphalanx::CBaseMagicPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::{
     MonsterTraceTarget, approach_attack_range, schedule_attack_interval,
@@ -442,13 +443,11 @@ pub(crate) fn execute_player_archery<Runtime: GameMainLoopRuntime>(
 
     if player_ai.archery().is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.archery_last_used_ms() != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.archery_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.archery_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             game.send_base_magic_failure(player_id, 0x0d);
             return rejected();
         }
