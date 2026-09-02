@@ -1293,8 +1293,8 @@ use crate::gameserver::appserver::skills::huoxieshu::{
     execute_battle_fairy_huoxieshu, HUOXIESHU_SKILL_ID,
 };
 use crate::gameserver::appserver::skills::immediatestate::{
-    execute_player_auto_start_immediate_state, execute_player_immediate_state,
-    is_immediate_state_skill,
+    execute_monster_immediate_state, execute_player_auto_start_immediate_state,
+    execute_player_immediate_state, is_immediate_state_skill,
 };
 use crate::gameserver::appserver::skills::kernel::{SkillStage, SkillTermination};
 use crate::gameserver::appserver::skills::knockoutruntime::{
@@ -40874,6 +40874,45 @@ impl CGame {
         skill_ids.len()
     }
 
+    /// Проводит `CMoveShape::AutoStartPassiveSkill → CBaseAI::Run →
+    /// OnExecuteBackStageSkills` для уже подтверждённых monster-владельцев
+    /// `TaiJi`/`Origin`. Region временно извлекается только для согласованного
+    /// доступа к canonical monster и around-публикации состояния.
+    fn execute_owned_monster_back_stage_skills(
+        &mut self,
+        region_id: i32,
+        monster_id: i32,
+        now_ms: u32,
+    ) -> usize {
+        let Some(mut owner) = self.take_region_owner(region_id) else {
+            return 0;
+        };
+        let skill_ids = owner
+            .base_mut()
+            .find_monster_by_id_mut(monster_id)
+            .map(CMonster::take_reached_back_stage_skills)
+            .unwrap_or_default();
+        for (skill_id, skill_level) in &skill_ids {
+            let executed = execute_monster_immediate_state(
+                self,
+                owner.base_mut(),
+                monster_id,
+                *skill_id,
+                *skill_level,
+                now_ms,
+            );
+            tracing::trace!(
+                region_id,
+                monster_id,
+                skill_id,
+                executed,
+                "исполнен background-навык монстра"
+            );
+        }
+        self.restore_region_owner(owner);
+        skill_ids.len()
+    }
+
     /// Исполняет независимые обычную и war-soul очереди одного игрока. Уже
     /// начатый `ASA_MOVE` удерживает только обычную очередь; навык боевой феи
     /// продолжает свой `SkillExecutionKernel` в том же такте.
@@ -47407,6 +47446,11 @@ impl CGame {
                 {
                     continue;
                 }
+                let _ = self.execute_owned_monster_back_stage_skills(
+                    region_id,
+                    monster_id,
+                    now_ms,
+                );
                 let (ai_type, stop_frame) = self
                     .find_region(region_id)
                     .and_then(|owner| owner.base().find_monster_by_id(monster_id))

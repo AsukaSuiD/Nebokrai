@@ -43,8 +43,10 @@
 //! предоставляет достигнутый `CStateFactory`, а применение состояний остаётся
 //! у этого владельца.
 //!
-//! Реализованные `AddSkill`, `DelSkill`, `ClearSkills`, `AddState`, `GetStatesNum` и
-//! `UpdateAbnormality` используют это же хранилище. Ещё не восстановленные
+//! Реализованные `AddSkill`, `DelSkill`, `ClearSkills`, auto-start background-
+//! очередь, `AddState`, `GetStatesNum` и `UpdateAbnormality` используют это же
+//! хранилище. Частичное извлечение background ID сохраняет порядок и cursor
+//! ещё не материализованных concrete owner-ов. Ещё не восстановленные
 //! классы навыков и ИИ остаются в сохранённом `UNKNOWN` (исследовательский декомпилят хранится локально) ниже.
 
 use std::collections::BTreeMap;
@@ -1180,6 +1182,33 @@ impl CMoveShape {
     pub(crate) fn take_back_stage_skill_ids(&mut self) -> Vec<u32> {
         self.back_stage_begin_cursor = 0;
         std::mem::take(&mut self.back_stage_skill_ids)
+    }
+
+    /// Извлекает только уже достигнутые concrete background-owner-ы, не
+    /// удаляя остальные записи из native-порядка. Cursor начатых `Begin`
+    /// пересчитывается относительно сохранённого подпорядка.
+    pub(crate) fn take_matching_back_stage_skill_ids(
+        &mut self,
+        mut predicate: impl FnMut(u32) -> bool,
+    ) -> Vec<u32> {
+        let old_cursor = self.back_stage_begin_cursor;
+        let queued = std::mem::take(&mut self.back_stage_skill_ids);
+        let mut selected = Vec::new();
+        let mut retained = Vec::new();
+        let mut retained_begun = 0usize;
+        for (index, skill_id) in queued.into_iter().enumerate() {
+            if predicate(skill_id) {
+                selected.push(skill_id);
+            } else {
+                if index < old_cursor {
+                    retained_begun = retained_begun.wrapping_add(1);
+                }
+                retained.push(skill_id);
+            }
+        }
+        self.back_stage_skill_ids = retained;
+        self.back_stage_begin_cursor = retained_begun;
+        selected
     }
 
     pub(crate) fn begin_pending_back_stage_skill_ids(&mut self) -> Vec<u32> {

@@ -14,8 +14,10 @@
 //! графика, HP и скорость — остаётся в объекте, как в `AddMonster`.
 //! `InitAI` и `GetAI` материализованы типизированным binding-ом из
 //! `ai/aifactory.rs`; `InitSkills` использует канонические `CSkillFactory` и
-//! `CMoveShape`, а сериализация и полный автономный ИИ остаются ниже в
-//! исходном материале. Достигнутая цепочка базовой атаки
+//! `CMoveShape`. Auto-start очередь при первом AI-проходе исполняет
+//! подтверждённые monster-ветви `TaiJi`/`Origin`, не поглощая остальные ещё
+//! не материализованные state owner-ы. Сериализация и полный автономный ИИ
+//! остаются ниже в исходном материале. Достигнутая цепочка базовой атаки
 //! хранит канонические
 //! HP, защиту первого нападающего, снимок смертельной атаки и цель боевого ИИ;
 //! `CGame` координирует урон и смерть, `Nation/GodsBattle`, награду, добычу,
@@ -116,9 +118,11 @@ use super::skills::bossfiendpenetrate::BossFiendPenetrateProgress;
 use super::skills::littlestar::LittleStarProgress;
 use super::skills::monsterfastattack::MonsterFastAttackProgress;
 use super::skills::monsterprojectile::MonsterProjectileProgress;
+use super::skills::origin::ORIGIN_SKILL_ID;
 use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistProgress};
 use super::skills::summoncreatureskill::SummonCreatureProgress;
+use super::skills::taiji::TAIJI_SKILL_ID;
 use super::skills::yunshenglightning::YunShengLightningProgress;
 use super::skills::skillfactory::CSkillFactory;
 use crate::nets::netserver::message::CMessage;
@@ -595,6 +599,19 @@ impl CMonster {
                 self.move_shape
                     .add_skill(u32::from(skill.id), i32::from(skill.level), factory);
         }
+    }
+
+    /// `CBaseAI::OnExecuteBackStageSkills` для подтверждённых monster-ветвей
+    /// `CTaiJi::AI` и `COrigin::AI`. Остальные auto-start state ID остаются в
+    /// очереди до материализации их собственного monster owner-а.
+    pub(crate) fn take_reached_back_stage_skills(&mut self) -> Vec<(u32, i32)> {
+        self.move_shape
+            .take_matching_back_stage_skill_ids(|skill_id| {
+                matches!(skill_id, TAIJI_SKILL_ID | ORIGIN_SKILL_ID)
+            })
+            .into_iter()
+            .map(|skill_id| (skill_id, self.move_shape.skill_level(skill_id)))
+            .collect()
     }
 
     pub(crate) const fn carriage_action(&self) -> i32 {
