@@ -5,13 +5,14 @@
 //! проверки лука, MP, задержку и построение движущейся phalanx-формы. MP
 //! списывается до повторной проверки оружия и не откатывается при позднем
 //! отказе. `CGame` только разрешает владельцев, регистрирует форму и доставляет
-//! точные сообщения `0xBFE01/0xBF502`.
+//! точные сообщения `0xBFE01/0xBF502`. Cooldown использует абсолютный срок
+//! `CSkill::IsRestored`; задержка и движение phalanx остаются elapsed.
 
 use super::baseattack::time_reached;
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED,
     SKILL_USAGE_TARGET_MAX_DISTANCE};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::lightingarrowphalanx::CLightingArrowPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -127,7 +128,7 @@ pub(crate) fn execute_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: 
                 _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected); }
             }, _ => unreachable!(),
         };
-        if player_ai.lighting_arrow_last_used_ms() != 0 && !time_reached(runtime.now_milliseconds(), player_ai.lighting_arrow_last_used_ms(), reuse_ms) {
+        if !skill_is_restored(player_ai.lighting_arrow_last_used_ms(), reuse_ms, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected);
         }
         let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);

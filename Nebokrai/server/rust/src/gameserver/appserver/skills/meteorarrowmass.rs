@@ -6,11 +6,12 @@
 //! задержки пополняет единственный `MeteorArrowState`. `CGame` доставляет
 //! уже построенные owner-ом пакеты и обновляет внешние свойства игрока.
 //! Унаследованный `CStateSkill::End(true)` фиксирует cooldown без повторного
-//! добавления состояния; `End(false)` только прерывает выполнение.
+//! добавления состояния; `End(false)` только прерывает выполнение. Cooldown
+//! следует абсолютному сроку `CSkill::IsRestored`; задержка стадии остаётся elapsed.
 
 use super::baseattack::time_reached;
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::meteorarrowstate::MeteorArrowState;
 pub(crate) use super::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -82,7 +83,7 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(gam
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let amount = properties.query_property(AMOUNT); let limit = properties.query_property(AMOUNT_LIMIT);
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.meteor_arrow_mass().is_none() {
-        if ai.meteor_arrow_mass_last_used_ms() != 0 && !time_reached(runtime.now_milliseconds(), ai.meteor_arrow_mass_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.meteor_arrow_mass_last_used_ms(), reuse, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return result(QueuedSkillExecutionState::Rejected);
         }
         let Some(player) = game.find_player(player_id) else { return result(QueuedSkillExecutionState::Rejected) };

@@ -10,7 +10,8 @@
 //! Клиентский `End(true)` во время удержания только выпускает стрелу; после
 //! выпуска он завершает `CAttackSkill::End(1)` с единичным оружейным
 //! `AfterUseSkill`. Внутреннее прерывание всегда использует `End(0)` без износа,
-//! cooldown и применения отложенной атаки.
+//! cooldown и применения отложенной атаки. Cooldown использует абсолютный
+//! срок `CSkill::IsRestored`; удержание и полёт сохраняют elapsed-семантику.
 //! Процентный damage factor сохраняется в `f32` только после расширенного
 //! x87-умножения; критический урон усекается к нулю при записи в `i32`.
 //! При переносе яда DWORD-произведение уровня оружия и модификатора остаётся
@@ -20,7 +21,7 @@
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::spiderpoison::{install_spider_poison_state, target_has_cure};
 use super::spiderpoisonstate::SpiderPoisonState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -243,7 +244,11 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
 
     if player_ai.heartless_arrow().is_none() {
         let Some((target_x, target_y, _)) = target_snapshot(game, region_id, target) else { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0286"); return terminal(QueuedSkillExecutionState::Rejected) };
-        if player_ai.heartless_arrow_last_used_ms() != 0 && !time_reached(runtime.now_milliseconds(), player_ai.heartless_arrow_last_used_ms(), reuse_delay_ms) {
+        if !skill_is_restored(
+            player_ai.heartless_arrow_last_used_ms(),
+            reuse_delay_ms,
+            runtime.now_milliseconds(),
+        ) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None);

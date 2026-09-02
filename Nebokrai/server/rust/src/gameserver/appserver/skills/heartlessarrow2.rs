@@ -8,7 +8,9 @@
 //! как `0xE6` делает это только в общем `End`; эта наблюдаемая разница не
 //! сглаживается. Общий `End` возвращает движение при любом исходе, но только
 //! `End(true)` один раз выполняет оружейный `AfterUseSkill`, обновляет свойства
-//! и фиксирует cooldown. `CGame` остаётся владельцем региона и доставки.
+//! и фиксирует cooldown. Cooldown использует абсолютный срок
+//! `CSkill::IsRestored`, а задержка исполнения остаётся elapsed-проверкой.
+//! `CGame` остаётся владельцем региона и доставки.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -18,7 +20,7 @@ use super::basemagic::{
 };
 use super::heartlessarrowphalanx2::CHeartlessArrowPhalanx;
 use super::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -287,9 +289,11 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
     if player_ai.heartless_arrow_area().is_none() {
-        if player_ai.heartless_arrow_area_last_used_ms(id) != 0
-            && !time_reached(runtime.now_milliseconds(), player_ai.heartless_arrow_area_last_used_ms(id), reuse_delay_ms)
-        {
+        if !skill_is_restored(
+            player_ai.heartless_arrow_area_last_used_ms(id),
+            reuse_delay_ms,
+            runtime.now_milliseconds(),
+        ) {
             game.send_base_magic_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

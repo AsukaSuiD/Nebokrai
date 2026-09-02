@@ -6,12 +6,13 @@
 //! списывается до поздней проверки лука без отката; `CGame` только разрешает
 //! владельцев, регистрирует форму и доставляет построенные сообщения. Общий
 //! `End` очищает все три пути и возвращает движение; только `End(true)`
-//! обновляет свойства и фиксирует cooldown.
+//! обновляет свойства и фиксирует cooldown. Cooldown использует абсолютный
+//! срок `CSkill::IsRestored`; задержка исполнения остаётся elapsed.
 
 use super::baseattack::{real_distance, time_reached, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::rainarrowphalanx::{CRainArrowPhalanx, RainArrowCell, RAIN_ARROW_SKILL_ID};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -108,7 +109,7 @@ pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame
         PlayerSkillDispatch::SelfTarget { .. } => { let p = CShape::get_direction_position(direction, crate::gameserver::appserver::shape::ShapeAreaCoordinates { x: source.0, y: source.1 }).ok(); (p.map_or(source, |p| (p.x, p.y)), None) },
         PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE && target.id == id => { let p = CShape::get_direction_position(direction, crate::gameserver::appserver::shape::ShapeAreaCoordinates { x: source.0, y: source.1 }).ok(); (p.map_or(source, |p| (p.x, p.y)), None) },
         PlayerSkillDispatch::Object { target, .. } => match target_snapshot(game, region, target) { Some((x, y, false)) => ((x, y), Some(target)), _ => { game.send_base_magic_failure(id, 10); game.send_skill_system_info(id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected) } } };
-        if ai.rain_arrow_last_used_ms() != 0 && !time_reached(runtime.now_milliseconds(), ai.rain_arrow_last_used_ms(), reuse) { game.send_base_magic_failure(id, 0x0d); game.send_skill_system_info(id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.rain_arrow_last_used_ms(), reuse, runtime.now_milliseconds()) { game.send_base_magic_failure(id, 0x0d); game.send_skill_system_info(id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected) }
         let path = game.base_magic_path(region, source.0, source.1, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { game.send_base_magic_failure(id, 0x0b); game.send_skill_system_info(id, b"GS0290"); return outcome(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(id) else { return outcome(QueuedSkillExecutionState::Rejected) }; if !weapon_valid(game, player) { game.send_base_magic_failure(id, 0x0e); game.send_skill_system_info(id, b"GS0297"); return outcome(QueuedSkillExecutionState::Rejected) }
         if mp != 0 && (player.mana().wrapping_sub(mp) as i32) < 0 { game.send_base_magic_failure(id, 7); game.send_skill_system_info_with_unsigned(id, b"GS0288", mp); return outcome(QueuedSkillExecutionState::Rejected) }

@@ -7,11 +7,12 @@
 //! RNG и phalanx принадлежат этому семейству; `CGame` лишь связывает владельцев.
 //! Изъятие состояния и `Summon` выполняются до `End(1)`; сам End только
 //! обновляет свойства и cooldown. `End(0)` не откатывает уже изъятое состояние.
+//! Cooldown следует абсолютному сроку `CSkill::IsRestored`; cast-delay остаётся elapsed.
 
 use super::baseattack::{time_reached, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::meteorarrowmass::send_meteor_arrow_state_remove;
 use super::meteorarrowphalanx::CMeteorArrowPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -126,7 +127,7 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
                 _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected) }
             }, _ => unreachable!(),
         };
-        if ai.meteor_arrow_last_used_ms() != 0 && !time_reached(runtime.now_milliseconds(), ai.meteor_arrow_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.meteor_arrow_last_used_ms(), reuse, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected)
         }
         let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);
