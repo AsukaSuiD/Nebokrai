@@ -11236,6 +11236,24 @@ impl CPlayer {
         self.idle_attack_skill_id = default_attack_skill_id;
     }
 
+    /// Materialized `CPlayerAI::OnChangeSkill`: после `End` завершённого
+    /// concrete owner-а native меняет текущий навык на вычисленную базовую
+    /// атаку. В Rust `Some` обозначает именно ещё активное выполнение, поэтому
+    /// завершённый указатель очищается, а выбранный default хранится отдельно.
+    /// Проверка ID не даёт позднему завершению затереть уже начатый навык.
+    pub(crate) fn restore_default_attack_skill_after_completion(
+        &mut self,
+        completed_skill_id: u32,
+        default_attack_skill_id: u32,
+    ) -> bool {
+        if self.move_shape.current_skill_id() != Some(completed_skill_id) {
+            return false;
+        }
+        self.move_shape.set_current_skill_id(None);
+        self.idle_attack_skill_id = default_attack_skill_id;
+        true
+    }
+
     pub(crate) const fn war_soul_state(&self) -> u32 {
         self.war_soul_state
     }

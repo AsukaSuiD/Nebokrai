@@ -57,7 +57,9 @@
 //! возвращают player-а к вычисленному default attack; death-tail делает это и
 //! без активного skill, а разорванный concrete owner больше не оставляет
 //! current-skill и запрет движения.
-//! Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `OnChangeSkill` достигнут после завершения concrete owner-а: его `End`
+//! предшествует возврату к вычисленному default attack, а отказ до `Begin` не
+//! меняет выбранный навык. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
 //! следующий навык продвигается только после завершения текущего. Выбранный
@@ -2801,7 +2803,11 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkill
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
+// STATUS: IMPLEMENTED
+// MATERIALIZED: завершение concrete owner-а и удаление FIFO выполняются в
+// `execute_queued_player_skills`, затем
+// `CPlayer::restore_default_attack_skill_after_completion` сохраняет исходный
+// `SetCurrentSkill(GetDefaultAttackSkillID())`.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:608

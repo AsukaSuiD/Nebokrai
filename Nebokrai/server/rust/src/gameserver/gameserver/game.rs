@@ -41437,6 +41437,22 @@ impl CGame {
                 QueuedSkillExecutionState::Rejected =>
                     player_ai.finish_player_skill(dispatch, SkillTermination::Rejected),
             };
+            if outcome.state == QueuedSkillExecutionState::Completed
+                && removed_from_queue
+            {
+                let default_attack_skill_id = self
+                    .find_player(player_id)
+                    .map(|player| player.default_attack_skill_id(&self.goods_factory));
+                if let Some((player, default_attack_skill_id)) = self
+                    .find_player_mut(player_id)
+                    .zip(default_attack_skill_id)
+                {
+                    let _ = player.restore_default_attack_skill_after_completion(
+                        dispatch.skill_id(),
+                        default_attack_skill_id,
+                    );
+                }
+            }
             if outcome.state == QueuedSkillExecutionState::Rejected
                 && removed_from_queue
                 && let Some(default_attack_skill_id) = lost_materialized_object_target_default
