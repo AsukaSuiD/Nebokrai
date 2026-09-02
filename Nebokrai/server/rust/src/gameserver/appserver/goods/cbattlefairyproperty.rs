@@ -8,7 +8,9 @@
 //! очищает список до count и публикует только полные records. Constructor и
 //! signed modifier-based `ExpUp/LevelUp` также материализованы; player lookup
 //! и обязательный old-client update выражены типизированными facts/effects,
-//! а диагностические сведения уровня публикуются в месте изменения.
+//! а диагностические сведения уровня публикуются в месте изменения. При
+//! `LevelUp` произведение base на pullulate rate округляется до `f32`, после
+//! чего полная сумма с текущим целым усекается FISTP к нулю.
 //! Process-global lazy singleton заменён обычным explicit owner-ом; пустой
 //! `vecUpLevelReleated` сохранён как owned vector. Поля, которые exact
 //! constructor не инициализировал и эти методы не читают, намеренно не
@@ -264,8 +266,9 @@ impl CBattleFairyProperty {
             (GAP_BF_ATTACK, GAP_BF_ATTACK_BASE),
         ] {
             let base = goods.addon_property_value(factory, base_property, 1) as f32;
-            let value = goods.addon_property_value(factory, value_property, 1) as f32;
-            let grown = (value + base * pullulate_rate).round() as i32;
+            let growth = base * pullulate_rate;
+            let value = goods.addon_property_value(factory, value_property, 1);
+            let grown = (f64::from(value) + f64::from(growth)).trunc() as i32;
             let _ = goods.set_addon_property_value_core(value_property, 1, grown);
         }
 
