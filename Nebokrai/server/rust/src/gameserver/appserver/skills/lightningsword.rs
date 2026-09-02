@@ -9,7 +9,9 @@
 //! вариант `3` переопределяет их на категорию `2` и `GS0292`.
 //! Ни один из четырёх вариантов не изнашивает оружие в `Attack` или `AI`:
 //! унаследованный `AfterUseSkill` делает это один раз через общий `End(1)`
-//! фронтального семейства с отдельной cooldown-ячейкой варианта.
+//! фронтального семейства с отдельной cooldown-ячейкой варианта. Каждая ячейка
+//! проверяется абсолютным сроком `CSkill::IsRestored`; стадийная задержка
+//! остаётся elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -18,7 +20,7 @@ use super::frontcellsword::{
     finish_front_cell_sword, front_shape, master_info, send_failure, send_visual, target_level,
     weapon_is_compatible,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::lightningsword2::LIGHTNING_SWORD_2_SKILL_ID;
 use super::lightningsword3::LIGHTNING_SWORD_3_SKILL_ID;
 use super::lightningsword4::LIGHTNING_SWORD_4_SKILL_ID;
@@ -137,13 +139,11 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
 
     if player_ai.lightning_sword().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.lightning_sword_last_used_ms(skill_id) != 0
-            && !time_reached(
-                now_ms,
-                player_ai.lightning_sword_last_used_ms(skill_id),
-                cooldown_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.lightning_sword_last_used_ms(skill_id),
+            cooldown_ms,
+            now_ms,
+        ) {
             send_failure(game, player_id, definition, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

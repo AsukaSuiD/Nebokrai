@@ -12,7 +12,8 @@
 //! время восстановления.
 //! Element modifier вычисляется в расширенной точности x87 из целых свойств и
 //! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
-//! перед `int`.
+//! перед `int`. Восстановление использует абсолютный срок
+//! `CSkill::IsRestored`; отложенный удар сохраняет elapsed-семантику.
 
 use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -20,7 +21,7 @@ use super::basemagic::{
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -260,9 +261,11 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
             send_failure(game, player_id, 10, mp_loss, true);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        if player_ai.thunder_blow_2_last_used_ms() != 0
-            && !time_reached(runtime.now_milliseconds(), player_ai.thunder_blow_2_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(
+            player_ai.thunder_blow_2_last_used_ms(),
+            cooldown_ms,
+            runtime.now_milliseconds(),
+        ) {
             send_failure(game, player_id, 0x0d, mp_loss, true);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

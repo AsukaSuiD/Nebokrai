@@ -7,7 +7,8 @@
 //! региону форму; её срок жизни, поиск цели и формула остаются у владельца формы.
 //! Собственный `End` не меняет движение, но вызывает оружейный
 //! `CAttackSkill::End`; успех, отказ после `Begin` и клиентская отмена используют
-//! один хвост с `AfterUseSkill` и временем восстановления.
+//! один хвост с `AfterUseSkill` и временем восстановления. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; задержка формы остаётся elapsed.
 
 use super::baseattack::{
     finish_immediate_base_attack, time_reached, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -17,7 +18,7 @@ use super::basemagic::{
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
     SKILL_USAGE_SUMMONED_LIFETIME,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::thunderblowphalanx::CThunderBlowPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -157,9 +158,11 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
     if player_ai.thunder_blow().is_none() {
-        if player_ai.thunder_blow_last_used_ms() != 0
-            && !time_reached(runtime.now_milliseconds(), player_ai.thunder_blow_last_used_ms(), cooldown_ms)
-        { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
+        if !skill_is_restored(
+            player_ai.thunder_blow_last_used_ms(),
+            cooldown_ms,
+            runtime.now_milliseconds(),
+        ) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
         let Some((target_x, target_y, _)) = destination(game, region_id, dispatch) else {
             return terminal(QueuedSkillExecutionState::Rejected);
         };

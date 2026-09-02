@@ -10,7 +10,8 @@
 //! `thunder2phalanx.rs`. `CGame` разрешает владельцев, регистрирует область,
 //! применяет атаку к целям и выполняет фактическую доставку.
 //! Пара с `CThunder` использует то же усечение sprite через исходный `i64` и
-//! отдельное усечение стихийного коэффициента в `i32`.
+//! отдельное усечение стихийного коэффициента в `i32`. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; ожидание остаётся elapsed.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -18,7 +19,9 @@ use super::basemagic::{
     SKILL_USAGE_MIN_ATTACK,
 };
 use super::battlefairytransfer::send_goods_update;
-use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
+use super::kernel::{
+    battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
+};
 use super::thunder::{
     dispatch_position, master_info, reject_thunder_family, scaled_battle_fairy_sprite,
     send_thunder_family_cast, terminal, thunder_element_modifier,
@@ -108,9 +111,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.leiming2_last_used_ms() != 0
-            && !time_reached(cooldown_now_ms, player_ai.leiming2_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(player_ai.leiming2_last_used_ms(), cooldown_ms, cooldown_now_ms) {
             return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) =

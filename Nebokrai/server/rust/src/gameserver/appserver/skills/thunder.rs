@@ -8,6 +8,8 @@
 //! регистрирует область в регионе и выполняет сетевую доставку.
 //! Sprite сначала масштабируется через исходное усечение x87 в `i64` с
 //! последующим чтением младших 32 бит; стихийный коэффициент усекается в `i32`.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`, а ожидание
+//! стадии сохраняет elapsed-семантику.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -16,7 +18,9 @@ use super::basemagic::{
 };
 use super::battlefairytransfer::send_goods_update;
 use super::fightdefense::truncate_original;
-use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
+use super::kernel::{
+    battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
+};
 use super::thunderphalanx::CThunderPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -205,9 +209,7 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.thunder_last_used_ms() != 0
-            && !time_reached(cooldown_now_ms, player_ai.thunder_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(player_ai.thunder_last_used_ms(), cooldown_ms, cooldown_now_ms) {
             return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) =

@@ -8,14 +8,16 @@
 //! Общий для двух вариантов `End(1)` фиксирует только успешно созданную
 //! область; `End(0)` очищает отказ или отмену без обновления cooldown.
 //! Общая стихийная прибавка обоих вариантов сохраняет расширенное вычисление
-//! x87 из целых свойств и усечение результата к нулю.
+//! x87 из целых свойств и усечение результата к нулю. Восстановление обоих
+//! вариантов использует абсолютный срок `CSkill::IsRestored`; задержка формы
+//! остаётся elapsed.
 
 use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME};
 use super::godthunderphalanx::CGodThunderPhalanx;
 use super::godthunderphalanx2::CGodThunderPhalanx2;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -177,7 +179,7 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
     if execution(ai, second).is_none() {
-        if last_used(ai, second) != 0 && !time_reached(runtime.now_milliseconds(), last_used(ai, second), reuse) {
+        if !skill_is_restored(last_used(ai, second), reuse, runtime.now_milliseconds()) {
             fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) };
