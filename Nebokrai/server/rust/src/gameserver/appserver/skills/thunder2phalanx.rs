@@ -9,7 +9,10 @@
 //! `ReplaceAffectRegion` вызывается региональным owner-ом после успешного
 //! добавления новой формы и до её публикации: поскольку все level-маски 1×1,
 //! совпавшая клетка старой области становится неактивной.
+//! Базовый урон использует общий с `CThunderPhalanx` расширенный порядок x87,
+//! усечение в `i64` и чтение младших 32 бит.
 
+use super::thunder::thunder_base_damage;
 use super::thunder2::{LEIMING2_SKILL_ID, LEIMING2_TARGET_DAMAGE_FACTOR_PROPERTY};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
@@ -183,8 +186,7 @@ impl CLeimingPhalanx2 {
         target_damage_factor: u32,
         random_below: &mut dyn FnMut(i32) -> i32,
     ) -> (AttackInformation, PlayerCombatProperties, u8, u8) {
-        let base_damage = (f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6)
-            .round_ties_even() as i32;
+        let base_damage = thunder_base_damage(target_damage_factor, sprite);
         let delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
         let width = delta.wrapping_abs().wrapping_add(1);
         let damage = base_damage

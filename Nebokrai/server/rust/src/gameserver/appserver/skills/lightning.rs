@@ -11,6 +11,8 @@
 //! задержки он отправляет выстрел с нулевыми type/id, затем отмену и `End(0)`.
 //! `End(1)` сбрасывает execution-состояние и завершает успешную атаку;
 //! `End(0)` очищает отменённую команду без обновления свойств и cooldown.
+//! Стихийная прибавка и критический множитель сохраняют расширенное вычисление
+//! x87 и усечение к нулю при записи в целое поле.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -18,6 +20,7 @@ use super::basemagic::{
     SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -246,10 +249,11 @@ fn calculate_attack(
     }
     .wrapping_add(1);
     let random_damage = game.skill_random_below(width);
-    let element_bonus = ((element_modifier as f32)
-        * 0.01
-        * (combat.element_modify as f32))
-        .round_ties_even() as i32;
+    let element_bonus = truncate_original(
+        f64::from(element_modifier)
+            * f64::from(0.01_f32)
+            * f64::from(combat.element_modify),
+    );
     let element_damage = element_bonus
         .wrapping_add(combat.add_element_attack as i32)
         .wrapping_add(random_damage)
@@ -279,8 +283,9 @@ fn calculate_attack(
         attack.critical = true;
         let critical_rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage =
-                ((power.hp_damage as f32) * critical_rate).round_ties_even() as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     Some((master, attack))

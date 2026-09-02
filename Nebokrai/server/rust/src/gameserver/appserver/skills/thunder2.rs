@@ -9,6 +9,8 @@
 //! в `thunder.rs`; формула и жизненный цикл области остаются здесь и в
 //! `thunder2phalanx.rs`. `CGame` разрешает владельцев, регистрирует область,
 //! применяет атаку к целям и выполняет фактическую доставку.
+//! Пара с `CThunder` использует то же усечение sprite через исходный `i64` и
+//! отдельное усечение стихийного коэффициента в `i32`.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -18,7 +20,8 @@ use super::basemagic::{
 use super::battlefairytransfer::send_goods_update;
 use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use super::thunder::{
-    dispatch_position, master_info, reject_thunder_family, send_thunder_family_cast, terminal,
+    dispatch_position, master_info, reject_thunder_family, scaled_battle_fairy_sprite,
+    send_thunder_family_cast, terminal, thunder_element_modifier,
 };
 use super::thunder2phalanx::CLeimingPhalanx2;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -232,9 +235,9 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     else {
         return reject(game, player_id, skill_level, 2, b"");
     };
-    let scaled_sprite = (f64::from(sprite) * 0.0001).round_ties_even() as i32;
+    let scaled_sprite = scaled_battle_fairy_sprite(sprite);
     let element_modifier = player.combat_properties().element_modify.wrapping_add(
-        ((em_modifier as f32) * 0.01 * (scaled_sprite as f32)).round_ties_even() as i32,
+        thunder_element_modifier(em_modifier, scaled_sprite),
     );
     let master = master_info(player);
     let cch = i32::from(player.combat_properties().cch);

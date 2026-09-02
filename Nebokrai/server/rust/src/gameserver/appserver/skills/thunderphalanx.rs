@@ -10,9 +10,12 @@
 //! намеренно передаёт только исходный префикс
 //! `(m_dwLifeTime/m_dwFrequency)*m_dwNumTargets` из массива на 49 ячеек на
 //! окно. Поиск сущностей и применение атаки остаются у исполняющего владельца.
+//! Базовый урон сохраняет расширенный порядок x87, усечение в `i64` и чтение
+//! младших 32 бит исходного результата.
 
-use super::thunder::THUNDER_SKILL_ID;
-use super::thunder::THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY;
+use super::thunder::{
+    THUNDER_SKILL_ID, THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY, thunder_base_damage,
+};
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -242,8 +245,7 @@ impl CThunderPhalanx {
         let constructor_delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
         let constructor_width = constructor_delta.wrapping_abs().wrapping_add(1);
         let _discarded_constructor_roll = random_below(constructor_width);
-        let base_damage = (f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6)
-            .round_ties_even() as i32;
+        let base_damage = thunder_base_damage(target_damage_factor, sprite);
         let property_delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
         let property_width = property_delta.wrapping_abs().wrapping_add(1);
         let damage = base_damage

@@ -6,6 +6,8 @@
 //! `SkillExecutionKernel`, визуальные пакеты и построение `CThunderPhalanx`.
 //! `CGame` только разрешает владельцев,
 //! регистрирует область в регионе и выполняет сетевую доставку.
+//! Sprite сначала масштабируется через исходное усечение x87 в `i64` с
+//! последующим чтением младших 32 бит; стихийный коэффициент усекается в `i32`.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -13,6 +15,7 @@ use super::basemagic::{
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
 };
 use super::battlefairytransfer::send_goods_update;
+use super::fightdefense::truncate_original;
 use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
 use super::thunderphalanx::CThunderPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -26,6 +29,33 @@ use crate::nets::netserver::message::CMessage;
 
 pub(crate) const THUNDER_SKILL_ID: u32 = 0x21f;
 pub(crate) const THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY: u32 = 20_003;
+
+fn truncate_original_i64_low(value: f64) -> i32 {
+    if !value.is_finite()
+        || value < -9_223_372_036_854_775_808.0
+        || value >= 9_223_372_036_854_775_808.0
+    {
+        i64::MIN as i32
+    } else {
+        (value as i64) as i32
+    }
+}
+
+pub(super) fn scaled_battle_fairy_sprite(sprite: i32) -> i32 {
+    truncate_original_i64_low(f64::from(sprite) * 0.0001)
+}
+
+pub(super) fn thunder_element_modifier(em_modifier: u32, scaled_sprite: i32) -> i32 {
+    truncate_original(
+        f64::from(em_modifier) * f64::from(0.01_f32) * f64::from(scaled_sprite),
+    )
+}
+
+pub(super) fn thunder_base_damage(target_damage_factor: u32, sprite: i32) -> i32 {
+    truncate_original_i64_low(
+        f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6,
+    )
+}
 const PLAYER_TYPE: i32 = 400;
 const VISUAL_OBJECT_TYPE: i32 = 700;
 const DENIED_STATE_A: u32 = 0x192;
@@ -284,9 +314,8 @@ pub(crate) fn execute_battle_fairy_thunder<Runtime: GameMainLoopRuntime>(
     }) else {
         return reject_thunder_family(game, player_id, THUNDER_SKILL_ID, skill_level, 2, b"");
     };
-    let scaled_sprite = (f64::from(sprite) * 0.0001).round_ties_even() as i32;
-    let element_modifier = ((em_modifier as f32) * 0.01 * (scaled_sprite as f32))
-        .round_ties_even() as i32;
+    let scaled_sprite = scaled_battle_fairy_sprite(sprite);
+    let element_modifier = thunder_element_modifier(em_modifier, scaled_sprite);
     let master = master_info(player);
     let cch = i32::from(player.combat_properties().cch);
     let summon_id = game.allocate_summon_shape_id();
