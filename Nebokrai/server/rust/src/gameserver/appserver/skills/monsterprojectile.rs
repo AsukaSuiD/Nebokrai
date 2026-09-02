@@ -1,12 +1,14 @@
 //! Общий снарядный путь монстров для навыков с прямой траекторией.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходные владельцы
-//! `CSkeletonArchery` и `CChuckStone`, подтверждает общий порядок подготовки,
-//! проверки преград, расчёта времени полёта и удара по клетке. Конкретный
-//! владелец сохраняет идентификатор навыка, а начало полёта отдельно занимает
-//! attack-speed timestamp ИИ; выбор цели, защита и последствия
-//! смерти остаются у существующих владельцев боя и `CGame`. Оба исходных
-//! `CalculateAttackPower` берут elemental damage из virtual
+//! `CSkeletonArchery`, `CChuckStone` и `CYakshaSlash`, подтверждает общий
+//! порядок подготовки, проверки преград, расчёта времени полёта и удара по
+//! клетке. Конкретный владелец сохраняет идентификатор навыка, а начало полёта
+//! отдельно занимает attack-speed timestamp ИИ; выбор цели, защита и
+//! последствия смерти остаются у существующих владельцев боя и `CGame`.
+//! Коэффициент `CYakshaSlash` вычисляется в x87 из полного unsigned `u32` и
+//! `0.01_f32`, без подмены нулевого свойства единицей, затем сохраняется как
+//! `f32`. Оба остальных исходных `CalculateAttackPower` берут elemental damage из virtual
 //! `CMonster::GetAddElementAtk == 0`, поэтому ресурсный element range здесь не
 //! участвует и между physical и critical roll нет дополнительного RNG.
 use super::baseattack::{
@@ -71,10 +73,9 @@ impl MonsterProjectileDispatch {
         attacker_tamed: bool,
         now_ms: u32,
     ) -> Self {
-        let damage_factor = match properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR) {
-            0 => 1.0,
-            factor => factor as f32 * 0.01,
-        };
+        let damage_factor = (f64::from(
+            properties.query_property(SKILL_USAGE_TARGET_DAMAGE_FACTOR),
+        ) * f64::from(0.01_f32)) as f32;
         Self {
             monster_id, skill_id, impact_x: target_x, impact_y: target_y,
             skill_level, properties, property, attacker_master, attacker_tamed,
