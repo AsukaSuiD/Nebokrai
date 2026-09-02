@@ -227,7 +227,8 @@ fn calculate_attack(
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = (power.hp_damage as f32 * rate) as i32;
+            power.hp_damage =
+                truncate_original(f64::from(power.hp_damage) * f64::from(rate));
         }
     }
     Some((master, attack))
