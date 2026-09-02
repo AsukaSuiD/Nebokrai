@@ -845,9 +845,10 @@ use crate::gameserver::appserver::session::ctrader::{
     TraderContainerKind, TraderOfferAdded, TraderOfferBlock, TraderOfferRemoved,
 };
 use crate::gameserver::appserver::shape::{
-    CShape, MoveCheckCellRegistry, SHAPE_CHANGE_AREA, SHAPE_CHANGE_DELETE, SHAPE_CHANGE_NONE,
-    SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE, ShapeAreaCoordinates, ShapeCoordinateBlock,
-    ShapeFigure, ShapeIdentity, ShapeResolver, ShapeRuntimeFacts, ShapeView,
+    distance_between_shape_geometry, CShape, MoveCheckCellRegistry, SHAPE_CHANGE_AREA,
+    SHAPE_CHANGE_DELETE, SHAPE_CHANGE_NONE, SHAPE_CHANGE_REGION, SHAPE_CHANGE_REMOVE,
+    ShapeAreaCoordinates, ShapeCoordinateBlock, ShapeFigure, ShapeIdentity, ShapeResolver,
+    ShapeRuntimeFacts, ShapeView,
 };
 use crate::gameserver::appserver::skills::baseattack::{
     abort_player_base_attack_on_region_change, cancel_player_base_attack,
@@ -14859,17 +14860,14 @@ impl CGame {
         let second_player = self.players.get(&second_id)?;
         let first = first_player.shape();
         let second = second_player.shape();
-        let dx = (truncate_original(f64::from(first.get_pos_x()))
-            .wrapping_sub(truncate_original(f64::from(second.get_pos_x())))
-            .unsigned_abs() as i32)
-            .wrapping_sub(i32::from(first_player.figure().get(2)))
-            .wrapping_sub(i32::from(second_player.figure().get(2)));
-        let dy = (truncate_original(f64::from(first.get_pos_y()))
-            .wrapping_sub(truncate_original(f64::from(second.get_pos_y())))
-            .unsigned_abs() as i32)
-            .wrapping_sub(i32::from(first_player.figure().get(0)))
-            .wrapping_sub(i32::from(second_player.figure().get(0)));
-        Some(dx.max(dy))
+        Some(distance_between_shape_geometry(
+            first.get_pos_x(),
+            first.get_pos_y(),
+            first_player.figure(),
+            second.get_pos_x(),
+            second.get_pos_y(),
+            second_player.figure(),
+        ))
     }
 
     pub(crate) fn create_player_trade_session(

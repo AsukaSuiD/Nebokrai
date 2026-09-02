@@ -286,21 +286,14 @@ impl ShapeView {
     /// Exact Chebyshev-like `CShape::Distance(CShape*)` с вычитанием figure
     /// half-extents каждой стороны. Отрицательный результат допустим.
     pub(crate) fn distance(self, other: Self) -> i32 {
-        let self_x = legacy_truncate_position(f32::from_bits(self.pos_x_bits));
-        let other_x = legacy_truncate_position(f32::from_bits(other.pos_x_bits));
-        let self_y = legacy_truncate_position(f32::from_bits(self.pos_y_bits));
-        let other_y = legacy_truncate_position(f32::from_bits(other.pos_y_bits));
-        let horizontal = (self_x.wrapping_sub(other_x).unsigned_abs() as i32)
-            .wrapping_sub(self.figure.get(2) as i32)
-            .wrapping_sub(other.figure.get(2) as i32);
-        let vertical = (self_y.wrapping_sub(other_y).unsigned_abs() as i32)
-            .wrapping_sub(self.figure.get(0) as i32)
-            .wrapping_sub(other.figure.get(0) as i32);
-        if vertical < horizontal {
-            horizontal
-        } else {
-            vertical
-        }
+        distance_between_shape_geometry(
+            f32::from_bits(self.pos_x_bits),
+            f32::from_bits(self.pos_y_bits),
+            self.figure,
+            f32::from_bits(other.pos_x_bits),
+            f32::from_bits(other.pos_y_bits),
+            other.figure,
+        )
     }
 
     /// Exact `CShape::RealDistance(CShape*)` для двух живых shape-view.
@@ -350,6 +343,30 @@ fn legacy_absolute_delta(left: i32, right: i32) -> i32 {
     } else {
         delta
     }
+}
+
+/// Exact геометрия `CShape::Distance(CShape*)` без требования materialized
+/// tile/region view. Это сохраняет исходный x87 integer-indefinite для
+/// недопустимой float-координаты и используется caller-ами с живыми shapes.
+pub(crate) fn distance_between_shape_geometry(
+    source_x: f32,
+    source_y: f32,
+    source_figure: ShapeFigure,
+    target_x: f32,
+    target_y: f32,
+    target_figure: ShapeFigure,
+) -> i32 {
+    let source_x = legacy_truncate_position(source_x);
+    let source_y = legacy_truncate_position(source_y);
+    let target_x = legacy_truncate_position(target_x);
+    let target_y = legacy_truncate_position(target_y);
+    let horizontal = (source_x.wrapping_sub(target_x).unsigned_abs() as i32)
+        .wrapping_sub(i32::from(source_figure.get(2)))
+        .wrapping_sub(i32::from(target_figure.get(2)));
+    let vertical = (source_y.wrapping_sub(target_y).unsigned_abs() as i32)
+        .wrapping_sub(i32::from(source_figure.get(0)))
+        .wrapping_sub(i32::from(target_figure.get(0)));
+    horizontal.max(vertical)
 }
 
 /// Exact `CShape::Distance(long,long,long,long)`: Chebyshev distance с
