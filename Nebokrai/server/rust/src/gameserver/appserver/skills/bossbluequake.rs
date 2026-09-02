@@ -13,12 +13,15 @@
 //! элементального и духовного компонентов.
 //! Путь монстра сохраняет собственную формулу и тот же порядок состояния и `ForceMove`;
 //! `CGame` только координирует временное владение регионом и доставку.
+//! Для monster-цели `time_percent` отдельно сохраняется в `f32`, после чего
+//! unsigned duration масштабируется в x87 и усекается к нулю.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
     time_reached,
 };
 use super::bossbluequakestate::BossBlueQuakeState;
+use super::fightdefense::truncate_original;
 use super::flash::cell_views;
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
@@ -58,6 +61,13 @@ const SKILL_USAGE_TARGET_BACK_STEP: u32 = 30_002;
 const SKILL_USAGE_TARGET_MOVE_SPEED: u32 = 30_003;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 const SKILL_USAGE_USER_RP_LOSE: u32 = 3;
+
+fn scaled_monster_duration(persist: u32, time_percent: u32) -> u32 {
+    let percent = f64::from(time_percent) as f32;
+    truncate_original(
+        f64::from(persist) * f64::from(percent) * f64::from(0.01_f32),
+    ) as u32
+}
 
 pub(crate) const BOSS_BLUE_QUAKE_SKILL_ID: u32 = 0x1f8;
 
@@ -542,7 +552,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         let base_duration = if target.object_type == PLAYER_TYPE {
             persist
         } else {
-            (persist as f32 * time_percent as f32 * 0.01).round_ties_even() as u32
+            scaled_monster_duration(persist, time_percent)
         };
         let source_reank = game
             .find_player(player_id)
@@ -749,8 +759,10 @@ fn attack_target<Runtime: GameMainLoopRuntime>(
     if target_level(game, region, identity).is_some_and(|target_level| target_level < attacker_property.level as u8) {
         let persist = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
         let duration = if identity.object_type == PLAYER_TYPE { persist } else {
-            (persist as f32 * properties.query_property(SKILL_USAGE_TIME_PERCENT) as f32 * 0.01)
-                .round_ties_even() as u32
+            scaled_monster_duration(
+                persist,
+                properties.query_property(SKILL_USAGE_TIME_PERCENT),
+            )
         };
         replace_quake_state(
             game,
