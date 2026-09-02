@@ -9,10 +9,11 @@
 //! фактическую доставку; lifecycle навыка остаётся здесь.
 //! Достигнутый apply-path фиксирует cooldown даже при смерти владельца или
 //! неудачной установке состояния; раннее прерывание этого не делает.
+//! Входной cooldown сохраняет absolute DWORD deadline `CSkill::IsRestored`.
 
 use super::baseattack::time_reached;
 use super::daubpoisonstate::{DaubPoisonState, DAUB_POISON_STATE_ID, replace_player_daub_poison_state};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -122,9 +123,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
 
     if player_ai.daub_poison().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.daub_poison_last_used_ms() != 0
-            && !time_reached(now_ms, player_ai.daub_poison_last_used_ms(), reuse)
-        {
+        if !skill_is_restored(player_ai.daub_poison_last_used_ms(), reuse, now_ms) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

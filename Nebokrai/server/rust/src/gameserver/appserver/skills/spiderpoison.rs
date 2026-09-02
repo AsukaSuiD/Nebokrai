@@ -13,11 +13,12 @@
 //! Координатный `Begin` по точному EXE использует общий
 //! `CState::GetSufferer`: выбирает первый `CMoveShape` клетки и продолжает
 //! через тот же объектный pipeline.
+//! Player reuse-gate использует exact `CSkill::IsRestored`; cast delay — elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillTermination, skill_is_restored};
 use super::monsterattack::{
     MonsterAttackDeath, apply_owned_monster_attack_hit, defend_owned_monster_attack,
     owned_monster_attackable, resolve_owned_monster_attack_target,
@@ -218,9 +219,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
     };
     if player_ai.spider_poison().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.spider_poison_last_used_ms() != 0
-            && !time_reached(now_ms, player_ai.spider_poison_last_used_ms(), reuse_delay)
-        {
+        if !skill_is_restored(player_ai.spider_poison_last_used_ms(), reuse_delay, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

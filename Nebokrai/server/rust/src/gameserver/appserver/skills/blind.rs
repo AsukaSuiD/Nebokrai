@@ -11,10 +11,11 @@
 //! отказ `10 + GS0286` и `End(false)` без generic failure `2`.
 //! `End(true)` фиксирует cooldown после установки, а `End(false)` не откатывает
 //! уже установленный `Rush2State`.
+//! Обе входные перегрузки проверяют reuse через exact `CSkill::IsRestored`.
 
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::poisonmoth::{master_info, MONSTER_TYPE, PLAYER_TYPE};
 use super::rush::scaled_state_time;
 use super::rushstate2::Rush2State;
@@ -175,9 +176,11 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
-        if ai.blind_last_used_ms() != 0
-            && !time_reached(runtime.now_milliseconds(), ai.blind_last_used_ms(), reuse)
-        {
+        if !skill_is_restored(
+            ai.blind_last_used_ms(),
+            reuse,
+            runtime.now_milliseconds(),
+        ) {
             failure(game, player_id, 0x0d, 0, None, false);
         } else {
             failure(game, player_id, 10, 0, None, false);
@@ -219,7 +222,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
 
     if ai.blind().is_none() {
         let now = runtime.now_milliseconds();
-        if ai.blind_last_used_ms() != 0 && !time_reached(now, ai.blind_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.blind_last_used_ms(), reuse, now) {
             failure(game, player_id, 0x0d, mp_loss, None, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

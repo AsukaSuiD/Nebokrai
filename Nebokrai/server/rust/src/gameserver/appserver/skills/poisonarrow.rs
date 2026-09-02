@@ -7,6 +7,7 @@
 //! игрока или монстра; последующие периодические удары принадлежат
 //! `poisonarrowstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
 //! object-target он проходит точный отказ `10 → ZHGS0045 → 2 → End`.
+//! Reuse использует exact `CSkill::IsRestored`; cast и periodic часы — elapsed.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -14,7 +15,9 @@ use super::basemagic::{
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::battlefairytransfer::send_goods_update;
-use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
+use super::kernel::{
+    SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost, skill_is_restored,
+};
 use super::poisonarrowstate::{PoisonArrowState, send_poison_arrow_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -171,13 +174,11 @@ pub(crate) fn execute_battle_fairy_poison_arrow<Runtime: GameMainLoopRuntime>(
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.poison_arrow_last_used_ms() != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.poison_arrow_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.poison_arrow_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
             send_failure(game, player_id, 2);
