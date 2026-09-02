@@ -7,10 +7,13 @@
 //! `MP → OnChangeStates → weapon` сохранена. Формула и состояние принадлежат
 //! `leafcutstate3.rs`; `CGame` только разрешает владельцев, PK и доставку.
 //! `End` возвращает движение и выполняет `CSummonSkill::End(1)`.
+//! Числовые границы двух `f32`-аргументов совпадают с `CLeafCut` и используют
+//! общий подтверждённый адаптер без раннего округления damage factor и уровня оружия.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::leafcut::leaf_cut_factors;
 use super::leafcutstate3::{LeafCutState3, send_leaf_cut_3_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -93,8 +96,6 @@ fn send_visual(game: &mut CGame, player_id: i32, level: i32, action: u8, target:
 }
 
 fn master_info(player: &CPlayer) -> MasterInfo { let p = player.pk_permissions(); MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(p.player), permitted_to_kill_teammate: i32::from(p.teammate), permitted_to_kill_guild_member: i32::from(p.guild_member), permitted_to_kill_criminal: i32::from(p.criminal) } }
-fn unsigned_float(value: u32) -> f32 { let signed = value as i32; let converted = signed as f32; if signed < 0 { converted + 4_294_967_296.0 } else { converted } }
-
 pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_leaf_cut_3_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some(target) = dispatch_target(dispatch) else { return reject_initial(game, player_id, 10, 0, None) };
@@ -152,7 +153,8 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
     if target.object_type == PLAYER_TYPE { let _ = game.player_on_first_skill(player_id, target.id, Some(region_id), runtime); }
     let Some((master, combat, weapon_level)) = game.find_player(player_id).map(|player| (master_info(player), player.combat_properties(), player.weapon_damage_level(game.goods_factory()))) else { finish_player_leaf_cut_3(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
     let now = runtime.now_milliseconds();
-    let state = LeafCutState3::new(master, now, keep, frequency, unsigned_float(factor) * 0.01, unsigned_float(weapon_level as u32) * unsigned_float(weapon_modifier) * 0.01, combat.minimum_attack as u16, combat.maximum_attack as u16, combat.add_element_attack as u16, combat.add_soul_attack);
+    let (damage_factor, weapon_factor) = leaf_cut_factors(factor, weapon_level as u32, weapon_modifier);
+    let state = LeafCutState3::new(master, now, keep, frequency, damage_factor, weapon_factor, combat.minimum_attack as u16, combat.maximum_attack as u16, combat.add_element_attack as u16, combat.add_soul_attack);
     let Some((previous, identity, x, y)) = game.replace_leaf_cut_3_state(region_id, target, state, now) else { finish_player_leaf_cut_3(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
     if let Some(previous) = previous { send_leaf_cut_3_state_visual(game, region_id, identity, x, y, previous, false, now); }
     send_leaf_cut_3_state_visual(game, region_id, identity, x, y, state, true, now);
