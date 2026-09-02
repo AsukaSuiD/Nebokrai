@@ -7,6 +7,8 @@
 //! element и soul: poison остаётся для последующего `ApplyFinalDamage`. Для
 //! монстров сохраняются отдельные
 //! ограничения попадания, защита и сопротивления без коэффициента PvP.
+//! PvP full-miss со стихийным уроном сравнивает целый RNG непосредственно с
+//! произведением `u16 * f32`: дробная часть порога не усекается заранее.
 //! Функции вызываются на стадии `Calculate` общего конвейера и не меняют число
 //! или порядок обращений к RNG. Типизированная ветвь щитов и `Promotion`
 //! вызывается в исходной точке `PreDefense`, до обычной защиты и в порядке
@@ -317,12 +319,12 @@ pub(crate) fn defend_player_base_attack(
     let full_miss = if target.full_miss == 0 {
         false
     } else {
-        let chance = if has_element {
-            truncate_original(f64::from(target.full_miss) * f64::from(attacker.full_miss_scale()))
+        if has_element {
+            (random(100) as f32)
+                < f32::from(target.full_miss) * attacker.full_miss_scale()
         } else {
-            i32::from(target.full_miss)
-        };
-        random(100) < chance
+            random(100) < i32::from(target.full_miss)
+        }
     };
     if hit <= random(100) || full_miss {
         clear_miss_sensitive_damage(attack);
