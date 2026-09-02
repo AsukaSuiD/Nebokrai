@@ -8,9 +8,13 @@
 //! и сетевой формат принадлежат навыку. Player- и monster-owner-ы подключены
 //! к своим реальным AI/runtime путям; `CGame` остаётся координатором общей
 //! защиты, жизненного цикла цели и доставки.
+//! Шанс попадания отдельно сохраняет level-компонент в `f32`, затем складывает
+//! его с расширенным x87 hit-компонентом и усекает результат к нулю.
+//! Критический урон также усекается при исходной записи в `i32`.
 
 use super::baseattack::time_reached;
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::knockoutstate::{
     KnockOutState, replace_monster_knock_out_state, replace_player_knock_out_state,
@@ -43,6 +47,26 @@ const DEFAULT_CONTACT_SKILL_ID: u32 = 0x7fff_ffff;
 const DELAY: u32 = 10_001;
 const PERSIST: u32 = 10_002;
 const REUSE: u32 = 10_005;
+
+fn knock_out_hit_chance(
+    source_hit: u16,
+    target_dodge: u16,
+    source_level: u8,
+    target_level: u8,
+    base: i32,
+    magnify: f32,
+    level_rate: f32,
+) -> i32 {
+    let level_component = (f64::from(
+        i32::from(source_level).wrapping_sub(i32::from(target_level)),
+    ) * f64::from(level_rate)
+        + f64::from(base)) as f32;
+    truncate_original(
+        f64::from(i32::from(source_hit).wrapping_sub(i32::from(target_dodge)))
+            * f64::from(magnify)
+            + f64::from(level_component),
+    )
+}
 const CAN_BREAK: u32 = 10_006;
 
 #[derive(Clone, Copy)]
@@ -156,7 +180,7 @@ fn attack(game: &mut CGame, player_id: i32, target_level: u8) -> Option<(MasterI
     if game.skill_random_below(100) < i32::from(combat.cch) {
         value.critical = true;
         let rate = game.globe_setup().critical_rate();
-        for power in &mut value.damages { power.hp_damage = ((power.hp_damage as f32) * rate).round_ties_even() as i32; }
+        for power in &mut value.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); }
     }
     Some((master, value))
 }
@@ -203,7 +227,7 @@ fn monster_attack(
     if critical_roll < critical_chance {
         attack.critical = true;
         let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; }
+        for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); }
     }
     Some((master, attack))
 }
@@ -291,7 +315,15 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
     let source_hit = region.find_monster_by_id(monster_id).map_or(1, |monster| monster.hit(property));
     let source_level = property.level as u8;
     let (base, magnify, level_rate) = game.globe_setup().base_attack_hit_formula();
-    let chance = ((i32::from(source_hit).wrapping_sub(i32::from(target_dodge))) as f32 * magnify + base as f32 + i32::from(source_level).wrapping_sub(i32::from(target_level)) as f32 * level_rate).round_ties_even() as i32;
+    let chance = knock_out_hit_chance(
+        source_hit,
+        target_dodge,
+        source_level,
+        target_level,
+        base,
+        magnify,
+        level_rate,
+    );
     if chance <= game.skill_random_below(100) {
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) { let _ = monster.finish_base_attack_cast_without_reuse(now_ms); }
         return true;
@@ -398,7 +430,15 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     if maximum != 0 && maximum.wrapping_add(1) < game.base_magic_path(region_id, sx, sy, target.x, target.y, None).len() as u32 { failure(game, player_id, 0x0b); return result(QueuedSkillExecutionState::Rejected); }
     cast(game, player_id, target, level, true);
     let (base, magnify, level_rate) = game.globe_setup().base_attack_hit_formula();
-    let chance = ((i32::from(combat.hit).wrapping_sub(i32::from(target.dodge))) as f32 * magnify + base as f32 + i32::from(source_level).wrapping_sub(i32::from(target.level)) as f32 * level_rate).round_ties_even() as i32;
+    let chance = knock_out_hit_chance(
+        combat.hit,
+        target.dodge,
+        source_level,
+        target.level,
+        base,
+        magnify,
+        level_rate,
+    );
     if chance <= game.skill_random_below(100) { return result(QueuedSkillExecutionState::Completed); }
     if let Some((master, attack)) = attack(game, player_id, target.level) {
         match target.identity.object_type {
