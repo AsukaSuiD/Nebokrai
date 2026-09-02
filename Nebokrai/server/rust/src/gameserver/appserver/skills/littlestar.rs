@@ -13,7 +13,9 @@
 //! `CAttackSkill::End(1)` с единичным оружейным `AfterUseSkill`; этот порядок
 //! общий для завершения и отмены, а периодический `Attack` оружие не изнашивает.
 //! Стихийная прибавка вычисляется в расширенной точности x87 из целых свойств
-//! и сохранённой `f32`-константы, затем усекается к нулю.
+//! и сохранённой `f32`-константы, затем усекается к нулю. Player и monster
+//! ветви используют абсолютный срок `CSkill::IsRestored`; периодические тики
+//! и общая длительность остаются elapsed.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -36,7 +38,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination,
+    skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination,
 };
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -245,7 +247,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
 
     if ai.little_star().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if ai.little_star_last_used_ms() != 0 && !time_reached(now_ms, ai.little_star_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.little_star_last_used_ms(), reuse, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

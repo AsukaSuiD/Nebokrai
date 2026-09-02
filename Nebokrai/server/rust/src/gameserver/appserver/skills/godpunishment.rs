@@ -6,11 +6,12 @@
 //! пакеты, `SkillExecutionKernel` и построение phalanx. `CGame` оставляет за
 //! собой только разрешение независимых владельцев, регистрацию и доставку.
 //! `End(1)` сбрасывает execution-состояние после регистрации phalanx;
-//! отмена использует `End(0)` без обновления свойств и cooldown.
+//! отмена использует `End(0)` без обновления свойств и cooldown. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; задержка phalanx остаётся elapsed.
 
 use super::baseattack::time_reached;
 use super::godpunishmentphalanx::CGodPunishmentPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -90,7 +91,7 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
     let lifetime = props.query_property(SUMMONED_LIFETIME); let minimum = props.query_property(MIN_ATTACK) as i32; let maximum_attack = props.query_property(MAX_ATTACK) as i32; let element = props.query_property(ELEMENT_MODIFIER) as i32;
     if ai.god_punishment().is_none() {
         let started = runtime.now_milliseconds(); let now = runtime.now_milliseconds();
-        if ai.god_punishment_last_used_ms() != 0 && !time_reached(now, ai.god_punishment_last_used_ms(), reuse) { fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected); }
+        if !skill_is_restored(ai.god_punishment_last_used_ms(), reuse, now) { fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected); }
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) };
         let Some(source) = player.shape_view() else { return terminal(QueuedSkillExecutionState::Rejected) };
         if maximum != 0 && game.base_magic_path(region, source.tile_x, source.tile_y, x, y, None).len() > maximum as usize { fail(game, player_id, 0x0b, mp); return terminal(QueuedSkillExecutionState::Rejected); }

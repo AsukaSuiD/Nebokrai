@@ -11,12 +11,14 @@
 //! `float`. Критический множитель переводится в `int` с x87 rounding-control
 //! `11`, то есть усечением к нулю после умножения каждого боевого компонента.
 //! `End(true)` фиксирует обновление свойств и cooldown после удара;
-//! `End(false)` прекращает полёт без отката уже применённой атаки.
+//! `End(false)` прекращает полёт без отката уже применённой атаки. Player и
+//! monster ветви используют абсолютный срок `CSkill::IsRestored`; cast и полёт
+//! остаются elapsed.
 
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::{MonsterAttackDeath, owned_monster_attackable, resolve_owned_monster_attack_target};
 use super::monsterprojectile::{MonsterProjectileDispatch, execute_owned_monster_projectile_target, finish_owned_monster_projectile};
 use super::poisonmoth::{master_info, MONSTER_TYPE, PLAYER_TYPE};
@@ -215,7 +217,7 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_step = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.yaksha_slash().is_none() {
         let now = runtime.now_milliseconds();
-        if ai.yaksha_slash_last_used_ms() != 0 && !time_reached(now, ai.yaksha_slash_last_used_ms(), reuse) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.yaksha_slash_last_used_ms(), reuse, now) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(target_view) = target_view(game, region_id, target) else { fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) };
         if maximum != 0 && source_view.real_distance(Some(target_view)) > maximum as i32 { fail(game, player_id, 0x0b); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if game.base_magic_path(region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }

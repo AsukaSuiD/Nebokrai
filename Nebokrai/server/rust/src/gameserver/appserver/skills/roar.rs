@@ -7,10 +7,12 @@
 //! `RoarState`. `CGame` только связывает владельцев, свойства и доставку.
 //! Успех, отказ после `Begin` и клиентская отмена используют подтверждённый
 //! `CSummonSkill::End(1)`: возврат движения, обновление свойств, очистку и cooldown.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`; установка
+//! состояния сохраняет elapsed-задержку.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::roarstate::RoarState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -151,7 +153,7 @@ pub(crate) fn execute_player_roar<Runtime: GameMainLoopRuntime>(game: &mut CGame
     if ai.roar().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if ai.roar_last_used_ms() != 0 && !time_reached(cooldown_now_ms, ai.roar_last_used_ms(), reuse_delay_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.roar_last_used_ms(), reuse_delay_ms, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }

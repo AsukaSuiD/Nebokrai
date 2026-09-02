@@ -11,13 +11,14 @@
 //! Общий `End` очищает execution-state, возвращает движение и завершает
 //! `CAttackSkill::End(1)` с единичным оружейным `AfterUseSkill` и отдельной
 //! cooldown-ячейкой варианта; `Attack` оружие по числу целей не изнашивает.
+//! Ячейки проверяются абсолютным сроком `CSkill::IsRestored`; рывок остаётся elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::flash::{
     calculate_dash_attack, cell_views, master_info, target_level, weapon_is_valid,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::littleflash2::{
     EMPTY_PATH_MESSAGE_ID as LITTLE_FLASH_2_EMPTY_PATH_MESSAGE_ID, LITTLE_FLASH_2_SKILL_ID,
 };
@@ -351,9 +352,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
 
     if ai.little_flash().is_none() {
         let now = runtime.now_milliseconds();
-        if ai.little_flash_last_used_ms(skill_id) != 0
-            && !time_reached(now, ai.little_flash_last_used_ms(skill_id), reuse)
-        {
+        if !skill_is_restored(ai.little_flash_last_used_ms(skill_id), reuse, now) {
             failure(game, player_id, 0x0d, mp_loss, Some(b"GS0278"));
             return terminal(QueuedSkillExecutionState::Rejected);
         }
