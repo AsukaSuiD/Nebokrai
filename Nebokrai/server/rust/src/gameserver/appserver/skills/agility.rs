@@ -19,12 +19,14 @@ use super::agilitystate::{
 };
 use super::baseattack::time_reached;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::stateskill::finish_state_skill;
 use super::natural::{NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN};
 use super::naturalstate::NaturalState;
 use super::rapture::{RAPTURE_SKILL_ID, SKILL_USAGE_TARGET_BLAST_COEFFICIENT_GAIN};
 use super::rapturestate::RaptureState;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
@@ -60,12 +62,15 @@ impl AgilityFamilyExecutionState {
     }
 }
 
-fn finish_movement(game: &mut CGame, player_id: i32) {
+fn restore_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn abort_player_agility(game: &mut CGame, player_id: i32) {
+    restore_movement(game, player_id);
+    abort_skill(game, player_id);
 }
 
 fn finish_player_agility<Runtime: GameMainLoopRuntime>(
@@ -75,8 +80,10 @@ fn finish_player_agility<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_movement(game, player_id);
-    player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
+    restore_movement(game, player_id);
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_agility_family_used(skill_id, now_ms);
+    });
 }
 
 pub(crate) fn cancel_player_agility_family<Runtime: GameMainLoopRuntime>(
@@ -128,11 +135,8 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
     let initial_mana = player.mana();
     let Some(properties) = game.skill_base_properties(skill_id, skill_level)
     else {
-        if player_ai.agility_family().is_some()
-            && let Some(player) = game.find_player_mut(player_id)
-        {
-            player.set_skill_moveable(true);
-            player.set_current_skill_id(None);
+        if player_ai.agility_family().is_some() {
+            abort_player_agility(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -173,7 +177,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
         if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
             game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
-            finish_movement(game, player_id);
+            abort_player_agility(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if mp_loss != 0 && initial_mana < mp_loss {
@@ -183,7 +187,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
                 insufficient_mana_message,
                 mp_loss,
             );
-            finish_movement(game, player_id);
+            abort_player_agility(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -205,8 +209,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
         game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 2);
-        finish_movement(game, player_id);
-        player_ai.mark_agility_family_used(skill_id, runtime.now_milliseconds());
+        finish_player_agility(game, player_id, skill_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -222,7 +225,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
                 insufficient_mana_message,
                 mp_loss,
             );
-            finish_movement(game, player_id);
+            abort_player_agility(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {

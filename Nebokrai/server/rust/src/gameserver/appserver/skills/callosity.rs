@@ -26,6 +26,8 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
+use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -60,6 +62,17 @@ impl CallosityExecutionState {
     }
 }
 
+fn restore_movement(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
+}
+
+fn abort_player_callosity(game: &mut CGame, player_id: i32) {
+    restore_movement(game, player_id);
+    abort_skill(game, player_id);
+}
+
 fn finish_player_callosity<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
@@ -67,11 +80,10 @@ fn finish_player_callosity<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
-    player_ai.mark_callosity_used(skill_id, runtime.now_milliseconds());
+    restore_movement(game, player_id);
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_callosity_used(skill_id, now_ms);
+    });
 }
 
 pub(crate) fn cancel_player_callosity<Runtime: GameMainLoopRuntime>(
@@ -124,10 +136,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
     let Some(properties) = game.skill_base_properties(skill_id, skill_level)
     else {
         if player_ai.callosity().is_some() {
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.set_skill_moveable(true);
-                player.set_current_skill_id(None);
-            }
+            abort_player_callosity(game, player_id);
         }
         return rejected();
     };
@@ -174,11 +183,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
         game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 2);
-        if let Some(player) = game.find_player_mut(player_id) {
-            player.set_skill_moveable(true);
-            player.set_current_skill_id(None);
-        }
-        player_ai.mark_callosity_used(skill_id, runtime.now_milliseconds());
+        finish_player_callosity(game, player_id, skill_id, player_ai, runtime);
         return rejected();
     }
 
@@ -190,10 +195,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         if (current_mp.wrapping_sub(mp_loss) as i32) < 0 {
             game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.set_skill_moveable(true);
-                player.set_current_skill_id(None);
-            }
+            abort_player_callosity(game, player_id);
             return rejected();
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -203,10 +205,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
             game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 8);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0289", rp_loss);
-            if let Some(player) = game.find_player_mut(player_id) {
-                player.set_skill_moveable(true);
-                player.set_current_skill_id(None);
-            }
+            abort_player_callosity(game, player_id);
             return rejected();
         }
         if let Some(player) = game.find_player_mut(player_id) {

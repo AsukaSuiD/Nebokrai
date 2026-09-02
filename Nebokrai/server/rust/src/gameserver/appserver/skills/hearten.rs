@@ -19,8 +19,10 @@ pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 use super::baseattack::time_reached;
 use super::heartenstate::{send_hearten_state_visual, HeartenState};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -66,11 +68,15 @@ fn send_cast(
     }
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
-fn finish_movement(game: &mut CGame, player_id: i32) {
+fn restore_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
+}
+
+fn abort_player_hearten(game: &mut CGame, player_id: i32) {
+    restore_movement(game, player_id);
+    abort_skill(game, player_id);
 }
 
 fn finish_player_hearten<Runtime: GameMainLoopRuntime>(
@@ -79,8 +85,10 @@ fn finish_player_hearten<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    finish_movement(game, player_id);
-    player_ai.mark_hearten_used(runtime.now_milliseconds());
+    restore_movement(game, player_id);
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
+        player_ai.mark_hearten_used(now_ms);
+    });
 }
 
 pub(crate) fn cancel_player_hearten<Runtime: GameMainLoopRuntime>(
@@ -144,7 +152,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         .unwrap_or((player_id, source_x, source_y));
     let Some(properties) = game.skill_base_properties(HEARTEN_SKILL_ID, skill_level) else {
         game.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 2);
-        finish_movement(game, player_id);
+        abort_player_hearten(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
@@ -205,7 +213,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
 
     if game.find_player(target_id).is_some_and(CPlayer::is_dead) {
         game.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 10);
-        finish_movement(game, player_id);
+        abort_player_hearten(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -217,7 +225,7 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         if current_mana < mp_loss {
             game.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish_movement(game, player_id);
+            abort_player_hearten(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
