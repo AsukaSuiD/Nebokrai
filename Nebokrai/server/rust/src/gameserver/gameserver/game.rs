@@ -46273,12 +46273,11 @@ impl CGame {
         ) = (tick, &phalanx)
         {
             let Some(target) = thunder_slash_target(self, region_id, thunder_slash) else { return true };
-            let applied = match target.object_type {
+            match target.object_type {
                 PLAYER_TYPE => self.apply_summoned_skill_to_player(&phalanx, target.id, region_id, false, runtime),
                 MONSTER_TYPE => self.apply_summoned_skill_to_monster(&phalanx, target.id, region_id, sampled_at_ms, runtime),
                 _ => false,
             };
-            if applied { self.damage_player_weapon(thunder_slash.master().master_id, runtime); }
             return true;
         }
         if let (
