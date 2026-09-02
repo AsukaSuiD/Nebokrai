@@ -78,7 +78,6 @@ pub(crate) const fn explosive_arrow_variant(dispatch: PlayerSkillDispatch) -> Op
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_explosive_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, variant: ExplosiveArrowVariant, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_explosive_arrow_used(variant, now_ms));
 }
 fn abort_player_explosive_arrow(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }

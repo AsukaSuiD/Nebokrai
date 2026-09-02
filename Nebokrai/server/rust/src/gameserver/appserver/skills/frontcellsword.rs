@@ -51,7 +51,6 @@ pub(crate) fn finish_front_cell_sword<Runtime, MarkUsed>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, mark_used);
 }
 

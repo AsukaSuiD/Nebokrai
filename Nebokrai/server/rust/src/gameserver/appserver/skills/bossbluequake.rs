@@ -218,6 +218,9 @@ fn finish_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
     }
     if successful {
         game.damage_player_weapon(player_id, runtime);
+    }
+    let _ = game.update_player_properties(player_id);
+    if successful {
         player_ai.mark_boss_blue_quake_used(runtime.now_milliseconds());
     }
 }

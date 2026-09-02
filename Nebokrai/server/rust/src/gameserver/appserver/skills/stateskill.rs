@@ -3,8 +3,10 @@
 //! Несколько конкретных владельцев используют одинаковый каркас пакета
 //! отказа и начала/завершения каста. Значения `opcode`, `skill ID` и `action`
 //! передаёт конкретный навык; здесь сохраняется только общий порядок полей.
-//! Унаследованный `CStateSkill → CSkill::End(true)` очищает current skill и
-//! фиксирует cooldown без повторного применения уже установленного состояния.
+//! Унаследованный `CStateSkill::End(true)` после установки состояния выполняет
+//! общий оружейный `AfterUseSkill`, а `CSkill::End` обновляет свойства,
+//! очищает current skill и фиксирует cooldown без повторного применения уже
+//! установленного состояния.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::states::summonskill::abort_skill;
@@ -22,6 +24,8 @@ pub(crate) fn finish_state_skill<Runtime, MarkUsed>(
     Runtime: GameMainLoopRuntime,
     MarkUsed: FnOnce(&mut CPlayerAI, u32),
 {
+    game.damage_player_weapon(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     abort_skill(game, player_id);
     mark_used(player_ai, runtime.now_milliseconds());
 }

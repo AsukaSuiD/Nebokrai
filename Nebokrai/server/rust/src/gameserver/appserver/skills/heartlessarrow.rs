@@ -79,7 +79,6 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_heartless_arrow_used(now_ms));
 }
 

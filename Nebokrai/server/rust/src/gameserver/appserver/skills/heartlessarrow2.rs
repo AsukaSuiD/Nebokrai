@@ -162,7 +162,6 @@ fn finish_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
         return;
     };
     restore_player_movement(game, player_id);
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_heartless_arrow_area_used(id, now_ms);
     });

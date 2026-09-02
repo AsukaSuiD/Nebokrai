@@ -39,8 +39,9 @@ pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_
 }
 
 /// Общий достигнутый хвост `CBaseAttack::End`, `CBaseMagic::End` и
-/// `CArchery::End`: износ оружия предшествует фиксации времени восстановления
-/// и очистке текущего навыка; задержанные варианты сначала возвращают движение.
+/// `CArchery::End`: износ оружия и обязательный `CPlayer::UpdateProperty`
+/// предшествуют фиксации времени восстановления и очистке текущего навыка;
+/// задержанные варианты сначала возвращают движение.
 fn finish_base_attack_owner<Runtime, MarkUsed>(
     game: &mut CGame,
     player_id: i32,
@@ -58,6 +59,7 @@ fn finish_base_attack_owner<Runtime, MarkUsed>(
         player.set_skill_moveable(true);
     }
     game.damage_player_weapon(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
@@ -126,6 +128,7 @@ pub(crate) fn abort_player_base_attack_on_region_change(
     let Some(dispatch) = player_ai.base_attack().map(SkillExecutionKernel::dispatch) else {
         return false;
     };
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);

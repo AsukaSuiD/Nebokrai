@@ -50,7 +50,6 @@ fn finish_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_mosou_used(now_ms);
     });

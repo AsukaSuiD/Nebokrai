@@ -208,6 +208,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     }
     game.restore_region_owner(region);
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
@@ -228,6 +229,7 @@ pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
     let Some(dispatch) = player_ai.gibe().map(SkillExecutionKernel::dispatch) else {
         return false;
     };
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

@@ -123,7 +123,6 @@ fn restore_movement(game: &mut CGame, player_id: i32) {
 
 fn finish<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_movement(game, player_id);
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_direct_projectile_used(skill_id, now_ms));
 }
 

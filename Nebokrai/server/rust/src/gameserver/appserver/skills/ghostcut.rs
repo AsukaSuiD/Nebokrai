@@ -67,7 +67,6 @@ pub(crate) fn is_ghost_cut_dispatch(dispatch: PlayerSkillDispatch) -> bool { fam
 
 fn finish_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, skill_id: u32, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_ghost_cut_used(skill_id, now_ms);
     });

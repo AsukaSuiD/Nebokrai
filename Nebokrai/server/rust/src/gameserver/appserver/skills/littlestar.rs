@@ -139,7 +139,6 @@ fn finish_player_little_star<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     send_player_visual(game, player_id, level, 3, None);
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
         player_ai.mark_little_star_used(now_ms);
     });

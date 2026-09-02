@@ -59,7 +59,6 @@ fn send_strike(game: &mut CGame, player_id: i32, level: i32, identity: ShapeIden
 fn send_end(game: &mut CGame, player_id: i32, level: i32) { let Some(player) = game.find_player(player_id) else { return }; let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(3); message.add_long(SCORPION_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(player.shape().get_direction()); let _ = game.send_player_shape_around(player_id, None, &message); }
 fn finish_player_scorpion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    game.damage_player_weapon(player_id, runtime);
     finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_scorpion_used(now_ms));
 }
 fn abort_player_scorpion(game: &mut CGame, player_id: i32, level: i32) { restore_player_movement(game, player_id); send_end(game, player_id, level); abort_skill(game, player_id); }
