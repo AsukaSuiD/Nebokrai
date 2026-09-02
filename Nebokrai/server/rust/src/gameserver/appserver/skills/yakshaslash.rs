@@ -7,13 +7,15 @@
 //! конкретного `CMoveShape`. Объектная ветвь достигнута и для игрока, и для
 //! монстра; `CGame` только разрешает владельцев, применяет готовый удар и
 //! выполняет доставку.
-//! Критический множитель переводится в `int` с x87 rounding-control `11`,
-//! то есть усечением к нулю после умножения каждого боевого компонента.
+//! Беззнаковый skill factor сохраняется в x87 до единственной записи в
+//! `float`. Критический множитель переводится в `int` с x87 rounding-control
+//! `11`, то есть усечением к нулю после умножения каждого боевого компонента.
 //! `End(true)` фиксирует обновление свойств и cooldown после удара;
 //! `End(false)` прекращает полёт без отката уже применённой атаки.
 
 use super::baseattack::{time_reached, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
+use super::fightdefense::truncate_original;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::{MonsterAttackDeath, owned_monster_attackable, resolve_owned_monster_attack_target};
 use super::monsterprojectile::{MonsterProjectileDispatch, execute_owned_monster_projectile_target, finish_owned_monster_projectile};
@@ -193,8 +195,9 @@ fn calculate_attack(game: &mut CGame, player_id: i32, level: i32, factor: u32, h
     let master = master_info(player);
     let span = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_abs().wrapping_add(1);
     let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(span)).max(0);
-    let mut attack = AttackInformation { skill_id: YAKSHA_SLASH_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: factor as f32 * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
-    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate) as i32; } }
+    let damage_factor = (f64::from(factor) * f64::from(0.01_f32)) as f32;
+    let mut attack = AttackInformation { skill_id: YAKSHA_SLASH_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
+    if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } }
     Some((master, attack))
 }
 
