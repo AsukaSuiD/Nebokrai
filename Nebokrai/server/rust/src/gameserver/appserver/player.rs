@@ -5284,7 +5284,7 @@ impl CPlayer {
         let base_u16 = |offset| read_player_wire_u16(&self.base_property_wire, offset);
         let base_u32 = |offset| read_player_wire_u32(&self.base_property_wire, offset);
         let derived = |value: u32, coefficient: f32| {
-            ((value as f32) * coefficient).round() as u32
+            ((value as f32) * coefficient).trunc() as u32
         };
         let mut properties = PlayerCombatProperties {
             maximum_hp: self
@@ -8464,8 +8464,16 @@ impl CPlayer {
             self.tao_zhuang_properties.clone()
         };
         let occupation = usize::from(self.base_properties.occupation).min(2);
-        let derived = |value: u32, coefficient: f32| {
-            ((value as i32 as f32) * coefficient).round() as i32 as u32
+        // Оба TaoZhuang owner-а вызывают точный `AddPreItemToPlayer`: x87
+        // усекает полную сумму live property и производной signed delta.
+        let derived_u32 = |current: u32, value: u32, coefficient: f32| {
+            (current as f32 + value as i32 as f32 * coefficient).trunc() as i32 as u32
+        };
+        let derived_i32 = |current: i32, value: u32, coefficient: f32| {
+            (current as f32 + value as i32 as f32 * coefficient).trunc() as i32
+        };
+        let derived_u16 = |current: u16, value: u32, coefficient: f32| {
+            (current as f32 + value as i32 as f32 * coefficient).trunc() as i32 as u16
         };
         for (property, value) in properties {
             match property {
@@ -8526,58 +8534,63 @@ impl CPlayer {
                 0x1b => {
                     self.combat_properties.strength =
                         self.combat_properties.strength.wrapping_add(value);
-                    self.combat_properties.maximum_attack = self
-                        .combat_properties
-                        .maximum_attack
-                        .wrapping_add(derived(value, coefficients.str_to_max_attack[occupation]));
-                    self.combat_properties.burden =
-                        self.combat_properties.burden.wrapping_add(derived(
-                            value,
-                            coefficients.str_to_burden[occupation],
-                        )
-                            as u16);
+                    self.combat_properties.maximum_attack = derived_u32(
+                        self.combat_properties.maximum_attack,
+                        value,
+                        coefficients.str_to_max_attack[occupation],
+                    );
+                    self.combat_properties.burden = derived_u16(
+                        self.combat_properties.burden,
+                        value,
+                        coefficients.str_to_burden[occupation],
+                    );
                 }
                 0x1c => {
                     self.combat_properties.dexterity =
                         self.combat_properties.dexterity.wrapping_add(value);
-                    self.combat_properties.minimum_attack = self
-                        .combat_properties
-                        .minimum_attack
-                        .wrapping_add(derived(value, coefficients.dex_to_min_attack[occupation]));
-                    self.combat_properties.reank = self
-                        .combat_properties
-                        .reank
-                        .wrapping_add(derived(value, coefficients.dex_to_stiff[occupation]) as u16);
+                    self.combat_properties.minimum_attack = derived_u32(
+                        self.combat_properties.minimum_attack,
+                        value,
+                        coefficients.dex_to_min_attack[occupation],
+                    );
+                    self.combat_properties.reank = derived_u16(
+                        self.combat_properties.reank,
+                        value,
+                        coefficients.dex_to_stiff[occupation],
+                    );
                 }
                 0x1d => {
                     self.combat_properties.constitution =
                         self.combat_properties.constitution.wrapping_add(value);
-                    self.combat_properties.maximum_hp = self
-                        .combat_properties
-                        .maximum_hp
-                        .wrapping_add(derived(value, coefficients.con_to_max_hp[occupation]));
-                    self.combat_properties.defense = self
-                        .combat_properties
-                        .defense
-                        .wrapping_add(derived(value, coefficients.con_to_defense[occupation]));
+                    self.combat_properties.maximum_hp = derived_u32(
+                        self.combat_properties.maximum_hp,
+                        value,
+                        coefficients.con_to_max_hp[occupation],
+                    );
+                    self.combat_properties.defense = derived_u32(
+                        self.combat_properties.defense,
+                        value,
+                        coefficients.con_to_defense[occupation],
+                    );
                 }
                 0x1e => {
                     self.combat_properties.intelligence =
                         self.combat_properties.intelligence.wrapping_add(value);
-                    self.combat_properties.element_modify = self
-                        .combat_properties
-                        .element_modify
-                        .wrapping_add(
-                            derived(value, coefficients.int_to_element[occupation]) as i32
-                        );
-                    self.combat_properties.maximum_mp = self
-                        .combat_properties
-                        .maximum_mp
-                        .wrapping_add(derived(value, coefficients.int_to_max_mp[occupation]));
-                    self.combat_properties.element_resistance = self
-                        .combat_properties
-                        .element_resistance
-                        .wrapping_add(derived(value, coefficients.int_to_resistant[occupation]));
+                    self.combat_properties.element_modify = derived_i32(
+                        self.combat_properties.element_modify,
+                        value,
+                        coefficients.int_to_element[occupation],
+                    );
+                    self.combat_properties.maximum_mp = derived_u32(
+                        self.combat_properties.maximum_mp,
+                        value,
+                        coefficients.int_to_max_mp[occupation],
+                    );
+                    self.combat_properties.element_resistance = derived_u32(
+                        self.combat_properties.element_resistance,
+                        value,
+                        coefficients.int_to_resistant[occupation],
+                    );
                 }
                 0x1f => {
                     self.combat_properties.maximum_hp =
