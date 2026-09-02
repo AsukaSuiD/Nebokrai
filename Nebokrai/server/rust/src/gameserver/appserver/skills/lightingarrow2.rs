@@ -9,8 +9,9 @@
 //! `End(true)` прекращает оставшиеся клетки и фиксирует cooldown, тогда как
 //! внутренний `End(false)` сохраняет уже нанесённые необратимые эффекты, но не
 //! запускает новые клетки и не фиксирует cooldown.
-//! Критический урон вычисляется в расширенной точности x87 и усекается к нулю
-//! при записи в `i32`.
+//! Беззнаковый коэффициент урона остаётся в расширенной точности x87 до
+//! единственной записи в `float`; критический урон также вычисляется в x87 и
+//! усекается к нулю при записи в `i32`.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -109,7 +110,9 @@ pub(crate) const fn is_lighting_arrow_2_dispatch(dispatch: PlayerSkillDispatch) 
 
 fn calculate_attack(game: &mut CGame, player_id: i32, target_level: u8, level: i32, factor: u32, hit: i32) -> Option<(MasterInfo, AttackInformation)> {
     let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let (divisor, floor) = game.globe_setup().weapon_damage_factors(); let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, floor); let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
-    let mut attack = AttackInformation { skill_id: LIGHTING_ARROW_2_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor: factor as f32 * weapon_factor * 0.01, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
+    let damage_factor =
+        (f64::from(factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32;
+    let mut attack = AttackInformation { skill_id: LIGHTING_ARROW_2_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit, damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
     if game.skill_random_below(100) < i32::from(combat.cch) { attack.critical = true; let rate = game.globe_setup().critical_rate(); for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); } }
     Some((master, attack))
 }
