@@ -1228,6 +1228,7 @@ use crate::gameserver::appserver::skills::curestate::{
 };
 use crate::gameserver::appserver::skills::fightdefense::{
     defend_build_base_attack, defend_monster_base_attack, defend_player_base_attack,
+    truncate_original,
 };
 use crate::gameserver::appserver::skills::fury::{
     cancel_player_fury, execute_player_fury, is_fury_dispatch, FURY_SKILL_ID,
@@ -14851,18 +14852,20 @@ impl CGame {
         self.main_loop_state.current_tick_ms
     }
 
+    /// Exact `CShape::Distance(CShape*)`: обе координаты усекаются к нулю до
+    /// вычисления figure-adjusted Chebyshev distance.
     pub(crate) fn player_trade_distance(&self, first_id: i32, second_id: i32) -> Option<i32> {
         let first_player = self.players.get(&first_id)?;
         let second_player = self.players.get(&second_id)?;
         let first = first_player.shape();
         let second = second_player.shape();
-        let dx = ((first.get_pos_x().round_ties_even() as i32)
-            .wrapping_sub(second.get_pos_x().round_ties_even() as i32)
+        let dx = (truncate_original(f64::from(first.get_pos_x()))
+            .wrapping_sub(truncate_original(f64::from(second.get_pos_x())))
             .unsigned_abs() as i32)
             .wrapping_sub(i32::from(first_player.figure().get(2)))
             .wrapping_sub(i32::from(second_player.figure().get(2)));
-        let dy = ((first.get_pos_y().round_ties_even() as i32)
-            .wrapping_sub(second.get_pos_y().round_ties_even() as i32)
+        let dy = (truncate_original(f64::from(first.get_pos_y()))
+            .wrapping_sub(truncate_original(f64::from(second.get_pos_y())))
             .unsigned_abs() as i32)
             .wrapping_sub(i32::from(first_player.figure().get(0)))
             .wrapping_sub(i32::from(second_player.figure().get(0)));
@@ -18477,8 +18480,8 @@ impl CGame {
         };
         let level = player.level();
         let jjc_level = player.jjc_level();
-        let tile_x = player.shape().get_pos_x().round_ties_even() as i32;
-        let tile_y = player.shape().get_pos_y().round_ties_even() as i32;
+        let tile_x = truncate_original(f64::from(player.shape().get_pos_x()));
+        let tile_y = truncate_original(f64::from(player.shape().get_pos_y()));
         let mut request = CMessage::new(0x0006_0902);
         request.add_long(player_id);
         request.add_byte(level);
