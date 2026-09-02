@@ -9,7 +9,6 @@
 //! установленного состояния.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::CGame;
 use crate::gameserver::gameserver::game::GameMainLoopRuntime;
 use crate::nets::netserver::message::CMessage;
@@ -26,7 +25,9 @@ pub(crate) fn finish_state_skill<Runtime, MarkUsed>(
 {
     game.damage_player_weapon(player_id, runtime);
     let _ = game.update_player_properties(player_id);
-    abort_skill(game, player_id);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
     mark_used(player_ai, runtime.now_milliseconds());
 }
 

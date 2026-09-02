@@ -7,8 +7,9 @@
 //! очищает текущий навык и фиксирует время восстановления. В достигнутых
 //! владельцах виртуальный `Summon` является синхронным обновлением свойств
 //! игрока; skill-specific состояние и движение остаются у конкретного owner-а.
-//! При `End(0)` `Summon` и `AfterUseSkill` не выполняются, а конкретный owner
-//! завершает свои флаги через отдельный abort-путь. `CCorpsePtomaine`,
+//! При `End(0)` `Summon` и `AfterUseSkill` не выполняются, но базовый
+//! `CSkill::End` всё равно обновляет свойства перед очисткой current skill;
+//! concrete owner завершает свои флаги через отдельный abort-путь. `CCorpsePtomaine`,
 //! `CSpriteBurn`, `CGibe`, `CMonsterTaming` и `CPetsControl` переопределяют
 //! `AfterUseSkill` пустой функцией; для них используется явный хвост без
 //! износа оружия.
@@ -21,6 +22,7 @@ use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 
 pub(crate) fn abort_skill(game: &mut CGame, player_id: i32) {
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
