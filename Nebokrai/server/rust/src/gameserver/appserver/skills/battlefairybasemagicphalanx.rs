@@ -9,6 +9,11 @@
 //! рассчитанную атаку к независимому владельцу цели.
 //! Sprite-scale усекается через исходный 64-битный `fistp`, а критический
 //! множитель — к `int`; оба преобразования используют truncation к нулю.
+//! Exact точки `0x005E2698..0x005E26DC` и `0x005E27BC..0x005E27E6`
+//! сохраняют x87-произведения до соответствующих `FISTP`.
+
+use super::fightdefense::truncate_original;
+use super::thunder::truncate_original_i64_low;
 
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
@@ -141,8 +146,13 @@ pub(crate) fn calculate_owned_battle_fairy_base_magic_attack(
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
-    let sprite = (((war_soul.addon_property_value(game.goods_factory(), GAP_BF_SPRITE, 1) as f64)
-        * 0.0001) as i64) as i32;
+    let sprite = truncate_original_i64_low(
+        f64::from(war_soul.addon_property_value(
+            game.goods_factory(),
+            GAP_BF_SPRITE,
+            1,
+        )) * 0.0001,
+    );
     let combat_scales = game.globe_setup().base_combat_scales();
     calculate_battle_fairy_base_magic_attack(
         phalanx,
@@ -210,7 +220,9 @@ pub(crate) fn calculate_battle_fairy_base_magic_attack(
         attack.critical = true;
         let critical_rate = combat.critical_rate();
         for power in &mut attack.damages {
-            power.hp_damage = ((power.hp_damage as f32) * critical_rate) as i32;
+            power.hp_damage = truncate_original(
+                f64::from(power.hp_damage) * f64::from(critical_rate),
+            );
         }
     }
     let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] =
