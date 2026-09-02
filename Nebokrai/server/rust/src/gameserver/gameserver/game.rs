@@ -45283,6 +45283,7 @@ impl CGame {
                 missed.add_long(target_id);
                 let _ = self.send_player_shape_around(target_id, None, &missed);
             }
+            self.increase_owned_player_rp(master.master_id, true, 0);
             return true;
         }
         let current_health = target_health - damage;
@@ -45294,6 +45295,9 @@ impl CGame {
                     .movement_shape_mut()
                     .set_action(if current_health == 0 { 6 } else { 5 });
             }
+        }
+        if damage != 0 {
+            self.increase_owned_player_rp(target_id, false, damage as u16);
         }
         if current_health != 0 && attack.full_miss == 0 {
             let _ = self.queue_player_hurt_ai(target_id, damage, runtime);
@@ -45353,6 +45357,7 @@ impl CGame {
             let _ = self.send_player_shape_around(target_id, None, &hurt);
             self.damage_player_armor(target_id, runtime);
         }
+        self.increase_owned_player_rp(master.master_id, true, 0);
         true
     }
 
@@ -45643,9 +45648,11 @@ impl CGame {
             missed.add_long(MONSTER_TYPE);
             missed.add_long(target_id);
             let _ = self.send_shape_position_around(region_id, x, y, &missed);
+            self.increase_owned_player_rp(master.master_id, true, 0);
             return true;
         }
         if damage == 0 {
+            self.increase_owned_player_rp(master.master_id, true, 0);
             return true;
         }
         if current_health != 0 {
@@ -45666,6 +45673,7 @@ impl CGame {
                 master.master_type,
                 master.master_id,
             );
+            self.increase_owned_player_rp(master.master_id, true, 0);
             return true;
         }
 
@@ -45678,6 +45686,7 @@ impl CGame {
         died.base_mut().add_char(1);
         Self::append_base_attack_tail(&mut died, &attack);
         let _ = self.send_shape_position_around(region_id, x, y, &died);
+        self.increase_owned_player_rp(master.master_id, true, 0);
         true
     }
 
@@ -45737,7 +45746,7 @@ impl CGame {
             &self.globe_setup,
             &mut random,
         );
-        self.apply_defended_player_attack_to_stationary_build(
+        let applied = self.apply_defended_player_attack_to_stationary_build(
             master.master_id,
             region_id,
             target,
@@ -45745,7 +45754,11 @@ impl CGame {
             view.tile_y,
             &attack,
             runtime,
-        )
+        );
+        if applied {
+            self.increase_owned_player_rp(master.master_id, true, 0);
+        }
+        applied
     }
 
     fn run_owned_skill_phalanx<Runtime: GameMainLoopRuntime>(
