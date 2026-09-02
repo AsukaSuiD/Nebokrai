@@ -16,6 +16,8 @@
 //! расписание поэтому выполняет обычный `OnLoseTarget` и ставит поиск заново.
 //! Конструктор и ветвь `SKILL_MONSTER_BASE_ATTACK` фабрики подтверждают ID
 //! `0x2bd`; навык игрока `1` принадлежит другому модулю и не подменяет этот ID.
+//! Проверка reuse в расписании делегируется общему exact `CSkill::IsRestored`:
+//! его wrapped DWORD deadline намеренно отличается от длительностей стадий.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -1090,7 +1092,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .find_monster_by_id(monster_id)
             .map(|monster| monster.skill_last_used_ms(skill_id))
             .unwrap_or_default();
-        if last_used_ms != 0 && now_ms.wrapping_sub(last_used_ms) < reuse_delay_ms {
+        if last_used_ms != 0 && !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
             return true;
         }
         return execute_monster_immediate_state(
@@ -1878,7 +1880,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .find_monster_by_id(monster_id)
         .map(|monster| monster.skill_last_used_ms(skill_id))
         .unwrap_or_default();
-    if last_used_ms != 0 && now_ms.wrapping_sub(last_used_ms) < reuse_delay_ms {
+    if last_used_ms != 0 && !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
         return true;
     }
     let direction = get_line_direction(monster_x, monster_y, target_x, target_y);
