@@ -6584,11 +6584,11 @@ impl CPlayer {
         self.auto_protected
     }
 
-    pub(crate) fn improve_experience_multiplier(&self) -> f32 {
+    pub(crate) fn improve_experience_multiplier(&self) -> f64 {
         self.move_shape
             .script_states()
             .iter()
-            .fold(1.0_f32, |multiplier, state| {
+            .fold(1.0_f64, |multiplier, state| {
                 multiplier + state.experience_multiplier_delta()
             })
     }

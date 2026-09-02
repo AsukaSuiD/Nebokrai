@@ -223,7 +223,7 @@ impl ScriptMoveState {
         }
     }
 
-    pub(crate) const fn experience_multiplier_delta(self) -> f32 {
+    pub(crate) fn experience_multiplier_delta(self) -> f64 {
         match self.kind {
             ScriptStateKind::ImproveExp(state) => state.multiplier_delta(),
             _ => 0.0,

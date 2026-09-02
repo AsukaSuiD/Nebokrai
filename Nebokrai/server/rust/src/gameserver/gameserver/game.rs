@@ -38089,11 +38089,12 @@ impl CGame {
             {
                 let level_delta = i32::from(beneficiary_level) - monster_level;
                 if level_delta > 0 {
-                    let attenuation = (level_delta as f32 * drop.level_attenuation)
-                        .min(drop.level_attenuation_limit);
+                    let attenuation =
+                        (f64::from(level_delta) * f64::from(drop.level_attenuation))
+                            .min(f64::from(drop.level_attenuation_limit));
                     let remaining = 1.0 - attenuation;
                     if remaining > 0.0 {
-                        maximum_odds = (maximum_odds as f32 / remaining).round_ties_even() as i32;
+                        maximum_odds = (f64::from(maximum_odds) / remaining).trunc() as i32;
                     } else {
                         continue;
                     }
@@ -38102,8 +38103,9 @@ impl CGame {
             if maximum_odds == 0 {
                 continue;
             }
-            let odds = (drop.odds as f32 * self.globe_setup.monster_drop_goods_scale())
-                .round_ties_even() as i32;
+            let odds = (f64::from(drop.odds)
+                * f64::from(self.globe_setup.monster_drop_goods_scale()))
+            .trunc() as i32;
             if odds <= game_legacy_random(&mut self.random_state, maximum_odds) {
                 continue;
             }
@@ -38197,14 +38199,10 @@ impl CGame {
             None => return false,
         };
         let raw_vigour = f64::from(self.globe_setup.exp_to_vigour_x())
-            * f64::from(experience_gain.wrapping_add(600))
-            * 0.30103
+            * f64::from(experience_gain.wrapping_add(600)).log10()
             - f64::from(self.globe_setup.exp_to_vigour_y());
-        let vigour_gain = if raw_vigour <= 0.0 {
-            0
-        } else {
-            (raw_vigour.round_ties_even() as u32).min(self.globe_setup.maximum_vigour_once())
-        };
+        let vigour_gain = ((raw_vigour.trunc() as i32).max(0) as u32)
+            .min(self.globe_setup.maximum_vigour_once());
         let Some(player) = self.find_player_mut(player_id) else {
             return false;
         };
@@ -38403,10 +38401,12 @@ impl CGame {
                 player.continuous_kill_amount(),
             );
             let improve_multiplier = player.improve_experience_multiplier();
-            let experience_gain =
-                ((corrected as f32) * exp_scale * region_scale * improve_multiplier)
-                    .round_ties_even()
-                    .max(0.0) as u32;
+            let globally_scaled =
+                (f64::from(corrected) * f64::from(exp_scale)).trunc() as i32 as u32;
+            let region_scaled =
+                (f64::from(globally_scaled) * f64::from(region_scale)).trunc() as i32 as u32;
+            let experience_gain = (f64::from(region_scaled) * improve_multiplier)
+                .trunc() as i32 as u32;
             if self.add_player_experience(player_id, experience_gain, runtime) {
                 self.increase_player_followers_experience(player_id, region_id, experience_gain);
             }

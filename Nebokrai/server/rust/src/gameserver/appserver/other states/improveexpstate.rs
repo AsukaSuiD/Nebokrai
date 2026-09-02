@@ -3,7 +3,8 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/other states/improveexpstate.cpp`. Достигнутый путь создаётся
 //! `CMoveShape::AddState`; каждый живой экземпляр независимо добавляет
-//! `coefficient * 0.01` к множителю опыта в порядке канонического списка.
+//! `coefficient * float(0.01)` к неокруглённому x87-подобному множителю опыта
+//! в порядке канонического списка.
 //! Exact vtable направляет клиентский срок на
 //! `CAgilityState2::GetRemainedTime` по `0x005D5F30`.
 
@@ -22,8 +23,8 @@ impl ImproveExpState {
 
     pub(crate) const fn state_id(self) -> i32 { IMPROVE_EXP_STATE_ID }
 
-    pub(crate) const fn multiplier_delta(self) -> f32 {
-        self.coefficient as f32 * 0.01
+    pub(crate) fn multiplier_delta(self) -> f64 {
+        f64::from(self.coefficient) * f64::from(0.01_f32)
     }
 }
 

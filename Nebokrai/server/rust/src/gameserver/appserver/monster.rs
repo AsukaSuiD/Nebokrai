@@ -78,8 +78,10 @@
 //! Два направления virtual `IsAttackAble` разведены явно: этот owner
 //! проверяет monster-target относительно player/monster attacker-а, а
 //! обратную player-target политику хранит `CPlayer` и координирует `CGame`.
-//! Формулы групповой квоты и поправки опыта также принадлежат этому owner-у;
-//! состав живой группы, множители игрока/региона и выдачу координирует `CGame`.
+//! Формулы групповой квоты и поправки опыта также принадлежат этому owner-у:
+//! таблица квоты индексируется числом живых участников, а оба результата
+//! усекаются к нулю после x87-порядка операций. Состав живой группы,
+//! поэтапные масштабы игрока/региона и выдачу координирует `CGame`.
 //! Там же разрешается `GetBeneficiary`: при непригодности прямого кандидата
 //! используется первый участник его типизированного командного сеанса в том
 //! же регионе и в исходном порядке списка подключений.
@@ -188,8 +190,10 @@ pub(crate) struct MonsterCombatProperties {
 }
 
 /// Параметры точных `CalculateExperienceQuota` и
-/// `CalculateExperienceCorrective`; состав группы и применение результата
-/// остаются у `CGame`.
+/// `CalculateExperienceCorrective`; состав группы и поэтапное применение
+/// результата остаются у `CGame`. Вычисления ведутся через `f64` как безопасный
+/// адаптер для x87-стека оригинала, а коэффициенты сохраняют исходную `f32`
+/// точность.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MonsterExperienceFormula {
     ratios: [f32; 8],
@@ -233,13 +237,12 @@ impl MonsterExperienceFormula {
             return property.experience;
         }
         let factor = ((1.0
-            - self.difference * (average_level - f32::from(player_level)))
-            / alive_amount as f32)
-            .max(self.limit);
-        (property.experience as f32
-            * factor
-            * self.ratios[(alive_amount.saturating_sub(1).min(7)) as usize])
-            .round_ties_even() as u32
+            - f64::from(self.difference)
+                * (f64::from(average_level) - f64::from(player_level)))
+            / f64::from(alive_amount))
+        .max(f64::from(self.limit));
+        let ratio = self.ratios[alive_amount.min(7) as usize];
+        (f64::from(property.experience) * factor * f64::from(ratio)).trunc() as i32 as u32
     }
 
     pub(crate) fn corrective(
@@ -252,21 +255,22 @@ impl MonsterExperienceFormula {
     ) -> u32 {
         let level_delta = i32::from(player_level) - property.level as i32;
         let amerce_level = level_delta.wrapping_sub(self.amerce_start_level).max(0);
-        let corrective_factor =
-            (1.0 - amerce_level as f32 * self.amerce).max(self.amerce_limit);
-        let mut corrected = (quota as f32 * corrective_factor)
-            .round_ties_even()
-            .max(0.0) as u32;
+        let corrective_factor = (1.0
+            - f64::from(amerce_level) * f64::from(self.amerce))
+        .max(f64::from(self.amerce_limit));
+        let mut corrected = (f64::from(quota) * corrective_factor)
+            .max(0.0)
+            .trunc() as i32 as u32;
         corrected = corrected.min(property.experience);
         if level_delta.max(0) <= self.hit_base_level
             && is_first_attacker
             && continuous_kill_amount != 0
         {
-            let prize = (continuous_kill_amount as f32 * self.hit_prize)
-                .min(self.maximum_hit_prize);
-            corrected = (corrected as f32 * (prize + 1.0))
-                .round_ties_even()
-                .max(0.0) as u32;
+            let prize = (f64::from(continuous_kill_amount) * f64::from(self.hit_prize))
+                .min(f64::from(self.maximum_hit_prize));
+            corrected = (f64::from(corrected) * (prize + 1.0))
+                .max(0.0)
+                .trunc() as i32 as u32;
         }
         corrected
     }
