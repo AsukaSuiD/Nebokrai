@@ -183,7 +183,8 @@
 //! `BFPropertyAdd` соединяет восемь gear-ячеек с headgear battle fairy,
 //! `GlobeSetup` occupation coefficients и player combat state. Сохранены
 //! ранний effect до результата Add, post-remove `-1`, clamp текущих HP/MP,
-//! двойное применение MaxHP/Str/Int/Dex и двойной `0xBF918` в Remove.
+//! двойное применение MaxHP/Str/Int/Dex, x87 truncate каждой дробной дельты
+//! и двойной `0xBF918` в Remove.
 //! Goods-message `0x8FC2A` материализован до ordered potential mutation:
 //! aggregate guard остаётся в клиентских единицах, отдельные allocation
 //! умножаются на `10000`, одинаковые property keys имеют `std::map` first-win,
@@ -12730,11 +12731,11 @@ impl CPlayer {
             let (tracked_property, applied_amount) = match property {
                 GAP_BF_ATTACK => (
                     GAP_BF_ATTACK_POTENTIAL,
-                    (f64::from(amount) * 1.5).round() as i32,
+                    (f64::from(amount) * 1.5).trunc() as i32,
                 ),
                 GAP_BF_SPRITE => (
                     GAP_BF_SPRITE_POTENTIAL,
-                    (f64::from(amount) * 1.5).round() as i32,
+                    (f64::from(amount) * 1.5).trunc() as i32,
                 ),
                 GAP_BF_BLAST => (GAP_BF_BLAST_POTENTIAL, amount),
                 GAP_BF_BRAVE => (GAP_BF_BRAVE_POTENTIAL, amount),
@@ -13189,7 +13190,7 @@ impl CPlayer {
                 + f64::from(agility)
                 + f64::from(spiritualism)
                 + f64::from(strength))
-            .round() as i32;
+            .trunc() as i32;
             let potential = goods.addon_property_value(factory, GAP_BF_POTENTIAL, 1);
             let _stored = goods.set_addon_property_value_core(
                 GAP_BF_POTENTIAL,
@@ -13206,22 +13207,22 @@ impl CPlayer {
         self.set_strength(
             self.combat_properties
                 .strength
-                .wrapping_sub((f64::from(recovered.1) * 0.00001).round() as u32),
+                .wrapping_sub((f64::from(recovered.1) * 0.00001).trunc() as u32),
         );
         self.set_dexterity(
             self.combat_properties
                 .dexterity
-                .wrapping_sub((f64::from(recovered.2) * 0.00001).round() as u32),
+                .wrapping_sub((f64::from(recovered.2) * 0.00001).trunc() as u32),
         );
         self.set_maximum_hp(
             self.combat_properties
                 .maximum_hp
-                .wrapping_sub((f64::from(recovered.4) * 0.00001).round() as u32),
+                .wrapping_sub((f64::from(recovered.4) * 0.00001).trunc() as u32),
         );
         self.set_intelligence(
             self.combat_properties
                 .intelligence
-                .wrapping_sub((f64::from(recovered.3) * 0.00001).round() as u32),
+                .wrapping_sub((f64::from(recovered.3) * 0.00001).trunc() as u32),
         );
         report
             .effects
@@ -15021,22 +15022,24 @@ fn clamp_battle_fairy_current(
 }
 
 fn add_battle_fairy_u32(current: u32, delta: f64) -> u32 {
-    let next = f64::from(current) + delta;
-    if next < 0.0 {
+    // `BFPropertyAdd/AllocatePotential` сначала FISTP-усекают delta, затем
+    // выполняют целочисленное сложение/вычитание с текущим свойством.
+    let next = i64::from(current) + delta.trunc() as i64;
+    if next < 0 {
         0
     } else {
-        clamp_combat_scalar(next.round() as u32)
+        clamp_combat_scalar(next as u32)
     }
 }
 
 fn add_battle_fairy_u16(current: u16, delta: f64) -> u16 {
-    let next = f64::from(current) + delta;
-    if next < 0.0 { 0 } else { next.round() as u16 }
+    let next = i64::from(current) + delta.trunc() as i64;
+    if next < 0 { 0 } else { next as u16 }
 }
 
 fn add_battle_fairy_i32(current: i32, delta: f64) -> i32 {
-    let next = f64::from(current) + delta;
-    if next < 0.0 { 0 } else { next.round() as i32 }
+    let next = i64::from(current) + delta.trunc() as i64;
+    if next < 0 { 0 } else { next as i32 }
 }
 
 const fn clamp_combat_scalar(value: u32) -> u32 {
