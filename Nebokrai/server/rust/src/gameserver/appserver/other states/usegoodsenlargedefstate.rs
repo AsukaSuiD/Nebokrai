@@ -3,7 +3,7 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/other states/usegoodsenlargedefstate.cpp`. Достигнутый путь
 //! сохраняет `DWORD` времени и коэффициента; формула защиты выполняет исходное
-//! float-округление, wrapping-сложение и маску младших 16 бит.
+//! FISTP-усечение, wrapping-сложение и сужение к младшим 16 битам.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 
@@ -23,7 +23,10 @@ impl UseGoodsEnlargeDefState {
     pub(crate) const fn state_id(self) -> i32 { USE_GOODS_ENLARGE_DEF_STATE_ID }
 
     pub(crate) fn apply(self, properties: &mut PlayerCombatProperties) {
-        let delta = ((self.coefficient as f32) * 0.01 * (properties.defense as f32)).round() as u32;
+        let delta = (f64::from(self.coefficient)
+            * f64::from(0.01_f32)
+            * f64::from(properties.defense))
+        .trunc() as i32 as u32;
         properties.defense = properties.defense.wrapping_add(delta) & 0xffff;
     }
 }

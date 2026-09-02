@@ -3,8 +3,9 @@
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/other states/usegoodsenlargemaxmpstate.cpp`. Достигнутый путь
 //! создаётся фабрикой `CMoveShape::AddState`, хранит исходные `DWORD` времени
-//! и коэффициента и при пересчёте увеличивает максимум MP с float-округлением
-//! и верхней границей `i32::MAX`. Недостигнутые перегрузки сохранены ниже.
+//! и коэффициента и при пересчёте увеличивает максимум MP с FISTP-усечением,
+//! wrapping-сложением и верхней границей `i32::MAX`. Недостигнутые перегрузки
+//! сохранены ниже.
 
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 
@@ -24,8 +25,14 @@ impl UseGoodsEnlargeMaxMpState {
     pub(crate) const fn state_id(self) -> i32 { USE_GOODS_ENLARGE_MAX_MP_STATE_ID }
 
     pub(crate) fn apply(self, properties: &mut PlayerCombatProperties) {
-        let delta = ((self.coefficient as f32) * 0.01 * (properties.maximum_mp as f32)).round() as u32;
-        properties.maximum_mp = properties.maximum_mp.saturating_add(delta).min(i32::MAX as u32);
+        let delta = (f64::from(self.coefficient)
+            * f64::from(0.01_f32)
+            * f64::from(properties.maximum_mp))
+        .trunc() as i32 as u32;
+        properties.maximum_mp = properties
+            .maximum_mp
+            .wrapping_add(delta)
+            .min(i32::MAX as u32);
     }
 }
 
