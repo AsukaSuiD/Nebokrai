@@ -3,6 +3,7 @@
 //! Навык `544` расходует `GAP_BF_MP` экипированного боевого духа, немедленно
 //! рассылает изменённый товар, затем создаёт упорядоченное защитное состояние.
 //! Любое завершение состояния добавляет краткоживущий `CCureState`.
+//! Reuse проверяется exact `CSkill::IsRestored`, отдельно от cast duration.
 
 pub(crate) const LIFE_SHIELD_SKILL_ID: u32 = 544;
 pub(crate) const LIFE_SHIELD_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -17,7 +18,9 @@ pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
 pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
 
 use super::baseattack::time_reached;
-use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
+use super::kernel::{
+    SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost, skill_is_restored,
+};
 use super::lifeshieldstate::{
     finish_life_shield_state, send_life_shield_state_visual, LifeShieldState,
 };
@@ -106,13 +109,11 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     if player_ai.life_shield().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.life_shield_last_used_ms() != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.life_shield_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.life_shield_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             game.send_battle_fairy_skill_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
             game.send_battle_fairy_skill_failure(player_id, 2);

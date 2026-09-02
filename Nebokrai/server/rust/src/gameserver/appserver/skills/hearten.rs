@@ -5,6 +5,7 @@
 //! расход перед началом каста, задержку, направление на цель, замену состояния,
 //! публикацию `OnChangeStates` и отдельное время восстановления. Клиентская
 //! отмена снимает движение и текущий навык, но не возвращает уже списанную MP.
+//! Reuse использует exact `CSkill::IsRestored`; cast delay остаётся elapsed.
 
 pub(crate) const HEARTEN_SKILL_ID: u32 = 324;
 pub(crate) const HEARTEN_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -18,7 +19,7 @@ pub(crate) const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 
 use super::baseattack::time_reached;
 use super::heartenstate::{send_hearten_state_visual, HeartenState};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -167,13 +168,11 @@ pub(crate) fn execute_player_hearten<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.hearten_last_used_ms() != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.hearten_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.hearten_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             game.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             game.send_self_state_skill_failure(HEARTEN_EFFECT_MESSAGE, player_id, 2);
