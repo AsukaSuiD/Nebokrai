@@ -5479,7 +5479,8 @@ impl CPlayer {
 
     /// `MountEquip` cases `0x9B/0x9C/0x9E..0xA1` после battle-fairy prelude.
     /// Текущие BF-атрибуты хранятся в масштабе 1/10000; нулевое производное
-    /// значение восстанавливает base addon-ы, как native positive pass.
+    /// значение восстанавливает base addon-ы, как native positive pass. Все
+    /// FISTP-преобразования используют truncate полной суммы с live property.
     pub(crate) fn apply_battle_fairy_equipment_properties(
         &mut self,
         mut properties: PlayerCombatProperties,
@@ -5489,12 +5490,20 @@ impl CPlayer {
         fn add_u32(target: &mut u32, delta: i64) {
             *target = (i64::from(*target) + delta).clamp(0, i64::from(i32::MAX)) as u32;
         }
-        fn add_u16(target: &mut u16, delta: i64) {
-            let value = i64::from(*target) + delta;
+        fn add_scaled_u32(target: &mut u32, delta: f64) {
+            let value = (f64::from(*target) + delta).trunc() as i64;
+            *target = value.clamp(0, i64::from(i32::MAX)) as u32;
+        }
+        fn add_scaled_i32(target: &mut i32, delta: f64) {
+            let value = (f64::from(*target) + delta).trunc() as i64;
+            *target = value.clamp(0, i64::from(i32::MAX)) as i32;
+        }
+        fn add_scaled_u16(target: &mut u16, delta: f64) {
+            let value = (f64::from(*target) + delta).trunc() as i64;
             *target = if value < 0 { 0 } else { value as u16 };
         }
-        fn rounded(value: i32, coefficient: f32) -> i32 {
-            (f64::from(value) * f64::from(coefficient)).round() as i32
+        fn truncated_product(value: i32, coefficient: f32) -> i32 {
+            (f64::from(value) * f64::from(coefficient)).trunc() as i32
         }
         fn scaled(value: i32) -> f64 {
             f64::from(value) * 0.0001_f64
@@ -5525,8 +5534,10 @@ impl CPlayer {
                 GAP_BF_BRAVE => {
                     let base = goods.addon_property_value(factory, GAP_BF_BRAVE_BASE, 1);
                     let current = goods.addon_property_value(factory, GAP_BF_BRAVE, 1);
-                    let base_effect = rounded(base, coefficients.battle_fairy_brave_to_player);
-                    let current_effect = rounded(current, coefficients.battle_fairy_brave_to_player);
+                    let base_effect =
+                        truncated_product(base, coefficients.battle_fairy_brave_to_player);
+                    let current_effect =
+                        truncated_product(current, coefficients.battle_fairy_brave_to_player);
                     if current_effect == 0 {
                         let _ = goods.set_addon_property_value_core(GAP_BF_BRAVE, 1, base);
                         add_u32(&mut properties.strength, i64::from(base_effect));
@@ -5536,22 +5547,23 @@ impl CPlayer {
                         continue;
                     }
                     let effect = scaled(current_effect);
-                    add_u32(&mut properties.strength, effect.round() as i64);
-                    add_u32(
+                    add_scaled_u32(&mut properties.strength, effect);
+                    add_scaled_u32(
                         &mut properties.maximum_attack,
-                        (effect * f64::from(coefficients.str_to_max_attack[occupation])).round()
-                            as i64,
+                        effect * f64::from(coefficients.str_to_max_attack[occupation]),
                     );
-                    add_u16(
+                    add_scaled_u16(
                         &mut properties.burden,
-                        (effect * f64::from(coefficients.str_to_burden[occupation])).round() as i64,
+                        effect * f64::from(coefficients.str_to_burden[occupation]),
                     );
                 }
                 GAP_BF_AGILITY => {
                     let base = goods.addon_property_value(factory, GAP_BF_AGILITY_BASE, 1);
                     let current = goods.addon_property_value(factory, GAP_BF_AGILITY, 1);
-                    let base_effect = rounded(base, coefficients.battle_fairy_agility_to_player);
-                    let current_effect = rounded(current, coefficients.battle_fairy_agility_to_player);
+                    let base_effect =
+                        truncated_product(base, coefficients.battle_fairy_agility_to_player);
+                    let current_effect =
+                        truncated_product(current, coefficients.battle_fairy_agility_to_player);
                     if current_effect == 0 {
                         let _ = goods.set_addon_property_value_core(GAP_BF_AGILITY, 1, base);
                         add_u32(&mut properties.dexterity, i64::from(base_effect));
@@ -5561,24 +5573,23 @@ impl CPlayer {
                         continue;
                     }
                     let effect = scaled(current_effect);
-                    add_u32(&mut properties.dexterity, effect.round() as i64);
-                    add_u32(
+                    add_scaled_u32(&mut properties.dexterity, effect);
+                    add_scaled_u32(
                         &mut properties.minimum_attack,
-                        (effect * f64::from(coefficients.dex_to_min_attack[occupation])).round()
-                            as i64,
+                        effect * f64::from(coefficients.dex_to_min_attack[occupation]),
                     );
-                    add_u16(
+                    add_scaled_u16(
                         &mut properties.reank,
-                        (effect * f64::from(coefficients.dex_to_stiff[occupation])).round() as i64,
+                        effect * f64::from(coefficients.dex_to_stiff[occupation]),
                     );
                 }
                 GAP_BF_SPRITUALISM => {
                     let base = goods.addon_property_value(factory, GAP_BF_SPRITUALISM_BASE, 1);
                     let current = goods.addon_property_value(factory, GAP_BF_SPRITUALISM, 1);
                     let base_effect =
-                        rounded(base, coefficients.battle_fairy_spiritualism_to_player);
+                        truncated_product(base, coefficients.battle_fairy_spiritualism_to_player);
                     let current_effect =
-                        rounded(current, coefficients.battle_fairy_spiritualism_to_player);
+                        truncated_product(current, coefficients.battle_fairy_spiritualism_to_player);
                     if current_effect == 0 {
                         let _ = goods.set_addon_property_value_core(GAP_BF_SPRITUALISM, 1, base);
                         let _ = goods.set_addon_property_value_core(GAP_BF_MAX_MP, 1, base);
@@ -5590,38 +5601,38 @@ impl CPlayer {
                         continue;
                     }
                     let effect = scaled(current_effect);
-                    add_u32(&mut properties.intelligence, effect.round() as i64);
-                    properties.element_modify = (i64::from(properties.element_modify)
-                        + (effect * f64::from(coefficients.int_to_element[occupation])).round()
-                            as i64)
-                        .clamp(0, i64::from(i32::MAX)) as i32;
-                    add_u32(
-                        &mut properties.maximum_mp,
-                        (effect * f64::from(coefficients.int_to_max_mp[occupation])).round() as i64,
+                    add_scaled_u32(&mut properties.intelligence, effect);
+                    add_scaled_i32(
+                        &mut properties.element_modify,
+                        effect * f64::from(coefficients.int_to_element[occupation]),
                     );
-                    add_u32(
+                    add_scaled_u32(
+                        &mut properties.maximum_mp,
+                        effect * f64::from(coefficients.int_to_max_mp[occupation]),
+                    );
+                    add_scaled_u32(
                         &mut properties.element_resistance,
-                        (effect * f64::from(coefficients.int_to_resistant[occupation])).round()
-                            as i64,
+                        effect * f64::from(coefficients.int_to_resistant[occupation]),
                     );
                     clamp_battle_fairy_current(goods, factory, GAP_BF_MP, GAP_BF_MAX_MP);
                 }
                 GAP_BF_STRENGH => {
                     let base = goods.addon_property_value(factory, GAP_BF_STRENGH_BASE, 1);
                     let current = goods.addon_property_value(factory, GAP_BF_STRENGH, 1);
-                    let base_effect = rounded(base, coefficients.battle_fairy_strength_to_hp);
-                    let current_effect = rounded(current, coefficients.battle_fairy_strength_to_hp);
-                    let effect = if current_effect == 0 {
+                    let base_effect =
+                        truncated_product(base, coefficients.battle_fairy_strength_to_hp);
+                    let current_effect =
+                        truncated_product(current, coefficients.battle_fairy_strength_to_hp);
+                    if current_effect == 0 {
                         let _ = goods.set_addon_property_value_core(GAP_BF_STRENGH, 1, base);
                         let _ = goods.set_addon_property_value_core(GAP_BF_MAX_HP, 1, base);
                         let _ = goods.set_addon_property_value_core(GAP_BF_HP, 1, base);
-                        i64::from(base_effect)
+                        add_u32(&mut properties.maximum_hp, i64::from(base_effect));
                     } else if goods.addon_property_value(factory, GAP_BF_HP, 1) != 0 {
-                        scaled(current_effect).round() as i64
+                        add_scaled_u32(&mut properties.maximum_hp, scaled(current_effect));
                     } else {
                         continue;
-                    };
-                    add_u32(&mut properties.maximum_hp, effect);
+                    }
                     clamp_battle_fairy_current(goods, factory, GAP_BF_HP, GAP_BF_MAX_HP);
                 }
                 _ => {}
