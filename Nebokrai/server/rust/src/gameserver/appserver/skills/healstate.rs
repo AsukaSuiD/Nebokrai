@@ -176,15 +176,6 @@ pub(crate) fn unsigned_float(value: u32) -> f32 {
     }
 }
 
-pub(crate) fn round_original(value: f32) -> i32 {
-    let truncated = value as i32;
-    if value - truncated as f32 > 0.5 {
-        truncated.wrapping_add(1)
-    } else {
-        truncated
-    }
-}
-
 pub(crate) fn send_heal_state_visual(
     game: &mut CGame,
     region_id: i32,

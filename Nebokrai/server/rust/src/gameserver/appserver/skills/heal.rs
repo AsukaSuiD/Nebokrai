@@ -5,7 +5,10 @@
 //! `appserver/skills/heal*.cpp` и `superheal*.cpp`. Совпадающий конвейер объединён:
 //! двойная проверка MP, время восстановления, расстояние, задержка, направление,
 //! точная формула усиления оружием с плавающей точкой и установка
-//! периодического состояния.
+//! периодического состояния. Начальная прибавка HP во всех четырёх `AI`
+//! сначала сохраняет произведение с `0.01f` в `f32`, затем отдельно сохраняет
+//! в `f32` сумму с unsigned-константой и только при создании состояния усекает
+//! её через `FISTP dword`; ручного округления дробной части здесь нет.
 //! Обычный нетранспортный монстр после начальной проверки заменяется самим
 //! заклинателем. `CGame` координирует владельцев и доставку; формула и пакеты
 //! остаются здесь. У `CSuperHeal2` состояние подтверждённо хранится у выбранной
@@ -16,7 +19,8 @@
 
 use super::baseattack::time_reached;
 use super::heal2::HEAL_2_SKILL_ID;
-use super::healstate::{HealState, round_original, send_heal_state_visual, unsigned_float};
+use super::fightdefense::truncate_original;
+use super::healstate::{HealState, send_heal_state_visual};
 use super::healstate2::HealState2;
 use super::superheal::SUPER_HEAL_SKILL_ID;
 use super::superheal2::SUPER_HEAL_2_SKILL_ID;
@@ -287,7 +291,9 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     let constant = properties.query_property(SKILL_USAGE_CONST);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let scaled = coefficient.wrapping_mul(weapon_level);
-    let hp_gain = round_original(unsigned_float(constant) + unsigned_float(scaled) * 0.01) as u32;
+    let scaled_factor = (f64::from(scaled) * f64::from(0.01_f32)) as f32;
+    let hp_gain_float = (f64::from(constant) + f64::from(scaled_factor)) as f32;
+    let hp_gain = truncate_original(f64::from(hp_gain_float)) as u32;
 
     if player_ai.heal_family(index).is_none() {
         let started_at_ms = runtime.now_milliseconds();
