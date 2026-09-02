@@ -7,7 +7,11 @@
 //! критического удара.
 //! Встроенная `tagAttackInformation` сохраняет конструкторские skill-id
 //! `0x7fffffff` и уровень `1`: очистка между тиками уровень не перезаписывает.
-//! Критический float-множитель тика усекается к нулю перед записью `int`.
+//! `CalculateAttackPower` `0x005E3E30..0x005E3F82` держит сумму броска,
+//! минимального урона и `float`-модификатора в x87 до `__ftol2`, а critical
+//! умножает уже целый урон на `float` rate и делает `FISTP` с режимом
+//! усечения. Оба преобразования моделируются через `f64` без промежуточного
+//! округления Rust `f32`.
 //! Этот же владелец извлекает каноническое состояние на такте ИИ, возвращает
 //! его до применения удара и передаёт рассчитанную атаку координатору `CGame`.
 //! DB-запись буквально сохраняет десять DWORD `MasterInfo`, остаток срока,
@@ -25,6 +29,7 @@ use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
 use crate::gameserver::appserver::states::state::timed_client_state_time;
+use crate::gameserver::appserver::skills::fightdefense::truncate_original;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
 use crate::nets::netserver::message::CMessage;
 
@@ -203,14 +208,15 @@ impl BloodLossState {
         let maximum = i32::from(self.maximum_attack);
         let span = minimum.abs_diff(maximum).wrapping_add(1) as i32;
         let rolled = minimum.wrapping_add(random(span));
-        let mut damage =
-            (rolled as f32 + f32::from_bits(self.damage_modifier_bits)) as i32;
+        let mut damage = truncate_original(
+            f64::from(rolled) + f64::from(f32::from_bits(self.damage_modifier_bits)),
+        );
         if damage < 0 {
             damage = 0;
         }
         let critical = random(100) < i32::from(critical_chance);
         if critical {
-            damage = (damage as f32 * critical_rate) as i32;
+            damage = truncate_original(f64::from(damage) * f64::from(critical_rate));
         }
         AttackInformation {
             skill_id: DEFAULT_PERIODIC_SKILL_ID,
