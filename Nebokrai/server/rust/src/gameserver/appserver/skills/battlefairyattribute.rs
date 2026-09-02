@@ -4,15 +4,18 @@
 //! Этот владелец семейства сохраняет общий порядок: проверка экипировки,
 //! задержки повторного применения и запаса MP, необратимое списание и
 //! `0xBF918`, задержка, действия применения 2 и 3, замена состояния и
-//! пересчёт свойств. `CGame` используется только для разрешения владельцев
-//! и фактической доставки.
+//! пересчёт свойств. Восстановление использует исходный абсолютный срок
+//! `CSkill::IsRestored`, а задержка стадий остаётся elapsed-проверкой. `CGame`
+//! используется только для разрешения владельцев и фактической доставки.
 
 use super::baseattack::time_reached;
 use super::battlefairyattributestate::{
     send_battle_fairy_attribute_state_visual, BattleFairyAttributeKind,
     BattleFairyAttributeState,
 };
-use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
+use super::kernel::{
+    battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
+};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{BattleFairyManaSpendOutcome, BattleFairySkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -163,9 +166,11 @@ pub(crate) fn execute_battle_fairy_attribute<Runtime: GameMainLoopRuntime>(
 
     if player_ai.battle_fairy_attribute().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.battle_fairy_attribute_last_used_ms(skill_id) != 0
-            && !time_reached(now_ms, player_ai.battle_fairy_attribute_last_used_ms(skill_id), delay_ms)
-        {
+        if !skill_is_restored(
+            player_ai.battle_fairy_attribute_last_used_ms(skill_id),
+            delay_ms,
+            now_ms,
+        ) {
             game.send_battle_fairy_skill_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
             send_cast(game, player_id, target, skill_id, skill_level, 3);

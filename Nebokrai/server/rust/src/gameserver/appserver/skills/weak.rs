@@ -7,10 +7,12 @@
 //! `CGame` только разрешает владельцев, регистрирует область и доставляет
 //! уже сформированные сообщения. Формула срока сохраняет unsigned wrapping,
 //! отдельно записанный `f32`-масштаб и исходное усечение x87 к нулю.
+//! Cooldown следует абсолютному сроку `CSkill::IsRestored`; задержка стадии
+//! сохраняет отдельную elapsed-семантику.
 
 use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::weakphalanx::CWeakPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -124,7 +126,7 @@ pub(crate) fn execute_player_weak<Runtime: GameMainLoopRuntime>(game: &mut CGame
     if player_ai.weak().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.weak_last_used_ms() != 0 && !time_reached(cooldown_now_ms, player_ai.weak_last_used_ms(), cooldown_ms) {
+        if !skill_is_restored(player_ai.weak_last_used_ms(), cooldown_ms, cooldown_now_ms) {
             send_error(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

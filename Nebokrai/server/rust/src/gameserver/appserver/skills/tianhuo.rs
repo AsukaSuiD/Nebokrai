@@ -10,14 +10,17 @@
 //! `CTianhuoPhalanx`. Пакет стадии применения намеренно содержит legacy ID
 //! `0x13A`, хотя ID навыка равен `0x21A`. `CGame` только разрешает владельцев,
 //! регистрирует область, применяет результат к независимым владельцам и
-//! выполняет доставку.
+//! выполняет доставку. Восстановление использует абсолютный срок
+//! `CSkill::IsRestored`; стадийная задержка остаётся elapsed-проверкой.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
     SKILL_USAGE_MIN_ATTACK,
 };
-use super::kernel::{battle_fairy_mana_text_cost, SkillExecutionKernel, SkillStage};
+use super::kernel::{
+    battle_fairy_mana_text_cost, skill_is_restored, SkillExecutionKernel, SkillStage,
+};
 use super::thunder::{dispatch_position, master_info, terminal};
 use super::tianhuophalanx::CTianhuoPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -159,9 +162,11 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.tianhuo_last_used_ms() != 0
-            && !time_reached(cooldown_now_ms, player_ai.tianhuo_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(
+            player_ai.tianhuo_last_used_ms(),
+            cooldown_ms,
+            cooldown_now_ms,
+        ) {
             return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) = positioned_target(game, region_id, player_id, dispatch)

@@ -9,11 +9,13 @@
 //! Общий для двух вариантов `End(1)` возвращает движение и завершает
 //! зарегистрированную область; отмена использует `End(0)` без cooldown.
 //! Стихийная прибавка вычисляется в расширенной точности x87 из беззнакового
-//! свойства и знакового modifier-а игрока, затем усекается к нулю.
+//! свойства и знакового modifier-а игрока, затем усекается к нулю. Cooldown
+//! следует абсолютному сроку `CSkill::IsRestored`, а задержка стадии остаётся
+//! elapsed-проверкой.
 
 use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::yinyangphalanx::CYinYangPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -156,7 +158,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
     if execution(player_ai, second).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if last_used(player_ai, second) != 0 && !time_reached(cooldown_now_ms, last_used(player_ai, second), cooldown_ms) {
+        if !skill_is_restored(last_used(player_ai, second), cooldown_ms, cooldown_now_ms) {
             send_error(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some((target_x, target_y, target)) = target_position(game, region_id, player_id, dispatch) else { send_error(game, player_id, 10, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); };

@@ -4,6 +4,8 @@
 //! повтор при временном отсутствии equipment-owner-а. Раздельными остаются
 //! source/target property, signed-проверки и тексты ошибок. Один
 //! `SkillExecutionKernel` хранит только команду, стадии и исходные часы.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`, а ожидание
+//! стадии сохраняет отдельную elapsed-семантику.
 
 use super::baseattack::time_reached;
 use super::basemagic::{
@@ -11,7 +13,7 @@ use super::basemagic::{
     SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::huoxieshu::HUOXIESHU_SKILL_ID;
-use super::kernel::{SkillExecutionKernel, SkillStage};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage};
 use super::lingzhishu::LINGZHISHU_SKILL_ID;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{BattleFairySkillDispatch, CPlayer};
@@ -189,13 +191,11 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         };
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.battle_fairy_transfer_last_used_ms(kind) != 0
-            && !time_reached(
-                cooldown_now_ms,
-                player_ai.battle_fairy_transfer_last_used_ms(kind),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.battle_fairy_transfer_last_used_ms(kind),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
             send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
