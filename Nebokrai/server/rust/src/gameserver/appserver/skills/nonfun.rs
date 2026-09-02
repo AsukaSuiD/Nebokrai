@@ -60,6 +60,7 @@ pub(crate) fn execute_player_non_fun<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

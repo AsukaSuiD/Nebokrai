@@ -87,6 +87,7 @@ fn finish_player_item_skill_2<Runtime: GameMainLoopRuntime>(
             player.mark_skill_item_used(item_index, item_used_at_ms);
         }
     }
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

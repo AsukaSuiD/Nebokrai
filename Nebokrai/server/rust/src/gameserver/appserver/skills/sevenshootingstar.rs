@@ -112,7 +112,16 @@ fn send_visual(game: &mut CGame, player_id: i32, level: i32, action: u8, destina
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn finish(game: &mut CGame, player_id: i32) {
+fn finish<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame,
+    player_id: i32,
+    runtime: &mut Runtime,
+    successful: bool,
+) {
+    if successful {
+        game.damage_player_weapon(player_id, runtime);
+    }
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
@@ -132,7 +141,7 @@ pub(crate) fn cancel_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    finish(game, player_id);
+    finish(game, player_id, runtime, record_reuse);
     if record_reuse {
         player_ai.mark_seven_shooting_star_used(runtime.now_milliseconds());
     }
@@ -310,14 +319,14 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let Some((target_x, target_y)) = target_position(game, region_id, dispatch) else {
-            finish(game, player_id);
+            finish(game, player_id, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
-            finish(game, player_id);
+            finish(game, player_id, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -342,7 +351,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
             .and_then(SevenShootingStarExecutionState::destination)
             .or_else(|| target_position(game, region_id, dispatch));
         let Some((target_x, target_y)) = destination else {
-            finish(game, player_id);
+            finish(game, player_id, runtime, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let mut path = game.base_magic_path(region_id, source_x, source_y, target_x, target_y, Some(maximum_distance));
@@ -397,7 +406,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
         player_ai.mark_seven_shooting_star_used(expiration_now_ms);
-        finish(game, player_id);
+        finish(game, player_id, runtime, true);
         terminal(QueuedSkillExecutionState::Completed)
     } else {
         terminal(QueuedSkillExecutionState::Pending)

@@ -124,10 +124,12 @@ fn send_cast_visual(
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-/// Выполняет точный `CRage::End`: состояние игрока обновляется до визуального
-/// завершения. Отметка cooldown остаётся у вызывающего AI-owner-а, поскольку
-/// только он знает значение `useRestoreTime` исходного вызова.
+/// Выполняет общий хвост `CRage::End`: свойства и состояние игрока обновляются
+/// до визуального завершения. Оружейный `AfterUseSkill` и отметка cooldown
+/// остаются у успешного AI-owner-а, поскольку только он знает значение
+/// `useRestoreTime` исходного вызова.
 pub(crate) fn end_player_rage(game: &mut CGame, player_id: i32, level: i32) {
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
@@ -143,6 +145,7 @@ fn finish_player_rage<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
+    game.damage_player_weapon(player_id, runtime);
     end_player_rage(game, player_id, level);
     player_ai.mark_rage_used(runtime.now_milliseconds());
 }

@@ -7,9 +7,10 @@
 //! после строгой границы `SKILL_USAGE_ACTION_INTERVAL`; формула сохраняет два
 //! вызова генератора MSVCRT на каждую рассчитанную атаку. `CGame` разрешает
 //! независимых владельцев и применяет уже рассчитанные результаты. Собственный
-//! `End` очищает накопленный путь, возвращает движение и фиксирует время
-//! восстановления без оружейного `AfterUseSkill`; тот же хвост используется
-//! при отказе после `Begin` и клиентской отмене.
+//! `End` очищает накопленный путь, возвращает движение, выполняет общий
+//! оружейный `AfterUseSkill`, обновляет свойства и фиксирует время
+//! восстановления; тот же ненулевой хвост используется при отказе после
+//! `Begin` и клиентской отмене.
 //! Element modifier вычисляется в расширенной точности x87 из целых свойств и
 //! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
 //! перед `int`.
@@ -73,6 +74,8 @@ fn finish_player_chain_lightning<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
+    game.damage_player_weapon(player_id, runtime);
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);

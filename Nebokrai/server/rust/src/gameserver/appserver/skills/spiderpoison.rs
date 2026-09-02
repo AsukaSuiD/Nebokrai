@@ -134,6 +134,10 @@ fn finish_player_spider_poison<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     successful: bool,
 ) {
+    if successful {
+        game.damage_player_weapon(player_id, runtime);
+    }
+    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);
