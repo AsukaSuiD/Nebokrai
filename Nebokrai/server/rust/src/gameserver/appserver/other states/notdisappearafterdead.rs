@@ -107,20 +107,6 @@
 //
 
 // ============================================================================
-// FUNCTION: CNotDisappearAfterDead::OnUpdateProperties
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\other states\notdisappearafterdead.cpp:51
-// RVA: 0x001D6580
-// ADDRESS: 005d6580
-// PROTOTYPE: int __thiscall OnUpdateProperties(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CNotDisappearAfterDead::Begin
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
