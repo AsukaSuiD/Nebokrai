@@ -138,7 +138,9 @@
 //! сложение и нулевой clamp отрицательного результата до общего пересчёта.
 //! `GAP_EQUIP_ACTIVE (0x69)` использует пересобранную из живой экипировки
 //! anima-bind карту уровней и в storage order применяет процентный
-//! `ActiveEquip`; ездовой owner этого case не имеет.
+//! `ActiveEquip`; ездовой owner этого case не имеет. `ActiveEquip`, обычные
+//! addon-ы и `MountFuMoProperty` сохраняют x87 truncate полной производной
+//! суммы, включая вложенное преобразование ordinary-fairy характеристик.
 //! Periodic hatcher caller замкнут через `CGame`;
 //! Hotkey owner хранит exact 24 DWORD и связывает назначение с возвратом
 //! consumable из hand в packet/hand/wallet/YuanBao; equipment destination
@@ -157,7 +159,7 @@
 //! `ReplacePlayerData/RestorePlayerData` выражены временной typed-проекцией
 //! только для defense-pass навыков боевого духа: blast/level берутся из
 //! headgear, три setup scale действуют во время защиты, а затем прежние scale
-//! возвращаются с исходным целочисленным округлением и minimum clamp.
+//! возвращаются с исходным усечением к нулю и minimum clamp.
 //! `BatllteFairyCombine` соединяет container inputs, global BattleFairy gate,
 //! fetch power, shared Game RNG/factory, `CMoveShape::AddSkill` и ordered
 //! адресные object/skill/goods/audit effects. `BTreeMap` skill storage в
@@ -2117,19 +2119,33 @@ fn apply_equipment_goods_properties(
         let value = i32::from(*target).wrapping_add(delta);
         *target = if value < 0 { 0 } else { value as u16 };
     }
-    fn derived(value: i32, coefficient: f32) -> i32 {
-        ((value as f32) * coefficient).round() as i32
+    // `AddPreItemToPlayer`, `MountFuMoProperty` и `ActiveEquip` перед FISTP
+    // выставляют x87 RC=truncate; производные поля усекают полную сумму.
+    fn scaled_delta(value: i32, coefficient: f32) -> i32 {
+        ((value as f32) * coefficient).trunc() as i32
+    }
+    fn add_derived_u32(target: &mut u32, delta: i32, coefficient: f32) {
+        let value = (*target as f32 + delta as f32 * coefficient).trunc() as i64;
+        *target = value.clamp(0, i64::from(i32::MAX)) as u32;
+    }
+    fn add_derived_i32(target: &mut i32, delta: i32, coefficient: f32) {
+        let value = (*target as f32 + delta as f32 * coefficient).trunc() as i32;
+        *target = if delta < 0 && value < 0 { 0 } else { value };
+    }
+    fn add_derived_u16(target: &mut u16, delta: i32, coefficient: f32) {
+        let value = (*target as f32 + delta as f32 * coefficient).trunc() as i32;
+        *target = if value < 0 { 0 } else { value as u16 };
     }
     fn active_u32(current: u32, addition: i32, scale: f64) -> u32 {
-        let value = (f64::from(current) + f64::from(addition) * scale).round() as i64;
+        let value = (f64::from(current) + f64::from(addition) * scale).trunc() as i64;
         value.clamp(0, i64::from(i32::MAX)) as u32
     }
     fn active_signed(current: i32, addition: i32, scale: f64) -> i32 {
-        let value = (f64::from(current) + f64::from(addition) * scale).round() as i64 as u32;
+        let value = (f64::from(current) + f64::from(addition) * scale).trunc() as i64 as u32;
         if (value as i32) < 0 { 0 } else { value as i32 }
     }
     fn active_u16(current: u16, addition: i32, scale: f64) -> u16 {
-        let value = (f64::from(current) + f64::from(addition) * scale).round() as i64;
+        let value = (f64::from(current) + f64::from(addition) * scale).trunc() as i64;
         if value < 0 { 0 } else { value as u16 }
     }
 
@@ -2256,52 +2272,59 @@ fn apply_equipment_goods_properties(
                 GAP_MP_RESTORE_SPEED_CORRECTION => add_u16(&mut properties.mp_recovery, delta),
                 GAP_STRENGTH_CORRECTION => {
                     add_u32(&mut properties.strength, delta);
-                    add_u32(
+                    add_derived_u32(
                         &mut properties.maximum_attack,
-                        derived(delta, coefficients.str_to_max_attack[occupation]),
+                        delta,
+                        coefficients.str_to_max_attack[occupation],
                     );
-                    add_u16(
+                    add_derived_u16(
                         &mut properties.burden,
-                        derived(delta, coefficients.str_to_burden[occupation]),
+                        delta,
+                        coefficients.str_to_burden[occupation],
                     );
                 }
                 GAP_AGILITY_CORRECTION => {
                     add_u32(&mut properties.dexterity, delta);
-                    add_u32(
+                    add_derived_u32(
                         &mut properties.minimum_attack,
-                        derived(delta, coefficients.dex_to_min_attack[occupation]),
+                        delta,
+                        coefficients.dex_to_min_attack[occupation],
                     );
-                    add_u16(
+                    add_derived_u16(
                         &mut properties.reank,
-                        derived(delta, coefficients.dex_to_stiff[occupation]),
+                        delta,
+                        coefficients.dex_to_stiff[occupation],
                     );
                 }
                 GAP_CONSTITUTION_CORRECTION => {
                     add_u32(&mut properties.constitution, delta);
-                    add_u32(
+                    add_derived_u32(
                         &mut properties.maximum_hp,
-                        derived(delta, coefficients.con_to_max_hp[occupation]),
+                        delta,
+                        coefficients.con_to_max_hp[occupation],
                     );
-                    add_u32(
+                    add_derived_u32(
                         &mut properties.defense,
-                        derived(delta, coefficients.con_to_defense[occupation]),
+                        delta,
+                        coefficients.con_to_defense[occupation],
                     );
                 }
                 GAP_WAKAN_CORRECTION => {
                     add_u32(&mut properties.intelligence, delta);
-                    properties.element_modify = properties
-                        .element_modify
-                        .wrapping_add(derived(delta, coefficients.int_to_element[occupation]));
-                    if delta < 0 && properties.element_modify < 0 {
-                        properties.element_modify = 0;
-                    }
-                    add_u32(
-                        &mut properties.maximum_mp,
-                        derived(delta, coefficients.int_to_max_mp[occupation]),
+                    add_derived_i32(
+                        &mut properties.element_modify,
+                        delta,
+                        coefficients.int_to_element[occupation],
                     );
-                    add_u32(
+                    add_derived_u32(
+                        &mut properties.maximum_mp,
+                        delta,
+                        coefficients.int_to_max_mp[occupation],
+                    );
+                    add_derived_u32(
                         &mut properties.element_resistance,
-                        derived(delta, coefficients.int_to_resistant[occupation]),
+                        delta,
+                        coefficients.int_to_resistant[occupation],
                     );
                 }
                 GAP_HP_UPPER_LIMIT_CORRECTION => add_u32(&mut properties.maximum_hp, delta),
@@ -2319,51 +2342,55 @@ fn apply_equipment_goods_properties(
                     properties.blast_element_attack = value;
                 }
                 GAP_FAIRY_STRENGTH if include_fairy_properties => {
-                    let player_delta = derived(delta, coefficients.fairy_strength_to_player);
+                    let player_delta = scaled_delta(delta, coefficients.fairy_strength_to_player);
                     add_u32(&mut properties.strength, player_delta);
-                    add_u32(
+                    add_derived_u32(
                         &mut properties.maximum_attack,
-                        derived(player_delta, coefficients.str_to_max_attack[occupation]),
+                        player_delta,
+                        coefficients.str_to_max_attack[occupation],
                     );
-                    add_u16(
+                    add_derived_u16(
                         &mut properties.burden,
-                        derived(player_delta, coefficients.str_to_burden[occupation]),
+                        player_delta,
+                        coefficients.str_to_burden[occupation],
                     );
                 }
                 GAP_FAIRY_AGILITY if include_fairy_properties => {
-                    let player_delta = derived(delta, coefficients.fairy_agility_to_player);
+                    let player_delta = scaled_delta(delta, coefficients.fairy_agility_to_player);
                     add_u32(&mut properties.dexterity, player_delta);
-                    add_u32(
+                    add_derived_u32(
                         &mut properties.minimum_attack,
-                        derived(player_delta, coefficients.dex_to_min_attack[occupation]),
+                        player_delta,
+                        coefficients.dex_to_min_attack[occupation],
                     );
-                    add_u16(
+                    add_derived_u16(
                         &mut properties.reank,
-                        derived(player_delta, coefficients.dex_to_stiff[occupation]),
+                        player_delta,
+                        coefficients.dex_to_stiff[occupation],
                     );
                 }
                 GAP_FAIRY_WAKAN if include_fairy_properties => {
-                    let player_delta = derived(delta, coefficients.fairy_wakan_to_player);
+                    let player_delta = scaled_delta(delta, coefficients.fairy_wakan_to_player);
                     add_u32(&mut properties.intelligence, player_delta);
-                    properties.element_modify = properties.element_modify.wrapping_add(derived(
+                    add_derived_i32(
+                        &mut properties.element_modify,
                         player_delta,
                         coefficients.int_to_element[occupation],
-                    ));
-                    if player_delta < 0 && properties.element_modify < 0 {
-                        properties.element_modify = 0;
-                    }
-                    add_u32(
-                        &mut properties.maximum_mp,
-                        derived(player_delta, coefficients.int_to_max_mp[occupation]),
                     );
-                    add_u32(
+                    add_derived_u32(
+                        &mut properties.maximum_mp,
+                        player_delta,
+                        coefficients.int_to_max_mp[occupation],
+                    );
+                    add_derived_u32(
                         &mut properties.element_resistance,
-                        derived(player_delta, coefficients.int_to_resistant[occupation]),
+                        player_delta,
+                        coefficients.int_to_resistant[occupation],
                     );
                 }
                 GAP_FAIRY_HP if include_fairy_properties => add_u32(
                     &mut properties.maximum_hp,
-                    derived(delta, coefficients.fairy_hp_to_player),
+                    scaled_delta(delta, coefficients.fairy_hp_to_player),
                 ),
                 _ => {}
             }
@@ -4733,7 +4760,7 @@ impl CPlayer {
 
     /// Exact `JJcWeekClear`: первые четыре WORD — weekly counters; при
     /// пятнадцати участиях score получает level-dependent award с x87
-    /// round-to-nearest-even и cap 1500.
+    /// усечением к нулю и cap 1500.
     pub(crate) fn clear_jjc_week(&mut self) {
         let joined = LegacyReader::new(&self.jjc_data)
             .read_u16()
@@ -4745,7 +4772,7 @@ impl CPlayer {
                 300.0
             };
             let award = (f64::from(self.base_properties.jjc_level) * 0.001 * factor)
-                .round_ties_even()
+                .trunc()
                 .clamp(0.0, 1500.0) as u32;
             self.base_properties.jjc_score = self.base_properties.jjc_score.wrapping_add(award);
         }
@@ -10326,7 +10353,7 @@ impl CPlayer {
 
     /// Временная проекция `ReplacePlayerData` для единственного вызова
     /// base-defense. Возвращаемые scale — уже точный результат последующего
-    /// `RestorePlayerData`, включая legacy ROUND через signed DWORD.
+    /// `RestorePlayerData`, включая legacy truncate через signed DWORD.
     pub(crate) fn war_soul_defense_projection(
         &self,
         factory: &CGoodsFactory,
@@ -10336,8 +10363,8 @@ impl CPlayer {
     ) -> Option<(PlayerCombatProperties, u8, [f32; 3])> {
         let goods = self.war_soul_goods(factory)?;
         let restored_scale = |value: f32, minimum: f32| {
-            let rounded = value.round_ties_even() as i32 as u32;
-            (rounded as f32).max(minimum)
+            let truncated = value.trunc() as i32 as u32;
+            (truncated as f32).max(minimum)
         };
         let restored = [
             restored_scale(self.combat_properties.full_miss_scale(), 0.01),
@@ -15543,34 +15570,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 //
 
 // ============================================================================
-// FUNCTION: CPlayer::ActiveEquip
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:6432
-// RVA: 0x0002B240
-// ADDRESS: 0042b240
-// PROTOTYPE: void __thiscall ActiveEquip(CGoods * param_1, ulong param_2, long param_3)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::MountFuMoProperty
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:7230
-// RVA: 0x0002B690
-// ADDRESS: 0042b690
-// PROTOTYPE: int __thiscall MountFuMoProperty(GOODS_ADDON_PROPERTIES param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
 // FUNCTION: CPlayer::CanMountEquip
 // STATUS: UNKNOWN (сохранены только метаданные исследования)
 // COMPONENT: GameServer
@@ -16074,62 +16073,6 @@ fn write_player_wire_u32(wire: &mut [u8], offset: usize, value: u32) {
 // RVA: 0x0002F0A0
 // ADDRESS: 0042f0a0
 // PROTOTYPE: void __thiscall SendCutLog(CGUID * param_1)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CountScoreAdd
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15155
-// RVA: 0x0002F250
-// ADDRESS: 0042f250
-// PROTOTYPE: int __cdecl CountScoreAdd(int param_1, int param_2)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::JJcWeekClear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15176
-// RVA: 0x0002F2D0
-// ADDRESS: 0042f2d0
-// PROTOTYPE: void __thiscall JJcWeekClear(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::JJcSeasonClear
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15190
-// RVA: 0x0002F320
-// ADDRESS: 0042f320
-// PROTOTYPE: void __thiscall JJcSeasonClear(void)
-//
-// Полный декомпилят сохранён в локальном исследовательском корпусе.
-//
-//
-
-// ============================================================================
-// FUNCTION: CPlayer::AddPreItemToPlayer
-// STATUS: UNKNOWN (сохранены только метаданные исследования)
-// COMPONENT: GameServer
-// ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
-// SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\player.cpp:15373
-// RVA: 0x0002F360
-// ADDRESS: 0042f360
-// PROTOTYPE: void __thiscall AddPreItemToPlayer(ulong param_1, ulong param_2)
 //
 // Полный декомпилят сохранён в локальном исследовательском корпусе.
 //
