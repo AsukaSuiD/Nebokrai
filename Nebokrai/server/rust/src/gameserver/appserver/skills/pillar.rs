@@ -11,10 +11,12 @@
 //! отмена используют тот же хвост без создания нового состояния.
 //! Беззнаковый коэффициент состояния умножается на сохранённую `f32`-константу
 //! `0.001` в расширенной точности x87 и только затем записывается в `float`.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`; задержка
+//! установки состояния остаётся elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::pillarstate::{PillarState, replace_player_pillar_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -91,7 +93,7 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.pillar().is_none() {
         let started_at_ms = runtime.now_milliseconds(); let cooldown_now_ms = runtime.now_milliseconds();
-        if ai.pillar_last_used_ms() != 0 && !time_reached(cooldown_now_ms, ai.pillar_last_used_ms(), reuse) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.pillar_last_used_ms(), reuse, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(PILLAR_SKILL_ID)); }
         ai.begin_pillar(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if ai.pillar().is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }

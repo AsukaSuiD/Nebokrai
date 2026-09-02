@@ -11,6 +11,8 @@
 //! `CGame` только связывает player, region и доставку.
 //! `End(true)` фиксирует cooldown после создания области; `End(false)` только
 //! прекращает незавершённый cast и не возвращает уже списанные MP или стрелы.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`; cast-delay
+//! и lifetime созданной области остаются elapsed.
 
 use super::baseattack::{time_reached, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{
@@ -18,7 +20,7 @@ use super::basemagic::{
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fallingstarphalanx::create_falling_star_phalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::meteorarrow::{master_info, target_snapshot, weapon_is_valid};
 use super::meteorarrowmass::send_meteor_arrow_state_remove;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -215,9 +217,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             },
         };
         let now_ms = runtime.now_milliseconds();
-        if ai.falling_star_last_used_ms() != 0
-            && !time_reached(now_ms, ai.falling_star_last_used_ms(), reuse)
-        {
+        if !skill_is_restored(ai.falling_star_last_used_ms(), reuse, now_ms) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return outcome(QueuedSkillExecutionState::Rejected);
         }

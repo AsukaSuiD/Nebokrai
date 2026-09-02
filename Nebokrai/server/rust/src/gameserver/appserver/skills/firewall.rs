@@ -9,11 +9,13 @@
 //! регистрирует область и выполняет фактическую доставку.
 //! Стихийная прибавка усекается из расширенного x87-результата; коэффициент
 //! времени жизни отдельно сохраняется в `f32` до умножения и усечения.
+//! Восстановление использует абсолютный срок `CSkill::IsRestored`; задержка и
+//! lifetime стены остаются elapsed.
 
 use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
 use super::firewallphalanx::CFireWallPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -187,9 +189,11 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
     if player_ai.fire_wall().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.fire_wall_last_used_ms() != 0
-            && !time_reached(cooldown_now_ms, player_ai.fire_wall_last_used_ms(), reuse_delay_ms)
-        {
+        if !skill_is_restored(
+            player_ai.fire_wall_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

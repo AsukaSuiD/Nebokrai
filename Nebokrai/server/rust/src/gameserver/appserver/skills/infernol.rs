@@ -13,7 +13,8 @@
 //! обновлением свойств, очисткой и фиксацией времени восстановления.
 //! Element modifier вычисляется в расширенной точности x87 из целых свойств и
 //! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
-//! перед `int`.
+//! перед `int`. Восстановление использует абсолютный срок
+//! `CSkill::IsRestored`; задержка исполнения остаётся elapsed.
 
 use super::baseattack::{SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{
@@ -21,7 +22,7 @@ use super::basemagic::{
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -294,13 +295,11 @@ pub(crate) fn execute_player_infernol<Runtime: GameMainLoopRuntime>(
 
     if player_ai.infernol().is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        if player_ai.infernol_last_used_ms() != 0
-            && !time_reached(
-                runtime.now_milliseconds(),
-                player_ai.infernol_last_used_ms(),
-                reuse_delay_ms,
-            )
-        {
+        if !skill_is_restored(
+            player_ai.infernol_last_used_ms(),
+            reuse_delay_ms,
+            runtime.now_milliseconds(),
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

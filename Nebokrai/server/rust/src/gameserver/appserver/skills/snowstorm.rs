@@ -8,9 +8,11 @@
 //! MP и блокирует движение; подтверждённый monster-owner пропускает оба
 //! player-only эффекта и создаёт область с нулевым element modifier. `CGame`
 //! только разрешает владельцев, регистрирует область и выполняет доставку.
+//! Player и monster ветви используют абсолютный срок `CSkill::IsRestored`, а
+//! задержка и lifetime области сохраняют elapsed-семантику.
 
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::snowstormphalanx::CSnowStormPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::ai::monsterai::schedule_attack_interval;
@@ -192,7 +194,7 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
     if player_ai.snow_storm().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.snow_storm_last_used_ms() != 0 && !time_reached(cooldown_now_ms, player_ai.snow_storm_last_used_ms(), cooldown_ms) {
+        if !skill_is_restored(player_ai.snow_storm_last_used_ms(), cooldown_ms, cooldown_now_ms) {
             send_error(game, player_id, 0x0d);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

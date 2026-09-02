@@ -9,7 +9,9 @@
 //! `End(1)` возвращает движение и завершает общий `CSummonSkill::End` после
 //! построения сферы; отмена использует `End(0)` без cooldown.
 //! Стихийная прибавка вычисляется в расширенной точности x87 из целых свойств
-//! и сохранённой `f32`-константы, затем усекается к нулю.
+//! и сохранённой `f32`-константы, затем усекается к нулю. Восстановление
+//! использует абсолютный срок `CSkill::IsRestored`; delay и движение сферы
+//! остаются elapsed.
 
 use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
@@ -19,7 +21,7 @@ use super::basemagic::{
     SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED,
 };
 use super::chaosspherephalanx::CChaosSpherePhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -201,9 +203,11 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
     if player_ai.chaos_sphere().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.chaos_sphere_last_used_ms() != 0
-            && !time_reached(cooldown_now_ms, player_ai.chaos_sphere_last_used_ms(), reuse_delay_ms)
-        {
+        if !skill_is_restored(
+            player_ai.chaos_sphere_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             send_failure(game, player_id, 13);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);
