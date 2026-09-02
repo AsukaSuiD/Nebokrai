@@ -30,7 +30,7 @@ impl CGame {
         replace_quake_state(self, owner.base_mut(), target, state, || {
             runtime.now_milliseconds()
         });
-        self.damage_player_weapon(source_player_id, runtime);
+        self.increase_owned_player_rp(source_player_id, true, 0);
         let _ = self.force_move_owned_shape(
             owner.base_mut(),
             target,
