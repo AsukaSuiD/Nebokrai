@@ -17,7 +17,9 @@
 //! строго положительными типом объекта и ID; отрицательные legacy-значения
 //! могут храниться, но расписание их целью не считает. Timestamp
 //! попытки атаки принадлежит расписанию ИИ и не подменяет отдельные reuse-таймеры
-//! установленных навыков. Default-ветвь `CAIFactory::CreateAI` также проходит
+//! установленных навыков; его DWORD deadline сохраняет исходное раннее
+//! срабатывание рядом с переполнением часов. Default-ветвь
+//! `CAIFactory::CreateAI` также проходит
 //! этот общий runtime как обычный `CMonsterAI`, сохраняя исходный `ai_type`.
 //! Остальные AI-ветви ниже остаются RAW.
 //! Внешний virtual `Attack(skill, target)` не запускает навык: он только
@@ -88,7 +90,9 @@ pub(crate) struct MonsterAiScheduleState {
 
 impl MonsterAiScheduleState {
     pub(crate) const fn begin_attack_attempt(&mut self, now_ms: u32, interval_ms: u32) -> bool {
-        if now_ms.wrapping_sub(self.last_attack_attempt_ms) < interval_ms {
+        // Exact `m_dwTimeStamp + GetAttackSpeed() <= timeGetTime()` сохраняет
+        // wrapped absolute deadline, а не устойчивый elapsed-интервал.
+        if self.last_attack_attempt_ms.wrapping_add(interval_ms) > now_ms {
             return false;
         }
         self.last_attack_attempt_ms = now_ms;
