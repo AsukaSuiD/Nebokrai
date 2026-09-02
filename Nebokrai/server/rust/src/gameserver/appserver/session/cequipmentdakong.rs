@@ -13,6 +13,8 @@
 //! живой диспетчер `CScript::RunFunction` с временным возвратом игрока в
 //! каноническую карту игры в точной позиции вызова. Результаты уже выполненных
 //! отправок публикуются через `tracing`, не накапливаясь в отчётах.
+//! Половинное свойство седьмого слота сохраняет x87-усечение к нулю, включая
+//! отрицательные значения снятия камня.
 
 use crate::gameserver::appserver::container::cequipmentdakongcontainer::{
     CEquipmentDaKongContainer,
@@ -246,7 +248,7 @@ fn first_base_value(
 }
 
 fn half_slot_seven_addition(value: i32) -> i32 {
-    (f64::from(value) * 0.5).round_ties_even() as i32
+    (f64::from(value) * 0.5).trunc() as i64 as i32
 }
 
 fn same_color_socket(equipment: &CGoods, factory: &CGoodsFactory, slot: i32) -> bool {
