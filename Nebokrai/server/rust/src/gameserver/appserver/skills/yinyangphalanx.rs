@@ -8,7 +8,10 @@
 //! обходятся X→Y, цели обрабатываются один раз в порядке первого появления,
 //! затем область удаляется. Формула сохраняет два вызова legacy RNG: диапазон
 //! урона и критический удар.
+//! Критический множитель применяется в расширенной точности x87 и усекается к
+//! нулю только для исходных physical/element/soul-компонентов.
 
+use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
@@ -151,7 +154,7 @@ impl CYinYangPhalanx {
         if random_below(100) < self.critical_chance {
             attack.critical = true;
             for power in &mut attack.damages {
-                if matches!(power.kind, AttackPowerType::Physical | AttackPowerType::Element | AttackPowerType::Soul) { power.hp_damage = (power.hp_damage as f32 * critical_rate).round_ties_even() as i32; }
+                if matches!(power.kind, AttackPowerType::Physical | AttackPowerType::Element | AttackPowerType::Soul) { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(critical_rate)); }
             }
         }
         (attack, combat, occupation, attacker_level)

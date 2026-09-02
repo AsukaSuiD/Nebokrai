@@ -8,8 +8,11 @@
 //! снимок клетки, поэтому пакет удаления может повториться. Формула делает ровно один
 //! вызов legacy RNG до чтения боевого духа и свойств навыка. Поиск целей и
 //! применение результата к независимым владельцам остаются у `CGame`.
+//! Слагаемое боевого духа и случайная база складываются в x87 до единственного
+//! усечения в `i64`, после которого читаются младшие 32 бита.
 
 use super::tianhuo::{TIANHUO_SKILL_ID, TIANHUO_TARGET_DAMAGE_FACTOR_PROPERTY};
+use super::thunder::truncate_original_i64_low;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_BF_SPRITE;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
@@ -136,9 +139,10 @@ impl CTianhuoPhalanx {
         let delta = self.maximum_attack.wrapping_sub(self.minimum_attack);
         let width = delta.wrapping_abs().wrapping_add(1);
         let rolled_attack = random_below(width).wrapping_add(self.minimum_attack);
-        let damage = (f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6
-            + f64::from(rolled_attack))
-        .round_ties_even() as i32;
+        let damage = truncate_original_i64_low(
+            f64::from(target_damage_factor) * f64::from(sprite) * 1.0e-6
+                + f64::from(rolled_attack),
+        );
         (
             AttackInformation {
                 skill_id: TIANHUO_SKILL_ID,

@@ -6,7 +6,10 @@
 //! атакует только первый объект собственной клетки. Ошибка конструктора EXE
 //! сохранена: оба края физического урона получают прежний максимум, но RNG
 //! диапазона всё равно вызывается перед проверкой критического удара.
+//! Критический множитель применяется в расширенной точности x87 и усекается к
+//! нулю при записи результата в `i32`.
 
+use super::fightdefense::truncate_original;
 use super::thunderslash::THUNDER_SLASH_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::LegacyWriter;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -109,7 +112,7 @@ pub(crate) fn calculate_owned_thunder_slash_attack(
     };
     if game.skill_random_below(100) < phalanx.critical_chance {
         attack.critical = true; let rate = game.globe_setup().critical_rate();
-        for power in &mut attack.damages { power.hp_damage = (power.hp_damage as f32 * rate).round_ties_even() as i32; }
+        for power in &mut attack.damages { power.hp_damage = truncate_original(f64::from(power.hp_damage) * f64::from(rate)); }
     }
     let [blast_attack, blast_defense, element_blast_attack, element_blast_defense, full_miss] = game.globe_setup().base_combat_scales();
     if combat.blast_attack_scale() < 1.0 { combat.blast_attack_scale_bits = blast_attack.max(1.0).to_bits(); }

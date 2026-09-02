@@ -7,8 +7,11 @@
 //! имеет приоритет. Формула выполняет ровно один вызов `legacy MSVCRT RNG`.
 //! Поиск цели, проверка `IsAttackAble`, защита и сетевые последствия остаются
 //! у исполняющего владельца, которому требуется доступ к нескольким сущностям.
+//! Атака боевого духа усекается через исходный `i64` с чтением младших 32 бит;
+//! процентный damage factor сохраняется в `f32` только после x87-умножения.
 
 use super::fatalblow::FATAL_BLOW_SKILL_ID;
+use super::thunder::scaled_battle_fairy_sprite;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::PlayerCombatProperties;
 use crate::gameserver::appserver::shape::{CShape, SHAPE_CHANGE_DELETE, ShapeIdentity};
@@ -47,8 +50,8 @@ pub(crate) fn calculate_owned_fatal_blow_attack(
     let master = phalanx.master();
     if master.master_type != 400 || master.master_id == 0 { return None }
     let player = game.find_player(master.master_id)?;
-    let battle_fairy_attack = (f64::from(player.war_soul_attack(game.goods_factory())?) * 0.0001)
-        .round_ties_even() as i32;
+    let battle_fairy_attack =
+        scaled_battle_fairy_sprite(player.war_soul_attack(game.goods_factory())?);
     let combat = player.combat_properties();
     let occupation = player.occupation();
     let attacker_level = player.level();
@@ -160,7 +163,7 @@ impl CFatalBlowPhalanx {
             attacker_faction_id: self.master.master_guild_id,
             attacker_union_id: self.master.master_union_id,
             hit_modifier: 0,
-            damage_factor: self.damage_factor as f32 * 0.01,
+            damage_factor: (f64::from(self.damage_factor) * f64::from(0.01_f32)) as f32,
             damage_modifier: 0,
             critical: false,
             blast_attack: false,

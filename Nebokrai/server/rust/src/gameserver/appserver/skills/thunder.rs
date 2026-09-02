@@ -30,7 +30,7 @@ use crate::nets::netserver::message::CMessage;
 pub(crate) const THUNDER_SKILL_ID: u32 = 0x21f;
 pub(crate) const THUNDER_TARGET_DAMAGE_FACTOR_PROPERTY: u32 = 20_003;
 
-fn truncate_original_i64_low(value: f64) -> i32 {
+pub(super) fn truncate_original_i64_low(value: f64) -> i32 {
     if !value.is_finite()
         || value < -9_223_372_036_854_775_808.0
         || value >= 9_223_372_036_854_775_808.0
