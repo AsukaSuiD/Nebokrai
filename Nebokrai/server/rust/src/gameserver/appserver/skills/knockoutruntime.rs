@@ -279,8 +279,7 @@ pub(crate) fn execute_owned_monster_knock_out<Runtime: GameMainLoopRuntime>(
         if schedule_attack_interval(property.ai, interval).is_some_and(|interval| region.find_monster_by_id_mut(monster_id).is_none_or(|monster| !monster.begin_ai_attack_attempt(now_ms, interval))) { return true; }
         let reuse = properties.query_property(REUSE);
         let last_used = region.find_monster_by_id(monster_id).map(|monster| monster.skill_last_used_ms(KNOCK_OUT_SKILL_ID)).unwrap_or_default();
-        if last_used != 0
-            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used, reuse, now_ms,
             )
         {

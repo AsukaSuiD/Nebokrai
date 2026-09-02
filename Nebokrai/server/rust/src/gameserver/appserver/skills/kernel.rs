@@ -19,8 +19,9 @@
 //! Общий текст недостатка маны боевого духа получает fixed-point стоимость
 //! через `double 0.0001` и x87-усечение; это одинаковый контракт всех
 //! достигнутых concrete skill owner-ов.
-//! Все достигнутые monster-skill reuse-gate вызывают общий `IsRestored` ниже;
-//! stage, missile и periodic duration продолжают использовать elapsed-часы.
+//! Все достигнутые monster-skill reuse-gate вызывают общий `IsRestored` ниже,
+//! включая исходный нулевой timestamp до первого применения; stage, missile
+//! и periodic duration продолжают использовать elapsed-часы.
 
 pub(crate) fn battle_fairy_mana_text_cost(cost: u32) -> u32 {
     (f64::from(cost) * 0.0001_f64).trunc() as i64 as u32

@@ -176,12 +176,11 @@ pub(crate) fn execute_owned_monster_thorn<Runtime: GameMainLoopRuntime>(
                     .is_some_and(|monster| monster.begin_ai_attack_attempt(now_ms, interval))
             });
         if !schedule_ready
-            || (last_used_ms != 0
-                && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+            || !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                     last_used_ms,
                     reuse_delay_ms,
                     now_ms,
-                ))
+                )
         {
             return true;
         }

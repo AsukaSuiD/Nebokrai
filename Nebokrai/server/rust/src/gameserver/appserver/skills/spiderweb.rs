@@ -611,8 +611,7 @@ pub(crate) fn execute_owned_spider_web(
             return true;
         }
         let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_SKILL_DELAY_TIME);
-        if last_used_ms != 0
-            && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+        if !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                 last_used_ms,
                 reuse_delay,
                 now_ms,

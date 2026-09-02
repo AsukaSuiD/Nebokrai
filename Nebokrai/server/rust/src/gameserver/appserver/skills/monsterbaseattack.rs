@@ -1092,7 +1092,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
             .find_monster_by_id(monster_id)
             .map(|monster| monster.skill_last_used_ms(skill_id))
             .unwrap_or_default();
-        if last_used_ms != 0 && !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
+        if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
             return true;
         }
         return execute_monster_immediate_state(
@@ -1880,7 +1880,7 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
         .find_monster_by_id(monster_id)
         .map(|monster| monster.skill_last_used_ms(skill_id))
         .unwrap_or_default();
-    if last_used_ms != 0 && !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
+    if !skill_is_restored(last_used_ms, reuse_delay_ms, now_ms) {
         return true;
     }
     let direction = get_line_direction(monster_x, monster_y, target_x, target_y);

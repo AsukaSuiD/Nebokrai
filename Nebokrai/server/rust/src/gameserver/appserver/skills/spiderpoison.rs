@@ -439,12 +439,11 @@ pub(crate) fn execute_owned_spider_poison<Runtime: GameMainLoopRuntime>(
                 })
             });
         if !schedule_ready
-            || (last_used_ms != 0
-                && !crate::gameserver::appserver::skills::kernel::skill_is_restored(
+            || !crate::gameserver::appserver::skills::kernel::skill_is_restored(
                     last_used_ms,
                     reuse_delay,
                     now_ms,
-                ))
+                )
         {
             return true;
         }
