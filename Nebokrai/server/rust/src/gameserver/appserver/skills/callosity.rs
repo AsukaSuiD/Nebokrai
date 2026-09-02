@@ -10,6 +10,8 @@
 //! сообщений, частичная мутация и два независимых времени восстановления
 //! остаются здесь. Клиентская отмена сохраняет уже списанные ресурсы и
 //! завершает тот же активный экземпляр до фиксации времени восстановления.
+//! Reuse каждого варианта использует exact `CSkill::IsRestored`; stage delay
+//! остаётся elapsed-интервалом.
 //!
 //! Сохранённый ниже псевдокод относится к `CCallosity`; `CCallosity2` имеет
 //! тот же контракт с идентификатором `0x7d` и собственным временем
@@ -24,7 +26,7 @@ use super::callositystate::{
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination,
+    SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored,
 };
 use crate::gameserver::appserver::skills::stateskill::finish_state_skill;
 use crate::gameserver::appserver::states::summonskill::abort_skill;
@@ -153,7 +155,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
         let last_used_ms = player_ai.callosity_last_used_ms(skill_id);
-        if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
+        if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
             game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return rejected();

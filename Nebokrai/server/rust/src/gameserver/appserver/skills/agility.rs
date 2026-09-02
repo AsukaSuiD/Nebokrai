@@ -11,6 +11,8 @@
 //! немедленно входит в полный `UpdateProperty`, а не ждёт постороннего
 //! пересчёта. Клиентская отмена проходит через тот же семейный владелец и не
 //! откатывает уже выполненный расход MP.
+//! Reuse каждого ID проверяется общим absolute deadline `CSkill::IsRestored`;
+//! задержка исполнения остаётся отдельным elapsed-интервалом.
 
 use super::agility2::begin_agility_2_state;
 pub(crate) use super::agility2::AGILITY_2_SKILL_ID;
@@ -18,7 +20,7 @@ use super::agilitystate::{
     send_agility_family_state_visual, AgilityState, PersistentAgilityFamilyState,
 };
 use super::baseattack::time_reached;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::stateskill::finish_state_skill;
 use super::natural::{NATURAL_SKILL_ID, SKILL_USAGE_TARGET_ELEMENT_RESISTANT_GAIN};
 use super::naturalstate::NaturalState;
@@ -174,7 +176,7 @@ pub(crate) fn execute_player_agility_family<Runtime: GameMainLoopRuntime>(
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
         let last_used_ms = player_ai.agility_family_last_used_ms(skill_id);
-        if last_used_ms != 0 && !time_reached(cooldown_now_ms, last_used_ms, reuse_delay_ms) {
+        if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
             game.send_self_state_skill_failure(AGILITY_EFFECT_MESSAGE, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             abort_player_agility(game, player_id);
