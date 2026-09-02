@@ -2,16 +2,18 @@
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/itemskill2.cpp`. Владелец сохраняет whitelist цели,
-//! две проверки MP, задержку, cooldown одновременно навыка и расходника,
+//! две проверки MP, задержку и независимые cooldown навыка и расходника,
 //! точную позицию stack-а и порядок: расход предмета, container-пакет,
 //! `0xBF709`, регистрация `CThunderFirePhalanx`. `CGame` только связывает
 //! независимых владельцев региона, игрока и сетевой доставки. `End(1)` сначала
 //! возвращает движение, затем отдельными отсчётами фиксирует cooldown расходника
 //! и навыка; предмет удаляется только успешным `Summon`, но не отменой.
+//! `CheckCastCondition` проверяет только абсолютный срок поля навыка через
+//! `CSkill::IsRestored`; item-gate принадлежит более раннему `ReUseSkillItem`.
 
 use super::baseattack::{real_distance, time_reached, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::soulcollectstate::send_soul_collect_state_visual;
 use super::thunderfirephalanx::CThunderFirePhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -137,8 +139,7 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
         if target.object_type==MONSTER_TYPE && !allow_monster { send_notify(game, player_id, b"GS1181"); return terminal(QueuedSkillExecutionState::Rejected); }
         if target.object_type==MONSTER_TYPE && !game.new_skill_monster_conf().groups().get(&group).is_some_and(|names| names.iter().any(|name| name==&original_name)) { send_notify(game, player_id, b"GS1182"); return terminal(QueuedSkillExecutionState::Rejected); }
         if target.object_type==PLAYER_TYPE && target.id==player_id { send_failure(game, player_id, 10, b"GS1183", None); return terminal(QueuedSkillExecutionState::Rejected); }
-        let item_last=game.find_player(player_id).map_or(0, |player| player.last_skill_item_use_ms(item_index)); let last=player_ai.item_skill_2_last_used_ms().max(item_last);
-        if last!=0 && !time_reached(runtime.now_milliseconds(), last, reuse) { send_failure(game, player_id, 0x0d, b"GS1184", None); return terminal(QueuedSkillExecutionState::Rejected); }
+        if !skill_is_restored(player_ai.item_skill_2_last_used_ms(), reuse, runtime.now_milliseconds()) { send_failure(game, player_id, 0x0d, b"GS1184", None); return terminal(QueuedSkillExecutionState::Rejected); }
         let path=game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None); if maximum!=0 && path.len()>maximum as usize { send_failure(game, player_id, 0x0b, b"GS1185", None); return terminal(QueuedSkillExecutionState::Rejected); } if path.iter().any(|cell| cell.2==2) { send_failure(game, player_id, 0x0f, b"GS1186", None); return terminal(QueuedSkillExecutionState::Rejected); } if mp_loss!=0 && !has_mana(mana, mp_loss) { send_failure(game, player_id, 7, b"GS1187", Some(mp_loss)); return terminal(QueuedSkillExecutionState::Rejected); }
         player_ai.begin_item_skill_2(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
     } else if player_ai.item_skill_2().is_none_or(|execution| execution.dispatch()!=dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
