@@ -11,6 +11,7 @@
 //! завершение после `Begin` используют подтверждённый хвост `End(1)`: возврат
 //! движения, `AfterUseSkill`, очистку текущего навыка и фиксацию времени
 //! восстановления.
+//! Reuse использует exact `CSkill::IsRestored`; cast и phalanx flight — elapsed.
 //! Координатная перегрузка `Begin` разрешает первый `CMoveShape` клетки через
 //! точный `CState::GetSufferer` без fallback к заклинателю.
 
@@ -22,7 +23,7 @@ use super::basemagic::{
     SKILL_USAGE_SUMMONED_SPEED, SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fireboltphalanx::CFireBoltPhalanx;
-use super::kernel::{SkillStage, SkillTermination};
+use super::kernel::{SkillStage, SkillTermination, skill_is_restored};
 use super::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -189,9 +190,11 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         let cooldown_now_ms = runtime.now_milliseconds();
-        if player_ai.fire_bolt_last_used_ms() != 0
-            && !time_reached(cooldown_now_ms, player_ai.fire_bolt_last_used_ms(), reuse_delay_ms)
-        {
+        if !skill_is_restored(
+            player_ai.fire_bolt_last_used_ms(),
+            reuse_delay_ms,
+            cooldown_now_ms,
+        ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

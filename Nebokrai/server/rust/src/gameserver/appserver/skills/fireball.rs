@@ -9,6 +9,7 @@
 //! Обычное, отказное и клиентское завершение после `Begin` проходят через
 //! подтверждённый общий хвост `End(1)` с возвратом движения, `AfterUseSkill`
 //! и временем восстановления.
+//! Reuse использует exact `CSkill::IsRestored`; cast/phalanx часы — elapsed.
 
 use super::baseattack::{finish_delayed_base_attack, time_reached};
 use super::basemagic::{
@@ -18,7 +19,7 @@ use super::basemagic::{
     SKILL_USAGE_TARGET_MAX_DISTANCE,
 };
 use super::fireballphalanx::CFireBallPhalanx;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::soulcollectstate::send_soul_collect_state_visual;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -197,9 +198,11 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0286");
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        if player_ai.fire_ball_last_used_ms() != 0
-            && !time_reached(runtime.now_milliseconds(), player_ai.fire_ball_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(
+            player_ai.fire_ball_last_used_ms(),
+            cooldown_ms,
+            runtime.now_milliseconds(),
+        ) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

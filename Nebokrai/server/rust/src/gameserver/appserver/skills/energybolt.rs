@@ -14,7 +14,8 @@
 //! Три player-варианта используют общий `End`: очистку progress, возврат
 //! движения и `CAttackSkill::End(1)` с единичным `AfterUseSkill ->
 //! CPlayer::OnWeaponDamaged`, обновлением свойств и cooldown конкретного
-//! идентификатора.
+//! идентификатора. Reuse использует exact `CSkill::IsRestored`, а полёт
+//! остаётся elapsed.
 //! Стихийная прибавка сохраняет расширенное вычисление x87 из целых свойств и
 //! сохранённой `f32`-константы, затем усекается к нулю.
 //! Множитель собранных душ также остаётся в x87: signed `souls` умножается на
@@ -42,7 +43,7 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination,
+    SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored,
 };
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
@@ -523,9 +524,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0286");
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        if ai.path_projectile_last_used_ms(spec.skill_id) != 0
-            && !time_reached(now_ms, ai.path_projectile_last_used_ms(spec.skill_id), reuse)
-        {
+        if !skill_is_restored(ai.path_projectile_last_used_ms(spec.skill_id), reuse, now_ms) {
             send_player_projectile_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

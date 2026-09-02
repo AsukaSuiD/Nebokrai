@@ -12,12 +12,13 @@
 //! владельцев, применяет рассчитанные удары и доставляет готовые пакеты.
 //! Оба владельца вычисляют критический множитель в расширенной точности x87 и
 //! усекают его к нулю при записи в `int`.
+//! Reuse использует exact `CSkill::IsRestored`; cast и flight часы — elapsed.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::fightdefense::truncate_original;
 use super::flash::{cell_views, master_info};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::poisonmoth::{MONSTER_TYPE, PLAYER_TYPE};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -213,7 +214,7 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
     let now_ms = runtime.now_milliseconds();
 
     if ai.direct_projectile().is_none() {
-        if ai.direct_projectile_last_used_ms(skill_id) != 0 && !time_reached(now_ms, ai.direct_projectile_last_used_ms(skill_id), reuse_ms) {
+        if !skill_is_restored(ai.direct_projectile_last_used_ms(skill_id), reuse_ms, now_ms) {
             send_failure(game, player_id, 0x0d); return terminal(QueuedSkillExecutionState::Rejected)
         }
         let Some(target_position) = destination(game, region_id, dispatch) else { send_failure(game, player_id, 10); return terminal(QueuedSkillExecutionState::Rejected) };

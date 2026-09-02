@@ -11,17 +11,18 @@
 //! оружейный `AfterUseSkill`, обновляет свойства и фиксирует время
 //! восстановления; тот же ненулевой хвост используется при отказе после
 //! `Begin` и клиентской отмене.
+//! Reuse использует exact `CSkill::IsRestored`; action interval — elapsed.
 //! Element modifier вычисляется в расширенной точности x87 из целых свойств и
 //! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
 //! перед `int`.
 
-use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
+use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{
     SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK,
     SKILL_USAGE_REUSE_DELAY_TIME,
 };
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -273,9 +274,11 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
     let damage_modifier = properties.query_property(TARGET_FINAL_DAMAGE_MODIFIER) as i32;
 
     if player_ai.chain_lightning().is_none() {
-        if player_ai.chain_lightning_last_used_ms() != 0
-            && !time_reached(runtime.now_milliseconds(), player_ai.chain_lightning_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(
+            player_ai.chain_lightning_last_used_ms(),
+            cooldown_ms,
+            runtime.now_milliseconds(),
+        ) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
