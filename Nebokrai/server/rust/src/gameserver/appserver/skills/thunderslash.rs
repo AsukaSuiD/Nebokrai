@@ -1,4 +1,5 @@
 //! Громовое рассечение `CThunderSlash` (`0x72`).
+//! Reuse проверяется exact `CSkill::IsRestored`; cast/phalanx часы — elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/thunderslash.cpp`. Навык требует топор категории `1` и
@@ -16,7 +17,7 @@ use super::baseattack::{
 };
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_SUMMONED_LIFETIME};
 use super::flash::master_info;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::ragebreakstate::send_rage_break_state_visual;
 use super::thunderslashphalanx::CThunderSlashPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -114,7 +115,7 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     if ai.thunder_slash().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if ai.thunder_slash_last_used_ms() != 0 && !time_reached(cooldown_now_ms, ai.thunder_slash_last_used_ms(), reuse) {
+        if !skill_is_restored(ai.thunder_slash_last_used_ms(), reuse, cooldown_now_ms) {
             failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };

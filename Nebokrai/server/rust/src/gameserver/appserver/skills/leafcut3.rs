@@ -1,4 +1,5 @@
 //! Третий периодический удар листвы `CLeafCut3` (`0x8F`).
+//! Reuse проверяется exact `CSkill::IsRestored`; cast и periodic часы — elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/leafcut3.cpp`. Владелец проверяет живую объектную цель,
@@ -12,7 +13,7 @@
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::leafcut::leaf_cut_factors;
 use super::leafcutstate3::{LeafCutState3, send_leaf_cut_3_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -117,7 +118,7 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
 
     if ai.leaf_cut_3().is_none() {
         let now = runtime.now_milliseconds();
-        if ai.leaf_cut_3_last_used_ms() != 0 && now < ai.leaf_cut_3_last_used_ms().wrapping_add(reuse) { return reject_initial(game, player_id, 0x0d, 0, None) }
+        if !skill_is_restored(ai.leaf_cut_3_last_used_ms(), reuse, now) { return reject_initial(game, player_id, 0x0d, 0, None) }
         let Some(blocked) = path_block(game, region_id, source_x, source_y, target_x, target_y, maximum) else { return reject_initial(game, player_id, 0x0b, 0, None) };
         if blocked { return reject_initial(game, player_id, 0x0f, 0, Some((b"GS0291", &target_name))) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };

@@ -1,4 +1,5 @@
 //! Фронтальный рубящий удар `CJuCut` (`0x6C`).
+//! Reuse проверяется exact `CSkill::IsRestored`; cast delay остаётся elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/jucut.cpp`. Навык сохраняет частичное изменение MP до
@@ -18,7 +19,7 @@ use super::frontcellsword::{
     finish_front_cell_sword, front_shape, master_info, send_failure, send_visual, target_level,
     weapon_is_compatible,
 };
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::gameserver::game::{
@@ -112,9 +113,7 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
 
     if player_ai.ju_cut().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.ju_cut_last_used_ms() != 0
-            && !time_reached(now_ms, player_ai.ju_cut_last_used_ms(), cooldown_ms)
-        {
+        if !skill_is_restored(player_ai.ju_cut_last_used_ms(), cooldown_ms, now_ms) {
             send_failure(game, player_id, DEFINITION, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

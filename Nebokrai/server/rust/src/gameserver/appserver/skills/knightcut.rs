@@ -1,4 +1,5 @@
 //! Рыцарский удар `CKnightCut` (`0x67`).
+//! Reuse проверяется exact `CSkill::IsRestored`; cast/state часы — elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/knightcut.cpp`. Навык сохраняет частичную трату MP до
@@ -17,7 +18,7 @@ use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::CURE_SKILL_ID;
 use super::fightdefense::truncate_original;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::knightcutstate::{KnightCutState, replace_monster_knight_cut_state, replace_player_knight_cut_state};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -206,7 +207,7 @@ pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut
 
     if player_ai.knight_cut().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.knight_cut_last_used_ms() != 0 && !time_reached(now_ms, player_ai.knight_cut_last_used_ms(), reuse) { send_failure(game, player_id, 0x0d, 0); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(player_ai.knight_cut_last_used_ms(), reuse, now_ms) { send_failure(game, player_id, 0x0d, 0); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_compatible(game, player) { send_failure(game, player_id, 0x0e, 0); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }

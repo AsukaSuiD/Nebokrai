@@ -1,4 +1,5 @@
 //! Семейство бегущего удара `CGhostCut` (`0x66/0x79/0x7A`).
+//! Reuse проверяется exact `CSkill::IsRestored`; шаги полёта остаются elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходные владельцы
 //! `appserver/skills/ghostcut*.cpp`. После двукратной проверки меча и MP
@@ -21,7 +22,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME}
 use super::fightdefense::truncate_original;
 use super::ghostcut2::GHOST_CUT_2_SKILL_ID;
 use super::ghostcut3::GHOST_CUT_3_SKILL_ID;
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -161,7 +162,7 @@ pub(crate) fn execute_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut 
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum_distance = properties.query_property(TARGET_MAX_DISTANCE); let missile_step_ms = properties.query_property(MISSILE_FLYING_TIME); let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let target_damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR); let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if player_ai.ghost_cut().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if player_ai.ghost_cut_last_used_ms(requested_skill) != 0 && !time_reached(now_ms, player_ai.ghost_cut_last_used_ms(requested_skill), reuse_delay_ms) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(player_ai.ghost_cut_last_used_ms(requested_skill), reuse_delay_ms, now_ms) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_sword(game, player) { send_failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss == 0 { return terminal(QueuedSkillExecutionState::Rejected) }

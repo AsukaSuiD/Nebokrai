@@ -1,4 +1,5 @@
 //! Обратный рубящий удар `CInverseChopped` (`0x8A`).
+//! Reuse проверяется exact `CSkill::IsRestored`; cast delay остаётся elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/inversechopped.cpp`. Навык атакует все допустимые фигуры
@@ -16,7 +17,7 @@ use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME}
 use super::energyholdingstate::take_player_energy_holding;
 use super::flash::cell_views;
 use super::frontcellsword::{FrontCellSwordDefinition, MONSTER_TYPE, PLAYER_TYPE, calculate_attack_with_multiplier, destination, master_info, send_failure, send_visual, target_level, weapon_is_compatible};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
@@ -68,7 +69,7 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
     if ai.inverse_chopped().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if ai.inverse_chopped_last_used_ms() != 0 && !time_reached(cooldown_now_ms, ai.inverse_chopped_last_used_ms(), reuse_delay_ms) { send_failure(game, player_id, DEFINITION, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.inverse_chopped_last_used_ms(), reuse_delay_ms, cooldown_now_ms) { send_failure(game, player_id, DEFINITION, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_compatible(game, player, DEFINITION) { send_failure(game, player_id, DEFINITION, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, DEFINITION, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }

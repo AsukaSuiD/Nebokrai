@@ -1,4 +1,5 @@
 //! Подготовка яростного удара `CRageBreak` (`0x6E`).
+//! Reuse проверяется exact `CSkill::IsRestored`; cast/state часы — elapsed.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/ragebreak.cpp`. Владелец сохраняет проверку и повторное
@@ -12,7 +13,7 @@ use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual};
-use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination};
+use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
 use super::ragebreakstate::{RageBreakState, send_rage_break_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
@@ -92,7 +93,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
 
     if ai.rage_break().is_none() {
         let now = runtime.now_milliseconds();
-        if ai.rage_break_last_used_ms() != 0 && now < ai.rage_break_last_used_ms().wrapping_add(reuse) {
+        if !skill_is_restored(ai.rage_break_last_used_ms(), reuse, now) {
             fail(game, player_id, 0x0d, rp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
