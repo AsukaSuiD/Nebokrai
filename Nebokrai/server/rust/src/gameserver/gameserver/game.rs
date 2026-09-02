@@ -415,6 +415,11 @@
 //! удаление дикого монстра через игрока-получателя. Цель-игрок рекурсивно
 //! применяет правила PvP, уровня и безопасной клетки хозяина и доходит до
 //! общего хвоста урона, смерти, убийства и экипировки.
+//! `CPlayer::do_coutribute` сохраняет усечение групповой доли, отдельное
+//! 32-битное произведение для предметной доли и историческую двухступенчатую
+//! проверку fetch-power: сначала с лимитом сравнивается булевый маркер
+//! положительного прироста, затем превышение добавляет ещё и усечённый лимит.
+//! Денежная потеря при смерти также усекается к нулю.
 //! Follow/stay action также проходит master pet-slot geometry, near movement
 //! либо far `BF603` relocation; lifecycle замыкает master loss/reclaim,
 //! age/wild notices и `Evanish` unlink/wire, active-mode search выбирает
@@ -41932,7 +41937,7 @@ impl CGame {
         base_contribution: i32,
     ) {
         let (_, _, item_modifier) = self.contribute_setup.country_city_modifiers();
-        let value = contribution_percent(base_contribution, item_modifier);
+        let value = contribution_item_percent(base_contribution, item_modifier);
         let Some(item) = u32::try_from(value)
             .ok()
             .and_then(|value| self.contribute_setup.item_for_value(value))
@@ -42298,7 +42303,8 @@ impl CGame {
                     let share = if murderer_team == 0 || level_sum == 0 {
                         gain
                     } else {
-                        (f64::from(level) / f64::from(level_sum) * f64::from(gain)).round() as i32
+                        (f64::from(level) / f64::from(level_sum) * f64::from(gain)).trunc()
+                            as i32
                     };
                     if let Some(player) = self.find_player_mut(id) {
                         let current = player.contribution();
@@ -42307,17 +42313,16 @@ impl CGame {
                             .then_some(gain / 100)
                             .unwrap_or_default()
                             .max(0) as u32;
-                        let applied_fetch_gain =
-                            if fetch_gain > 0 && (fetch_gain as f32) < maximum_fetch_gain {
-                                fetch_gain
-                            } else if maximum_fetch_gain < fetch_gain as f32 {
-                                maximum_fetch_gain.round().max(0.0) as u32
-                            } else {
-                                0
-                            };
-                        if applied_fetch_gain != 0 {
+                        if u32::from(fetch_gain > 0) as f32 <= maximum_fetch_gain {
                             player.set_fetch_power(
-                                player.fetch_power().wrapping_add(applied_fetch_gain),
+                                player.fetch_power().wrapping_add(fetch_gain),
+                                maximum_fetch,
+                            );
+                        }
+                        if maximum_fetch_gain < fetch_gain as f32 {
+                            let capped_gain = maximum_fetch_gain.trunc() as i32 as u32;
+                            player.set_fetch_power(
+                                player.fetch_power().wrapping_add(capped_gain),
                                 maximum_fetch,
                             );
                         }
@@ -42678,8 +42683,9 @@ impl CGame {
                             && (game_legacy_random(&mut self.random_state, 10_000) as f32)
                                 < lost.money * 10_000.0
                         {
-                            let amount =
-                                (f64::from(money) * f64::from(lost.money_percent)).round() as u32;
+                            let amount = (f64::from(money)
+                                * f64::from(lost.money_percent))
+                            .trunc() as i32 as u32;
                             if amount != 0 {
                                 if let Some(goods) = self
                                     .find_player(blow.victim_id)
@@ -49615,7 +49621,11 @@ fn gods_battle_team_szl_share(total: u32, teammate_amount: u32) -> u32 {
 }
 
 fn contribution_percent(base: i32, modifier: i32) -> i32 {
-    (f64::from(base) * f64::from(modifier) * 0.01).round() as i32
+    (f64::from(base) * f64::from(modifier) * f64::from(0.01_f32)).trunc() as i32
+}
+
+fn contribution_item_percent(base: i32, modifier: i32) -> i32 {
+    (f64::from(base.wrapping_mul(modifier)) * f64::from(0.01_f32)).trunc() as i32
 }
 
 pub(crate) fn legacy_atoi_i32(value: &[u8]) -> i32 {
