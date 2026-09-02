@@ -16,6 +16,9 @@
 //! записи в `float`, а критический множитель переводится в `int` с усечением
 //! к нулю отдельно для каждого боевого компонента. Hit-модификатор сохраняет
 //! подтверждённое знаковое отрицание с wrapping-семантикой.
+//! Ширина физического RNG буквально вычисляется как
+//! `maximum - minimum + 1` в DWORD; исходный владелец не исправляет
+//! инвертированные границы через `abs` или clamp.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_USER_HIT_MODIFIER, time_reached};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_REUSE_DELAY_TIME};
@@ -83,7 +86,7 @@ fn send_start(game: &mut CGame, player_id: i32, level: i32) { let Some(player) =
 fn send_fire(game: &mut CGame, player_id: i32, level: i32, target: ShapeIdentity, position: (i32, i32), flying_time: u32) { let mut message = CMessage::new(EFFECT_MESSAGE); message.add_byte(2); message.add_long(STRIKE_SKILL_ID as i32); message.add_short(level as i16); message.add_long(PLAYER_TYPE); message.add_long(player_id); message.add_long(target.object_type); message.add_long(target.id); message.add_long(position.0); message.add_long(position.1); message.add_ulong(flying_time); let _ = game.send_player_shape_around(player_id, None, &message); }
 
 fn calculate_attack(game: &mut CGame, player_id: i32, region_id: i32, target: ShapeIdentity, level: i32, factor: u32, hit: i32) -> Option<(MasterInfo, AttackInformation)> {
-    let target_level = target_level(game, region_id, target)?; let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors(); let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum_factor); let width = (combat.maximum_attack as i32).wrapping_sub(combat.minimum_attack as i32).max(0).wrapping_add(1); let physical = (combat.minimum_attack as i32).wrapping_add(game.skill_random_below(width)).max(0);
+    let target_level = target_level(game, region_id, target)?; let player = game.find_player(player_id)?; let combat = player.combat_properties(); let master = master_info(player); let (divisor, minimum_factor) = game.globe_setup().weapon_damage_factors(); let weapon_factor = player.weapon_modifier(game.goods_factory(), i32::from(target_level), divisor, minimum_factor); let minimum = combat.minimum_attack as i32; let width = (combat.maximum_attack as i32).wrapping_sub(minimum).wrapping_add(1); let physical = minimum.wrapping_add(game.skill_random_below(width)).max(0);
     let damage_factor =
         (f64::from(factor) * f64::from(weapon_factor) * f64::from(0.01_f32)) as f32;
     let mut attack = AttackInformation { skill_id: STRIKE_SKILL_ID, skill_level: level as u8, attacker_type: PLAYER_TYPE, attacker_id: player_id, attacker_team_id: master.master_team_id, attacker_faction_id: master.master_guild_id, attacker_union_id: master.master_union_id, hit_modifier: hit.wrapping_neg(), damage_factor, damage_modifier: 0, critical: false, blast_attack: false, full_miss: 0, damages: vec![AttackPower { kind: AttackPowerType::Physical, hp_damage: physical, mp_damage: 0 }, AttackPower { kind: AttackPowerType::Element, hp_damage: (combat.add_element_attack as i32).max(0), mp_damage: 0 }, AttackPower { kind: AttackPowerType::Soul, hp_damage: i32::from(combat.add_soul_attack), mp_damage: 0 }] };
