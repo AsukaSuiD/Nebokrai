@@ -41409,7 +41409,13 @@ impl CGame {
                         ..
                     }
             );
-            let outcome = if attribute_skill {
+            let outcome = if self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai) {
+                QueuedSkillExecutionOutcome {
+                    state: QueuedSkillExecutionState::Rejected,
+                    first_contact: false,
+                    killing_blow: None,
+                }
+            } else if attribute_skill {
                 execute_battle_fairy_attribute(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_life_shield {
                 execute_battle_fairy_life_shield(self, player_id, dispatch, player_ai, runtime)

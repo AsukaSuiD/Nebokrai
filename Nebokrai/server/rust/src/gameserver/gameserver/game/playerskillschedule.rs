@@ -27,7 +27,15 @@
 //! Тот же true используют BossBlueFury, DaubPoison, EnergyHolding, Fury,
 //! GodBless, Hearten, MeteorArrowMass, Pillar, Rage/RageBreak, Roar,
 //! SoulCollect и два обычных щита. Независимая очередь боевой феи, включая
-//! LifeShield, этим владельцем не обрабатывается.
+//! LifeShield, проходит отдельный вход OnScheduleAboutWarSoul (0x00509730).
+//! Он проверяет IsDied и DoesTargetEffective до Begin, но не вызывает
+//! EnterCombatState. Отказ отправляет байты 4, 2 через
+//! RejectUseSkillRequestWarSoul (0x0042e720); OnLoseTargetWarSoul
+//! (0x005091b0) у ещё не начатого навыка только возвращает ID 0x224.
+//! Для Yujia/Yubing/Yumo/Yufa, LifeShield, Wangsheng, Huoxieshu и Lingzhishu
+//! DoesTargetEffective постоянен true; прочие навыки духа наследуют
+//! IsAttackAble. Очередь с ненулевыми координатами проходит дальше к Begin,
+//! отсутствие и объекта, и координат отклоняется до исполнения.
 //! Хранение очереди и kernel
 //! остаётся у CPlayerAI, боевые правила — у существующих владельцев целей.
 
@@ -45,6 +53,39 @@ enum TargetRule {
 }
 
 impl CGame {
+    pub(super) fn reject_battle_fairy_skill_schedule(
+        &mut self,
+        player_id: i32,
+        dispatch: BattleFairySkillDispatch,
+        ai: &CPlayerAI,
+    ) -> bool {
+        if ai.battle_fairy_skill_execution_is_materialized()
+            || !(0x212..=0x224).contains(&dispatch.skill_id())
+        {
+            return false;
+        }
+        let rejected = match dispatch {
+            BattleFairySkillDispatch::SelfTarget { .. } => true,
+            BattleFairySkillDispatch::Point { x, y, .. } => x == 0 || y == 0,
+            BattleFairySkillDispatch::Object { target, .. } => {
+                let Some(player) = self.find_player(player_id) else { return false };
+                let Some(region_id) = player.server_region_id() else { return false };
+                let master = crate::gameserver::appserver::skills::flash::master_info(player);
+                let accepts_any_live_target = matches!(dispatch.skill_id(), 0x216..=0x219 | 0x220..=0x223);
+                self.base_magic_target_view(region_id, target).is_none()
+                    || self.base_magic_target_dead(region_id, target)
+                    || (!accepts_any_live_target && !match target.object_type {
+                        1100 | 1200 => self.stationary_build_attackable_by_player(player_id, region_id, target),
+                        _ => self.owned_player_skill_target_attackable(master, target, region_id),
+                    })
+            }
+        };
+        if rejected {
+            self.send_battle_fairy_skill_failure(player_id, 2);
+        }
+        rejected
+    }
+
     pub(super) fn materialized_player_skill_active(player_ai: &CPlayerAI, skill_id: u32) -> Option<bool> {
         Some(match skill_id {
             BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
