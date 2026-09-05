@@ -48,6 +48,12 @@
 //! Даже с координатами war-soul расписание вызывает объектный Begin с null
 //! (0x00509861), а не координатную перегрузку; конкретный owner сохраняет
 //! собственный порядок отказа этого входа.
+//! Однако после допуска Begin всех 19 навыков феи (0x212..0x224) безусловно
+//! вызывает общий 0x00601A50, затем CSkill::Begin (0x004D83E0). Источник в
+//! OnScheduleAboutWarSoul 0x00509861 — CPlayer, не визуальный объект type 700:
+//! его OnBeginSkill (0x0042CC90) переводит в бой любой ID, кроме 0xA.
+//! Поэтому перед конкретными проверками ресурсов фиксируется отдельное
+//! время Begin и выполняется EnterCombatState, но при отказе допуска — нет.
 //! Хранение очереди и kernel
 //! остаётся у CPlayerAI, боевые правила — у существующих владельцев целей.
 //! Объектные и координатные Begin перечисленных ниже конкретных классов
@@ -135,6 +141,21 @@ impl CGame {
             && Self::player_skill_begin_pending(ai, skill_id);
         if needs_begin {
             ai.set_scheduled_skill_begin(Some((dispatch, runtime.now_milliseconds())));
+            self.enter_player_combat_state(player_id);
+        }
+    }
+
+    pub(super) fn begin_battle_fairy_skill_schedule<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        dispatch: BattleFairySkillDispatch,
+        ai: &mut CPlayerAI,
+        runtime: &mut Runtime,
+    ) {
+        if (0x212..=0x224).contains(&dispatch.skill_id())
+            && !ai.battle_fairy_skill_execution_is_materialized()
+        {
+            ai.set_scheduled_fairy_skill_begin(Some((dispatch, runtime.now_milliseconds())));
             self.enter_player_combat_state(player_id);
         }
     }

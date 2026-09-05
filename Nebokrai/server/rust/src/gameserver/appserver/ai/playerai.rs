@@ -2,7 +2,9 @@
 //! Отсчёт CState::Begin фиксируется общим расписанием до OnBeginSkill.
 //! Краткоживущий контекст привязан к dispatch и передаётся kernel при его
 //! установке, до первого AI. После вызова владельца контекст очищается даже
-//! при отказе; активные навыки и отдельная очередь феи его не наследуют.
+//! при отказе; активные навыки его не наследуют. Очередь феи использует
+//! отдельный типизированный контекст, чтобы два исполнения одного такта
+//! не могли получить отсчёт друг друга.
 //!
 //! Точная пара `gameserver.exe + GameServer.pdb`, исходный владелец
 //! `appserver/ai/playerai.cpp`. Трёхаргументный virtual `MoveTo` RVA
@@ -161,6 +163,7 @@ pub(crate) struct CPlayerAI {
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
     scheduled_skill_begin: Option<(PlayerSkillDispatch, u32)>,
+    scheduled_fairy_skill_begin: Option<(BattleFairySkillDispatch, u32)>,
     selected_battle_fairy_skill_id: u32,
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
@@ -414,6 +417,10 @@ pub(crate) struct PlayerEnergyRegeneration {
 impl CPlayerAI {
     pub(crate) fn set_scheduled_skill_begin(&mut self, begin: Option<(PlayerSkillDispatch, u32)>) {
         self.scheduled_skill_begin = begin;
+    }
+
+    pub(crate) fn set_scheduled_fairy_skill_begin(&mut self, begin: Option<(BattleFairySkillDispatch, u32)>) {
+        self.scheduled_fairy_skill_begin = begin;
     }
 
     pub(crate) fn when_been_hurted(&mut self, now_ms: u32) {
@@ -2724,10 +2731,11 @@ impl CPlayerAI {
         self.battle_fairy_attribute
     }
 
-    pub(crate) const fn begin_battle_fairy_attribute(
+    pub(crate) fn begin_battle_fairy_attribute(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.battle_fairy_attribute = Some(state);
     }
 
@@ -2753,10 +2761,11 @@ impl CPlayerAI {
         self.battle_fairy_attribute_last_used_ms[index] = now_ms;
     }
 
-    pub(crate) const fn begin_battle_fairy_base_magic(
+    pub(crate) fn begin_battle_fairy_base_magic(
         &mut self,
-        state: BattleFairyBaseMagicExecutionState,
+        mut state: BattleFairyBaseMagicExecutionState,
     ) {
+        state.kernel_mut().inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.battle_fairy_base_magic = Some(state);
     }
 
@@ -2780,10 +2789,11 @@ impl CPlayerAI {
         self.life_shield
     }
 
-    pub(crate) const fn begin_life_shield(
+    pub(crate) fn begin_life_shield(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.life_shield = Some(state);
     }
 
@@ -2807,10 +2817,11 @@ impl CPlayerAI {
         self.battle_fairy_transfer
     }
 
-    pub(crate) const fn begin_battle_fairy_transfer(
+    pub(crate) fn begin_battle_fairy_transfer(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.battle_fairy_transfer = Some(state);
     }
 
@@ -2848,10 +2859,11 @@ impl CPlayerAI {
         self.wangsheng
     }
 
-    pub(crate) const fn begin_wangsheng(
+    pub(crate) fn begin_wangsheng(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.wangsheng = Some(state);
     }
 
@@ -2875,10 +2887,11 @@ impl CPlayerAI {
         self.poison_arrow
     }
 
-    pub(crate) const fn begin_poison_arrow(
+    pub(crate) fn begin_poison_arrow(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.poison_arrow = Some(state);
     }
 
@@ -2902,10 +2915,11 @@ impl CPlayerAI {
         self.blood_loss
     }
 
-    pub(crate) const fn begin_blood_loss(
+    pub(crate) fn begin_blood_loss(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.blood_loss = Some(state);
     }
 
@@ -2929,10 +2943,11 @@ impl CPlayerAI {
         self.fatal_blow
     }
 
-    pub(crate) const fn begin_fatal_blow(
+    pub(crate) fn begin_fatal_blow(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.fatal_blow = Some(state);
     }
 
@@ -2956,10 +2971,11 @@ impl CPlayerAI {
         self.thunder
     }
 
-    pub(crate) const fn begin_thunder(
+    pub(crate) fn begin_thunder(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.thunder = Some(state);
     }
 
@@ -2983,10 +2999,11 @@ impl CPlayerAI {
         self.leiming2
     }
 
-    pub(crate) const fn begin_leiming2(
+    pub(crate) fn begin_leiming2(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.leiming2 = Some(state);
     }
 
@@ -3010,10 +3027,11 @@ impl CPlayerAI {
         self.tianhuo
     }
 
-    pub(crate) const fn begin_tianhuo(
+    pub(crate) fn begin_tianhuo(
         &mut self,
-        state: SkillExecutionKernel<BattleFairySkillDispatch>,
+        mut state: SkillExecutionKernel<BattleFairySkillDispatch>,
     ) {
+        state.inherit_scheduled_begin(self.scheduled_fairy_skill_begin);
         self.tianhuo = Some(state);
     }
 

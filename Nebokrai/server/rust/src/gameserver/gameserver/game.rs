@@ -41465,6 +41465,9 @@ impl CGame {
             let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
             let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
                 && !player_ai.battle_fairy_skill_execution_is_materialized();
+            if !schedule_rejected {
+                self.begin_battle_fairy_skill_schedule(player_id, dispatch, player_ai, runtime);
+            }
             let outcome = if schedule_rejected {
                 QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
@@ -41609,6 +41612,7 @@ impl CGame {
             };
             let materialized_end = outcome.state != QueuedSkillExecutionState::Pending
                 && player_ai.battle_fairy_skill_execution_is_materialized();
+            player_ai.set_scheduled_fairy_skill_begin(None);
             if !schedule_rejected
                 && begin_was_pending
                 && outcome.state == QueuedSkillExecutionState::Rejected

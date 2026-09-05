@@ -15,6 +15,8 @@
 //! выдаёт 4,10, ZHGS0050, ещё один 4,10 и End(0). После попытки Summon
 //! (+0x94, 0x005179d9) всегда следует End(1), независимо от создания снаряда.
 //! Задержка — unsigned now >= wrapping(start + delay), cmp/jb 0x00517836.
+//! Уже первый AI использует ранний отсчёт CState::Begin из отдельного
+//! контекста феи, а не локальное время после OnBeginSkill и проверок.
 //! Отказ до успешного Begin заканчивается action 3, затем внешним 4,2
 //! планировщика; повторный AI-отказ такого внешнего ответа не добавляет.
 
@@ -258,6 +260,8 @@ pub(crate) fn execute_battle_fairy_base_magic<Runtime: GameMainLoopRuntime>(
             .advance(SkillStage::Begin, SkillStage::Check);
         player_ai.begin_battle_fairy_base_magic(execution);
         let first_ai_now_ms = runtime.now_milliseconds();
+        let started_at_ms = player_ai.battle_fairy_base_magic()
+            .map_or(started_at_ms, |state| state.kernel().started_at_ms());
         if first_ai_now_ms < started_at_ms.wrapping_add(delay_ms) {
             return pending();
         }
