@@ -15,6 +15,9 @@
 //! движение и текущий навык освобождаются без износа оружия и фиксации
 //! времени восстановления. Координатный `Begin` разрешает первый `CMoveShape`
 //! клетки через точный `CState::GetSufferer` без fallback к заклинателю.
+//! Объектное исполнение навыка монстром проходит `monsterbaseattack`: ID `1`
+//! сохраняется, физический разброс исключает верхнюю границу, а critical-roll
+//! выполняется и при нулевом monster `GetCCH`. Это не подмена навыком `0x2bd`.
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::PlayerSkillDispatch;

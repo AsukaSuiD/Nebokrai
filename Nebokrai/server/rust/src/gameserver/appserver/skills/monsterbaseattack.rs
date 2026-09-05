@@ -2,8 +2,7 @@
 //!
 //! Источник: точная пара `gameserver.exe + GameServer.pdb`, владелец
 //! `appserver/skills/monsterbaseattack.cpp`. Модуль навыка хранит выбор цели,
-//! стадии атаки, преследование и два исходных RNG-вызова: физический разброс,
-//! затем обязательный critical-roll при виртуальном `GetCCH == 0`. Встроенный
+//! стадии атаки, преследование и исходный физический разброс. Встроенный
 //! `GetAddElementAtk` возвращает ноль; диапазон monster element здесь не
 //! разыгрывается. Общие защита,
 //! применение повреждений и точные пакеты принадлежат узкому
@@ -23,6 +22,16 @@
 //! задаёт эффект, а `OnFighting` завершает активный ход даже после `End(0)`:
 //! Swordship устанавливает состояние без reuse, WuXing отвергает type `600`
 //! без эффекта и reuse. Это завершение не добавляется фоновой очереди.
+//! Объектный `CBaseAttack` (`1`) использует тот же monster runtime, но сохраняет
+//! свой ID в состоянии и wire. `AI` по VA `0x005B39B0/0x00514820` имеют
+//! одинаковую последовательность; различия расчёта не стираются:
+//! `CBaseAttack` (`0x005B3600`) берёт `max(max-min,0)`, MonsterBase/Fast
+//! (`0x00514460/0x00513490`) прибавляют единицу, LordFast (`0x00530D60`)
+//! использует `abs(max-min)+1` с DWORD-переполнением. MonsterBase/Fast перед
+//! critical-roll требуют успешный cast в CPlayer, поэтому на монстре этого
+//! RNG-вызова нет; BaseAttack/LordFast выполняют его даже при `GetCCH == 0`.
+//! `BaseAttack/MonsterBaseAttack::AI` сравнивают задержку с абсолютным
+//! wrapping DWORD deadline (`0x005B3B0E/0x0051497E`), а не с elapsed-time.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -61,6 +70,7 @@
 // COMPONENT_VARIANT_END: GameServer
 
 use super::baseattack::{
+    BASE_ATTACK_SKILL_ID as COMMON_BASE_ATTACK_SKILL_ID,
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
     SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
 };
@@ -197,7 +207,8 @@ const SKILL_TYPE_SUMMON: u32 = 3;
 fn is_owned_monster_attack_skill(skill_id: u32) -> bool {
     matches!(
         skill_id,
-        ARCHERY_SKILL_ID
+        COMMON_BASE_ATTACK_SKILL_ID
+            | ARCHERY_SKILL_ID
             | BASE_MAGIC_PROJECTILE_SKILL_ID
             | MONSTER_BASE_ATTACK_SKILL_ID
             | MONSTER_FAST_ATTACK_SKILL_ID
@@ -1660,7 +1671,15 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
     }
 
     if let Some(cast) = cast {
-        if !time_reached(now_ms, cast.started_at_ms(), delay_ms) {
+        let delay_reached = if matches!(
+            cast.dispatch().skill_id,
+            COMMON_BASE_ATTACK_SKILL_ID | MONSTER_BASE_ATTACK_SKILL_ID,
+        ) {
+            cast.started_at_ms().wrapping_add(delay_ms) <= now_ms
+        } else {
+            time_reached(now_ms, cast.started_at_ms(), delay_ms)
+        };
+        if !delay_reached {
             return true;
         }
         let dispatch = cast.dispatch();
@@ -1768,15 +1787,18 @@ pub(crate) fn execute_owned_monster_base_attack<Runtime: GameMainLoopRuntime>(
                 .map_or(ordinary_attack.0, |pet| pet.minimum_attack) as i32;
             let physical_maximum = pet_attack_properties
                 .map_or(ordinary_attack.1, |pet| pet.maximum_attack) as i32;
-            let physical_span = physical_maximum
-                .wrapping_sub(physical_minimum)
-                .max(0)
-                .wrapping_add(1);
+            let difference = physical_maximum.wrapping_sub(physical_minimum);
+            let physical_span = match dispatch.skill_id {
+                COMMON_BASE_ATTACK_SKILL_ID => difference.max(0),
+                LORD_FAST_ATTACK_SKILL_ID => difference.wrapping_abs().wrapping_add(1),
+                _ => difference.max(0).wrapping_add(1),
+            };
             let physical = physical_minimum.wrapping_add(game.skill_random_below(physical_span));
-            // `CMonster::GetAddElementAtk` остаётся нулевым даже для pet-owner;
-            // второй RNG оригинала — последующий roll при `GetCCH == 0`.
+            // `CMonster::GetAddElementAtk` остаётся нулевым даже для pet-owner.
             let element = 0;
-            let _critical_roll = game.skill_random_below(100);
+            if matches!(dispatch.skill_id, COMMON_BASE_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID) {
+                let _critical_roll = game.skill_random_below(100);
+            }
             let attack = AttackInformation {
                 skill_id: dispatch.skill_id,
                 skill_level: dispatch.skill_level as u8,
