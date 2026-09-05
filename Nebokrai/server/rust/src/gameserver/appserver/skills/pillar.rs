@@ -47,7 +47,7 @@ fn finish_player_pillar<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_pillar_used(now_ms);
+        player_ai.mark_skill_used(PILLAR_SKILL_ID, now_ms);
     });
 }
 
@@ -93,7 +93,7 @@ pub(crate) fn execute_player_pillar<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.pillar().is_none() {
         let started_at_ms = runtime.now_milliseconds(); let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.pillar_last_used_ms(), reuse, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.skill_last_used_ms(PILLAR_SKILL_ID), reuse, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(PILLAR_SKILL_ID)); }
         ai.begin_pillar(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if ai.pillar().is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }

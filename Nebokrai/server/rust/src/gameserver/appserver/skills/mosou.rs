@@ -52,7 +52,7 @@ fn finish_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_mosou_used(now_ms);
+        player_ai.mark_skill_used(MOSOU_SKILL_ID, now_ms);
     });
 }
 
@@ -234,7 +234,7 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
 
     if player_ai.mosou().is_none() {
         if !skill_is_restored(
-            player_ai.mosou_last_used_ms(),
+            player_ai.skill_last_used_ms(MOSOU_SKILL_ID),
             cooldown_ms,
             runtime.now_milliseconds(),
         ) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }

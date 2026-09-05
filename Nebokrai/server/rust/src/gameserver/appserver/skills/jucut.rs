@@ -60,7 +60,7 @@ fn finish_player_ju_cut<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_front_cell_sword(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_ju_cut_used(now_ms);
+        player_ai.mark_skill_used(JU_CUT_SKILL_ID, now_ms);
     });
 }
 
@@ -113,7 +113,7 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
 
     if player_ai.ju_cut().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.ju_cut_last_used_ms(), cooldown_ms, now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(JU_CUT_SKILL_ID), cooldown_ms, now_ms) {
             send_failure(game, player_id, DEFINITION, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

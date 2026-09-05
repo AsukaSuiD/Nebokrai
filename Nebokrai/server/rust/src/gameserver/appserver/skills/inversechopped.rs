@@ -40,7 +40,7 @@ fn finish_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game: &mut CGame,
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_inverse_chopped_used(now_ms);
+        player_ai.mark_skill_used(INVERSE_CHOPPED_SKILL_ID, now_ms);
     });
 }
 
@@ -69,7 +69,7 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
     if ai.inverse_chopped().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.inverse_chopped_last_used_ms(), reuse_delay_ms, cooldown_now_ms) { send_failure(game, player_id, DEFINITION, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.skill_last_used_ms(INVERSE_CHOPPED_SKILL_ID), reuse_delay_ms, cooldown_now_ms) { send_failure(game, player_id, DEFINITION, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_compatible(game, player, DEFINITION) { send_failure(game, player_id, DEFINITION, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, DEFINITION, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }

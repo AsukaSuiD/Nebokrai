@@ -149,7 +149,7 @@ fn finish_player_rage<Runtime: GameMainLoopRuntime>(
 ) {
     game.damage_player_weapon(player_id, runtime);
     end_player_rage(game, player_id, level);
-    player_ai.mark_rage_used(runtime.now_milliseconds());
+    player_ai.mark_skill_used(RAGE_SKILL_ID, runtime.now_milliseconds());
 }
 
 pub(crate) fn cancel_player_rage<Runtime: GameMainLoopRuntime>(
@@ -211,7 +211,7 @@ pub(crate) fn execute_player_rage<Runtime: GameMainLoopRuntime>(
         .is_some_and(|state| state.kernel().stage() == SkillStage::Begin)
     {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.rage_last_used_ms(), reuse_ms, now_ms) {
+        if !skill_is_restored(ai.skill_last_used_ms(RAGE_SKILL_ID), reuse_ms, now_ms) {
             send_failure(game, player_id, 0x0d, 0);
             end_player_rage(game, player_id, level);
             return terminal(QueuedSkillExecutionState::Rejected);

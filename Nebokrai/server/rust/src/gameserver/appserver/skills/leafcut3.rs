@@ -39,7 +39,7 @@ const WEAPON_DAMAGE_LEVEL_MODIFIER: u32 = 20_018;
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 pub(crate) fn is_leaf_cut_3_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == LEAF_CUT_3_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_leaf_cut_3_used(now_ms); }); }
+fn finish_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_skill_used(LEAF_CUT_3_SKILL_ID, now_ms); }); }
 pub(crate) fn cancel_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.leaf_cut_3().map(SkillExecutionKernel::dispatch) else { return false }; finish_player_leaf_cut_3(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
 fn dispatch_target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
@@ -118,7 +118,7 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
 
     if ai.leaf_cut_3().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.leaf_cut_3_last_used_ms(), reuse, now) { return reject_initial(game, player_id, 0x0d, 0, None) }
+        if !skill_is_restored(ai.skill_last_used_ms(LEAF_CUT_3_SKILL_ID), reuse, now) { return reject_initial(game, player_id, 0x0d, 0, None) }
         let Some(blocked) = path_block(game, region_id, source_x, source_y, target_x, target_y, maximum) else { return reject_initial(game, player_id, 0x0b, 0, None) };
         if blocked { return reject_initial(game, player_id, 0x0f, 0, Some((b"GS0291", &target_name))) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };

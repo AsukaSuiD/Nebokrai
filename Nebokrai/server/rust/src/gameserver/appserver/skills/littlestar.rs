@@ -142,7 +142,7 @@ fn finish_player_little_star<Runtime: GameMainLoopRuntime>(
     }
     send_player_visual(game, player_id, level, 3, None);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_little_star_used(now_ms);
+        player_ai.mark_skill_used(LITTLE_STAR_SKILL_ID, now_ms);
     });
 }
 
@@ -247,7 +247,7 @@ pub(crate) fn execute_player_little_star<Runtime: GameMainLoopRuntime>(
 
     if ai.little_star().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.little_star_last_used_ms(), reuse, now_ms) {
+        if !skill_is_restored(ai.skill_last_used_ms(LITTLE_STAR_SKILL_ID), reuse, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

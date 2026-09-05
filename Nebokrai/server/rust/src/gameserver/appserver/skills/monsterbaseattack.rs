@@ -239,7 +239,7 @@ fn end_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
         player.set_current_skill_id(None);
     }
     if success {
-        ai.mark_monster_base_attack_used(runtime.now_milliseconds());
+        ai.mark_skill_used(MONSTER_BASE_ATTACK_SKILL_ID, runtime.now_milliseconds());
     }
 }
 
@@ -272,7 +272,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     let _can_be_breaked = properties.query_property(super::basemagic::SKILL_USAGE_CAN_BE_BREAKED);
     if ai.monster_base_attack().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.monster_base_attack_last_used_ms(), reuse, now) {
+        if !skill_is_restored(ai.skill_last_used_ms(MONSTER_BASE_ATTACK_SKILL_ID), reuse, now) {
             game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS1143");
             end_player_monster_base_attack(game, player_id, ai, runtime, false);

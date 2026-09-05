@@ -155,7 +155,7 @@ fn finish_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_boss_blue_fury_used(now_ms);
+        player_ai.mark_skill_used(BOSS_BLUE_FURY_SKILL_ID, now_ms);
     });
 }
 
@@ -219,7 +219,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     let now_ms = runtime.now_milliseconds();
     if player_ai.boss_blue_fury().is_none() {
         if !skill_is_restored(
-            player_ai.boss_blue_fury_last_used_ms(),
+            player_ai.skill_last_used_ms(BOSS_BLUE_FURY_SKILL_ID),
             reuse_delay_ms,
             now_ms,
         ) {

@@ -82,7 +82,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_heartless_arrow_used(now_ms));
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(HEARTLESS_ARROW_SKILL_ID, now_ms));
 }
 
 fn abort_player_heartless_arrow(game: &mut CGame, player_id: i32) {
@@ -247,7 +247,7 @@ pub(crate) fn execute_player_heartless_arrow<Runtime: GameMainLoopRuntime>(game:
     if player_ai.heartless_arrow().is_none() {
         let Some((target_x, target_y, _)) = target_snapshot(game, region_id, target) else { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0286"); return terminal(QueuedSkillExecutionState::Rejected) };
         if !skill_is_restored(
-            player_ai.heartless_arrow_last_used_ms(),
+            player_ai.skill_last_used_ms(HEARTLESS_ARROW_SKILL_ID),
             reuse_delay_ms,
             runtime.now_milliseconds(),
         ) {

@@ -174,7 +174,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let now_ms = runtime.now_milliseconds();
-    if !skill_is_restored(player_ai.gibe_last_used_ms(), reuse_delay_ms, now_ms) {
+    if !skill_is_restored(player_ai.skill_last_used_ms(GIBE_SKILL_ID), reuse_delay_ms, now_ms) {
         game.restore_region_owner(region);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
@@ -211,7 +211,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
-    player_ai.mark_gibe_used(runtime.now_milliseconds());
+    player_ai.mark_skill_used(GIBE_SKILL_ID, runtime.now_milliseconds());
     terminal(QueuedSkillExecutionState::Completed)
 }
 
@@ -232,7 +232,7 @@ pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
         player.set_current_skill_id(None);
     }
     if record_reuse {
-        player_ai.mark_gibe_used(runtime.now_milliseconds());
+        player_ai.mark_skill_used(GIBE_SKILL_ID, runtime.now_milliseconds());
     }
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }

@@ -53,7 +53,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 }
 fn finish_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_meteor_arrow_used(now_ms));
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(METEOR_ARROW_SKILL_ID, now_ms));
 }
 fn abort_player_meteor_arrow(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
@@ -127,7 +127,7 @@ pub(crate) fn execute_player_meteor_arrow<Runtime: GameMainLoopRuntime>(game: &m
                 _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected) }
             }, _ => unreachable!(),
         };
-        if !skill_is_restored(ai.meteor_arrow_last_used_ms(), reuse, runtime.now_milliseconds()) {
+        if !skill_is_restored(ai.skill_last_used_ms(METEOR_ARROW_SKILL_ID), reuse, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected)
         }
         let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);

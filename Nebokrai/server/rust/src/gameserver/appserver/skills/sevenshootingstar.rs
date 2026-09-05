@@ -147,7 +147,7 @@ pub(crate) fn cancel_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
     };
     finish(game, player_id, runtime, record_reuse);
     if record_reuse {
-        player_ai.mark_seven_shooting_star_used(runtime.now_milliseconds());
+        player_ai.mark_skill_used(SEVEN_SHOOTING_STAR_SKILL_ID, runtime.now_milliseconds());
     }
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -294,7 +294,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.seven_shooting_star_last_used_ms(),
+            player_ai.skill_last_used_ms(SEVEN_SHOOTING_STAR_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -411,7 +411,7 @@ pub(crate) fn execute_player_seven_shooting_star<Runtime: GameMainLoopRuntime>(
             }
             let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply);
         }
-        player_ai.mark_seven_shooting_star_used(expiration_now_ms);
+        player_ai.mark_skill_used(SEVEN_SHOOTING_STAR_SKILL_ID, expiration_now_ms);
         finish(game, player_id, runtime, true);
         terminal(QueuedSkillExecutionState::Completed)
     } else {

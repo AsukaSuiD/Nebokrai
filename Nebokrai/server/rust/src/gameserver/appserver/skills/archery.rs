@@ -391,7 +391,7 @@ fn finish_player_archery<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_archery_used(now_ms);
+        player_ai.mark_skill_used(ARCHERY_SKILL_ID, now_ms);
     });
 }
 
@@ -468,7 +468,7 @@ fn execute_player_archery_stage<Runtime: GameMainLoopRuntime>(
     if player_ai.archery().is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.archery_last_used_ms(),
+            player_ai.skill_last_used_ms(ARCHERY_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {

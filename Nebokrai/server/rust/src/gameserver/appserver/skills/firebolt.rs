@@ -105,7 +105,7 @@ fn finish_player_fire_bolt<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_fire_bolt_used(now_ms);
+        player_ai.mark_skill_used(FIRE_BOLT_SKILL_ID, now_ms);
     });
 }
 
@@ -191,7 +191,7 @@ pub(crate) fn execute_player_fire_bolt<Runtime: GameMainLoopRuntime>(
         }
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.fire_bolt_last_used_ms(),
+            player_ai.skill_last_used_ms(FIRE_BOLT_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {

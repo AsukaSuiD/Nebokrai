@@ -122,7 +122,7 @@ pub(crate) fn finish_player_base_attack<Runtime: GameMainLoopRuntime>(
         player_id,
         player_ai,
         runtime,
-        |player_ai, now_ms| player_ai.mark_base_attack_used(now_ms),
+        |player_ai, now_ms| player_ai.mark_skill_used(BASE_ATTACK_SKILL_ID, now_ms),
     );
 }
 

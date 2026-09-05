@@ -117,10 +117,10 @@ fn begin_execution(ai: &mut CPlayerAI, second: bool, state: SkillExecutionKernel
     if second { ai.begin_god_thunder_2(state); } else { ai.begin_god_thunder(state); }
 }
 fn last_used(ai: &CPlayerAI, second: bool) -> u32 {
-    if second { ai.god_thunder_2_last_used_ms() } else { ai.god_thunder_last_used_ms() }
+    if second { ai.skill_last_used_ms(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { ai.skill_last_used_ms(GOD_THUNDER_SKILL_ID) }
 }
 fn mark_used(ai: &mut CPlayerAI, second: bool, now: u32) {
-    if second { ai.mark_god_thunder_2_used(now); } else { ai.mark_god_thunder_used(now); }
+    if second { ai.mark_skill_used(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID, now); } else { ai.mark_skill_used(GOD_THUNDER_SKILL_ID, now); }
 }
 
 fn finish_player_god_thunder<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, second: bool, runtime: &mut Runtime) {

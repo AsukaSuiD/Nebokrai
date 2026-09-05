@@ -227,7 +227,7 @@ fn finish_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
         player.set_current_skill_id(None);
     }
     if successful {
-        player_ai.mark_boss_blue_quake_used(runtime.now_milliseconds());
+        player_ai.mark_skill_used(BOSS_BLUE_QUAKE_SKILL_ID, runtime.now_milliseconds());
     }
 }
 
@@ -433,7 +433,7 @@ pub(crate) fn execute_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
 
     if player_ai.boss_blue_quake().is_none() {
         if !skill_is_restored(
-            player_ai.boss_blue_quake_last_used_ms(),
+            player_ai.skill_last_used_ms(BOSS_BLUE_QUAKE_SKILL_ID),
             reuse_delay,
             now_ms,
         ) {

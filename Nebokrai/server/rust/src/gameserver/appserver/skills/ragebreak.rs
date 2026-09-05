@@ -41,7 +41,7 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { Q
 
 fn finish_player_rage_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_rage_break_used(now_ms); });
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_skill_used(RAGE_BREAK_SKILL_ID, now_ms); });
 }
 
 pub(crate) fn cancel_player_rage_break<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
@@ -97,7 +97,7 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
 
     if ai.rage_break().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.rage_break_last_used_ms(), reuse, now) {
+        if !skill_is_restored(ai.skill_last_used_ms(RAGE_BREAK_SKILL_ID), reuse, now) {
             fail(game, player_id, 0x0d, rp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

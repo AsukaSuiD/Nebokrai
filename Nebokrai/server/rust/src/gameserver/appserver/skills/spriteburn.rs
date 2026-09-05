@@ -125,7 +125,7 @@ fn finish_player_sprite_burn<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     finish_summon_skill_without_weapon_wear(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_sprite_burn_used(now_ms);
+        player_ai.mark_skill_used(SPRITE_BURN_SKILL_ID, now_ms);
     });
 }
 
@@ -217,7 +217,7 @@ pub(crate) fn execute_player_sprite_burn<Runtime: GameMainLoopRuntime>(
 
     if player_ai.sprite_burn().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.sprite_burn_last_used_ms(), reuse_delay_ms, now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(SPRITE_BURN_SKILL_ID), reuse_delay_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

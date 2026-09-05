@@ -79,8 +79,8 @@ fn send_visual(game: &mut CGame, player_id: i32, skill_id: u32, skill_level: i32
 fn execution(ai: &CPlayerAI, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.yin_yang_2() } else { ai.yin_yang() } }
 fn execution_mut(ai: &mut CPlayerAI, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.yin_yang_2_mut() } else { ai.yin_yang_mut() } }
 fn begin_execution(ai: &mut CPlayerAI, second: bool, state: SkillExecutionKernel<PlayerSkillDispatch>) { if second { ai.begin_yin_yang_2(state); } else { ai.begin_yin_yang(state); } }
-fn last_used(ai: &CPlayerAI, second: bool) -> u32 { if second { ai.yin_yang_2_last_used_ms() } else { ai.yin_yang_last_used_ms() } }
-fn mark_used(ai: &mut CPlayerAI, second: bool, now: u32) { if second { ai.mark_yin_yang_2_used(now); } else { ai.mark_yin_yang_used(now); } }
+fn last_used(ai: &CPlayerAI, second: bool) -> u32 { if second { ai.skill_last_used_ms(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { ai.skill_last_used_ms(YIN_YANG_SKILL_ID) } }
+fn mark_used(ai: &mut CPlayerAI, second: bool, now: u32) { if second { ai.mark_skill_used(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID, now); } else { ai.mark_skill_used(YIN_YANG_SKILL_ID, now); } }
 
 fn finish_player_yin_yang<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,

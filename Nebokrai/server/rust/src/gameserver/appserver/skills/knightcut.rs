@@ -99,7 +99,7 @@ fn send_failure(game: &CGame, player_id: i32, code: u8, amount: u32) {
 fn finish_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_knight_cut_used(now_ms);
+        player_ai.mark_skill_used(KNIGHT_CUT_SKILL_ID, now_ms);
     });
 }
 
@@ -207,7 +207,7 @@ pub(crate) fn execute_player_knight_cut<Runtime: GameMainLoopRuntime>(game: &mut
 
     if player_ai.knight_cut().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.knight_cut_last_used_ms(), reuse, now_ms) { send_failure(game, player_id, 0x0d, 0); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(player_ai.skill_last_used_ms(KNIGHT_CUT_SKILL_ID), reuse, now_ms) { send_failure(game, player_id, 0x0d, 0); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_compatible(game, player) { send_failure(game, player_id, 0x0e, 0); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }

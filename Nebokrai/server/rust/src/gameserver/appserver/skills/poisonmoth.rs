@@ -69,7 +69,7 @@ pub(crate) fn is_poison_moth_dispatch(dispatch: PlayerSkillDispatch) -> bool { m
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_poison_moth_used(now_ms));
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(POISON_MOTH_SKILL_ID, now_ms));
 }
 fn abort_player_poison_moth(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
 pub(crate) fn complete_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
@@ -139,7 +139,7 @@ pub(crate) fn execute_player_poison_moth<Runtime: GameMainLoopRuntime>(game: &mu
             PlayerSkillDispatch::Point { .. } => false,
         };
         if targets_self { reject(game, 10); return terminal(QueuedSkillExecutionState::Rejected) }
-        if !skill_is_restored(player_ai.poison_moth_last_used_ms(), reuse_delay_ms, now_ms) { reject(game, 0x0d); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(player_ai.skill_last_used_ms(POISON_MOTH_SKILL_ID), reuse_delay_ms, now_ms) { reject(game, 0x0d); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(destination) = target_position(game, region_id, player_id, dispatch) else { send_failure(game, player_id, 2, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) };
         let initial_path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);
         if maximum_distance != 0 && initial_path.len() as u32 > maximum_distance { reject(game, 0x0b); return terminal(QueuedSkillExecutionState::Rejected) }

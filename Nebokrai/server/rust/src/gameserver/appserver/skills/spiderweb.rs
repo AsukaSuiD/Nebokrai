@@ -287,7 +287,7 @@ fn finish_player_spider_web<Runtime: GameMainLoopRuntime>(
 ) {
     restore_player_movement(game, player_id);
     finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_spider_web_used(now_ms);
+        player_ai.mark_skill_used(SPIDER_WEB_SKILL_ID, now_ms);
     });
 }
 
@@ -363,7 +363,7 @@ pub(crate) fn execute_player_spider_web<Runtime: GameMainLoopRuntime>(
         return reject_player_begin(game, player_id, None);
     };
     if player_ai.spider_web().is_none() {
-        if !skill_is_restored(player_ai.spider_web_last_used_ms(), reuse_delay_ms, now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(SPIDER_WEB_SKILL_ID), reuse_delay_ms, now_ms) {
             return reject_player_begin(game, player_id, Some(0x0d));
         }
         let path = game.base_magic_path(

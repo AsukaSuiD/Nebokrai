@@ -64,7 +64,7 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { Q
 fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } }
 fn finish_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_lighting_arrow_2_used(now_ms));
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(LIGHTING_ARROW_2_SKILL_ID, now_ms));
 }
 fn abort_player_lighting_arrow_2(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
 pub(crate) fn complete_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
@@ -136,7 +136,7 @@ pub(crate) fn execute_player_lighting_arrow_2<Runtime: GameMainLoopRuntime>(game
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_time = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.lighting_arrow_2().is_none() {
         let Some(destination) = target_position(game, region_id, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) }; let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.lighting_arrow_2_last_used_ms(), reuse, now) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.skill_last_used_ms(LIGHTING_ARROW_2_SKILL_ID), reuse, now) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { failure(game, player_id, 0x0b, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) }; if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) } if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { if mp_loss != 0 { player.set_skill_moveable(false) } player.set_current_skill_id(Some(LIGHTING_ARROW_2_SKILL_ID)); }

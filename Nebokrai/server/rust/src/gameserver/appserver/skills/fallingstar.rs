@@ -88,7 +88,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_falling_star<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_falling_star_used(now_ms));
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(FALLING_STAR_SKILL_ID, now_ms));
 }
 
 fn abort_player_falling_star(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
@@ -217,7 +217,7 @@ pub(crate) fn execute_player_falling_star<Runtime: GameMainLoopRuntime>(
             },
         };
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.falling_star_last_used_ms(), reuse, now_ms) {
+        if !skill_is_restored(ai.skill_last_used_ms(FALLING_STAR_SKILL_ID), reuse, now_ms) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return outcome(QueuedSkillExecutionState::Rejected);
         }

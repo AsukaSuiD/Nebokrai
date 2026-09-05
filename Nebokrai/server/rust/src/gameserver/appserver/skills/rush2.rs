@@ -52,7 +52,7 @@ fn finish_player_rush_2<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_rush_owner(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_rush_2_used(now_ms);
+        player_ai.mark_skill_used(RUSH_2_SKILL_ID, now_ms);
     });
 }
 
@@ -170,7 +170,7 @@ pub(crate) fn execute_player_rush_2<Runtime: GameMainLoopRuntime>(
 
     if ai.rush_2().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.rush_2_last_used_ms(), reuse, now_ms) {
+        if !skill_is_restored(ai.skill_last_used_ms(RUSH_2_SKILL_ID), reuse, now_ms) {
             failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

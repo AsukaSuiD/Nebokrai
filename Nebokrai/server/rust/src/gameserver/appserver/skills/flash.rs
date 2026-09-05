@@ -70,7 +70,7 @@ impl FlashExecutionState {
 fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkillDispatch::SelfTarget { skill_id, .. } | PlayerSkillDispatch::Point { skill_id, .. } | PlayerSkillDispatch::Object { skill_id, .. } => skill_id } }
 pub(crate) fn is_flash_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == FLASH_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
-fn finish_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_flash_used(now_ms); }); }
+fn finish_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_skill_used(FLASH_SKILL_ID, now_ms); }); }
 pub(crate) fn cancel_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.flash().map(|state| state.kernel().dispatch()) else { return false }; finish_player_flash(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 pub(super) fn weapon_is_valid(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
 
@@ -219,7 +219,7 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
     let mp_loss = properties.query_property(USER_MP_LOSE); let rp_loss = properties.query_property(USER_RP_LOSE); let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let interval = properties.query_property(ACTION_INTERVAL); let hit = properties.query_property(USER_HIT_MODIFIER) as i32; let factor = properties.query_property(TARGET_DAMAGE_FACTOR);
     if ai.flash().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.flash_last_used_ms(), reuse, now) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.skill_last_used_ms(FLASH_SKILL_ID), reuse, now) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_valid(game, player) { failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }

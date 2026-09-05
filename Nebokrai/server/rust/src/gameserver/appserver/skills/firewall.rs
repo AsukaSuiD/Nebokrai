@@ -126,7 +126,7 @@ pub(crate) fn cancel_player_fire_wall<Runtime: GameMainLoopRuntime>(
     };
     finish(game, player_id, runtime, record_reuse);
     if record_reuse {
-        player_ai.mark_fire_wall_used(runtime.now_milliseconds());
+        player_ai.mark_skill_used(FIRE_WALL_SKILL_ID, runtime.now_milliseconds());
     }
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -194,7 +194,7 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.fire_wall_last_used_ms(),
+            player_ai.skill_last_used_ms(FIRE_WALL_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -313,7 +313,7 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    player_ai.mark_fire_wall_used(runtime.now_milliseconds());
+    player_ai.mark_skill_used(FIRE_WALL_SKILL_ID, runtime.now_milliseconds());
     finish(game, player_id, runtime, true);
     terminal(if summoned {
         QueuedSkillExecutionState::Completed

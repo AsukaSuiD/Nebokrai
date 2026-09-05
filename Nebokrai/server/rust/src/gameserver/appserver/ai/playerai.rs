@@ -1,4 +1,10 @@
 //! Достигнутая часть очередей и исполнения `CPlayerAI` GameServer.
+//! Сроки 80 одиночных обычных навыков хранятся по исходному skill_id в
+//! BTreeMap вместо отдельных полей и getter/setter-каталогов. Отсутствие
+//! записи означает нулевой срок; End обновляет только свой ID, очистка
+//! execution срок не удаляет. Коллекция не определяет порядок исполнения.
+//! Массивы семейств и сроки WarSoul пока остаются у прежних владельцев;
+//! перенос их идентичности не подменяется объединением с основным навыком.
 //! Отсчёт CState::Begin фиксируется общим расписанием до OnBeginSkill.
 //! Краткоживущий контекст привязан к dispatch и передаётся kernel при его
 //! установке, до первого AI. После вызова владельца контекст очищается даже
@@ -191,6 +197,7 @@ pub(crate) enum BattleFairySkillQueueOutcome {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CPlayerAI {
+    skill_last_used_ms: BTreeMap<u32, u32>,
     base_ai: CBaseAI,
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
@@ -201,173 +208,102 @@ pub(crate) struct CPlayerAI {
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
     base_attack: Option<BaseAttackExecutionState>,
-    base_attack_last_used_ms: u32,
     archery: Option<ArcheryExecutionState>,
-    archery_last_used_ms: u32,
     heartless_arrow: Option<HeartlessArrowExecutionState>,
-    heartless_arrow_last_used_ms: u32,
     heartless_arrow_area: Option<HeartlessArrowAreaExecutionState>,
     heartless_arrow_area_last_used_ms: [u32; 2],
     lighting_arrow: Option<LightingArrowExecutionState>,
-    lighting_arrow_last_used_ms: u32,
     lighting_arrow_2: Option<LightingArrow2ExecutionState>,
-    lighting_arrow_2_last_used_ms: u32,
     meteor_arrow_mass: Option<MeteorArrowMassExecutionState>,
-    meteor_arrow_mass_last_used_ms: u32,
     meteor_arrow: Option<MeteorArrowExecutionState>,
-    meteor_arrow_last_used_ms: u32,
     rain_arrow: Option<RainArrowExecutionState>,
-    rain_arrow_last_used_ms: u32,
     poison_moth: Option<PoisonMothExecutionState>,
-    poison_moth_last_used_ms: u32,
     blood_rose: Option<BloodRoseExecutionState>,
-    blood_rose_last_used_ms: u32,
     scorpion: Option<ScorpionExecutionState>,
-    scorpion_last_used_ms: u32,
     boa_lock: Option<BoaLockExecutionState>,
-    boa_lock_last_used_ms: u32,
     falling_star: Option<FallingStarExecutionState>,
-    falling_star_last_used_ms: u32,
     explosive_arrow: Option<ExplosiveArrowExecutionState>,
     explosive_arrow_last_used_ms: [u32; 3],
     strike: Option<StrikeExecutionState>,
-    strike_last_used_ms: u32,
     daub_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    daub_poison_last_used_ms: u32,
     yaksha_slash: Option<YakshaSlashExecutionState>,
-    yaksha_slash_last_used_ms: u32,
     agility_family: Option<AgilityFamilyExecutionState>,
     agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
-    base_magic_last_used_ms: u32,
     fire_bolt: Option<BaseMagicExecutionState>,
-    fire_bolt_last_used_ms: u32,
     fire_ball: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    fire_ball_last_used_ms: u32,
     item_skill_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    item_skill_2_last_used_ms: u32,
     chain_lightning: Option<ChainLightningExecutionState>,
-    chain_lightning_last_used_ms: u32,
     thunder_blow: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    thunder_blow_last_used_ms: u32,
     thunder_slash: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    thunder_slash_last_used_ms: u32,
     pillar: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    pillar_last_used_ms: u32,
     rush: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    rush_last_used_ms: u32,
     rush_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    rush_2_last_used_ms: u32,
     roar: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    roar_last_used_ms: u32,
     energy_holding: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    energy_holding_last_used_ms: u32,
     inverse_chopped: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    inverse_chopped_last_used_ms: u32,
     thunder_blow_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    thunder_blow_2_last_used_ms: u32,
     mosou: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    mosou_last_used_ms: u32,
     ghost_cut: Option<GhostCutExecutionState>,
     ghost_cut_last_used_ms: [u32; 3],
     knight_cut: Option<KnightCutExecutionState>,
-    knight_cut_last_used_ms: u32,
     army_break: Option<ArmyBreakExecutionState>,
     army_break_last_used_ms: [u32; 2],
     rage: Option<RageExecutionState>,
-    rage_last_used_ms: u32,
     rage_break: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    rage_break_last_used_ms: u32,
     fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    fury_last_used_ms: u32,
     flash: Option<FlashExecutionState>,
-    flash_last_used_ms: u32,
     swallow: Option<SwallowExecutionState>,
-    swallow_last_used_ms: u32,
     leaf_cut: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    leaf_cut_last_used_ms: u32,
     leaf_cut_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    leaf_cut_2_last_used_ms: u32,
     leaf_cut_3: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    leaf_cut_3_last_used_ms: u32,
     kerosene: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    kerosene_last_used_ms: u32,
     ignition: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    ignition_last_used_ms: u32,
     blind: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    blind_last_used_ms: u32,
     ju_cut: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    ju_cut_last_used_ms: u32,
     lightning_sword: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     lightning_sword_last_used_ms: [u32; 4],
     little_flash: Option<LittleFlashExecutionState>,
     little_flash_last_used_ms: [u32; 2],
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    fire_wall_last_used_ms: u32,
     poison_fog: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     poison_fog_destination: Option<(i32, i32)>,
-    poison_fog_last_used_ms: u32,
     infernol: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    infernol_last_used_ms: u32,
     seven_shooting_star: Option<SevenShootingStarExecutionState>,
-    seven_shooting_star_last_used_ms: u32,
     little_star: Option<PlayerLittleStarExecutionState>,
-    little_star_last_used_ms: u32,
     path_projectile: Option<PlayerPathProjectileExecutionState>,
     path_projectile_last_used_ms: [u32; 3],
     direct_projectile: Option<PlayerDirectProjectileExecutionState>,
     direct_projectile_last_used_ms: [u32; 2],
     yunsheng_lightning: Option<PlayerYunShengLightningExecutionState>,
-    yunsheng_lightning_last_used_ms: u32,
     corpse_ptomaine: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    corpse_ptomaine_last_used_ms: u32,
     monster_thorn: Option<PlayerMonsterThornExecutionState>,
-    monster_thorn_last_used_ms: u32,
     spider_mist: Option<PlayerSpiderMistExecutionState>,
-    spider_mist_last_used_ms: u32,
     spider_web: Option<PlayerSpiderWebExecutionState>,
-    spider_web_last_used_ms: u32,
     spider_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    spider_poison_last_used_ms: u32,
     summon_creature: Option<PlayerSummonCreatureExecutionState>,
     summon_creature_last_used_ms: [u32; 4],
     boss_blue_fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    boss_blue_fury_last_used_ms: u32,
     boss_blue_quake: Option<PlayerBossBlueQuakeExecutionState>,
-    boss_blue_quake_last_used_ms: u32,
     boss_fiend_penetrate: Option<PlayerBossFiendPenetrateExecutionState>,
-    boss_fiend_penetrate_last_used_ms: u32,
     sprite_burn: Option<SpriteBurnExecutionState>,
-    sprite_burn_last_used_ms: u32,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     wide_arc_attack_last_used_ms: [u32; 2],
     lord_fast_attack: Option<LordFastAttackExecutionState>,
     lord_fast_attack_last_used_ms: u32,
     monster_fast_attack_last_used_ms: u32,
     monster_base_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    monster_base_attack_last_used_ms: u32,
     monster_range_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    monster_range_attack_last_used_ms: u32,
     chaos_sphere: Option<ChaosSphereExecutionState>,
-    chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
-    lightning_last_used_ms: u32,
     seal: Option<SealExecutionState>,
-    seal_last_used_ms: u32,
     yin_yang: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    yin_yang_last_used_ms: u32,
     yin_yang_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    yin_yang_2_last_used_ms: u32,
     god_punishment: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    god_punishment_last_used_ms: u32,
     god_thunder: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    god_thunder_last_used_ms: u32,
     god_thunder_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    god_thunder_2_last_used_ms: u32,
     soul_collect: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    soul_collect_last_used_ms: u32,
     soul_mirror: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    soul_mirror_last_used_ms: u32,
     battle_fairy_base_magic: Option<BattleFairyBaseMagicExecutionState>,
     battle_fairy_base_magic_last_used_ms: u32,
     life_shield: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
@@ -393,25 +329,17 @@ pub(crate) struct CPlayerAI {
     callosity: Option<CallosityExecutionState>,
     callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    hearten_last_used_ms: u32,
     promotion: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    promotion_last_used_ms: u32,
     heal_family: [Option<SkillExecutionKernel<PlayerSkillDispatch>>; 4],
     heal_family_last_used_ms: [u32; 4],
     pets_control: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    pets_control_last_used_ms: u32,
     monster_taming: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    monster_taming_last_used_ms: u32,
     knock_out: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    knock_out_last_used_ms: u32,
     snow_storm: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    snow_storm_last_used_ms: u32,
     weak: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    weak_last_used_ms: u32,
     god_bless: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     god_bless_last_used_ms: [u32; 2],
     cure: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    cure_last_used_ms: u32,
     machine_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     machine_shield_last_used_ms: u32,
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -421,7 +349,6 @@ pub(crate) struct CPlayerAI {
     non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     swordship: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     gibe: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    gibe_last_used_ms: u32,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -448,6 +375,20 @@ pub(crate) struct PlayerEnergyRegeneration {
 }
 
 impl CPlayerAI {
+    /// CSkill хранит независимый срок последнего ненулевого End для каждого ID.
+    /// Отсутствующая запись равна исходному нулю до первого применения.
+    pub(crate) fn skill_last_used_ms(&self, skill_id: u32) -> u32 {
+        self.skill_last_used_ms.get(&skill_id).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn mark_skill_used(&mut self, skill_id: u32, now_ms: u32) {
+        if now_ms == 0 {
+            self.skill_last_used_ms.remove(&skill_id);
+        } else {
+            self.skill_last_used_ms.insert(skill_id, now_ms);
+        }
+    }
+
     pub(crate) fn set_scheduled_skill_begin(&mut self, begin: Option<(PlayerSkillDispatch, u32)>) {
         self.scheduled_skill_begin = begin;
     }
@@ -1065,9 +1006,6 @@ impl CPlayerAI {
         self.archery.as_mut()
     }
 
-    pub(crate) const fn archery_last_used_ms(&self) -> u32 {
-        self.archery_last_used_ms
-    }
 
     pub(crate) const fn agility_family(&self) -> Option<AgilityFamilyExecutionState> {
         self.agility_family
@@ -1096,9 +1034,6 @@ impl CPlayerAI {
         self.agility_family_last_used_ms[index] = now_ms;
     }
 
-    pub(crate) const fn mark_archery_used(&mut self, now_ms: u32) {
-        self.archery_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn heartless_arrow(&self) -> Option<HeartlessArrowExecutionState> { self.heartless_arrow }
     pub(crate) fn begin_heartless_arrow(&mut self, mut state: HeartlessArrowExecutionState) {
@@ -1106,8 +1041,6 @@ impl CPlayerAI {
         self.heartless_arrow = Some(state);
     }
     pub(crate) fn heartless_arrow_mut(&mut self) -> Option<&mut HeartlessArrowExecutionState> { self.heartless_arrow.as_mut() }
-    pub(crate) const fn heartless_arrow_last_used_ms(&self) -> u32 { self.heartless_arrow_last_used_ms }
-    pub(crate) const fn mark_heartless_arrow_used(&mut self, now_ms: u32) { self.heartless_arrow_last_used_ms = now_ms; }
     pub(crate) const fn heartless_arrow_area(&self) -> Option<HeartlessArrowAreaExecutionState> { self.heartless_arrow_area }
     pub(crate) fn begin_heartless_arrow_area(&mut self, mut state: HeartlessArrowAreaExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1129,80 +1062,60 @@ impl CPlayerAI {
         self.lighting_arrow = Some(state);
     }
     pub(crate) fn lighting_arrow_mut(&mut self) -> Option<&mut LightingArrowExecutionState> { self.lighting_arrow.as_mut() }
-    pub(crate) const fn lighting_arrow_last_used_ms(&self) -> u32 { self.lighting_arrow_last_used_ms }
-    pub(crate) const fn mark_lighting_arrow_used(&mut self, now_ms: u32) { self.lighting_arrow_last_used_ms = now_ms; }
     pub(crate) fn lighting_arrow_2(&self) -> Option<&LightingArrow2ExecutionState> { self.lighting_arrow_2.as_ref() }
     pub(crate) fn begin_lighting_arrow_2(&mut self, mut state: LightingArrow2ExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.lighting_arrow_2 = Some(state);
     }
     pub(crate) fn lighting_arrow_2_mut(&mut self) -> Option<&mut LightingArrow2ExecutionState> { self.lighting_arrow_2.as_mut() }
-    pub(crate) const fn lighting_arrow_2_last_used_ms(&self) -> u32 { self.lighting_arrow_2_last_used_ms }
-    pub(crate) const fn mark_lighting_arrow_2_used(&mut self, now_ms: u32) { self.lighting_arrow_2_last_used_ms = now_ms; }
     pub(crate) const fn meteor_arrow_mass(&self) -> Option<MeteorArrowMassExecutionState> { self.meteor_arrow_mass }
     pub(crate) fn begin_meteor_arrow_mass(&mut self, mut state: MeteorArrowMassExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.meteor_arrow_mass = Some(state);
     }
     pub(crate) fn meteor_arrow_mass_mut(&mut self) -> Option<&mut MeteorArrowMassExecutionState> { self.meteor_arrow_mass.as_mut() }
-    pub(crate) const fn meteor_arrow_mass_last_used_ms(&self) -> u32 { self.meteor_arrow_mass_last_used_ms }
-    pub(crate) const fn mark_meteor_arrow_mass_used(&mut self, now_ms: u32) { self.meteor_arrow_mass_last_used_ms = now_ms; }
     pub(crate) const fn meteor_arrow(&self) -> Option<MeteorArrowExecutionState> { self.meteor_arrow }
     pub(crate) fn begin_meteor_arrow(&mut self, mut state: MeteorArrowExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.meteor_arrow = Some(state);
     }
     pub(crate) fn meteor_arrow_mut(&mut self) -> Option<&mut MeteorArrowExecutionState> { self.meteor_arrow.as_mut() }
-    pub(crate) const fn meteor_arrow_last_used_ms(&self) -> u32 { self.meteor_arrow_last_used_ms }
-    pub(crate) const fn mark_meteor_arrow_used(&mut self, now_ms: u32) { self.meteor_arrow_last_used_ms = now_ms; }
     pub(crate) fn rain_arrow(&self) -> Option<RainArrowExecutionState> { self.rain_arrow.clone() }
     pub(crate) fn begin_rain_arrow(&mut self, mut state: RainArrowExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.rain_arrow = Some(state);
     }
     pub(crate) fn rain_arrow_mut(&mut self) -> Option<&mut RainArrowExecutionState> { self.rain_arrow.as_mut() }
-    pub(crate) const fn rain_arrow_last_used_ms(&self) -> u32 { self.rain_arrow_last_used_ms }
-    pub(crate) const fn mark_rain_arrow_used(&mut self, now_ms: u32) { self.rain_arrow_last_used_ms = now_ms; }
     pub(crate) fn poison_moth(&self) -> Option<&PoisonMothExecutionState> { self.poison_moth.as_ref() }
     pub(crate) fn begin_poison_moth(&mut self, mut state: PoisonMothExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.poison_moth = Some(state);
     }
     pub(crate) fn poison_moth_mut(&mut self) -> Option<&mut PoisonMothExecutionState> { self.poison_moth.as_mut() }
-    pub(crate) const fn poison_moth_last_used_ms(&self) -> u32 { self.poison_moth_last_used_ms }
-    pub(crate) const fn mark_poison_moth_used(&mut self, now_ms: u32) { self.poison_moth_last_used_ms = now_ms; }
     pub(crate) fn blood_rose(&self) -> Option<&BloodRoseExecutionState> { self.blood_rose.as_ref() }
     pub(crate) fn begin_blood_rose(&mut self, mut state: BloodRoseExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.blood_rose = Some(state);
     }
     pub(crate) fn blood_rose_mut(&mut self) -> Option<&mut BloodRoseExecutionState> { self.blood_rose.as_mut() }
-    pub(crate) const fn blood_rose_last_used_ms(&self) -> u32 { self.blood_rose_last_used_ms }
-    pub(crate) const fn mark_blood_rose_used(&mut self, now_ms: u32) { self.blood_rose_last_used_ms = now_ms; }
     pub(crate) fn scorpion(&self) -> Option<&ScorpionExecutionState> { self.scorpion.as_ref() }
     pub(crate) fn begin_scorpion(&mut self, mut state: ScorpionExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.scorpion = Some(state);
     }
     pub(crate) fn scorpion_mut(&mut self) -> Option<&mut ScorpionExecutionState> { self.scorpion.as_mut() }
-    pub(crate) const fn scorpion_last_used_ms(&self) -> u32 { self.scorpion_last_used_ms }
-    pub(crate) const fn mark_scorpion_used(&mut self, now_ms: u32) { self.scorpion_last_used_ms = now_ms; }
     pub(crate) fn boa_lock(&self) -> Option<&BoaLockExecutionState> { self.boa_lock.as_ref() }
     pub(crate) fn begin_boa_lock(&mut self, mut state: BoaLockExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.boa_lock = Some(state);
     }
     pub(crate) fn boa_lock_mut(&mut self) -> Option<&mut BoaLockExecutionState> { self.boa_lock.as_mut() }
-    pub(crate) const fn boa_lock_last_used_ms(&self) -> u32 { self.boa_lock_last_used_ms }
-    pub(crate) const fn mark_boa_lock_used(&mut self, now_ms: u32) { self.boa_lock_last_used_ms = now_ms; }
     pub(crate) fn falling_star(&self) -> Option<&FallingStarExecutionState> { self.falling_star.as_ref() }
     pub(crate) fn begin_falling_star(&mut self, mut state: FallingStarExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.falling_star = Some(state);
     }
     pub(crate) fn falling_star_mut(&mut self) -> Option<&mut FallingStarExecutionState> { self.falling_star.as_mut() }
-    pub(crate) const fn falling_star_last_used_ms(&self) -> u32 { self.falling_star_last_used_ms }
-    pub(crate) const fn mark_falling_star_used(&mut self, now_ms: u32) { self.falling_star_last_used_ms = now_ms; }
     pub(crate) fn explosive_arrow(&self) -> Option<&ExplosiveArrowExecutionState> { self.explosive_arrow.as_ref() }
     pub(crate) fn begin_explosive_arrow(&mut self, mut state: ExplosiveArrowExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1217,8 +1130,6 @@ impl CPlayerAI {
         self.strike = Some(state);
     }
     pub(crate) fn strike_mut(&mut self) -> Option<&mut StrikeExecutionState> { self.strike.as_mut() }
-    pub(crate) const fn strike_last_used_ms(&self) -> u32 { self.strike_last_used_ms }
-    pub(crate) const fn mark_strike_used(&mut self, now_ms: u32) { self.strike_last_used_ms = now_ms; }
 
     pub(crate) const fn daub_poison(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.daub_poison }
     pub(crate) fn begin_daub_poison(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1226,16 +1137,12 @@ impl CPlayerAI {
         self.daub_poison = Some(state);
     }
     pub(crate) fn daub_poison_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.daub_poison.as_mut() }
-    pub(crate) const fn daub_poison_last_used_ms(&self) -> u32 { self.daub_poison_last_used_ms }
-    pub(crate) const fn mark_daub_poison_used(&mut self, now_ms: u32) { self.daub_poison_last_used_ms = now_ms; }
     pub(crate) const fn yaksha_slash(&self) -> Option<YakshaSlashExecutionState> { self.yaksha_slash }
     pub(crate) fn begin_yaksha_slash(&mut self, mut state: YakshaSlashExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.yaksha_slash = Some(state);
     }
     pub(crate) fn yaksha_slash_mut(&mut self) -> Option<&mut YakshaSlashExecutionState> { self.yaksha_slash.as_mut() }
-    pub(crate) const fn yaksha_slash_last_used_ms(&self) -> u32 { self.yaksha_slash_last_used_ms }
-    pub(crate) const fn mark_yaksha_slash_used(&mut self, now_ms: u32) { self.yaksha_slash_last_used_ms = now_ms; }
 
     pub(crate) fn begin_base_attack(&mut self, mut state: BaseAttackExecutionState) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1252,13 +1159,7 @@ impl CPlayerAI {
             .is_some_and(|state| state.advance(expected, next))
     }
 
-    pub(crate) const fn base_attack_last_used_ms(&self) -> u32 {
-        self.base_attack_last_used_ms
-    }
 
-    pub(crate) const fn mark_base_attack_used(&mut self, now_ms: u32) {
-        self.base_attack_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn base_magic(&self) -> Option<BaseMagicExecutionState> {
         self.base_magic
@@ -1273,13 +1174,7 @@ impl CPlayerAI {
         self.base_magic.as_mut()
     }
 
-    pub(crate) const fn base_magic_last_used_ms(&self) -> u32 {
-        self.base_magic_last_used_ms
-    }
 
-    pub(crate) const fn mark_base_magic_used(&mut self, now_ms: u32) {
-        self.base_magic_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn fire_bolt(&self) -> Option<BaseMagicExecutionState> {
         self.fire_bolt
@@ -1294,13 +1189,7 @@ impl CPlayerAI {
         self.fire_bolt.as_mut()
     }
 
-    pub(crate) const fn fire_bolt_last_used_ms(&self) -> u32 {
-        self.fire_bolt_last_used_ms
-    }
 
-    pub(crate) const fn mark_fire_bolt_used(&mut self, now_ms: u32) {
-        self.fire_bolt_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn fire_ball(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_ball
@@ -1315,11 +1204,7 @@ impl CPlayerAI {
         self.fire_ball.as_mut()
     }
 
-    pub(crate) const fn fire_ball_last_used_ms(&self) -> u32 { self.fire_ball_last_used_ms }
 
-    pub(crate) const fn mark_fire_ball_used(&mut self, now_ms: u32) {
-        self.fire_ball_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn item_skill_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.item_skill_2
@@ -1334,11 +1219,7 @@ impl CPlayerAI {
         self.item_skill_2.as_mut()
     }
 
-    pub(crate) const fn item_skill_2_last_used_ms(&self) -> u32 { self.item_skill_2_last_used_ms }
 
-    pub(crate) const fn mark_item_skill_2_used(&mut self, now_ms: u32) {
-        self.item_skill_2_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn chain_lightning(&self) -> Option<ChainLightningExecutionState> {
         self.chain_lightning
@@ -1353,11 +1234,7 @@ impl CPlayerAI {
         self.chain_lightning.as_mut()
     }
 
-    pub(crate) const fn chain_lightning_last_used_ms(&self) -> u32 { self.chain_lightning_last_used_ms }
 
-    pub(crate) const fn mark_chain_lightning_used(&mut self, now_ms: u32) {
-        self.chain_lightning_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn thunder_blow(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow }
     pub(crate) fn begin_thunder_blow(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1365,8 +1242,6 @@ impl CPlayerAI {
         self.thunder_blow = Some(state);
     }
     pub(crate) fn thunder_blow_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow.as_mut() }
-    pub(crate) const fn thunder_blow_last_used_ms(&self) -> u32 { self.thunder_blow_last_used_ms }
-    pub(crate) const fn mark_thunder_blow_used(&mut self, now_ms: u32) { self.thunder_blow_last_used_ms = now_ms; }
 
     pub(crate) const fn thunder_slash(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_slash }
     pub(crate) fn begin_thunder_slash(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1374,8 +1249,6 @@ impl CPlayerAI {
         self.thunder_slash = Some(state);
     }
     pub(crate) fn thunder_slash_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_slash.as_mut() }
-    pub(crate) const fn thunder_slash_last_used_ms(&self) -> u32 { self.thunder_slash_last_used_ms }
-    pub(crate) const fn mark_thunder_slash_used(&mut self, now_ms: u32) { self.thunder_slash_last_used_ms = now_ms; }
 
     pub(crate) const fn pillar(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.pillar }
     pub(crate) fn begin_pillar(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1383,8 +1256,6 @@ impl CPlayerAI {
         self.pillar = Some(state);
     }
     pub(crate) fn pillar_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.pillar.as_mut() }
-    pub(crate) const fn pillar_last_used_ms(&self) -> u32 { self.pillar_last_used_ms }
-    pub(crate) const fn mark_pillar_used(&mut self, now_ms: u32) { self.pillar_last_used_ms = now_ms; }
 
     pub(crate) const fn rush(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.rush }
     pub(crate) fn begin_rush(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1392,8 +1263,6 @@ impl CPlayerAI {
         self.rush = Some(state);
     }
     pub(crate) fn rush_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rush.as_mut() }
-    pub(crate) const fn rush_last_used_ms(&self) -> u32 { self.rush_last_used_ms }
-    pub(crate) const fn mark_rush_used(&mut self, now_ms: u32) { self.rush_last_used_ms = now_ms; }
 
     pub(crate) const fn rush_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.rush_2 }
     pub(crate) fn begin_rush_2(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1401,8 +1270,6 @@ impl CPlayerAI {
         self.rush_2 = Some(state);
     }
     pub(crate) fn rush_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rush_2.as_mut() }
-    pub(crate) const fn rush_2_last_used_ms(&self) -> u32 { self.rush_2_last_used_ms }
-    pub(crate) const fn mark_rush_2_used(&mut self, now_ms: u32) { self.rush_2_last_used_ms = now_ms; }
 
     pub(crate) const fn roar(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.roar }
     pub(crate) fn begin_roar(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1410,8 +1277,6 @@ impl CPlayerAI {
         self.roar = Some(state);
     }
     pub(crate) fn roar_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.roar.as_mut() }
-    pub(crate) const fn roar_last_used_ms(&self) -> u32 { self.roar_last_used_ms }
-    pub(crate) const fn mark_roar_used(&mut self, now_ms: u32) { self.roar_last_used_ms = now_ms; }
 
     pub(crate) const fn energy_holding(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.energy_holding }
     pub(crate) fn begin_energy_holding(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1419,8 +1284,6 @@ impl CPlayerAI {
         self.energy_holding = Some(state);
     }
     pub(crate) fn energy_holding_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.energy_holding.as_mut() }
-    pub(crate) const fn energy_holding_last_used_ms(&self) -> u32 { self.energy_holding_last_used_ms }
-    pub(crate) const fn mark_energy_holding_used(&mut self, now_ms: u32) { self.energy_holding_last_used_ms = now_ms; }
 
     pub(crate) const fn inverse_chopped(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.inverse_chopped }
     pub(crate) fn begin_inverse_chopped(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1428,8 +1291,6 @@ impl CPlayerAI {
         self.inverse_chopped = Some(state);
     }
     pub(crate) fn inverse_chopped_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.inverse_chopped.as_mut() }
-    pub(crate) const fn inverse_chopped_last_used_ms(&self) -> u32 { self.inverse_chopped_last_used_ms }
-    pub(crate) const fn mark_inverse_chopped_used(&mut self, now_ms: u32) { self.inverse_chopped_last_used_ms = now_ms; }
 
     pub(crate) const fn thunder_blow_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow_2 }
     pub(crate) fn begin_thunder_blow_2(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1437,8 +1298,6 @@ impl CPlayerAI {
         self.thunder_blow_2 = Some(state);
     }
     pub(crate) fn thunder_blow_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.thunder_blow_2.as_mut() }
-    pub(crate) const fn thunder_blow_2_last_used_ms(&self) -> u32 { self.thunder_blow_2_last_used_ms }
-    pub(crate) const fn mark_thunder_blow_2_used(&mut self, now_ms: u32) { self.thunder_blow_2_last_used_ms = now_ms; }
 
     pub(crate) const fn mosou(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.mosou }
     pub(crate) fn begin_mosou(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -1446,8 +1305,6 @@ impl CPlayerAI {
         self.mosou = Some(state);
     }
     pub(crate) fn mosou_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.mosou.as_mut() }
-    pub(crate) const fn mosou_last_used_ms(&self) -> u32 { self.mosou_last_used_ms }
-    pub(crate) const fn mark_mosou_used(&mut self, now_ms: u32) { self.mosou_last_used_ms = now_ms; }
 
     pub(crate) const fn ghost_cut(&self) -> Option<&GhostCutExecutionState> { self.ghost_cut.as_ref() }
     pub(crate) fn begin_ghost_cut(&mut self, mut state: GhostCutExecutionState) {
@@ -1467,8 +1324,6 @@ impl CPlayerAI {
         self.knight_cut = Some(state);
     }
     pub(crate) fn knight_cut_mut(&mut self) -> Option<&mut KnightCutExecutionState> { self.knight_cut.as_mut() }
-    pub(crate) const fn knight_cut_last_used_ms(&self) -> u32 { self.knight_cut_last_used_ms }
-    pub(crate) const fn mark_knight_cut_used(&mut self, now_ms: u32) { self.knight_cut_last_used_ms = now_ms; }
     pub(crate) const fn army_break(&self) -> Option<&ArmyBreakExecutionState> { self.army_break.as_ref() }
     pub(crate) fn begin_army_break(&mut self, mut state: ArmyBreakExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1484,96 +1339,72 @@ impl CPlayerAI {
         self.rage = Some(state);
     }
     pub(crate) fn rage_mut(&mut self) -> Option<&mut RageExecutionState> { self.rage.as_mut() }
-    pub(crate) const fn rage_last_used_ms(&self) -> u32 { self.rage_last_used_ms }
-    pub(crate) const fn mark_rage_used(&mut self, now_ms: u32) { self.rage_last_used_ms = now_ms; }
     pub(crate) const fn rage_break(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.rage_break }
     pub(crate) fn begin_rage_break(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.rage_break = Some(state);
     }
     pub(crate) fn rage_break_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.rage_break.as_mut() }
-    pub(crate) const fn rage_break_last_used_ms(&self) -> u32 { self.rage_break_last_used_ms }
-    pub(crate) const fn mark_rage_break_used(&mut self, now_ms: u32) { self.rage_break_last_used_ms = now_ms; }
     pub(crate) const fn fury(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.fury }
     pub(crate) fn begin_fury(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.fury = Some(state);
     }
     pub(crate) fn fury_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.fury.as_mut() }
-    pub(crate) const fn fury_last_used_ms(&self) -> u32 { self.fury_last_used_ms }
-    pub(crate) const fn mark_fury_used(&mut self, now_ms: u32) { self.fury_last_used_ms = now_ms; }
     pub(crate) const fn flash(&self) -> Option<&FlashExecutionState> { self.flash.as_ref() }
     pub(crate) fn begin_flash(&mut self, mut state: FlashExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.flash = Some(state);
     }
     pub(crate) fn flash_mut(&mut self) -> Option<&mut FlashExecutionState> { self.flash.as_mut() }
-    pub(crate) const fn flash_last_used_ms(&self) -> u32 { self.flash_last_used_ms }
-    pub(crate) const fn mark_flash_used(&mut self, now_ms: u32) { self.flash_last_used_ms = now_ms; }
     pub(crate) const fn swallow(&self) -> Option<&SwallowExecutionState> { self.swallow.as_ref() }
     pub(crate) fn begin_swallow(&mut self, mut state: SwallowExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.swallow = Some(state);
     }
     pub(crate) fn swallow_mut(&mut self) -> Option<&mut SwallowExecutionState> { self.swallow.as_mut() }
-    pub(crate) const fn swallow_last_used_ms(&self) -> u32 { self.swallow_last_used_ms }
-    pub(crate) const fn mark_swallow_used(&mut self, now_ms: u32) { self.swallow_last_used_ms = now_ms; }
     pub(crate) const fn leaf_cut(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut }
     pub(crate) fn begin_leaf_cut(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.leaf_cut = Some(state);
     }
     pub(crate) fn leaf_cut_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut.as_mut() }
-    pub(crate) const fn leaf_cut_last_used_ms(&self) -> u32 { self.leaf_cut_last_used_ms }
-    pub(crate) const fn mark_leaf_cut_used(&mut self, now_ms: u32) { self.leaf_cut_last_used_ms = now_ms; }
     pub(crate) const fn leaf_cut_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_2 }
     pub(crate) fn begin_leaf_cut_2(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.leaf_cut_2 = Some(state);
     }
     pub(crate) fn leaf_cut_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_2.as_mut() }
-    pub(crate) const fn leaf_cut_2_last_used_ms(&self) -> u32 { self.leaf_cut_2_last_used_ms }
-    pub(crate) const fn mark_leaf_cut_2_used(&mut self, now_ms: u32) { self.leaf_cut_2_last_used_ms = now_ms; }
     pub(crate) const fn leaf_cut_3(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_3 }
     pub(crate) fn begin_leaf_cut_3(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.leaf_cut_3 = Some(state);
     }
     pub(crate) fn leaf_cut_3_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.leaf_cut_3.as_mut() }
-    pub(crate) const fn leaf_cut_3_last_used_ms(&self) -> u32 { self.leaf_cut_3_last_used_ms }
-    pub(crate) const fn mark_leaf_cut_3_used(&mut self, now_ms: u32) { self.leaf_cut_3_last_used_ms = now_ms; }
     pub(crate) const fn kerosene(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.kerosene }
     pub(crate) fn begin_kerosene(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.kerosene = Some(state);
     }
     pub(crate) fn kerosene_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.kerosene.as_mut() }
-    pub(crate) const fn kerosene_last_used_ms(&self) -> u32 { self.kerosene_last_used_ms }
-    pub(crate) const fn mark_kerosene_used(&mut self, now_ms: u32) { self.kerosene_last_used_ms = now_ms; }
     pub(crate) const fn ignition(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.ignition }
     pub(crate) fn begin_ignition(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.ignition = Some(state);
     }
     pub(crate) fn ignition_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.ignition.as_mut() }
-    pub(crate) const fn ignition_last_used_ms(&self) -> u32 { self.ignition_last_used_ms }
-    pub(crate) const fn mark_ignition_used(&mut self, now_ms: u32) { self.ignition_last_used_ms = now_ms; }
     pub(crate) const fn blind(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.blind }
     pub(crate) fn begin_blind(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.blind = Some(state);
     }
     pub(crate) fn blind_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.blind.as_mut() }
-    pub(crate) const fn blind_last_used_ms(&self) -> u32 { self.blind_last_used_ms }
-    pub(crate) const fn mark_blind_used(&mut self, now_ms: u32) { self.blind_last_used_ms = now_ms; }
     pub(crate) const fn ju_cut(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.ju_cut }
     pub(crate) fn begin_ju_cut(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.ju_cut = Some(state);
     }
     pub(crate) fn ju_cut_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.ju_cut.as_mut() }
-    pub(crate) const fn ju_cut_last_used_ms(&self) -> u32 { self.ju_cut_last_used_ms }
-    pub(crate) const fn mark_ju_cut_used(&mut self, now_ms: u32) { self.ju_cut_last_used_ms = now_ms; }
     pub(crate) const fn lightning_sword(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.lightning_sword }
     pub(crate) fn begin_lightning_sword(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1621,13 +1452,7 @@ impl CPlayerAI {
         self.fire_wall.as_mut()
     }
 
-    pub(crate) const fn fire_wall_last_used_ms(&self) -> u32 {
-        self.fire_wall_last_used_ms
-    }
 
-    pub(crate) const fn mark_fire_wall_used(&mut self, now_ms: u32) {
-        self.fire_wall_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn poison_fog(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.poison_fog }
     pub(crate) fn begin_poison_fog(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>, destination: (i32, i32)) {
@@ -1635,8 +1460,6 @@ impl CPlayerAI {
         self.poison_fog = Some(state); self.poison_fog_destination = Some(destination);
     }
     pub(crate) fn poison_fog_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.poison_fog.as_mut() }
-    pub(crate) const fn poison_fog_last_used_ms(&self) -> u32 { self.poison_fog_last_used_ms }
-    pub(crate) const fn mark_poison_fog_used(&mut self, now_ms: u32) { self.poison_fog_last_used_ms = now_ms; }
     pub(crate) const fn poison_fog_destination(&self) -> Option<(i32, i32)> { self.poison_fog_destination }
 
     pub(crate) const fn infernol(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
@@ -1657,13 +1480,7 @@ impl CPlayerAI {
         self.infernol.as_mut()
     }
 
-    pub(crate) const fn infernol_last_used_ms(&self) -> u32 {
-        self.infernol_last_used_ms
-    }
 
-    pub(crate) const fn mark_infernol_used(&mut self, now_ms: u32) {
-        self.infernol_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn seven_shooting_star(&self) -> Option<&SevenShootingStarExecutionState> {
         self.seven_shooting_star.as_ref()
@@ -1683,13 +1500,7 @@ impl CPlayerAI {
         self.seven_shooting_star.as_mut()
     }
 
-    pub(crate) const fn seven_shooting_star_last_used_ms(&self) -> u32 {
-        self.seven_shooting_star_last_used_ms
-    }
 
-    pub(crate) const fn mark_seven_shooting_star_used(&mut self, now_ms: u32) {
-        self.seven_shooting_star_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn little_star(&self) -> Option<&PlayerLittleStarExecutionState> {
         self.little_star.as_ref()
@@ -1704,13 +1515,7 @@ impl CPlayerAI {
         self.little_star.as_mut()
     }
 
-    pub(crate) const fn little_star_last_used_ms(&self) -> u32 {
-        self.little_star_last_used_ms
-    }
 
-    pub(crate) const fn mark_little_star_used(&mut self, now_ms: u32) {
-        self.little_star_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn path_projectile(&self) -> Option<&PlayerPathProjectileExecutionState> {
         self.path_projectile.as_ref()
@@ -1777,48 +1582,36 @@ impl CPlayerAI {
         self.yunsheng_lightning = Some(state);
     }
     pub(crate) fn yunsheng_lightning_mut(&mut self) -> Option<&mut PlayerYunShengLightningExecutionState> { self.yunsheng_lightning.as_mut() }
-    pub(crate) const fn yunsheng_lightning_last_used_ms(&self) -> u32 { self.yunsheng_lightning_last_used_ms }
-    pub(crate) const fn mark_yunsheng_lightning_used(&mut self, now_ms: u32) { self.yunsheng_lightning_last_used_ms = now_ms; }
     pub(crate) const fn corpse_ptomaine(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.corpse_ptomaine }
     pub(crate) fn begin_corpse_ptomaine(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.corpse_ptomaine = Some(state);
     }
     pub(crate) fn corpse_ptomaine_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.corpse_ptomaine.as_mut() }
-    pub(crate) const fn corpse_ptomaine_last_used_ms(&self) -> u32 { self.corpse_ptomaine_last_used_ms }
-    pub(crate) const fn mark_corpse_ptomaine_used(&mut self, now_ms: u32) { self.corpse_ptomaine_last_used_ms = now_ms; }
     pub(crate) const fn monster_thorn(&self) -> Option<&PlayerMonsterThornExecutionState> { self.monster_thorn.as_ref() }
     pub(crate) fn begin_monster_thorn(&mut self, mut state: PlayerMonsterThornExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.monster_thorn = Some(state);
     }
     pub(crate) fn monster_thorn_mut(&mut self) -> Option<&mut PlayerMonsterThornExecutionState> { self.monster_thorn.as_mut() }
-    pub(crate) const fn monster_thorn_last_used_ms(&self) -> u32 { self.monster_thorn_last_used_ms }
-    pub(crate) const fn mark_monster_thorn_used(&mut self, now_ms: u32) { self.monster_thorn_last_used_ms = now_ms; }
     pub(crate) const fn spider_mist(&self) -> Option<&PlayerSpiderMistExecutionState> { self.spider_mist.as_ref() }
     pub(crate) fn begin_spider_mist(&mut self, mut state: PlayerSpiderMistExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.spider_mist = Some(state);
     }
     pub(crate) fn spider_mist_mut(&mut self) -> Option<&mut PlayerSpiderMistExecutionState> { self.spider_mist.as_mut() }
-    pub(crate) const fn spider_mist_last_used_ms(&self) -> u32 { self.spider_mist_last_used_ms }
-    pub(crate) const fn mark_spider_mist_used(&mut self, now_ms: u32) { self.spider_mist_last_used_ms = now_ms; }
     pub(crate) const fn spider_web(&self) -> Option<&PlayerSpiderWebExecutionState> { self.spider_web.as_ref() }
     pub(crate) fn begin_spider_web(&mut self, mut state: PlayerSpiderWebExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.spider_web = Some(state);
     }
     pub(crate) fn spider_web_mut(&mut self) -> Option<&mut PlayerSpiderWebExecutionState> { self.spider_web.as_mut() }
-    pub(crate) const fn spider_web_last_used_ms(&self) -> u32 { self.spider_web_last_used_ms }
-    pub(crate) const fn mark_spider_web_used(&mut self, now_ms: u32) { self.spider_web_last_used_ms = now_ms; }
     pub(crate) const fn spider_poison(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.spider_poison }
     pub(crate) fn begin_spider_poison(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.spider_poison = Some(state);
     }
     pub(crate) fn spider_poison_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.spider_poison.as_mut() }
-    pub(crate) const fn spider_poison_last_used_ms(&self) -> u32 { self.spider_poison_last_used_ms }
-    pub(crate) const fn mark_spider_poison_used(&mut self, now_ms: u32) { self.spider_poison_last_used_ms = now_ms; }
     pub(crate) const fn summon_creature(&self) -> Option<&PlayerSummonCreatureExecutionState> { self.summon_creature.as_ref() }
     pub(crate) fn begin_summon_creature(&mut self, mut state: PlayerSummonCreatureExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1833,24 +1626,18 @@ impl CPlayerAI {
         self.boss_blue_fury = Some(state);
     }
     pub(crate) fn boss_blue_fury_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.boss_blue_fury.as_mut() }
-    pub(crate) const fn boss_blue_fury_last_used_ms(&self) -> u32 { self.boss_blue_fury_last_used_ms }
-    pub(crate) const fn mark_boss_blue_fury_used(&mut self, now_ms: u32) { self.boss_blue_fury_last_used_ms = now_ms; }
     pub(crate) const fn boss_blue_quake(&self) -> Option<PlayerBossBlueQuakeExecutionState> { self.boss_blue_quake }
     pub(crate) fn begin_boss_blue_quake(&mut self, mut state: PlayerBossBlueQuakeExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.boss_blue_quake = Some(state);
     }
     pub(crate) fn boss_blue_quake_mut(&mut self) -> Option<&mut PlayerBossBlueQuakeExecutionState> { self.boss_blue_quake.as_mut() }
-    pub(crate) const fn boss_blue_quake_last_used_ms(&self) -> u32 { self.boss_blue_quake_last_used_ms }
-    pub(crate) const fn mark_boss_blue_quake_used(&mut self, now_ms: u32) { self.boss_blue_quake_last_used_ms = now_ms; }
     pub(crate) fn boss_fiend_penetrate(&self) -> Option<&PlayerBossFiendPenetrateExecutionState> { self.boss_fiend_penetrate.as_ref() }
     pub(crate) fn begin_boss_fiend_penetrate(&mut self, mut state: PlayerBossFiendPenetrateExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.boss_fiend_penetrate = Some(state);
     }
     pub(crate) fn boss_fiend_penetrate_mut(&mut self) -> Option<&mut PlayerBossFiendPenetrateExecutionState> { self.boss_fiend_penetrate.as_mut() }
-    pub(crate) const fn boss_fiend_penetrate_last_used_ms(&self) -> u32 { self.boss_fiend_penetrate_last_used_ms }
-    pub(crate) const fn mark_boss_fiend_penetrate_used(&mut self, now_ms: u32) { self.boss_fiend_penetrate_last_used_ms = now_ms; }
 
     pub(crate) const fn sprite_burn(&self) -> Option<&SpriteBurnExecutionState> {
         self.sprite_burn.as_ref()
@@ -1865,13 +1652,7 @@ impl CPlayerAI {
         self.sprite_burn.as_mut()
     }
 
-    pub(crate) const fn sprite_burn_last_used_ms(&self) -> u32 {
-        self.sprite_burn_last_used_ms
-    }
 
-    pub(crate) const fn mark_sprite_burn_used(&mut self, now_ms: u32) {
-        self.sprite_burn_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn wide_arc_attack(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
         self.wide_arc_attack.as_ref()
@@ -1940,13 +1721,7 @@ impl CPlayerAI {
         self.monster_base_attack = Some(SkillExecutionKernel::begin(dispatch, now_ms));
     }
 
-    pub(crate) const fn monster_base_attack_last_used_ms(&self) -> u32 {
-        self.monster_base_attack_last_used_ms
-    }
 
-    pub(crate) const fn mark_monster_base_attack_used(&mut self, now_ms: u32) {
-        self.monster_base_attack_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn monster_range_attack(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
         self.monster_range_attack.as_ref()
@@ -1962,9 +1737,7 @@ impl CPlayerAI {
         self.monster_range_attack = Some(SkillExecutionKernel::begin(dispatch, now_ms));
     }
 
-    pub(crate) const fn monster_range_attack_last_used_ms(&self) -> u32 { self.monster_range_attack_last_used_ms }
 
-    pub(crate) const fn mark_monster_range_attack_used(&mut self, now_ms: u32) { self.monster_range_attack_last_used_ms = now_ms; }
 
     pub(crate) const fn mark_fast_attack_used(&mut self, skill_id: u32, now_ms: u32) {
         if skill_id == super::super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID {
@@ -1987,13 +1760,7 @@ impl CPlayerAI {
         self.chaos_sphere.as_mut()
     }
 
-    pub(crate) const fn chaos_sphere_last_used_ms(&self) -> u32 {
-        self.chaos_sphere_last_used_ms
-    }
 
-    pub(crate) const fn mark_chaos_sphere_used(&mut self, now_ms: u32) {
-        self.chaos_sphere_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn lightning(&self) -> Option<LightningExecutionState> {
         self.lightning
@@ -2008,13 +1775,7 @@ impl CPlayerAI {
         self.lightning.as_mut()
     }
 
-    pub(crate) const fn lightning_last_used_ms(&self) -> u32 {
-        self.lightning_last_used_ms
-    }
 
-    pub(crate) const fn mark_lightning_used(&mut self, now_ms: u32) {
-        self.lightning_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn seal(&self) -> Option<SealExecutionState> {
         self.seal
@@ -2029,13 +1790,7 @@ impl CPlayerAI {
         self.seal.as_mut()
     }
 
-    pub(crate) const fn seal_last_used_ms(&self) -> u32 {
-        self.seal_last_used_ms
-    }
 
-    pub(crate) const fn mark_seal_used(&mut self, now_ms: u32) {
-        self.seal_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn yin_yang(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.yin_yang
@@ -2050,59 +1805,43 @@ impl CPlayerAI {
         self.yin_yang.as_mut()
     }
 
-    pub(crate) const fn yin_yang_last_used_ms(&self) -> u32 { self.yin_yang_last_used_ms }
 
-    pub(crate) const fn mark_yin_yang_used(&mut self, now_ms: u32) {
-        self.yin_yang_last_used_ms = now_ms;
-    }
     pub(crate) const fn yin_yang_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.yin_yang_2 }
     pub(crate) fn begin_yin_yang_2(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.yin_yang_2 = Some(state);
     }
     pub(crate) fn yin_yang_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.yin_yang_2.as_mut() }
-    pub(crate) const fn yin_yang_2_last_used_ms(&self) -> u32 { self.yin_yang_2_last_used_ms }
-    pub(crate) const fn mark_yin_yang_2_used(&mut self, now_ms: u32) { self.yin_yang_2_last_used_ms = now_ms; }
     pub(crate) const fn god_punishment(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_punishment }
     pub(crate) fn begin_god_punishment(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.god_punishment = Some(state);
     }
     pub(crate) fn god_punishment_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_punishment.as_mut() }
-    pub(crate) const fn god_punishment_last_used_ms(&self) -> u32 { self.god_punishment_last_used_ms }
-    pub(crate) const fn mark_god_punishment_used(&mut self, now: u32) { self.god_punishment_last_used_ms = now; }
     pub(crate) const fn god_thunder(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_thunder }
     pub(crate) fn begin_god_thunder(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.god_thunder = Some(state);
     }
     pub(crate) fn god_thunder_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_thunder.as_mut() }
-    pub(crate) const fn god_thunder_last_used_ms(&self) -> u32 { self.god_thunder_last_used_ms }
-    pub(crate) const fn mark_god_thunder_used(&mut self, now: u32) { self.god_thunder_last_used_ms = now; }
     pub(crate) const fn god_thunder_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_thunder_2 }
     pub(crate) fn begin_god_thunder_2(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.god_thunder_2 = Some(state);
     }
     pub(crate) fn god_thunder_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_thunder_2.as_mut() }
-    pub(crate) const fn god_thunder_2_last_used_ms(&self) -> u32 { self.god_thunder_2_last_used_ms }
-    pub(crate) const fn mark_god_thunder_2_used(&mut self, now: u32) { self.god_thunder_2_last_used_ms = now; }
     pub(crate) const fn soul_collect(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_collect }
     pub(crate) fn begin_soul_collect(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.soul_collect = Some(state);
     }
     pub(crate) fn soul_collect_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_collect.as_mut() }
-    pub(crate) const fn soul_collect_last_used_ms(&self) -> u32 { self.soul_collect_last_used_ms }
-    pub(crate) const fn mark_soul_collect_used(&mut self, now: u32) { self.soul_collect_last_used_ms = now; }
     pub(crate) const fn soul_mirror(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_mirror }
     pub(crate) fn begin_soul_mirror(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
         self.soul_mirror = Some(state);
     }
     pub(crate) fn soul_mirror_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.soul_mirror.as_mut() }
-    pub(crate) const fn soul_mirror_last_used_ms(&self) -> u32 { self.soul_mirror_last_used_ms }
-    pub(crate) const fn mark_soul_mirror_used(&mut self, now: u32) { self.soul_mirror_last_used_ms = now; }
 
     pub(crate) const fn callosity(&self) -> Option<CallosityExecutionState> {
         self.callosity
@@ -2151,10 +1890,6 @@ impl CPlayerAI {
     ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
         self.hearten.as_mut()
     }
-    pub(crate) const fn hearten_last_used_ms(&self) -> u32 { self.hearten_last_used_ms }
-    pub(crate) const fn mark_hearten_used(&mut self, now_ms: u32) {
-        self.hearten_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn promotion(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.promotion
@@ -2174,13 +1909,7 @@ impl CPlayerAI {
         self.promotion.as_mut()
     }
 
-    pub(crate) const fn promotion_last_used_ms(&self) -> u32 {
-        self.promotion_last_used_ms
-    }
 
-    pub(crate) const fn mark_promotion_used(&mut self, now_ms: u32) {
-        self.promotion_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn heal_family(
         &self,
@@ -2233,13 +1962,7 @@ impl CPlayerAI {
         self.pets_control.as_mut()
     }
 
-    pub(crate) const fn pets_control_last_used_ms(&self) -> u32 {
-        self.pets_control_last_used_ms
-    }
 
-    pub(crate) const fn mark_pets_control_used(&mut self, now_ms: u32) {
-        self.pets_control_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn monster_taming(
         &self,
@@ -2261,13 +1984,7 @@ impl CPlayerAI {
         self.monster_taming.as_mut()
     }
 
-    pub(crate) const fn monster_taming_last_used_ms(&self) -> u32 {
-        self.monster_taming_last_used_ms
-    }
 
-    pub(crate) const fn mark_monster_taming_used(&mut self, now_ms: u32) {
-        self.monster_taming_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn knock_out(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.knock_out
@@ -2282,11 +1999,7 @@ impl CPlayerAI {
         self.knock_out.as_mut()
     }
 
-    pub(crate) const fn knock_out_last_used_ms(&self) -> u32 { self.knock_out_last_used_ms }
 
-    pub(crate) const fn mark_knock_out_used(&mut self, now_ms: u32) {
-        self.knock_out_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn snow_storm(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.snow_storm
@@ -2301,11 +2014,7 @@ impl CPlayerAI {
         self.snow_storm.as_mut()
     }
 
-    pub(crate) const fn snow_storm_last_used_ms(&self) -> u32 { self.snow_storm_last_used_ms }
 
-    pub(crate) const fn mark_snow_storm_used(&mut self, now_ms: u32) {
-        self.snow_storm_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn weak(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.weak
@@ -2320,11 +2029,7 @@ impl CPlayerAI {
         self.weak.as_mut()
     }
 
-    pub(crate) const fn weak_last_used_ms(&self) -> u32 { self.weak_last_used_ms }
 
-    pub(crate) const fn mark_weak_used(&mut self, now_ms: u32) {
-        self.weak_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn god_bless(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_bless }
     pub(crate) fn begin_god_bless(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
@@ -2340,8 +2045,6 @@ impl CPlayerAI {
         self.cure = Some(state);
     }
     pub(crate) fn cure_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.cure.as_mut() }
-    pub(crate) const fn cure_last_used_ms(&self) -> u32 { self.cure_last_used_ms }
-    pub(crate) const fn mark_cure_used(&mut self, now_ms: u32) { self.cure_last_used_ms = now_ms; }
 
     pub(crate) const fn machine_shield(
         &self,
@@ -2479,13 +2182,7 @@ impl CPlayerAI {
         self.gibe.as_mut()
     }
 
-    pub(crate) const fn gibe_last_used_ms(&self) -> u32 {
-        self.gibe_last_used_ms
-    }
 
-    pub(crate) const fn mark_gibe_used(&mut self, now_ms: u32) {
-        self.gibe_last_used_ms = now_ms;
-    }
 
     /// Продвигает ровно одну ожидающую команду только после конечного состояния
     /// предыдущей. Новый запрос может заменить ещё не начатый хвост FIFO, но

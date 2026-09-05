@@ -147,7 +147,7 @@ fn finish_player_spider_poison<Runtime: GameMainLoopRuntime>(
         player.set_current_skill_id(None);
     }
     if successful {
-        player_ai.mark_spider_poison_used(runtime.now_milliseconds());
+        player_ai.mark_skill_used(SPIDER_POISON_SKILL_ID, runtime.now_milliseconds());
     }
 }
 
@@ -222,7 +222,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
     };
     if player_ai.spider_poison().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.spider_poison_last_used_ms(), reuse_delay, now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(SPIDER_POISON_SKILL_ID), reuse_delay, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

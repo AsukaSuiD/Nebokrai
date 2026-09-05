@@ -63,7 +63,7 @@ fn end_player_range_attack<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     if success { game.damage_player_weapon(player_id, runtime); }
     if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(None); }
-    if success { ai.mark_monster_range_attack_used(runtime.now_milliseconds()); }
+    if success { ai.mark_skill_used(MONSTER_RANGE_ATTACK_SKILL_ID, runtime.now_milliseconds()); }
 }
 
 pub(crate) fn finish_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
@@ -132,7 +132,7 @@ pub(crate) fn execute_player_monster_range_attack<Runtime: GameMainLoopRuntime>(
     };
     if ai.monster_range_attack().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.monster_range_attack_last_used_ms(), reuse, now) {
+        if !skill_is_restored(ai.skill_last_used_ms(MONSTER_RANGE_ATTACK_SKILL_ID), reuse, now) {
             game.send_self_state_skill_failure(0x000b_fe01, player_id, 13);
             game.send_skill_system_info(player_id, b"GS1143");
             end_player_range_attack(game, player_id, ai, runtime, false);

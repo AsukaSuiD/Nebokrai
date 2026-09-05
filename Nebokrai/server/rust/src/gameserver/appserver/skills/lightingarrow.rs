@@ -52,7 +52,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 }
 fn finish_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_lighting_arrow_used(now_ms));
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(LIGHTING_ARROW_SKILL_ID, now_ms));
 }
 fn abort_player_lighting_arrow(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
@@ -128,7 +128,7 @@ pub(crate) fn execute_player_lighting_arrow<Runtime: GameMainLoopRuntime>(game: 
                 _ => { game.send_base_magic_failure(player_id, 10); game.send_skill_system_info(player_id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected); }
             }, _ => unreachable!(),
         };
-        if !skill_is_restored(player_ai.lighting_arrow_last_used_ms(), reuse_ms, runtime.now_milliseconds()) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(LIGHTING_ARROW_SKILL_ID), reuse_ms, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected);
         }
         let path = game.base_magic_path(region_id, source_x, source_y, destination.0, destination.1, None);

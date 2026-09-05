@@ -80,7 +80,7 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_promotion<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     finish_movement(game, player_id);
-    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_promotion_used(now_ms));
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(PROMOTION_SKILL_ID, now_ms));
 }
 
 fn abort_player_promotion(game: &mut CGame, player_id: i32) {
@@ -495,7 +495,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         };
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.promotion_last_used_ms(),
+            player_ai.skill_last_used_ms(PROMOTION_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {

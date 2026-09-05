@@ -195,7 +195,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_cure_used(now_ms));
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(CURE_SKILL_ID, now_ms));
 }
 
 fn abort_player_cure(game: &mut CGame, player_id: i32) {
@@ -514,7 +514,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         };
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.cure_last_used_ms(), reuse_delay_ms, cooldown_now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(CURE_SKILL_ID), reuse_delay_ms, cooldown_now_ms) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return terminal(QueuedSkillExecutionState::Rejected);

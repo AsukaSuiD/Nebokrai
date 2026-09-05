@@ -76,7 +76,7 @@ fn finish_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_chaos_sphere_used(now_ms);
+        player_ai.mark_skill_used(CHAOS_SPHERE_SKILL_ID, now_ms);
     });
 }
 
@@ -204,7 +204,7 @@ pub(crate) fn execute_player_chaos_sphere<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.chaos_sphere_last_used_ms(),
+            player_ai.skill_last_used_ms(CHAOS_SPHERE_SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {

@@ -54,7 +54,7 @@ fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { Qu
 fn restore_player_movement(game: &mut CGame, id: i32) { if let Some(player) = game.find_player_mut(id) { player.set_skill_moveable(true); } }
 fn finish_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, runtime: &mut R) {
     restore_player_movement(game, id);
-    finish_state_skill(game, id, ai, runtime, |ai, now_ms| ai.mark_rain_arrow_used(now_ms));
+    finish_state_skill(game, id, ai, runtime, |ai, now_ms| ai.mark_skill_used(crate::gameserver::appserver::skills::rainarrowphalanx::RAIN_ARROW_SKILL_ID, now_ms));
 }
 fn abort_player_rain_arrow(game: &mut CGame, id: i32) { restore_player_movement(game, id); abort_skill(game, id); }
 pub(crate) fn complete_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, runtime: &mut R) -> bool {
@@ -116,7 +116,7 @@ pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame
         PlayerSkillDispatch::SelfTarget { .. } => { let p = CShape::get_direction_position(direction, crate::gameserver::appserver::shape::ShapeAreaCoordinates { x: source.0, y: source.1 }).ok(); (p.map_or(source, |p| (p.x, p.y)), None) },
         PlayerSkillDispatch::Object { target, .. } if target.object_type == PLAYER_TYPE && target.id == id => { let p = CShape::get_direction_position(direction, crate::gameserver::appserver::shape::ShapeAreaCoordinates { x: source.0, y: source.1 }).ok(); (p.map_or(source, |p| (p.x, p.y)), None) },
         PlayerSkillDispatch::Object { target, .. } => match target_snapshot(game, region, target) { Some((x, y, false)) => ((x, y), Some(target)), _ => { game.send_base_magic_failure(id, 10); game.send_skill_system_info(id, b"GS0285"); return outcome(QueuedSkillExecutionState::Rejected) } } };
-        if !skill_is_restored(ai.rain_arrow_last_used_ms(), reuse, runtime.now_milliseconds()) { game.send_base_magic_failure(id, 0x0d); game.send_skill_system_info(id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.skill_last_used_ms(crate::gameserver::appserver::skills::rainarrowphalanx::RAIN_ARROW_SKILL_ID), reuse, runtime.now_milliseconds()) { game.send_base_magic_failure(id, 0x0d); game.send_skill_system_info(id, b"GS0278"); return outcome(QueuedSkillExecutionState::Rejected) }
         let path = game.base_magic_path(region, source.0, source.1, destination.0, destination.1, None); if maximum != 0 && path.len() > maximum as usize { game.send_base_magic_failure(id, 0x0b); game.send_skill_system_info(id, b"GS0290"); return outcome(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(id) else { return outcome(QueuedSkillExecutionState::Rejected) }; if !weapon_valid(game, player) { game.send_base_magic_failure(id, 0x0e); game.send_skill_system_info(id, b"GS0297"); return outcome(QueuedSkillExecutionState::Rejected) }
         if mp != 0 && (player.mana().wrapping_sub(mp) as i32) < 0 { game.send_base_magic_failure(id, 7); game.send_skill_system_info_with_unsigned(id, b"GS0288", mp); return outcome(QueuedSkillExecutionState::Rejected) }

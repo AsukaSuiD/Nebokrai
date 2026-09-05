@@ -189,7 +189,7 @@ fn finish_player_spider_mist<Runtime: GameMainLoopRuntime>(
 ) {
     restore_player_movement(game, player_id);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_spider_mist_used(now_ms);
+        player_ai.mark_skill_used(SPIDER_MIST_SKILL_ID, now_ms);
     });
 }
 
@@ -250,7 +250,7 @@ pub(crate) fn execute_player_spider_mist<Runtime: GameMainLoopRuntime>(
     let now_ms = runtime.now_milliseconds();
 
     if player_ai.spider_mist().is_none() {
-        if !skill_is_restored(player_ai.spider_mist_last_used_ms(), reuse_delay_ms, now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(SPIDER_MIST_SKILL_ID), reuse_delay_ms, now_ms) {
             send_player_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

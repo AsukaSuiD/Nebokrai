@@ -85,7 +85,7 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
 }
 
 fn abort_player_pets_control(game: &mut CGame, player_id: i32) { finish_movement(game, player_id); abort_skill(game, player_id); }
-fn finish_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { finish_summon_skill_without_weapon_wear(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_pets_control_used(now_ms)); }
+fn finish_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { finish_summon_skill_without_weapon_wear(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(PETS_CONTROL_SKILL_ID, now_ms)); }
 pub(crate) fn complete_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.pets_control().map(SkillExecutionKernel::dispatch) else { return false }; finish_movement(game, player_id); finish_player_pets_control(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Completed) }
 pub(crate) fn cancel_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.pets_control().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_pets_control(game, player_id); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
@@ -142,7 +142,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         if !skill_is_restored(
-            player_ai.pets_control_last_used_ms(),
+            player_ai.skill_last_used_ms(PETS_CONTROL_SKILL_ID),
             reuse_delay_ms,
             runtime.now_milliseconds(),
         ) {

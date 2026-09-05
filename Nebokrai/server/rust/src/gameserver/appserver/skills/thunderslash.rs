@@ -54,7 +54,7 @@ fn finish_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_thunder_slash_used(now_ms);
+        player_ai.mark_skill_used(THUNDER_SLASH_SKILL_ID, now_ms);
     });
 }
 
@@ -121,7 +121,7 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
     if ai.thunder_slash().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(ai.thunder_slash_last_used_ms(), reuse, cooldown_now_ms) {
+        if !skill_is_restored(ai.skill_last_used_ms(THUNDER_SLASH_SKILL_ID), reuse, cooldown_now_ms) {
             failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };

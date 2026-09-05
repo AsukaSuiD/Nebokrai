@@ -134,7 +134,7 @@ fn finish_player_seal<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_seal_used(now_ms);
+        player_ai.mark_skill_used(SEAL_SKILL_ID, now_ms);
     });
 }
 
@@ -304,7 +304,7 @@ pub(crate) fn execute_player_seal<Runtime: GameMainLoopRuntime>(
 
     if player_ai.seal().is_none() {
         let started_at_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.seal_last_used_ms(), reuse_delay_ms, runtime.now_milliseconds()) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(SEAL_SKILL_ID), reuse_delay_ms, runtime.now_milliseconds()) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
             return reject_begin(game, player_id);

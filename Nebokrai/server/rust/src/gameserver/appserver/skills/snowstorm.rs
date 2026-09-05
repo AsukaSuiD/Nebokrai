@@ -152,7 +152,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_snow_storm_used(now_ms));
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(SNOW_STORM_SKILL_ID, now_ms));
 }
 
 fn abort_player_snow_storm(game: &mut CGame, player_id: i32) {
@@ -194,7 +194,7 @@ pub(crate) fn execute_player_snow_storm<Runtime: GameMainLoopRuntime>(game: &mut
     if player_ai.snow_storm().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.snow_storm_last_used_ms(), cooldown_ms, cooldown_now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(SNOW_STORM_SKILL_ID), cooldown_ms, cooldown_now_ms) {
             send_error(game, player_id, 0x0d);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

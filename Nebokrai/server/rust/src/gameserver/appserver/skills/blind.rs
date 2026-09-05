@@ -62,7 +62,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_blind<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_blind_used(now_ms));
+    finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(BLIND_SKILL_ID, now_ms));
 }
 
 fn abort_player_blind(game: &mut CGame, player_id: i32) {
@@ -177,7 +177,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
         };
         let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
         if !skill_is_restored(
-            ai.blind_last_used_ms(),
+            ai.skill_last_used_ms(BLIND_SKILL_ID),
             reuse,
             runtime.now_milliseconds(),
         ) {
@@ -222,7 +222,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
 
     if ai.blind().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.blind_last_used_ms(), reuse, now) {
+        if !skill_is_restored(ai.skill_last_used_ms(BLIND_SKILL_ID), reuse, now) {
             failure(game, player_id, 0x0d, mp_loss, None, false);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

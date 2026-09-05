@@ -167,7 +167,7 @@ fn finish_player_lightning<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_lightning_used(now_ms);
+        player_ai.mark_skill_used(LIGHTNING_SKILL_ID, now_ms);
     });
 }
 
@@ -369,7 +369,7 @@ pub(crate) fn execute_player_lightning<Runtime: GameMainLoopRuntime>(
     if player_ai.lightning().is_none() {
         let started_at_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.lightning_last_used_ms(),
+            player_ai.skill_last_used_ms(LIGHTNING_SKILL_ID),
             reuse_delay_ms,
             runtime.now_milliseconds(),
         ) {

@@ -75,7 +75,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_yaksha_slash_used(now_ms));
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(YAKSHA_SLASH_SKILL_ID, now_ms));
 }
 
 fn abort_player_yaksha_slash(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
@@ -217,7 +217,7 @@ pub(crate) fn execute_player_yaksha_slash<Runtime: GameMainLoopRuntime>(game: &m
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum = properties.query_property(TARGET_MAX_DISTANCE); let missile_step = properties.query_property(MISSILE_FLYING_TIME); let factor = properties.query_property(TARGET_DAMAGE_FACTOR); let hit = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.yaksha_slash().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.yaksha_slash_last_used_ms(), reuse, now) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(ai.skill_last_used_ms(YAKSHA_SLASH_SKILL_ID), reuse, now) { fail(game, player_id, 0x0d); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(target_view) = target_view(game, region_id, target) else { fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) };
         if maximum != 0 && source_view.real_distance(Some(target_view)) > maximum as i32 { fail(game, player_id, 0x0b); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }
         if game.base_magic_path(region_id, source_x, source_y, target_view.tile_x, target_view.tile_y, None).iter().any(|cell| cell.2 == BLOCK_UNFLY) { fail(game, player_id, 0x0f); fail(game, player_id, 2); return terminal(QueuedSkillExecutionState::Rejected) }

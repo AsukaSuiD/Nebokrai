@@ -100,7 +100,7 @@ fn finish_player_item_skill_2<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
-    player_ai.mark_item_skill_2_used(runtime.now_milliseconds());
+    player_ai.mark_skill_used(ITEM_SKILL_2_ID, runtime.now_milliseconds());
 }
 
 pub(crate) fn cancel_player_item_skill_2<Runtime: GameMainLoopRuntime>(
@@ -152,7 +152,7 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
         if target.object_type==MONSTER_TYPE && !allow_monster { send_notify(game, player_id, b"GS1181"); return terminal(QueuedSkillExecutionState::Rejected); }
         if target.object_type==MONSTER_TYPE && !game.new_skill_monster_conf().groups().get(&group).is_some_and(|names| names.iter().any(|name| name==&original_name)) { send_notify(game, player_id, b"GS1182"); return terminal(QueuedSkillExecutionState::Rejected); }
         if target.object_type==PLAYER_TYPE && target.id==player_id { send_failure(game, player_id, 10, b"GS1183", None); return terminal(QueuedSkillExecutionState::Rejected); }
-        if !skill_is_restored(player_ai.item_skill_2_last_used_ms(), reuse, runtime.now_milliseconds()) { send_failure(game, player_id, 0x0d, b"GS1184", None); return terminal(QueuedSkillExecutionState::Rejected); }
+        if !skill_is_restored(player_ai.skill_last_used_ms(ITEM_SKILL_2_ID), reuse, runtime.now_milliseconds()) { send_failure(game, player_id, 0x0d, b"GS1184", None); return terminal(QueuedSkillExecutionState::Rejected); }
         let path=game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None); if maximum!=0 && path.len()>maximum as usize { send_failure(game, player_id, 0x0b, b"GS1185", None); return terminal(QueuedSkillExecutionState::Rejected); } if path.iter().any(|cell| cell.2==2) { send_failure(game, player_id, 0x0f, b"GS1186", None); return terminal(QueuedSkillExecutionState::Rejected); } if mp_loss!=0 && !has_mana(mana, mp_loss) { send_failure(game, player_id, 7, b"GS1187", Some(mp_loss)); return terminal(QueuedSkillExecutionState::Rejected); }
         player_ai.begin_item_skill_2(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai.item_skill_2().is_none_or(|execution| execution.dispatch()!=dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }

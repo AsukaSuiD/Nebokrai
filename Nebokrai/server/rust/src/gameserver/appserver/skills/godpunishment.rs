@@ -58,7 +58,7 @@ fn visual(game: &mut CGame, player: i32, level: i32, action: u8, target: Option<
 }
 fn finish_player_god_punishment<Runtime: GameMainLoopRuntime>(game: &mut CGame, player: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     if let Some(owner) = game.find_player_mut(player) { owner.set_skill_moveable(true); }
-    finish_summon_skill(game, player, ai, runtime, |ai, now_ms| ai.mark_god_punishment_used(now_ms));
+    finish_summon_skill(game, player, ai, runtime, |ai, now_ms| ai.mark_skill_used(GOD_PUNISHMENT_SKILL_ID, now_ms));
 }
 
 fn abort_player_god_punishment(game: &mut CGame, player: i32) {
@@ -91,7 +91,7 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
     let lifetime = props.query_property(SUMMONED_LIFETIME); let minimum = props.query_property(MIN_ATTACK) as i32; let maximum_attack = props.query_property(MAX_ATTACK) as i32; let element = props.query_property(ELEMENT_MODIFIER) as i32;
     if ai.god_punishment().is_none() {
         let started = runtime.now_milliseconds(); let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.god_punishment_last_used_ms(), reuse, now) { fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected); }
+        if !skill_is_restored(ai.skill_last_used_ms(GOD_PUNISHMENT_SKILL_ID), reuse, now) { fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected); }
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) };
         let Some(source) = player.shape_view() else { return terminal(QueuedSkillExecutionState::Rejected) };
         if maximum != 0 && game.base_magic_path(region, source.tile_x, source.tile_y, x, y, None).len() > maximum as usize { fail(game, player_id, 0x0b, mp); return terminal(QueuedSkillExecutionState::Rejected); }

@@ -39,7 +39,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) { if let Some(playe
 fn finish_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
     abort_skill(game, player_id);
-    ai.mark_meteor_arrow_mass_used(runtime.now_milliseconds());
+    ai.mark_skill_used(crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID, runtime.now_milliseconds());
 }
 fn abort_player_meteor_arrow_mass(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
 pub(crate) fn complete_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
@@ -83,7 +83,7 @@ pub(crate) fn execute_player_meteor_arrow_mass<Runtime: GameMainLoopRuntime>(gam
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME); let amount = properties.query_property(AMOUNT); let limit = properties.query_property(AMOUNT_LIMIT);
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if ai.meteor_arrow_mass().is_none() {
-        if !skill_is_restored(ai.meteor_arrow_mass_last_used_ms(), reuse, runtime.now_milliseconds()) {
+        if !skill_is_restored(ai.skill_last_used_ms(crate::gameserver::appserver::skills::meteorarrowstate::METEOR_ARROW_MASS_SKILL_ID), reuse, runtime.now_milliseconds()) {
             game.send_base_magic_failure(player_id, 0x0d); game.send_skill_system_info(player_id, b"GS0278"); return result(QueuedSkillExecutionState::Rejected);
         }
         let Some(player) = game.find_player(player_id) else { return result(QueuedSkillExecutionState::Rejected) };

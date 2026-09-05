@@ -221,7 +221,7 @@ fn finish_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         player.set_current_skill_id(None);
     }
     if successful {
-        player_ai.mark_boss_fiend_penetrate_used(runtime.now_milliseconds());
+        player_ai.mark_skill_used(BOSS_FIEND_PENETRATE_SKILL_ID, runtime.now_milliseconds());
     }
 }
 
@@ -446,7 +446,7 @@ pub(crate) fn execute_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
         };
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.boss_fiend_penetrate_last_used_ms(),
+            player_ai.skill_last_used_ms(BOSS_FIEND_PENETRATE_SKILL_ID),
             reuse_delay,
             now_ms,
         ) {

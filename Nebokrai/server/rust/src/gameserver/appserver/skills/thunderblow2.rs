@@ -51,7 +51,7 @@ fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
 
 fn finish_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_thunder_blow_2_used(now_ms);
+        player_ai.mark_skill_used(THUNDER_BLOW_2_SKILL_ID, now_ms);
     });
 }
 
@@ -262,7 +262,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if !skill_is_restored(
-            player_ai.thunder_blow_2_last_used_ms(),
+            player_ai.skill_last_used_ms(THUNDER_BLOW_2_SKILL_ID),
             cooldown_ms,
             runtime.now_milliseconds(),
         ) {

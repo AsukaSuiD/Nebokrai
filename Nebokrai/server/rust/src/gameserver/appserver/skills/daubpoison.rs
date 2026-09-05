@@ -50,7 +50,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_daub_poison<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_daub_poison_used(now_ms));
+    finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(DAUB_POISON_SKILL_ID, now_ms));
 }
 
 fn abort_player_daub_poison(game: &mut CGame, player_id: i32) { restore_player_movement(game, player_id); abort_skill(game, player_id); }
@@ -123,7 +123,7 @@ pub(crate) fn execute_player_daub_poison<Runtime: GameMainLoopRuntime>(
 
     if player_ai.daub_poison().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.daub_poison_last_used_ms(), reuse, now_ms) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(DAUB_POISON_SKILL_ID), reuse, now_ms) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

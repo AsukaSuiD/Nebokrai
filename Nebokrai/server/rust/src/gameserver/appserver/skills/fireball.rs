@@ -80,7 +80,7 @@ fn finish_player_fire_ball<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_delayed_base_attack(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_fire_ball_used(now_ms);
+        player_ai.mark_skill_used(FIRE_BALL_SKILL_ID, now_ms);
     });
 }
 
@@ -199,7 +199,7 @@ pub(crate) fn execute_player_fire_ball<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if !skill_is_restored(
-            player_ai.fire_ball_last_used_ms(),
+            player_ai.skill_last_used_ms(FIRE_BALL_SKILL_ID),
             cooldown_ms,
             runtime.now_milliseconds(),
         ) {

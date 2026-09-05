@@ -106,7 +106,7 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_soul_mirror<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_soul_mirror_used(now_ms));
+    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(SOUL_MIRROR_SKILL_ID, now_ms));
 }
 
 fn abort_player_soul_mirror(game: &mut CGame, player_id: i32) {
@@ -284,7 +284,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
 
     if player_ai.soul_mirror().is_none() {
         let started = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.soul_mirror_last_used_ms(), cooldown, runtime.now_milliseconds()) {
+        if !skill_is_restored(player_ai.skill_last_used_ms(SOUL_MIRROR_SKILL_ID), cooldown, runtime.now_milliseconds()) {
             send_failure(game, player_id, 0x0d, mp_loss);
             return terminal(QueuedSkillExecutionState::Rejected);
         }

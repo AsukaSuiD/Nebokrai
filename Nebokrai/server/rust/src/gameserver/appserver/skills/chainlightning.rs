@@ -79,7 +79,7 @@ fn finish_player_chain_lightning<Runtime: GameMainLoopRuntime>(
 ) {
     super::baseattack::finish_delayed_base_attack(
         game, player_id, player_ai, runtime,
-        |ai, now_ms| ai.mark_chain_lightning_used(now_ms),
+        |ai, now_ms| ai.mark_skill_used(CHAIN_LIGHTNING_SKILL_ID, now_ms),
     );
 }
 
@@ -274,7 +274,7 @@ pub(crate) fn execute_player_chain_lightning<Runtime: GameMainLoopRuntime>(
 
     if player_ai.chain_lightning().is_none() {
         if !skill_is_restored(
-            player_ai.chain_lightning_last_used_ms(),
+            player_ai.skill_last_used_ms(CHAIN_LIGHTNING_SKILL_ID),
             cooldown_ms,
             runtime.now_milliseconds(),
         ) {
