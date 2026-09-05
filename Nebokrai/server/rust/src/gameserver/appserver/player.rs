@@ -5889,13 +5889,6 @@ impl CPlayer {
         self.move_shape.restore_defense_shields(states);
     }
 
-    pub(crate) fn replace_cure_state(
-        &mut self,
-        state: super::skills::curestate::CureState,
-    ) -> Option<super::skills::curestate::CureState> {
-        self.move_shape.replace_cure_state(state)
-    }
-
     pub(crate) fn cure_state(&self) -> Option<super::skills::curestate::CureState> {
         self.move_shape.cure_state()
     }

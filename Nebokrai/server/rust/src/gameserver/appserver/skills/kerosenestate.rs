@@ -51,6 +51,14 @@ impl KeroseneState {
     pub(crate) fn update_serialized_runtime(self, payload: &mut [u8], now_ms: u32) { if let Some(offset) = self.serialized_offset { let _ = LegacyWriter::write_u32_at(payload, offset + 44, self.remaining_time(now_ms)); } }
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
     pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { match self.serialized_offset { Some(offset) => Some((offset, KEROSENE_STATE_BYTES)), None => None } }
+    pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
+        if let Some(offset) = &mut self.serialized_offset {
+            if *offset >= inserted_offset {
+                *offset += amount;
+            }
+        }
+    }
+
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
     fn remaining_time(self, now_ms: u32) -> u32 { let elapsed = now_ms.wrapping_sub(self.started_at_ms); if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) } }
     pub(crate) fn ended(self, lifetime_now_ms: u32, target_dead: bool) -> bool { self.started_at_ms.wrapping_add(self.keep_time_ms) < lifetime_now_ms || target_dead }

@@ -57,6 +57,10 @@ impl LeafCutState3 {
     pub(crate) const fn master(self) -> MasterInfo { self.0.master() }
     pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { self.0.client_state_time(now_milliseconds) }
     pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { self.0.serialized_span() }
+    pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
+        self.0.shift_serialized_offset_for_insert(inserted_offset, amount);
+    }
+
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { self.0.shift_serialized_offset_after(removed_offset, amount); }
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.0.activate_loaded(now_ms); }
     pub(crate) fn decode(payload: &[u8], offset: usize, now_ms: u32) -> Result<Self, LegacyReadBlock> { LeafCutState::decode_with_id(payload, offset, now_ms, LEAF_CUT_3_STATE_ID).map(Self) }

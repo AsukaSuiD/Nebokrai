@@ -15,9 +15,15 @@
 //! подменяя обычного или приручённого монстра заклинателем.
 //! Порог очищения сохраняет расширенное вычисление x87 и усечение к нулю
 //! перед исходным целочисленным умножением. Восстановление использует
-//! абсолютный срок `CSkill::IsRestored`; cast-delay остаётся elapsed.
+//! абсолютные сроки `CSkill::IsRestored` и cast-delay (cmp/jb по 0x005AE373).
+//! После списания MP вызывается OnChangeStates (0x005AE2F1) до поворота
+//! и визуализации каста, а не обновление общего боевого статуса.
+//! AI (`0x005AE110`) сначала выполняет Begin нового Cure (`0x005AE49F`),
+//! затем завершает только первый прежний (`0x005AE50A`) и устанавливает
+//! новый в освободившийся слот (`0x005AE53A`). End пересчитывает свойства
+//! без обоих экземпляров; остальные Cure сохраняются. При отсутствии
+//! прежней записи новый экземпляр добавляется в конец без UpdateProperty.
 
-use super::baseattack::time_reached;
 use super::fightdefense::truncate_original;
 use super::bossbluequakestate::{
     BOSS_BLUE_QUAKE_STATE_ID, BossBlueQuakeState,
@@ -26,7 +32,7 @@ use super::bossbluequakestate::{
 use super::boalockstate::{
     BOA_LOCK_STATE_ID, BoaLockState, send_boa_lock_state_visual,
 };
-use super::curestate::{CureState, send_cure_state_visual, send_cure_state_visual_at};
+use super::curestate::{CureState, send_cure_state_visual};
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::stateskill::finish_state_skill;
 use super::knockoutstate::{
@@ -65,7 +71,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -422,22 +428,50 @@ pub(crate) fn finish_curable_state(game: &mut CGame, region_id: i32, target: Sha
 fn install_cure_state(game: &mut CGame, region_id: i32, target: &CureTarget, state: CureState) -> bool {
     match target.identity.object_type {
         PLAYER_TYPE => {
-            let installed = game.find_player_mut(target.identity.id).and_then(|player| {
-                (player.server_region_id() == Some(region_id)).then(|| player.replace_cure_state(state))
-            });
-            let Some(old) = installed else { return false };
-            if let Some(old) = old { send_cure_state_visual(game, target.identity.id, old, false); }
+            let Some(player) = game.find_player(target.identity.id)
+                .filter(|player| player.server_region_id() == Some(region_id)) else { return false };
+            let old = player.cure_state();
             send_cure_state_visual(game, target.identity.id, state, true);
+            if old.is_some() {
+                let Some(offset) = game.find_player_mut(target.identity.id)
+                    .and_then(|player| player.move_shape_mut().cure_state_replacement_offset())
+                    else { return false };
+                if !super::curestate::end_player_cure_state(game, target.identity.id) {
+                    return false;
+                }
+                let Some(player) = game.find_player_mut(target.identity.id) else { return false };
+                player.move_shape_mut().insert_replacement_cure_state(state, offset);
+            } else if let Some(player) = game.find_player_mut(target.identity.id) {
+                player.push_cure_state(state);
+            }
             true
         }
         MONSTER_TYPE => {
             let Some(mut owner) = game.take_region_owner(region_id) else { return false };
-            let old = owner.base_mut().find_monster_by_id_mut(target.identity.id).map(|monster| monster.move_shape_mut().replace_cure_state(state));
+            let installed = if let Some(monster) = owner.base().find_monster_by_id(target.identity.id) {
+                let old = monster.move_shape().cure_state();
+                let shape = monster.move_shape().shape().clone();
+                super::curestate::send_cure_state_visual_in_region(game, owner.base(), &shape, state, true);
+                if old.is_some() {
+                    let offset = owner.base().find_monster_by_id(target.identity.id)
+                        .and_then(|monster| monster.move_shape().cure_state_replacement_offset());
+                    if let Some(offset) = offset {
+                        if super::curestate::end_monster_cure_state_at(game, owner.base_mut(), target.identity.id, 0) {
+                            owner.base_mut().find_monster_by_id_mut(target.identity.id)
+                                .expect("End Cure сохраняет монстра")
+                                .move_shape_mut().insert_replacement_cure_state(state, offset);
+                            true
+                        } else { false }
+                    } else { false }
+                } else {
+                    owner.base_mut().find_monster_by_id_mut(target.identity.id)
+                        .expect("публикация не удаляет владельца Cure")
+                        .move_shape_mut().push_cure_state(state);
+                    true
+                }
+            } else { false };
             game.restore_region_owner(owner);
-            let Some(old) = old else { return false };
-            if let Some(old) = old { send_cure_state_visual_at(game, region_id, target.identity, target.tile_x, target.tile_y, old, false); }
-            send_cure_state_visual_at(game, region_id, target.identity, target.tile_x, target.tile_y, state, true);
-            true
+            installed
         }
         _ => false,
     }
@@ -531,14 +565,16 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         }
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_mana(mana.wrapping_sub(mp_loss));
+        }
+        let _ = game.publish_player_states(player_id);
+        if let Some(player) = game.find_player_mut(player_id) {
             player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target.tile_x, target.tile_y));
         }
-        let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_cast(game, player_id, &target, level, false);
         if let Some(execution) = player_ai.cure_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started_at_ms = player_ai.cure().map(SkillExecutionKernel::started_at_ms).expect("выполнение очищения создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
 
     send_cast(game, player_id, &target, level, true);
     let element_modify = game.find_player(player_id).map(|player| player.combat_properties().element_modify).unwrap_or_default();

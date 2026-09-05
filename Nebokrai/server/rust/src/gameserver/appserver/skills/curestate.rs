@@ -182,19 +182,31 @@ pub(crate) fn expire_monster_cure_state(
 ) -> bool {
     let mut ended = false;
     let mut position = 0;
-    while let Some((state, shape)) = region.find_monster_by_id(monster_id).and_then(|monster| {
-        Some((*monster.move_shape().cure_states().get(position)?, monster.move_shape().shape().clone()))
-    }) {
+    while let Some(state) = region.find_monster_by_id(monster_id)
+        .and_then(|monster| monster.move_shape().cure_states().get(position).copied())
+    {
         if !state.expired(now_ms) {
             position += 1;
             continue;
         }
-        send_cure_state_visual_in_region(game, region, &shape, state, false);
-        let _ = region.find_monster_by_id_mut(monster_id)
-            .and_then(|monster| monster.move_shape_mut().remove_cure_state(position));
-        ended = true;
+        ended |= end_monster_cure_state_at(game, region, monster_id, position);
     }
     ended
+}
+
+pub(crate) fn end_monster_cure_state_at(
+    game: &CGame,
+    region: &mut CServerRegion,
+    monster_id: i32,
+    position: usize,
+) -> bool {
+    let Some((state, shape)) = region.find_monster_by_id(monster_id).and_then(|monster| {
+        Some((*monster.move_shape().cure_states().get(position)?, monster.move_shape().shape().clone()))
+    }) else { return false };
+    send_cure_state_visual_in_region(game, region, &shape, state, false);
+    let _ = region.find_monster_by_id_mut(monster_id)
+        .and_then(|monster| monster.move_shape_mut().remove_cure_state(position));
+    true
 }
 
 // Статус оставшихся контрактов: UNKNOWN; декомпилят хранится локально

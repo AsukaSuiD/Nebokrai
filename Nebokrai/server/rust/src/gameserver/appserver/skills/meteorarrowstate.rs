@@ -59,6 +59,14 @@ impl MeteorArrowState {
     pub(crate) fn update_serialized(self, payload: &mut [u8]) {
         if let Some(offset) = self.serialized_offset { let _ = LegacyWriter::write_i32_at(payload, offset + 4, self.arrows); }
     }
+    pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
+        if let Some(offset) = &mut self.serialized_offset {
+            if *offset >= inserted_offset {
+                *offset += amount;
+            }
+        }
+    }
+
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
         if self.serialized_offset.is_some_and(|offset| removed_offset < offset) {
             self.serialized_offset = self.serialized_offset.map(|offset| offset - amount);

@@ -15,6 +15,10 @@
 //! повторные экземпляры одного ID. Добавление, замена,
 //! таймеры и удаление обновляют типизированную модель и её кодек в одной
 //! операции с прежними смещениями и порядком.
+//! Замена Cure сохраняет позицию удалённой записи через отдельный offset:
+//! между End и установкой нового экземпляра слот отсутствует в проекции.
+//! Vec::splice возвращает DB-запись на место, сдвигая сохранённые смещения
+//! соседей без их повторной загрузки и без сброса runtime-таймеров.
 //! Сбор душ хранится здесь без таймера и без параллельной raw-записи. Печать,
 //! паутина и оглушение дополнительно сохраняют общий порядок вставки для
 //! завершения через унаследованное защитное действие `CBlindState`.
@@ -468,6 +472,14 @@ impl UndeadState {
     fn serialized_span(&self) -> Option<(usize, usize)> {
         self.serialized_offset
             .map(|offset| (offset, 4 + UNDEAD_STATE_PARAMETER_BYTES))
+    }
+
+    fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
+        if let Some(offset) = &mut self.serialized_offset {
+            if *offset >= inserted_offset {
+                *offset += amount;
+            }
+        }
     }
 
     fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
@@ -3277,34 +3289,31 @@ impl CMoveShape {
         self.defense_shields = states;
     }
 
-    pub(crate) fn replace_cure_state(&mut self, state: CureState) -> Option<CureState> {
-        let serialized_offset = known_state_record_offsets(&self.ex_states)
-            .into_iter()
-            .find(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID));
-        if let Some(offset) = serialized_offset {
-            if let Some(destination) = self.ex_states.get_mut(offset..offset + CURE_STATE_BYTES) {
-                destination.copy_from_slice(&state.encoded());
-            }
-        } else {
-            if self.ex_states.len() < 4 {
-                self.ex_states.clear();
-                LegacyWriter::new(&mut self.ex_states).write_u32(0);
-            }
-            let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
-            write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
-            self.ex_states.extend_from_slice(&state.encoded());
-        }
-        if let Some(first) = self.cure_states.first_mut() {
-            Some(std::mem::replace(first, state))
-        } else {
-            self.cure_states.push(state);
-            None
-        }
-    }
-
     pub(crate) fn push_cure_state(&mut self, state: CureState) {
         self.append_serialized_state_record(&state.encoded());
         self.cure_states.push(state);
+    }
+
+    pub(crate) fn cure_state_replacement_offset(&self) -> Option<usize> {
+        known_state_record_offsets(&self.ex_states).into_iter()
+            .find(|offset| read_u32(&self.ex_states, *offset) == Some(CURE_STATE_SKILL_ID))
+    }
+
+    pub(crate) fn insert_replacement_cure_state(&mut self, state: CureState, offset: usize) {
+        let amount = CURE_STATE_BYTES;
+        self.ex_states.splice(offset..offset, state.encoded());
+        let count = read_u32(&self.ex_states, 0).expect("счётчик состояний");
+        write_u32(&mut self.ex_states, 0, count.wrapping_add(1));
+        for known in &mut self.extended_states { known.shift_serialized_offset_for_insert(offset, amount); }
+        for known in &mut self.change_body_states { known.shift_serialized_offset_for_insert(offset, amount); }
+        for known in &mut self.undead_states { known.shift_serialized_offset_for_insert(offset, amount); }
+        if let Some(known) = &mut self.leaf_cut_state { known.shift_serialized_offset_for_insert(offset, amount); }
+        if let Some(known) = &mut self.leaf_cut_3_state { known.shift_serialized_offset_for_insert(offset, amount); }
+        if let Some(known) = &mut self.kerosene_state { known.shift_serialized_offset_for_insert(offset, amount); }
+        if let Some(known) = &mut self.poison_fog_state { known.shift_serialized_offset_for_insert(offset, amount); }
+        if let Some(known) = &mut self.meteor_arrow_state { known.shift_serialized_offset_for_insert(offset, amount); }
+        if let Some(known) = &mut self.ride_state { known.shift_serialized_offset_for_insert(offset, amount); }
+        self.cure_states.insert(0, state);
     }
 
     pub(crate) fn activate_loaded_cure_states(&mut self, now_ms: u32) -> Vec<CureState> {

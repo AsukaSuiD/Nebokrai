@@ -298,6 +298,14 @@ impl ExtendedState {
         }
     }
 
+    pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
+        if let Some(offset) = &mut self.serialized_offset {
+            if *offset >= inserted_offset {
+                *offset += amount;
+            }
+        }
+    }
+
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) {
         if self
             .serialized_offset

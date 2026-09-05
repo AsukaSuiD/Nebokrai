@@ -68,6 +68,14 @@ impl LeafCutState {
     pub(crate) const fn skill_id(self) -> u32 { self.state_id }
     pub(crate) const fn master(self) -> MasterInfo { self.master }
     pub(crate) const fn serialized_span(self) -> Option<(usize, usize)> { match self.serialized_offset { Some(offset) => Some((offset, LEAF_CUT_STATE_BYTES)), None => None } }
+    pub(crate) fn shift_serialized_offset_for_insert(&mut self, inserted_offset: usize, amount: usize) {
+        if let Some(offset) = &mut self.serialized_offset {
+            if *offset >= inserted_offset {
+                *offset += amount;
+            }
+        }
+    }
+
     pub(crate) fn shift_serialized_offset_after(&mut self, removed_offset: usize, amount: usize) { if self.serialized_offset.is_some_and(|offset| removed_offset < offset) { self.serialized_offset = self.serialized_offset.map(|offset| offset - amount); } }
     pub(crate) fn client_state_time(self, now_milliseconds: impl FnMut() -> u32) -> u32 { timed_client_state_time(self.started_at_ms, self.keep_time_ms, now_milliseconds) }
     pub(crate) fn activate_loaded(&mut self, now_ms: u32) { self.started_at_ms = now_ms; self.attack_count = 0; }
