@@ -266,6 +266,8 @@ pub(crate) struct MoveShapeSkill {
 }
 
 /// Достигнутый wire/lifecycle owner `CNotDisappearAfterDead`.
+/// Serialize (0x005d64f0) сохраняет остаток в живом keeptime без смены старта;
+/// AI (0x005d7c80) использует строгие абсолютные wrapping сроки.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct UndeadState {
     state_id: u32,
@@ -478,14 +480,17 @@ impl UndeadState {
     }
 
     fn expired(&self, now_ms: u32) -> bool {
-        self.keep_time_ms != 0 && self.keep_time_ms < now_ms.wrapping_sub(self.started_ms)
+        self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
-    fn item_due(&self, now_ms: u32) -> bool {
+    fn item_due(&mut self, now_ms: u32) -> bool {
+        if self.last_item_tick_ms == 0 {
+            self.last_item_tick_ms = self.started_ms;
+        }
         self.frequency_ms != 0
             && self.item_index != 0
             && self.item_amount != 0
-            && self.frequency_ms < now_ms.wrapping_sub(self.last_item_tick_ms)
+            && self.last_item_tick_ms.wrapping_add(self.frequency_ms) < now_ms
     }
 }
 
@@ -1229,6 +1234,12 @@ impl CMoveShape {
         let payload = self.serialized_ex_states(now_ms, timed_state_now_milliseconds);
         for state in &mut self.extended_states {
             state.commit_saved_time(now_ms);
+        }
+        for state in &mut self.change_body_states {
+            state.commit_saved_time(now_ms);
+        }
+        for state in &mut self.undead_states {
+            state.keep_time_ms = state.remaining_time_ms(now_ms);
         }
         payload
     }

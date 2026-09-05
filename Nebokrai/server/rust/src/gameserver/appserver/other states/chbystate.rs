@@ -7,6 +7,9 @@
 //! Rust-владение заменяет raw `CState*`. Сохранённый ниже псевдокод служит
 //! локальным provenance для реализованного owner-а и не входит в runtime.
 //! Доступ к little-endian полям делегирован общему legacy codec поверх `bytes`.
+//! `Serialize` записывает остаток обратно в keeptime без перезапуска clock;
+//! клиентский снимок этого не делает. `AI` (0x005daaa0) завершает состояние
+//! только после абсолютного wrapping deadline, а не на его границе.
 
 use crate::gameserver::appserver::skills::skillfactory::CSkillFactory;
 use crate::gameserver::appserver::legacycodec::{LegacyReader, LegacyWriter};
@@ -219,7 +222,11 @@ impl ChangeBodyState {
     }
 
     pub(crate) fn expired(&self, now_ms: u32) -> bool {
-        self.keep_time_ms != 0 && self.keep_time_ms <= now_ms.wrapping_sub(self.started_ms)
+        self.keep_time_ms != 0 && self.started_ms.wrapping_add(self.keep_time_ms) < now_ms
+    }
+
+    pub(crate) fn commit_saved_time(&mut self, now_ms: u32) {
+        self.keep_time_ms = self.remaining_time_ms(now_ms);
     }
 
     pub(crate) fn on_change_region(&mut self) -> bool {
