@@ -5,7 +5,7 @@
 //! формула значения и конкретное каноническое состояние остаются у пяти
 //! навыков семейства; завершение сохраняет общий для конкретного skill ID
 //! reuse-clock. Точные `CEnlargeFullMiss/MaxMp/MaxHp::AI` RVA
-//! `0x00115720/0x001159B0/0x00115BF0` принимают и target, и sufferer owner-а,
+//! `0x00116720/0x001169B0/0x00116BF0` принимают и target, и sufferer owner-а,
 //! заменяют одноимённое состояние и публикуют `OnChangeStates`; их
 //! `OnUpdateProperties` меняет характеристики только при type `400`, поэтому
 //! monster хранит и сериализует состояние без придуманного property-effect.
@@ -13,6 +13,8 @@
 //! производных характеристик и фактическую публикацию состояния.
 //! Входной reuse-gate сохраняет общий `CSkill::IsRestored`, включая нулевой
 //! timestamp нового экземпляра навыка.
+//! `End(1)` записывает reuse, но не создаёт событие активного ИИ: оно
+//! принадлежит вызывающему `OnFighting`, а не фоновой очереди состояний.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::enlargefullmiss::{ENLARGE_FULL_MISS_SKILL_ID, SKILL_USAGE_FULL_MISS_GAIN};
@@ -95,7 +97,7 @@ pub(crate) fn execute_monster_immediate_state(
         }
         _ => return false,
     }
-    monster.finish_immediate_skill(skill_id, now_ms);
+    monster.mark_immediate_skill_used(skill_id, now_ms);
     let _ = game.publish_owned_monster_states(region, monster_id);
     true
 }

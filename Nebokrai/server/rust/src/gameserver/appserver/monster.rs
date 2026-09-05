@@ -1620,14 +1620,18 @@ impl CMonster {
     }
 
     /// Завершает немедленный self-state навык без искусственного attack-cast.
-    /// `CSkill::End(1)` фиксирует reuse и ставит тот же derived completion
-    /// action, который используется после обычной атаки.
-    pub(crate) fn finish_immediate_skill(&mut self, skill_id: u32, now_ms: u32) {
+    /// `CSkill::End(1)` фиксирует reuse независимо от активной/фоновой очереди.
+    pub(crate) fn mark_immediate_skill_used(&mut self, skill_id: u32, now_ms: u32) {
+        self.skill_last_used_ms.insert(skill_id, now_ms);
+    }
+
+    /// Активный `OnFighting` завершает и `End(0)`: очередь меняет навык,
+    /// но отметка восстановления остаётся прежней. Фоновый вызов сюда не идёт.
+    pub(crate) fn finish_active_immediate_skill(&mut self, now_ms: u32) {
         self.move_shape.shape_mut().set_action(1);
         if self.attack_completion_action == AiShapeAction::ChangeSkill {
             self.move_shape.set_current_skill_id(None);
         }
-        self.skill_last_used_ms.insert(skill_id, now_ms);
         self.base_ai
             .add_ai_event(self.attack_completion_action, 0, 0, now_ms);
     }
