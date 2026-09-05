@@ -5,21 +5,28 @@
 //! построением и обрезкой трёх путей, сообщением выстрела и созданием phalanx. MP
 //! списывается до поздней проверки лука без отката; `CGame` только разрешает
 //! владельцев, регистрирует форму и доставляет построенные сообщения. Общий
-//! `End` очищает все три пути и возвращает движение; только `End(true)`
-//! обновляет свойства и фиксирует cooldown. Cooldown использует абсолютный
+//! `End` (0x0058DE90) очищает все три пути и возвращает движение, затем
+//! передаёт исходный аргумент CStateSkill::End (0x005DFBD0). Только End(1)
+//! вызывает AfterUseSkill (+0x8C, износ оружия) и фиксирует cooldown.
+//! Обычный AI после Summon вызывает End(0) (0x0058EDD8): phalanx остаётся
+//! в регионе, но выстрел не изнашивает оружие и не обновляет reuse.
+//! m_bSkillPrepared выставлен лишь на синхронный Summon и сбрасывается End;
+//! отдельного фонового исполнения этого навыка между AI-тактами нет.
+//! Cooldown использует абсолютный
 //! срок `CSkill::IsRestored`; задержка исполнения остаётся elapsed.
 
 use super::baseattack::{real_distance, time_reached, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
+use super::stateskill::finish_state_skill;
 use super::rainarrowphalanx::{CRainArrowPhalanx, RainArrowCell, RAIN_ARROW_SKILL_ID};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
+use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase,
     QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
@@ -47,7 +54,7 @@ fn outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { Qu
 fn restore_player_movement(game: &mut CGame, id: i32) { if let Some(player) = game.find_player_mut(id) { player.set_skill_moveable(true); } }
 fn finish_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, runtime: &mut R) {
     restore_player_movement(game, id);
-    finish_summon_skill(game, id, ai, runtime, |ai, now_ms| ai.mark_rain_arrow_used(now_ms));
+    finish_state_skill(game, id, ai, runtime, |ai, now_ms| ai.mark_rain_arrow_used(now_ms));
 }
 fn abort_player_rain_arrow(game: &mut CGame, id: i32) { restore_player_movement(game, id); abort_skill(game, id); }
 pub(crate) fn complete_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame, id: i32, ai: &mut CPlayerAI, runtime: &mut R) -> bool {
@@ -139,5 +146,5 @@ pub(crate) fn execute_player_rain_arrow<R: GameMainLoopRuntime>(game: &mut CGame
         state.left, left_count, state.center, center_count, state.right, right_count, speed, maximum as i32); phalanx.shape_mut().set_region_id(region);
     if let Some(face) = face { let result = game.add_rain_arrow_phalanx(region, phalanx, face.x, face.y, now, runtime); if result.is_some_and(|r| r.is_ok()) { let _ = game.send_rain_arrow_phalanx_entry(region, summon_id, runtime); } }
     if let Some(s) = ai.rain_arrow_mut() { let _ = s.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = s.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = s.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_rain_arrow(game, id, ai, runtime); outcome(QueuedSkillExecutionState::Completed)
+    abort_player_rain_arrow(game, id); outcome(QueuedSkillExecutionState::Completed)
 }
