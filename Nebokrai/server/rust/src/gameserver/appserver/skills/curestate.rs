@@ -5,6 +5,8 @@
 //! на `CBlindState::AI` (0x005d5ba0): при нулевом сроке состояние живо на
 //! равенстве started == now и завершается лишь при started < now.
 //! До завершения оно участвует в `OnChangeStates`.
+//! End (`0x005FD420`) отправляет эффект до удаления; RemoveState затем
+//! вызывает UpdateProperty. Та же цепочка действует при замене через LifeShield.
 //! Запись сохраняет ID и четыре `long` базового `CState`:
 //! user type/ID и sufferer type/ID. Это же представление читается при
 //! входе и удаляется вместе с каноническим однотиковым состоянием. Vtable
@@ -82,6 +84,16 @@ impl CureState {
         writer.write_bytes(&encode_state_identities(self.user, self.sufferer));
         bytes.try_into().expect("размер состояния очищения фиксирован")
     }
+}
+
+pub(crate) fn end_player_cure_state(game: &mut CGame, player_id: i32) -> bool {
+    let Some(state) = game.find_player(player_id).and_then(|player| player.cure_state()) else {
+        return false;
+    };
+    send_cure_state_visual(game, player_id, state, false);
+    let _ = game.find_player_mut(player_id).and_then(|player| player.take_cure_state());
+    let _ = game.update_player_properties(player_id);
+    true
 }
 
 pub(crate) fn send_cure_state_visual(

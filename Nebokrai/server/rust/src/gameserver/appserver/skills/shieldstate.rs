@@ -115,28 +115,45 @@ pub(crate) fn expire_player_defense_shields(
                 player.war_soul_mana(game.goods_factory()),
             ).then_some(*state)
         });
-        let Some(state) = state else {
+        let Some(_) = state else {
             continue;
         };
-        match state {
-            DefenseShieldState::Life(state) => {
-                finish_life_shield_state(game, player_id, state, now_ms);
-            }
-            DefenseShieldState::Machine(state) => {
-                send_machine_shield_state_visual(game, player_id, state, false, || now_ms);
-            }
-            DefenseShieldState::Mana(state) => {
-                send_mana_shield_state_visual(game, player_id, state, false, || now_ms);
-            }
-            DefenseShieldState::Promotion(_) => {}
-        }
-        if game.find_player_mut(player_id)
-            .and_then(|player| player.remove_defense_shield(skill_id))
-            .is_some()
-        {
-            let _ = game.update_player_properties(player_id);
+        if end_player_defense_shield(game, player_id, skill_id, now_ms) {
             ended += 1;
         }
     }
     ended
+}
+
+pub(crate) fn end_player_defense_shield(
+    game: &mut CGame,
+    player_id: i32,
+    skill_id: u32,
+    now_ms: u32,
+) -> bool {
+    let state = game.find_player(player_id).and_then(|player| {
+        player.defense_shields().iter().find(|state| state.skill_id() == skill_id).copied()
+    });
+    let Some(state) = state else {
+        return false;
+    };
+    match state {
+        DefenseShieldState::Life(state) => {
+            finish_life_shield_state(game, player_id, state, now_ms);
+        }
+        DefenseShieldState::Machine(state) => {
+            send_machine_shield_state_visual(game, player_id, state, false, || now_ms);
+        }
+        DefenseShieldState::Mana(state) => {
+            send_mana_shield_state_visual(game, player_id, state, false, || now_ms);
+        }
+        DefenseShieldState::Promotion(_) => {}
+    }
+    let removed = game.find_player_mut(player_id)
+        .and_then(|player| player.remove_defense_shield(skill_id))
+        .is_some();
+    if removed {
+        let _ = game.update_player_properties(player_id);
+    }
+    removed
 }

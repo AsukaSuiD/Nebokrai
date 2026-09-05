@@ -8,6 +8,8 @@
 //! Cast duration — unsigned now >= wrapping(start + delay), cmp/jb 0x00518c59.
 //! При отказе Begin внешний 4,2 планировщика следует после action 3 от End(0),
 //! а при отказе уже начатого AI повторного общего ответа нет.
+//! Повторное наложение сначала полностью завершает прежний щит
+//! (`0x00518D6E`), включая Cure и пересчёт свойств, и лишь затем начинает новый.
 
 pub(crate) const LIFE_SHIELD_SKILL_ID: u32 = 544;
 pub(crate) const LIFE_SHIELD_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -25,7 +27,7 @@ use super::kernel::{
     SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost, skill_is_restored,
 };
 use super::lifeshieldstate::{
-    finish_life_shield_state, send_life_shield_state_visual, LifeShieldState,
+    send_life_shield_state_visual, LifeShieldState,
 };
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::container::cbattlefairycontainer::BattleFairyDefaultGoodsUpdate;
@@ -195,6 +197,9 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     }
 
     send_cast(game, player_id, skill_level, 2);
+    let _ = super::shieldstate::end_player_defense_shield(
+        game, player_id, LIFE_SHIELD_SKILL_ID, runtime.now_milliseconds(),
+    );
     let state = LifeShieldState::new(
         runtime.now_milliseconds(),
         keep_time_ms,
@@ -203,13 +208,10 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
         mp_factor,
         skill_level,
     );
-    let removed = game
+    send_life_shield_state_visual(game, player_id, state, true, || runtime.now_milliseconds());
+    let _ = game
         .find_player_mut(player_id)
         .and_then(|player| player.replace_life_shield_state(state));
-    if let Some(removed) = removed {
-        finish_life_shield_state(game, player_id, removed, runtime.now_milliseconds());
-    }
-    send_life_shield_state_visual(game, player_id, state, true, || runtime.now_milliseconds());
     if let Some(state) = player_ai.life_shield_mut() {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);

@@ -28974,10 +28974,13 @@ impl CGame {
         let god_bless_ended = finish_player_god_bless(self, player_id, now_ms, runtime);
         let roar_ended = finish_player_roar(self, player_id, now_ms, runtime);
         let expired_cure = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.take_cure_state_for_ai(now_ms));
-        if let Some(state) = expired_cure {
-            send_cure_state_visual(self, player_id, state, false);
+            .find_player(player_id)
+            .and_then(|player| player.cure_state())
+            .filter(|state| state.expired(now_ms));
+        if expired_cure.is_some() {
+            let _ = crate::gameserver::appserver::skills::curestate::end_player_cure_state(
+                self, player_id,
+            );
         }
         let periodic_state_ids = self
             .find_player(player_id)

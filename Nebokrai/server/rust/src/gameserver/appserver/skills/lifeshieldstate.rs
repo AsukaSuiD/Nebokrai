@@ -10,8 +10,10 @@
 //! `mp_factor` сохраняется в `f32` перед умножением, а `hp_factor` — нет.
 //! Первичное масштабирование через `damage_factor` выполняется `FISTP dword`
 //! до поиска war-soul goods; ноль единицей не подменяется.
+//! AddCure (`0x005E2FD0`) завершает прежний Cure, начинает новый и вызывает
+//! UpdateProperty до эффекта завершения самого LifeShield (`0x005E3110`).
 
-use super::curestate::{send_cure_state_visual, CureState};
+use super::curestate::{end_player_cure_state, send_cure_state_visual, CureState};
 use super::fightdefense::truncate_original;
 use super::lifeshield::{
     LIFE_SHIELD_SKILL_ID, SKILL_USAGE_STATE_PERSIST_TIME,
@@ -226,15 +228,11 @@ pub(crate) fn finish_life_shield_state(
             send_life_shield_state_visual(game, player_id, state, false, || now_ms);
             return;
         };
+        let _ = end_player_cure_state(game, player_id);
         let cure = CureState::new(identity, identity).begin_now();
-        let previous = game
-            .find_player_mut(player_id)
-            .and_then(|player| player.replace_cure_state(cure));
-        if let Some(previous) = previous {
-            send_cure_state_visual(game, player_id, previous, false);
-        }
         send_cure_state_visual(game, player_id, cure, true);
-        let _ = game.publish_player_states(player_id);
+        let _ = game.find_player_mut(player_id).map(|player| player.replace_cure_state(cure));
+        let _ = game.update_player_properties(player_id);
     }
     send_life_shield_state_visual(game, player_id, state, false, || now_ms);
 }

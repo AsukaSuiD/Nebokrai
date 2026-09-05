@@ -5891,6 +5891,10 @@ impl CPlayer {
         self.move_shape.cure_state()
     }
 
+    pub(crate) fn take_cure_state(&mut self) -> Option<super::skills::curestate::CureState> {
+        self.move_shape.take_cure_state()
+    }
+
     pub(crate) fn activate_loaded_cure_state(
         &mut self,
         now_ms: u32,
