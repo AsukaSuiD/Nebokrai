@@ -16,6 +16,11 @@
 //! Периодическая прибавка загружает полный unsigned `hp_gain` в x87,
 //! умножает на сохранённый `f32` Promotion-множитель и усекается `FISTP dword`
 //! без промежуточного `f32` и без округления дробной части.
+//! End (`0x005EEBA0`) не вызывает visual: он ищет собственную запись
+//! в контейнере sufferer через RemoveState (`0x004CDAB0`). Только найденная
+//! запись удаляется с UpdateProperty. При раздельных storage/target либо
+//! исчезнувшей цели End ничего не меняет; состояние продолжает существовать.
+//! Во время лечения остальные записи остаются доступны каноническому owner-у.
 
 use super::fightdefense::truncate_original;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -306,39 +311,62 @@ fn advance_effect(
     }
 }
 
-/// Выполняет один подтверждённый AI-такт всех состояний лечения, хранящихся
-/// у игрока либо монстра. Временное изъятие сохраняет исходный порядок
-/// состояний и позволяет эффекту обращаться к независимому владельцу цели;
-/// исчезнувшая цель завершает только соответствующую запись.
+/// Выполняет состояния последовательно, возвращая контейнер владельцу
+/// перед каждым внешним эффектом и пересчётом свойств.
 pub(crate) fn update_stored_heal_states(
     game: &mut CGame,
     region_id: i32,
     storage: ShapeIdentity,
     now_ms: u32,
 ) {
-    let Some(states) = take_stored_states(game, region_id, storage) else {
+    let Some(mut states) = take_stored_states(game, region_id, storage) else {
         return;
     };
-    let mut active = Vec::with_capacity(states.len());
-    let mut removed_skill_ids = Vec::new();
-    for mut state in states {
+    let mut position = 0;
+    while position < states.len() {
+        let mut state = states[position];
         let target = state.effect_target();
-        match advance_effect(game, region_id, &mut state, now_ms) {
-            Some((true, tile_x, tile_y)) => {
-                removed_skill_ids.push(state.skill_id());
-                send_heal_state_visual(
-                    game, region_id, target, tile_x, tile_y, state, false, || now_ms,
-                );
+        restore_stored_states(game, region_id, storage, states);
+        let ended = advance_effect(game, region_id, &mut state, now_ms)
+            .is_some_and(|(ended, _, _)| ended);
+        let Some(current) = take_stored_states(game, region_id, storage) else {
+            return;
+        };
+        states = current;
+        if ended && target.object_type == storage.object_type && target.id == storage.id {
+            let occurrence = states[..position]
+                .iter()
+                .filter(|previous| previous.skill_id() == state.skill_id())
+                .count();
+            states.remove(position);
+            restore_stored_states(game, region_id, storage, states);
+            remove_stored_heal_record(game, region_id, storage, state.skill_id(), occurrence);
+            if storage.object_type == 400 {
+                let _ = game.update_player_properties(storage.id);
             }
-            Some((false, _, _)) => active.push(state),
-            None => removed_skill_ids.push(state.skill_id()),
+            let Some(current) = take_stored_states(game, region_id, storage) else {
+                return;
+            };
+            states = current;
+        } else {
+            states[position] = state;
+            position += 1;
         }
     }
-    restore_stored_states(game, region_id, storage, active);
+    restore_stored_states(game, region_id, storage, states);
+}
+
+fn remove_stored_heal_record(
+    game: &mut CGame,
+    region_id: i32,
+    storage: ShapeIdentity,
+    skill_id: u32,
+    occurrence: usize,
+) {
     match storage.object_type {
         400 => {
             if let Some(player) = game.find_player_mut(storage.id) {
-                player.remove_serialized_heal_states(&removed_skill_ids);
+                player.remove_serialized_heal_state(skill_id, occurrence);
             }
         }
         600 => {
@@ -346,7 +374,7 @@ pub(crate) fn update_stored_heal_states(
                 if let Some(monster) = owner.base_mut().find_monster_by_id_mut(storage.id) {
                     monster
                         .move_shape_mut()
-                        .remove_serialized_heal_states(&removed_skill_ids);
+                        .remove_serialized_heal_state(skill_id, occurrence);
                 }
                 game.restore_region_owner(owner);
             }

@@ -2903,6 +2903,15 @@ impl CMoveShape {
         }
     }
 
+    pub(crate) fn remove_serialized_heal_state(&mut self, skill_id: u32, occurrence: usize) {
+        if let Some(offset) = known_state_record_offsets(&self.ex_states).into_iter()
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(skill_id))
+            .nth(occurrence)
+        {
+            self.remove_serialized_state_record_at(offset, HEAL_STATE_BYTES);
+        }
+    }
+
     pub(crate) fn activate_loaded_heal_states(&mut self, now_ms: u32) -> Vec<HealState> {
         for state in &mut self.heal_states {
             state.activate_loaded(now_ms);

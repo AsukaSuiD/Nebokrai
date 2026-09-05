@@ -5159,6 +5159,10 @@ impl CPlayer {
         self.move_shape.remove_serialized_heal_states(skill_ids);
     }
 
+    pub(crate) fn remove_serialized_heal_state(&mut self, skill_id: u32, occurrence: usize) {
+        self.move_shape.remove_serialized_heal_state(skill_id, occurrence);
+    }
+
     pub(crate) fn activate_loaded_heal_states(
         &mut self,
         now_ms: u32,
