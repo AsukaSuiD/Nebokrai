@@ -161,7 +161,7 @@ fn finish_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
-    player_ai.mark_fast_attack_used(skill_id, runtime.now_milliseconds());
+    player_ai.mark_skill_used(skill_id, runtime.now_milliseconds());
 }
 
 fn abort_player_lord_fast_attack(game: &mut CGame, player_id: i32) {
@@ -412,7 +412,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             return begin_failed(game);
         };
         if !skill_is_restored(
-            player_ai.fast_attack_last_used_ms(skill_id),
+            player_ai.skill_last_used_ms(skill_id),
             reuse_delay_ms,
             now_ms,
         ) {

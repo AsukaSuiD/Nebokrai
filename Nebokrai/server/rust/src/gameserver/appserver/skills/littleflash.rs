@@ -137,7 +137,7 @@ fn finish_player_little_flash<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_little_flash_used(skill_id, now_ms);
+        player_ai.mark_skill_used(skill_id, now_ms);
     });
 }
 
@@ -352,7 +352,7 @@ pub(crate) fn execute_player_little_flash<Runtime: GameMainLoopRuntime>(
 
     if ai.little_flash().is_none() {
         let now = runtime.now_milliseconds();
-        if !skill_is_restored(ai.little_flash_last_used_ms(skill_id), reuse, now) {
+        if !skill_is_restored(ai.skill_last_used_ms(skill_id), reuse, now) {
             failure(game, player_id, 0x0d, mp_loss, Some(b"GS0278"));
             return terminal(QueuedSkillExecutionState::Rejected);
         }

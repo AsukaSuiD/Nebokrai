@@ -1,9 +1,11 @@
 //! Достигнутая часть очередей и исполнения `CPlayerAI` GameServer.
-//! Сроки 80 одиночных обычных навыков хранятся по исходному skill_id в
+//! Сроки одиночных обычных навыков и подключённых семейств хранятся по исходному skill_id в
 //! BTreeMap вместо отдельных полей и getter/setter-каталогов. Отсутствие
 //! записи означает нулевой срок; End обновляет только свой ID, очистка
 //! execution срок не удаляет. Коллекция не определяет порядок исполнения.
-//! Массивы семейств и сроки WarSoul пока остаются у прежних владельцев;
+//! У подключённых семейств каждый вариант сохраняет собственный срок.
+//! Сроки взрывных стрел, призыва, лечения, благословения, щитов и WarSoul
+//! пока остаются у прежних владельцев;
 //! перенос их идентичности не подменяется объединением с основным навыком.
 //! Отсчёт CState::Begin фиксируется общим расписанием до OnBeginSkill.
 //! Краткоживущий контекст привязан к dispatch и передаётся kernel при его
@@ -120,12 +122,9 @@ use super::baseai::{AiShapeAction, CBaseAI, PassiveStiffenAction};
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
-use crate::gameserver::appserver::skills::agility::{
-    AGILITY_2_SKILL_ID, AGILITY_SKILL_ID, AgilityFamilyExecutionState,
-};
+use crate::gameserver::appserver::skills::agility::AgilityFamilyExecutionState;
 use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
-use crate::gameserver::appserver::skills::armybreak::{ARMY_BREAK_SKILL_ID, ArmyBreakExecutionState};
-use crate::gameserver::appserver::skills::armybreak2::ARMY_BREAK_2_SKILL_ID;
+use crate::gameserver::appserver::skills::armybreak::ArmyBreakExecutionState;
 use crate::gameserver::appserver::skills::flash::FlashExecutionState;
 use crate::gameserver::appserver::skills::swallow::SwallowExecutionState;
 use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
@@ -139,10 +138,7 @@ use crate::gameserver::appserver::skills::callosity::CallosityExecutionState;
 use crate::gameserver::appserver::skills::chaossphere::ChaosSphereExecutionState;
 use crate::gameserver::appserver::skills::chainlightning::ChainLightningExecutionState;
 use crate::gameserver::appserver::skills::heartlessarrow::HeartlessArrowExecutionState;
-use crate::gameserver::appserver::skills::heartlessarrow2::{
-    HEARTLESS_ARROW_2_SKILL_ID, HeartlessArrowAreaExecutionState,
-};
-use crate::gameserver::appserver::skills::heartlessarrow3::HEARTLESS_ARROW_3_SKILL_ID;
+use crate::gameserver::appserver::skills::heartlessarrow2::HeartlessArrowAreaExecutionState;
 use crate::gameserver::appserver::skills::lightingarrow::LightingArrowExecutionState;
 use crate::gameserver::appserver::skills::lightingarrow2::LightingArrow2ExecutionState;
 use crate::gameserver::appserver::skills::meteorarrowmass::MeteorArrowMassExecutionState;
@@ -158,9 +154,7 @@ use crate::gameserver::appserver::skills::explosivearrow::{
 };
 use crate::gameserver::appserver::skills::strike::StrikeExecutionState;
 use crate::gameserver::appserver::skills::yakshaslash::YakshaSlashExecutionState;
-use crate::gameserver::appserver::skills::ghostcut::{GHOST_CUT_SKILL_ID, GhostCutExecutionState};
-use crate::gameserver::appserver::skills::ghostcut2::GHOST_CUT_2_SKILL_ID;
-use crate::gameserver::appserver::skills::ghostcut3::GHOST_CUT_3_SKILL_ID;
+use crate::gameserver::appserver::skills::ghostcut::GhostCutExecutionState;
 use crate::gameserver::appserver::skills::knightcut::KnightCutExecutionState;
 use crate::gameserver::appserver::skills::littleflash::LittleFlashExecutionState;
 use crate::gameserver::appserver::skills::littlestar::PlayerLittleStarExecutionState;
@@ -177,8 +171,6 @@ use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
     SkillExecutionKernel, SkillStage, SkillTermination,
 };
-use crate::gameserver::appserver::skills::natural::NATURAL_SKILL_ID;
-use crate::gameserver::appserver::skills::rapture::RAPTURE_SKILL_ID;
 use crate::gameserver::appserver::skills::rage::RageExecutionState;
 use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
 
@@ -211,7 +203,6 @@ pub(crate) struct CPlayerAI {
     archery: Option<ArcheryExecutionState>,
     heartless_arrow: Option<HeartlessArrowExecutionState>,
     heartless_arrow_area: Option<HeartlessArrowAreaExecutionState>,
-    heartless_arrow_area_last_used_ms: [u32; 2],
     lighting_arrow: Option<LightingArrowExecutionState>,
     lighting_arrow_2: Option<LightingArrow2ExecutionState>,
     meteor_arrow_mass: Option<MeteorArrowMassExecutionState>,
@@ -228,7 +219,6 @@ pub(crate) struct CPlayerAI {
     daub_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     yaksha_slash: Option<YakshaSlashExecutionState>,
     agility_family: Option<AgilityFamilyExecutionState>,
-    agility_family_last_used_ms: [u32; 4],
     base_magic: Option<BaseMagicExecutionState>,
     fire_bolt: Option<BaseMagicExecutionState>,
     fire_ball: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -245,10 +235,8 @@ pub(crate) struct CPlayerAI {
     thunder_blow_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     mosou: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     ghost_cut: Option<GhostCutExecutionState>,
-    ghost_cut_last_used_ms: [u32; 3],
     knight_cut: Option<KnightCutExecutionState>,
     army_break: Option<ArmyBreakExecutionState>,
-    army_break_last_used_ms: [u32; 2],
     rage: Option<RageExecutionState>,
     rage_break: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -262,9 +250,7 @@ pub(crate) struct CPlayerAI {
     blind: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     ju_cut: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     lightning_sword: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    lightning_sword_last_used_ms: [u32; 4],
     little_flash: Option<LittleFlashExecutionState>,
-    little_flash_last_used_ms: [u32; 2],
     fire_wall: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     poison_fog: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     poison_fog_destination: Option<(i32, i32)>,
@@ -272,9 +258,7 @@ pub(crate) struct CPlayerAI {
     seven_shooting_star: Option<SevenShootingStarExecutionState>,
     little_star: Option<PlayerLittleStarExecutionState>,
     path_projectile: Option<PlayerPathProjectileExecutionState>,
-    path_projectile_last_used_ms: [u32; 3],
     direct_projectile: Option<PlayerDirectProjectileExecutionState>,
-    direct_projectile_last_used_ms: [u32; 2],
     yunsheng_lightning: Option<PlayerYunShengLightningExecutionState>,
     corpse_ptomaine: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     monster_thorn: Option<PlayerMonsterThornExecutionState>,
@@ -288,10 +272,7 @@ pub(crate) struct CPlayerAI {
     boss_fiend_penetrate: Option<PlayerBossFiendPenetrateExecutionState>,
     sprite_burn: Option<SpriteBurnExecutionState>,
     wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    wide_arc_attack_last_used_ms: [u32; 2],
     lord_fast_attack: Option<LordFastAttackExecutionState>,
-    lord_fast_attack_last_used_ms: u32,
-    monster_fast_attack_last_used_ms: u32,
     monster_base_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     monster_range_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     chaos_sphere: Option<ChaosSphereExecutionState>,
@@ -327,7 +308,6 @@ pub(crate) struct CPlayerAI {
     battle_fairy_attribute: Option<SkillExecutionKernel<BattleFairySkillDispatch>>,
     battle_fairy_attribute_last_used_ms: [u32; 8],
     callosity: Option<CallosityExecutionState>,
-    callosity_last_used_ms: [u32; 2],
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     promotion: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     heal_family: [Option<SkillExecutionKernel<PlayerSkillDispatch>>; 4],
@@ -345,7 +325,6 @@ pub(crate) struct CPlayerAI {
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     mana_shield_last_used_ms: u32,
     immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    immediate_state_last_used_ms: BTreeMap<u32, u32>,
     non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     swordship: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     gibe: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -1017,22 +996,6 @@ impl CPlayerAI {
     pub(crate) fn agility_family_mut(&mut self) -> Option<&mut AgilityFamilyExecutionState> {
         self.agility_family.as_mut()
     }
-    const fn agility_family_index(skill_id: u32) -> usize {
-        match skill_id {
-            AGILITY_SKILL_ID => 0,
-            AGILITY_2_SKILL_ID => 1,
-            RAPTURE_SKILL_ID => 2,
-            NATURAL_SKILL_ID => 3,
-            _ => unreachable!(),
-        }
-    }
-    pub(crate) const fn agility_family_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.agility_family_last_used_ms[Self::agility_family_index(skill_id)]
-    }
-    pub(crate) fn mark_agility_family_used(&mut self, skill_id: u32, now_ms: u32) {
-        let index = Self::agility_family_index(skill_id);
-        self.agility_family_last_used_ms[index] = now_ms;
-    }
 
 
     pub(crate) const fn heartless_arrow(&self) -> Option<HeartlessArrowExecutionState> { self.heartless_arrow }
@@ -1047,15 +1010,6 @@ impl CPlayerAI {
         self.heartless_arrow_area = Some(state);
     }
     pub(crate) fn heartless_arrow_area_mut(&mut self) -> Option<&mut HeartlessArrowAreaExecutionState> { self.heartless_arrow_area.as_mut() }
-    const fn heartless_arrow_area_index(skill_id: u32) -> usize {
-        match skill_id {
-            HEARTLESS_ARROW_2_SKILL_ID => 0,
-            HEARTLESS_ARROW_3_SKILL_ID => 1,
-            _ => unreachable!(),
-        }
-    }
-    pub(crate) const fn heartless_arrow_area_last_used_ms(&self, skill_id: u32) -> u32 { self.heartless_arrow_area_last_used_ms[Self::heartless_arrow_area_index(skill_id)] }
-    pub(crate) fn mark_heartless_arrow_area_used(&mut self, skill_id: u32, now_ms: u32) { self.heartless_arrow_area_last_used_ms[Self::heartless_arrow_area_index(skill_id)] = now_ms; }
     pub(crate) const fn lighting_arrow(&self) -> Option<LightingArrowExecutionState> { self.lighting_arrow }
     pub(crate) fn begin_lighting_arrow(&mut self, mut state: LightingArrowExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1312,11 +1266,6 @@ impl CPlayerAI {
         self.ghost_cut = Some(state);
     }
     pub(crate) fn ghost_cut_mut(&mut self) -> Option<&mut GhostCutExecutionState> { self.ghost_cut.as_mut() }
-    const fn ghost_cut_index(skill_id: u32) -> usize {
-        match skill_id { GHOST_CUT_SKILL_ID => 0, GHOST_CUT_2_SKILL_ID => 1, GHOST_CUT_3_SKILL_ID => 2, _ => unreachable!() }
-    }
-    pub(crate) const fn ghost_cut_last_used_ms(&self, skill_id: u32) -> u32 { self.ghost_cut_last_used_ms[Self::ghost_cut_index(skill_id)] }
-    pub(crate) fn mark_ghost_cut_used(&mut self, skill_id: u32, now_ms: u32) { self.ghost_cut_last_used_ms[Self::ghost_cut_index(skill_id)] = now_ms; }
 
     pub(crate) const fn knight_cut(&self) -> Option<&KnightCutExecutionState> { self.knight_cut.as_ref() }
     pub(crate) fn begin_knight_cut(&mut self, mut state: KnightCutExecutionState) {
@@ -1330,9 +1279,6 @@ impl CPlayerAI {
         self.army_break = Some(state);
     }
     pub(crate) fn army_break_mut(&mut self) -> Option<&mut ArmyBreakExecutionState> { self.army_break.as_mut() }
-    const fn army_break_index(skill_id: u32) -> usize { match skill_id { ARMY_BREAK_SKILL_ID => 0, ARMY_BREAK_2_SKILL_ID => 1, _ => unreachable!() } }
-    pub(crate) const fn army_break_last_used_ms(&self, skill_id: u32) -> u32 { self.army_break_last_used_ms[Self::army_break_index(skill_id)] }
-    pub(crate) fn mark_army_break_used(&mut self, skill_id: u32, now_ms: u32) { self.army_break_last_used_ms[Self::army_break_index(skill_id)] = now_ms; }
     pub(crate) const fn rage(&self) -> Option<&RageExecutionState> { self.rage.as_ref() }
     pub(crate) fn begin_rage(&mut self, mut state: RageExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1411,28 +1357,12 @@ impl CPlayerAI {
         self.lightning_sword = Some(state);
     }
     pub(crate) fn lightning_sword_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.lightning_sword.as_mut() }
-    const fn lightning_sword_index(skill_id: u32) -> usize { match skill_id { 0x70 => 0, 0x77 => 1, 0x78 => 2, 0x7e => 3, _ => unreachable!() } }
-    pub(crate) const fn lightning_sword_last_used_ms(&self, skill_id: u32) -> u32 { self.lightning_sword_last_used_ms[Self::lightning_sword_index(skill_id)] }
-    pub(crate) fn mark_lightning_sword_used(&mut self, skill_id: u32, now_ms: u32) { self.lightning_sword_last_used_ms[Self::lightning_sword_index(skill_id)] = now_ms; }
     pub(crate) const fn little_flash(&self) -> Option<&LittleFlashExecutionState> { self.little_flash.as_ref() }
     pub(crate) fn begin_little_flash(&mut self, mut state: LittleFlashExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
         self.little_flash = Some(state);
     }
     pub(crate) fn little_flash_mut(&mut self) -> Option<&mut LittleFlashExecutionState> { self.little_flash.as_mut() }
-    const fn little_flash_index(skill_id: u32) -> usize {
-        match skill_id {
-            0x71 => 0,
-            0x7f => 1,
-            _ => unreachable!(),
-        }
-    }
-    pub(crate) const fn little_flash_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.little_flash_last_used_ms[Self::little_flash_index(skill_id)]
-    }
-    pub(crate) fn mark_little_flash_used(&mut self, skill_id: u32, now_ms: u32) {
-        self.little_flash_last_used_ms[Self::little_flash_index(skill_id)] = now_ms;
-    }
 
     pub(crate) const fn fire_wall(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.fire_wall
@@ -1530,22 +1460,8 @@ impl CPlayerAI {
         self.path_projectile.as_mut()
     }
 
-    const fn path_projectile_index(skill_id: u32) -> usize {
-        match skill_id {
-            0x1a0 => 0,
-            0x1a2 => 1,
-            0x1a5 => 2,
-            _ => unreachable!(),
-        }
-    }
 
-    pub(crate) const fn path_projectile_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.path_projectile_last_used_ms[Self::path_projectile_index(skill_id)]
-    }
 
-    pub(crate) fn mark_path_projectile_used(&mut self, skill_id: u32, now_ms: u32) {
-        self.path_projectile_last_used_ms[Self::path_projectile_index(skill_id)] = now_ms;
-    }
 
     pub(crate) const fn direct_projectile(&self) -> Option<&PlayerDirectProjectileExecutionState> {
         self.direct_projectile.as_ref()
@@ -1560,21 +1476,8 @@ impl CPlayerAI {
         self.direct_projectile.as_mut()
     }
 
-    const fn direct_projectile_index(skill_id: u32) -> usize {
-        match skill_id {
-            0x19d => 0,
-            0x1a1 => 1,
-            _ => unreachable!(),
-        }
-    }
 
-    pub(crate) const fn direct_projectile_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.direct_projectile_last_used_ms[Self::direct_projectile_index(skill_id)]
-    }
 
-    pub(crate) fn mark_direct_projectile_used(&mut self, skill_id: u32, now_ms: u32) {
-        self.direct_projectile_last_used_ms[Self::direct_projectile_index(skill_id)] = now_ms;
-    }
 
     pub(crate) const fn yunsheng_lightning(&self) -> Option<&PlayerYunShengLightningExecutionState> { self.yunsheng_lightning.as_ref() }
     pub(crate) fn begin_yunsheng_lightning(&mut self, mut state: PlayerYunShengLightningExecutionState) {
@@ -1670,21 +1573,8 @@ impl CPlayerAI {
         self.wide_arc_attack.as_mut()
     }
 
-    const fn wide_arc_attack_index(skill_id: u32) -> usize {
-        match skill_id {
-            0x1a7 => 0,
-            0x1f6 => 1,
-            _ => unreachable!(),
-        }
-    }
 
-    pub(crate) const fn wide_arc_attack_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.wide_arc_attack_last_used_ms[Self::wide_arc_attack_index(skill_id)]
-    }
 
-    pub(crate) const fn mark_wide_arc_attack_used(&mut self, skill_id: u32, now_ms: u32) {
-        self.wide_arc_attack_last_used_ms[Self::wide_arc_attack_index(skill_id)] = now_ms;
-    }
 
     pub(crate) const fn lord_fast_attack(&self) -> Option<&LordFastAttackExecutionState> {
         self.lord_fast_attack.as_ref()
@@ -1699,13 +1589,6 @@ impl CPlayerAI {
         self.lord_fast_attack.as_mut()
     }
 
-    pub(crate) const fn fast_attack_last_used_ms(&self, skill_id: u32) -> u32 {
-        if skill_id == super::super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID {
-            self.monster_fast_attack_last_used_ms
-        } else {
-            self.lord_fast_attack_last_used_ms
-        }
-    }
 
     pub(crate) const fn monster_base_attack(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
         self.monster_base_attack.as_ref()
@@ -1739,13 +1622,6 @@ impl CPlayerAI {
 
 
 
-    pub(crate) const fn mark_fast_attack_used(&mut self, skill_id: u32, now_ms: u32) {
-        if skill_id == super::super::skills::monsterfastattack::MONSTER_FAST_ATTACK_SKILL_ID {
-            self.monster_fast_attack_last_used_ms = now_ms;
-        } else {
-            self.lord_fast_attack_last_used_ms = now_ms;
-        }
-    }
 
     pub(crate) const fn chaos_sphere(&self) -> Option<&ChaosSphereExecutionState> {
         self.chaos_sphere.as_ref()
@@ -1856,24 +1732,7 @@ impl CPlayerAI {
         self.callosity.as_mut()
     }
 
-    pub(crate) const fn callosity_last_used_ms(&self, skill_id: u32) -> u32 {
-        if skill_id == crate::gameserver::appserver::skills::callosity::CALLOSITY_2_SKILL_ID {
-            self.callosity_last_used_ms[1]
-        } else {
-            self.callosity_last_used_ms[0]
-        }
-    }
 
-    pub(crate) fn mark_callosity_used(&mut self, skill_id: u32, now_ms: u32) {
-        let index = if skill_id
-            == crate::gameserver::appserver::skills::callosity::CALLOSITY_2_SKILL_ID
-        {
-            1
-        } else {
-            0
-        };
-        self.callosity_last_used_ms[index] = now_ms;
-    }
 
     pub(crate) const fn hearten(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.hearten
@@ -2117,16 +1976,7 @@ impl CPlayerAI {
         self.immediate_state.as_mut()
     }
 
-    pub(crate) fn immediate_state_last_used_ms(&self, skill_id: u32) -> u32 {
-        self.immediate_state_last_used_ms
-            .get(&skill_id)
-            .copied()
-            .unwrap_or_default()
-    }
 
-    pub(crate) fn mark_immediate_state_used(&mut self, skill_id: u32, now_ms: u32) {
-        self.immediate_state_last_used_ms.insert(skill_id, now_ms);
-    }
 
     pub(crate) const fn non_fun(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.non_fun

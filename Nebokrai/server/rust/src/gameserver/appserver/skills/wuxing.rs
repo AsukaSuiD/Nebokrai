@@ -133,7 +133,7 @@ pub(crate) fn execute_player_auto_start_wuxing<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player
             .player_ai_mut()
-            .mark_immediate_state_used(skill_id, used_at_ms);
+            .mark_skill_used(skill_id, used_at_ms);
     }
     true
 }
@@ -172,7 +172,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
 
     if player_ai.immediate_state().is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
-        let last_used_ms = player_ai.immediate_state_last_used_ms(skill_id);
+        let last_used_ms = player_ai.skill_last_used_ms(skill_id);
         if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
             game.send_base_magic_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");
@@ -203,7 +203,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_immediate_state_used(skill_id, now_ms);
+        player_ai.mark_skill_used(skill_id, now_ms);
     });
     terminal(QueuedSkillExecutionState::Completed)
 }

@@ -84,7 +84,7 @@ fn finish_player_callosity<Runtime: GameMainLoopRuntime>(
 ) {
     restore_movement(game, player_id);
     finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_callosity_used(skill_id, now_ms);
+        player_ai.mark_skill_used(skill_id, now_ms);
     });
 }
 
@@ -154,7 +154,7 @@ pub(crate) fn execute_player_callosity<Runtime: GameMainLoopRuntime>(
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
-        let last_used_ms = player_ai.callosity_last_used_ms(skill_id);
+        let last_used_ms = player_ai.skill_last_used_ms(skill_id);
         if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
             game.send_self_state_skill_failure(CALLOSITY_EFFECT_MESSAGE, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"GS0278");

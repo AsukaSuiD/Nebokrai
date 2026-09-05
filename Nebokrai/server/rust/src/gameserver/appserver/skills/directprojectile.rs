@@ -124,7 +124,7 @@ fn restore_movement(game: &mut CGame, player_id: i32) {
 
 fn finish<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, ai: &mut CPlayerAI, runtime: &mut Runtime) {
     restore_movement(game, player_id);
-    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_direct_projectile_used(skill_id, now_ms));
+    finish_summon_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(skill_id, now_ms));
 }
 
 fn abort(game: &mut CGame, player_id: i32) { restore_movement(game, player_id); abort_skill(game, player_id); }
@@ -214,7 +214,7 @@ pub(crate) fn execute_player_direct_projectile<Runtime: GameMainLoopRuntime>(gam
     let now_ms = runtime.now_milliseconds();
 
     if ai.direct_projectile().is_none() {
-        if !skill_is_restored(ai.direct_projectile_last_used_ms(skill_id), reuse_ms, now_ms) {
+        if !skill_is_restored(ai.skill_last_used_ms(skill_id), reuse_ms, now_ms) {
             send_failure(game, player_id, 0x0d); return terminal(QueuedSkillExecutionState::Rejected)
         }
         let Some(target_position) = destination(game, region_id, dispatch) else { send_failure(game, player_id, 10); return terminal(QueuedSkillExecutionState::Rejected) };

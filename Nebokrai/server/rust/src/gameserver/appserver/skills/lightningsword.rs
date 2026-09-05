@@ -75,7 +75,7 @@ fn finish_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
 ) {
     finish_front_cell_sword(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_lightning_sword_used(skill_id, now_ms);
+        player_ai.mark_skill_used(skill_id, now_ms);
     });
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn execute_player_lightning_sword<Runtime: GameMainLoopRuntime>(
     if player_ai.lightning_sword().is_none() {
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.lightning_sword_last_used_ms(skill_id),
+            player_ai.skill_last_used_ms(skill_id),
             cooldown_ms,
             now_ms,
         ) {

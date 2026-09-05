@@ -320,7 +320,7 @@ fn finish_player_projectile<Runtime: GameMainLoopRuntime>(
         player.set_skill_moveable(true);
     }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_path_projectile_used(skill_id, now_ms);
+        player_ai.mark_skill_used(skill_id, now_ms);
     });
 }
 
@@ -524,7 +524,7 @@ pub(crate) fn execute_player_path_projectile<Runtime: GameMainLoopRuntime>(
             game.send_skill_system_info(player_id, b"GS0286");
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        if !skill_is_restored(ai.path_projectile_last_used_ms(spec.skill_id), reuse, now_ms) {
+        if !skill_is_restored(ai.skill_last_used_ms(spec.skill_id), reuse, now_ms) {
             send_player_projectile_failure(game, player_id, 0x0d);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }

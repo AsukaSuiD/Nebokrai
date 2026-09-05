@@ -69,7 +69,7 @@ pub(crate) fn is_ghost_cut_dispatch(dispatch: PlayerSkillDispatch) -> bool { fam
 fn finish_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, skill_id: u32, runtime: &mut Runtime) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_ghost_cut_used(skill_id, now_ms);
+        player_ai.mark_skill_used(skill_id, now_ms);
     });
 }
 
@@ -162,7 +162,7 @@ pub(crate) fn execute_player_ghost_cut<Runtime: GameMainLoopRuntime>(game: &mut 
     let mp_loss = properties.query_property(USER_MP_LOSE); let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME); let maximum_distance = properties.query_property(TARGET_MAX_DISTANCE); let missile_step_ms = properties.query_property(MISSILE_FLYING_TIME); let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32; let target_damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR); let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     if player_ai.ghost_cut().is_none() {
         let now_ms = runtime.now_milliseconds();
-        if !skill_is_restored(player_ai.ghost_cut_last_used_ms(requested_skill), reuse_delay_ms, now_ms) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
+        if !skill_is_restored(player_ai.skill_last_used_ms(requested_skill), reuse_delay_ms, now_ms) { send_failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
         if !weapon_is_sword(game, player) { send_failure(game, player_id, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss == 0 { return terminal(QueuedSkillExecutionState::Rejected) }

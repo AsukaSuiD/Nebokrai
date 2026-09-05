@@ -165,7 +165,7 @@ fn finish_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
     };
     restore_player_movement(game, player_id);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_heartless_arrow_area_used(id, now_ms);
+        player_ai.mark_skill_used(id, now_ms);
     });
 }
 
@@ -290,7 +290,7 @@ pub(crate) fn execute_player_heartless_arrow_area<Runtime: GameMainLoopRuntime>(
 
     if player_ai.heartless_arrow_area().is_none() {
         if !skill_is_restored(
-            player_ai.heartless_arrow_area_last_used_ms(id),
+            player_ai.skill_last_used_ms(id),
             reuse_delay_ms,
             runtime.now_milliseconds(),
         ) {
