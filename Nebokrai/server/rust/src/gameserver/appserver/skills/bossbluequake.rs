@@ -21,6 +21,9 @@
 //! unsigned duration масштабируется в x87 и усекается к нулю. Обе ветви
 //! проверяют восстановление абсолютным сроком `CSkill::IsRestored`, сохраняя
 //! elapsed-семантику общей задержки.
+//! End (0x00546090) возвращает движение до AfterUseSkill (0x0053CF30),
+//! затем освобождает текущий навык. Callback CPlayer +0x158 пуст:
+//! дополнительного пересчёта свойств при завершении нет.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -216,12 +219,13 @@ fn finish_player_boss_blue_quake<Runtime: GameMainLoopRuntime>(
 ) {
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
     }
     if successful {
         game.damage_player_weapon(player_id, runtime);
     }
-    let _ = game.update_player_properties(player_id);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
     if successful {
         player_ai.mark_boss_blue_quake_used(runtime.now_milliseconds());
     }

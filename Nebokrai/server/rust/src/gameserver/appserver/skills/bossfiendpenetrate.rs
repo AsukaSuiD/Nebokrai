@@ -15,6 +15,8 @@
 //! владельцев, применяет рассчитанную атаку и доставляет пакеты. Player и
 //! monster ветви используют абсолютный срок `CSkill::IsRestored`; стадийные и
 //! клеточные задержки остаются elapsed-проверками.
+//! End (0x0052B410) освобождает пути и возвращает движение до оружейного
+//! AfterUseSkill. Callback игрока +0x158 пуст и не пересчитывает свойства.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER,
@@ -215,7 +217,6 @@ fn finish_player_boss_fiend_penetrate<Runtime: GameMainLoopRuntime>(
     if successful {
         game.damage_player_weapon(player_id, runtime);
     }
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

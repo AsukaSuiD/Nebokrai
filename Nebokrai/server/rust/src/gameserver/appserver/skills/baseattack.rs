@@ -11,6 +11,11 @@
 //! Общий хвост подтверждённых `CAttackSkill::End` сохраняет восстановление
 //! движения, `AfterUseSkill`, время восстановления и очистку текущего навыка;
 //! конкретный владелец явно выбирает задержанный или немедленный вариант.
+//! CSkill::End (0x004D84C0) вызывает virtual +0x158, у CPlayer это пустой
+//! 0x00485540, а не UpdateProperty. Дополнительного пересчёта свойств нет;
+//! изменения от износа оружия обслуживает сам OnWeaponDamaged (0x00441D50).
+//! Luvinia EndSkill освобождает CBaseModule нового движка: этот lifecycle
+//! не является соответствием нашим CSkill/AfterUseSkill.
 //! При входе в другой регион исходный `OnChangeRegion` выполняет `End(false)`:
 //! движение и текущий навык освобождаются без износа оружия и фиксации
 //! времени восстановления. Координатный `Begin` разрешает первый `CMoveShape`
@@ -42,8 +47,8 @@ pub(crate) fn real_distance(source_x: i32, source_y: i32, target_x: i32, target_
 }
 
 /// Общий достигнутый хвост `CBaseAttack::End`, `CBaseMagic::End` и
-/// `CArchery::End`: износ оружия и обязательный `CPlayer::UpdateProperty`
-/// предшествуют фиксации времени восстановления и очистке текущего навыка;
+/// `CArchery::End`: износ оружия
+/// предшествует фиксации времени восстановления и очистке текущего навыка;
 /// задержанные варианты сначала возвращают движение.
 fn finish_base_attack_owner<Runtime, MarkUsed>(
     game: &mut CGame,
@@ -62,7 +67,6 @@ fn finish_base_attack_owner<Runtime, MarkUsed>(
         player.set_skill_moveable(true);
     }
     game.damage_player_weapon(player_id, runtime);
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
@@ -131,7 +135,6 @@ pub(crate) fn abort_player_base_attack_on_region_change(
     let Some(dispatch) = player_ai.base_attack().map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
         player.set_current_skill_id(None);

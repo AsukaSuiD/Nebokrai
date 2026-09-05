@@ -15,6 +15,9 @@
 //! вызов 0x005162F5 проходит общий Begin и OnBeginSkill; проверки предмета,
 //! whitelist и MP идут позже. Здесь сохраняется этот особый порядок, включая
 //! начало отсчёта до перехода в бой, а не после успешных проверок ресурсов.
+//! End (0x005AE7A0) возвращает движение перед CSummonSkill::End;
+//! AfterUseSkill (0x005149E0) фиксирует только cooldown предмета. Общий
+//! callback игрока +0x158 пуст: дополнительный UpdateProperty не нужен.
 
 use super::baseattack::{real_distance, time_reached, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED};
@@ -94,7 +97,6 @@ fn finish_player_item_skill_2<Runtime: GameMainLoopRuntime>(
             player.mark_skill_item_used(item_index, item_used_at_ms);
         }
     }
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

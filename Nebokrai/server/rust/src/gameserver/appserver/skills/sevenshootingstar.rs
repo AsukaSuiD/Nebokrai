@@ -7,6 +7,8 @@
 //! двойную проверку MP, строгие границы времени, точные визуальные пакеты и
 //! два вызова legacy RNG на рассчитанную атаку. `CGame` только разрешает
 //! владельцев, применяет готовую атаку и выполняет доставку.
+//! End (0x005355F0) возвращает движение до оружейного AfterUseSkill;
+//! callback CPlayer +0x158 пуст и не вызывает UpdateProperty.
 //! Element modifier вычисляется в расширенной точности x87 из целых свойств и
 //! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
 //! перед `int`. Восстановление использует абсолютный срок
@@ -119,12 +121,13 @@ fn finish<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     successful: bool,
 ) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
     if successful {
         game.damage_player_weapon(player_id, runtime);
     }
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
 }

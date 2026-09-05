@@ -8,13 +8,15 @@
 //! вызова генератора MSVCRT на каждую рассчитанную атаку. `CGame` разрешает
 //! независимых владельцев и применяет уже рассчитанные результаты. Собственный
 //! `End` очищает накопленный путь, возвращает движение, выполняет общий
-//! оружейный `AfterUseSkill`, обновляет свойства и фиксирует время
+//! оружейный `AfterUseSkill` и фиксирует время
 //! восстановления; тот же ненулевой хвост используется при отказе после
 //! `Begin` и клиентской отмене.
 //! Reuse использует exact `CSkill::IsRestored`; action interval — elapsed.
 //! Element modifier вычисляется в расширенной точности x87 из целых свойств и
 //! сохранённой `f32`-константы; он и критический множитель усекаются к нулю
 //! перед `int`.
+//! End (0x00598EE0) возвращает движение до AfterUseSkill (0x0053CF30).
+//! Общий callback игрока +0x158 пуст и не пересчитывает свойства.
 
 use super::baseattack::{SKILL_USAGE_TARGET_MAX_DISTANCE, SKILL_USAGE_USER_HIT_MODIFIER};
 use super::basemagic::{
@@ -75,13 +77,10 @@ fn finish_player_chain_lightning<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) {
-    game.damage_player_weapon(player_id, runtime);
-    let _ = game.update_player_properties(player_id);
-    if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
-        player.set_current_skill_id(None);
-    }
-    player_ai.mark_chain_lightning_used(runtime.now_milliseconds());
+    super::baseattack::finish_delayed_base_attack(
+        game, player_id, player_ai, runtime,
+        |ai, now_ms| ai.mark_chain_lightning_used(now_ms),
+    );
 }
 
 pub(crate) fn cancel_player_chain_lightning<Runtime: GameMainLoopRuntime>(

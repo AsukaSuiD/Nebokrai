@@ -8,6 +8,9 @@
 //! ресурсы, не вызывает RNG и не изменяет цель. Собственных пакетов нет,
 //! но унаследованный Begin переводит игрока в бой через общий вход расписания
 //! (включая снятие AutoProtect и сообщение о смене боевого состояния).
+//! AI вызывает End(false); End (0x0050E9B0) передаёт флаг CStateSkill::End:
+//! при таком завершении нет ни AfterUseSkill,
+//! ни cooldown, ни UpdateProperty; виртуальный callback игрока +0x158 пуст.
 
 use super::kernel::{SkillExecutionKernel, SkillStage};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
@@ -63,7 +66,6 @@ pub(crate) fn execute_player_non_fun<Runtime: GameMainLoopRuntime>(
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }

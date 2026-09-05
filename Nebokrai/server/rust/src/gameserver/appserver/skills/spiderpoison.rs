@@ -14,6 +14,8 @@
 //! `CState::GetSufferer`: выбирает первый `CMoveShape` клетки и продолжает
 //! через тот же объектный pipeline.
 //! Player reuse-gate использует exact `CSkill::IsRestored`; cast delay — elapsed.
+//! End (0x00546090) возвращает движение перед оружейным AfterUseSkill;
+//! callback игрока +0x158 пуст: общий End не пересчитывает свойства.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
 use super::basemagic::SKILL_USAGE_TARGET_MAX_DISTANCE;
@@ -135,12 +137,13 @@ fn finish_player_spider_poison<Runtime: GameMainLoopRuntime>(
     runtime: &mut Runtime,
     successful: bool,
 ) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+    }
     if successful {
         game.damage_player_weapon(player_id, runtime);
     }
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
-        player.set_skill_moveable(true);
         player.set_current_skill_id(None);
     }
     if successful {

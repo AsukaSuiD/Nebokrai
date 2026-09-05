@@ -10,6 +10,8 @@
 //! возвращает владельца региона; выбор питомца и правила назначения цели
 //! принадлежат этому модулю. Восстановление использует абсолютный срок
 //! `CSkill::IsRestored`; стадийная задержка остаётся elapsed.
+//! End (0x005AFA40) использует пустой AfterUseSkill (0x00601A70), а общий
+//! callback игрока +0x158 также пуст: ни износа, ни UpdateProperty при End нет.
 
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::monster_attackable_by_monster;
@@ -206,7 +208,6 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
     }
     game.restore_region_owner(region);
     let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
@@ -227,7 +228,6 @@ pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
     let Some(dispatch) = player_ai.gibe().map(SkillExecutionKernel::dispatch) else {
         return false;
     };
-    let _ = game.update_player_properties(player_id);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_current_skill_id(None);
     }
