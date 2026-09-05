@@ -41145,6 +41145,7 @@ impl CGame {
                 | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == GIBE_SKILL_ID,
             };
             let schedule_rejected = self.reject_player_skill_schedule(player_id, dispatch, player_ai);
+            let begin_was_pending = Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
             if !schedule_rejected {
                 self.begin_player_skill_schedule(player_id, dispatch, player_ai);
             }
@@ -41385,6 +41386,13 @@ impl CGame {
                     killing_blow: None,
                 }
             };
+            let begin_rejected = !schedule_rejected
+                && begin_was_pending
+                && outcome.state == QueuedSkillExecutionState::Rejected
+                && Self::player_skill_begin_pending(player_ai, dispatch.skill_id());
+            if begin_rejected {
+                let _ = self.send_base_attack_failure(player_id, 2);
+            }
             if outcome.first_contact {
                 match dispatch {
                     PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self
@@ -41411,7 +41419,7 @@ impl CGame {
                 QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
                     player_ai.finish_player_skill(dispatch, SkillTermination::Rejected),
             };
-            if (outcome.state == QueuedSkillExecutionState::Completed || schedule_rejected)
+            if (outcome.state == QueuedSkillExecutionState::Completed || schedule_rejected || begin_rejected)
                 && removed_from_queue
             {
                 self.restore_player_default_attack_after_skill_end(player_id);
@@ -41453,7 +41461,10 @@ impl CGame {
                         ..
                     }
             );
-            let outcome = if self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai) {
+            let schedule_rejected = self.reject_battle_fairy_skill_schedule(player_id, dispatch, player_ai);
+            let begin_was_pending = (0x212..=0x224).contains(&dispatch.skill_id())
+                && !player_ai.battle_fairy_skill_execution_is_materialized();
+            let outcome = if schedule_rejected {
                 QueuedSkillExecutionOutcome {
                     state: QueuedSkillExecutionState::Rejected,
                     first_contact: false,
@@ -41597,6 +41608,13 @@ impl CGame {
             };
             let materialized_end = outcome.state != QueuedSkillExecutionState::Pending
                 && player_ai.battle_fairy_skill_execution_is_materialized();
+            if !schedule_rejected
+                && begin_was_pending
+                && outcome.state == QueuedSkillExecutionState::Rejected
+                && !materialized_end
+            {
+                self.send_battle_fairy_skill_failure(player_id, 2);
+            }
             if outcome.first_contact {
                 match dispatch {
                     BattleFairySkillDispatch::Object { target, .. }

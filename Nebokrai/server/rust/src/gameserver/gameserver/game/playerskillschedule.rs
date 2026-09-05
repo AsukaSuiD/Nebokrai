@@ -6,6 +6,12 @@
 //! и virtual DoesTargetEffective; отказ вызывает EnterCombatState, один
 //! RejectUseSkillRequest и OnLoseTarget. У ещё не начатого навыка OnLoseTarget
 //! не вызывает End(1), но возвращает default attack после удаления команды.
+//! Отказ самого Begin имеет тот же общий RejectUseSkillRequest/OnLoseTarget
+//! после конкретной диагностики: объектный хвост 0x00509B0B, координатный
+//! 0x00509B32. Его отличаем от отказа AI по отсутствию материализованного
+//! исполнения до и после вызова owner-а; действующий навык сюда не попадает.
+//! Luvinia PlayerAI использует CheckNextAct/stModuParam вместо этого расписания;
+//! отказ старого Begin восстановлен по нашему EXE, без переноса нового AI.
 //! Координатный вход не проходит эту проверку; отсутствие и объекта, и
 //! координат отклоняется без EnterCombatState. Стадии активного навыка сюда
 //! не входят: повторная проверка изменила бы RNG и момент отказа его AI.
@@ -36,6 +42,9 @@
 //! DoesTargetEffective постоянен true; прочие навыки духа наследуют
 //! IsAttackAble. Очередь с ненулевыми координатами проходит дальше к Begin,
 //! отсутствие и объекта, и координат отклоняется до исполнения.
+//! При false из Begin отдельный хвост 0x0050988D также отправляет общий
+//! war-soul отказ после конкретного, затем возвращает базовый навык феи.
+//! Это не дополнительный End и не повторный отказ уже активного AI.
 //! Даже с координатами war-soul расписание вызывает объектный Begin с null
 //! (0x00509861), а не координатную перегрузку; конкретный owner сохраняет
 //! собственный порядок отказа этого входа.
@@ -70,6 +79,14 @@ enum TargetRule {
 }
 
 impl CGame {
+    pub(super) fn player_skill_begin_pending(ai: &CPlayerAI, skill_id: u32) -> bool {
+        if is_non_fun_skill(skill_id) {
+            ai.non_fun().is_none()
+        } else {
+            Self::materialized_player_skill_active(ai, skill_id) == Some(false)
+        }
+    }
+
     pub(super) fn begin_player_skill_schedule(
         &mut self,
         player_id: i32,
@@ -113,11 +130,8 @@ impl CGame {
                 | SNOW_STORM_SKILL_ID | WEAK_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID
                 | GIBE_SKILL_ID
         );
-        let needs_begin = if is_non_fun_skill(skill_id) {
-            ai.non_fun().is_none()
-        } else {
-            inherited_begin && Self::materialized_player_skill_active(ai, skill_id) == Some(false)
-        };
+        let needs_begin = (inherited_begin || is_non_fun_skill(skill_id))
+            && Self::player_skill_begin_pending(ai, skill_id);
         if needs_begin {
             self.enter_player_combat_state(player_id);
         }
