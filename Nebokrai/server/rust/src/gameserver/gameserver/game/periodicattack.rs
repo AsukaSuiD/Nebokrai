@@ -11,9 +11,9 @@ use super::*;
 
 impl CGame {
     fn increase_owned_skill_attacker_rp(&mut self, player_id: i32, skill_id: u32) {
-        // `CMonsterRangeAttack::Attack` (VA 0x005123e0) не вызывает IncreaseRp
-        // после OnBeenAttacked; RP защищающейся стороны остаётся обычным.
-        if skill_id != MONSTER_RANGE_ATTACK_SKILL_ID {
+        // Range/Fast Attack (VA 0x005123e0/0x00513700/0x00530fb0) не вызывают
+        // IncreaseRp после OnBeenAttacked; RP защищающейся стороны обычный.
+        if !matches!(skill_id, MONSTER_RANGE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID) {
             self.increase_owned_player_rp(player_id, true, 0);
         }
     }

@@ -30,6 +30,12 @@
 //! — `CPlayer::OnChangeStates` (VA `0x00433080`), а не combat tick.
 //! Расчёт player-урона MonsterBaseAttack использует здесь ту же формулу,
 //! что MonsterFastAttack; его одноударное исполнение остаётся у своего owner-а.
+//! Объектный и координатный входы включают NPC, постройки и ворота. Общий
+//! GetSufferer/IsDied сохраняет нулевой HP NPC; путь к крупной цели заканчивается
+//! в GetBeAttackedPoint её footprint. Постройки проходят общий owner защиты,
+//! HP и death-script. Attack (VA `0x00513700/0x00530fb0`) рассчитывает урон
+//! без предварительного IsAttackAble и не вызывает IncreaseRp атакующего;
+//! оба RNG-вызова поэтому предшествуют возможному отказу защиты цели.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -58,6 +64,9 @@ pub(crate) const LORD_FAST_ATTACK_SKILL_ID: u32 = 0x1f5;
 const EFFECT_MESSAGE: i32 = 0x000b_fe01;
 const PLAYER_TYPE: i32 = 400;
 const MONSTER_TYPE: i32 = 600;
+const NPC_TYPE: i32 = 500;
+const BUILD_TYPE: i32 = 1100;
+const CITY_GATE_TYPE: i32 = 1200;
 const BLOCK_UNFLY: u8 = 2;
 const SKILL_USAGE_USER_MP_LOSE: u32 = 2;
 
@@ -189,17 +198,6 @@ pub(crate) fn cancel_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
-pub(super) fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
-    match target.object_type {
-        PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
-        MONSTER_TYPE => game
-            .find_region(region_id)
-            .and_then(|owner| owner.base().find_monster_by_id(target.id))
-            .is_none_or(|monster| monster.hit_points() == 0),
-        _ => true,
-    }
-}
-
 pub(super) fn master_info(player: &CPlayer) -> MasterInfo {
     let permissions = player.pk_permissions();
     MasterInfo {
@@ -314,6 +312,9 @@ fn apply_attack<Runtime: GameMainLoopRuntime>(
             attack,
             runtime,
         ),
+        BUILD_TYPE | CITY_GATE_TYPE => game.apply_owned_skill_attack_to_stationary_build(
+            player_id, region_id, target, attack, runtime,
+        ),
         _ => return,
     }
 }
@@ -330,7 +331,7 @@ pub(crate) const fn is_lord_fast_attack_dispatch(dispatch: PlayerSkillDispatch) 
         } | PlayerSkillDispatch::Object {
             skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
             target: ShapeIdentity {
-                object_type: PLAYER_TYPE | MONSTER_TYPE,
+                object_type: PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE | BUILD_TYPE | CITY_GATE_TYPE,
                 ..
             },
         }
@@ -369,7 +370,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             let target = game.find_player(player_id)
                 .and_then(CPlayer::server_region_id)
                 .and_then(|region_id| resolve_coordinate_sufferer(game, region_id, x, y));
-            let Some(target) = target.filter(|target| matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE)) else {
+            let Some(target) = target.filter(|target| matches!(target.object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE | BUILD_TYPE | CITY_GATE_TYPE)) else {
                 abort_player_lord_fast_attack(game, player_id);
                 return terminal(QueuedSkillExecutionState::Rejected);
             };
@@ -378,7 +379,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         PlayerSkillDispatch::Object {
             skill_id: LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID,
             target,
-        } if matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
+        } if matches!(target.object_type, PLAYER_TYPE | NPC_TYPE | MONSTER_TYPE | BUILD_TYPE | CITY_GATE_TYPE) => target,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
     let Some((region_id, level, source_view)) = game.find_player(player_id).and_then(|player| {
@@ -427,12 +428,15 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
             send_failure(game, player_id, 0x0b);
             return begin_failed(game);
         }
+        let Some((path_x, path_y)) = game.base_magic_target_point(
+            region_id, source_view.tile_x, source_view.tile_y, target,
+        ) else { return begin_failed(game) };
         let path = game.base_magic_path(
             region_id,
             source_view.tile_x,
             source_view.tile_y,
-            target_view.tile_x,
-            target_view.tile_y,
+            path_x,
+            path_y,
             None,
         );
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
@@ -469,7 +473,7 @@ pub(crate) fn execute_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
         abort_player_lord_fast_attack(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if target_dead(game, region_id, target)
+    if game.base_magic_target_dead(region_id, target)
         || (target.object_type == PLAYER_TYPE && target.id == player_id)
     {
         send_failure(game, player_id, 10);

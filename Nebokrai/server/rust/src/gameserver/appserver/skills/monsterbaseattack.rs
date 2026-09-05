@@ -46,6 +46,8 @@
 //! RP, смерть и сообщения используют существующий владелец применения атаки.
 //! Постройки и ворота проходят существующие war/camp-проверки, защиту,
 //! изменение HP, death-script и wire стационарного owner-а; NPC не атакуются.
+//! У NPC нулевой combat HP: общая IsDied-проверка даёт failure 2 и End(1)
+//! до начала анимации, а не пустую атаку по истечении delay.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -253,7 +255,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
     ai: &mut CPlayerAI, runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    use super::lordfastattack::{calculate_attack, master_info, send_start, target_dead};
+    use super::lordfastattack::{calculate_attack, master_info, send_start};
     let rejected = || player_base_attack_outcome(QueuedSkillExecutionState::Rejected);
     if !is_player_monster_base_attack(dispatch) { return rejected(); }
     let Some((region_id, level, source)) = game.find_player(player_id).and_then(|player| {
@@ -289,11 +291,7 @@ pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
         PlayerSkillDispatch::SelfTarget { .. } => None,
     };
     let target = requested.and_then(|identity| game.base_magic_target_view(region_id, identity).map(|view| (identity, view)));
-    if target.is_some_and(|(identity, _)| match identity.object_type {
-        PLAYER_TYPE | MONSTER_TYPE => target_dead(game, region_id, identity),
-        1100 | 1200 => game.stationary_build_combat_snapshot(region_id, identity).is_some_and(|build| build.hp == 0),
-        _ => false,
-    }) {
+    if target.is_some_and(|(identity, _)| game.base_magic_target_dead(region_id, identity)) {
         game.send_self_state_skill_failure(0x000b_fe01, player_id, 2);
         end_player_monster_base_attack(game, player_id, ai, runtime, true);
         return player_base_attack_outcome(QueuedSkillExecutionState::Completed);
