@@ -56,7 +56,7 @@ fn finish_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, 
 }
 
 pub(crate) fn cancel_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.thunder_blow_2().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(THUNDER_BLOW_2_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -238,7 +238,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
         )))
     else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(THUNDER_BLOW_2_SKILL_ID, level) else {
-        if player_ai.thunder_blow_2().is_some() {
+        if player_ai.player_skill_execution(THUNDER_BLOW_2_SKILL_ID).is_some() {
             finish_player_thunder_blow_2(game, player_id, player_ai, runtime);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -256,7 +256,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
     let damage_modifier = properties.query_property(TARGET_FINAL_DAMAGE_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.thunder_blow_2().is_none() {
+    if player_ai.player_skill_execution(THUNDER_BLOW_2_SKILL_ID).is_none() {
         if target.object_type == PLAYER_TYPE && target.id == player_id {
             send_failure(game, player_id, 10, mp_loss, true);
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -286,12 +286,12 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
             player.set_current_skill_id(Some(THUNDER_BLOW_2_SKILL_ID));
             player.set_skill_moveable(false);
         }
-        player_ai.begin_thunder_blow_2(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
-    } else if player_ai.thunder_blow_2().is_none_or(|execution| execution.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+    } else if player_ai.player_skill_execution(THUNDER_BLOW_2_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.thunder_blow_2().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(THUNDER_BLOW_2_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss, false);
@@ -309,12 +309,12 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_direction_visual(game, player_id, level, 1);
-        if let Some(execution) = player_ai.thunder_blow_2_mut() {
+        if let Some(execution) = player_ai.player_skill_execution_mut(THUNDER_BLOW_2_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started_at_ms = player_ai.thunder_blow_2().map(SkillExecutionKernel::started_at_ms)
+    let started_at_ms = player_ai.player_skill_execution(THUNDER_BLOW_2_SKILL_ID).map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение второго громового удара создано");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
@@ -348,7 +348,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
     }
     let visual_target = game.base_magic_target_view(region_id, target).unwrap_or(target_view);
     send_attack_visual(game, player_id, level, target, visual_target.tile_x, visual_target.tile_y);
-    if let Some(execution) = player_ai.thunder_blow_2_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(THUNDER_BLOW_2_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -370,7 +370,7 @@ pub(crate) fn execute_player_thunder_blow_2<Runtime: GameMainLoopRuntime>(
         MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, target.id, region_id, attack, runtime),
         _ => unreachable!("тип цели проверен dispatcher-ом"),
     }
-    if let Some(execution) = player_ai.thunder_blow_2_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(THUNDER_BLOW_2_SKILL_ID) {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_thunder_blow_2(game, player_id, player_ai, runtime);

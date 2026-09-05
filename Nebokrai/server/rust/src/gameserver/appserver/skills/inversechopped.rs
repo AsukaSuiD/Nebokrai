@@ -45,7 +45,7 @@ fn finish_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game: &mut CGame,
 }
 
 pub(crate) fn cancel_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.inverse_chopped().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(INVERSE_CHOPPED_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_inverse_chopped(game, player_id, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -58,7 +58,7 @@ fn front_targets(game: &CGame, region_id: i32, player_id: i32) -> Vec<crate::gam
 pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_inverse_chopped_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, level, source_x, source_y, mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(INVERSE_CHOPPED_SKILL_ID), player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(INVERSE_CHOPPED_SKILL_ID, level) else { if ai.inverse_chopped().is_some() { finish_player_inverse_chopped(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(INVERSE_CHOPPED_SKILL_ID, level) else { if ai.player_skill_execution(INVERSE_CHOPPED_SKILL_ID).is_some() { finish_player_inverse_chopped(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -66,7 +66,7 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
     let target_damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.inverse_chopped().is_none() {
+    if ai.player_skill_execution(INVERSE_CHOPPED_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(ai.skill_last_used_ms(INVERSE_CHOPPED_SKILL_ID), reuse_delay_ms, cooldown_now_ms) { send_failure(game, player_id, DEFINITION, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
@@ -74,11 +74,11 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
         if !weapon_is_compatible(game, player, DEFINITION) { send_failure(game, player_id, DEFINITION, 0x0e, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, DEFINITION, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(INVERSE_CHOPPED_SKILL_ID)); }
-        ai.begin_inverse_chopped(SkillExecutionKernel::begin(dispatch, started_at_ms));
-    } else if ai.inverse_chopped().is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if ai.player_skill_execution(INVERSE_CHOPPED_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) { finish_player_inverse_chopped(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
-    if ai.inverse_chopped().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if ai.player_skill_execution(INVERSE_CHOPPED_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, DEFINITION, 7, mp_loss); finish_player_inverse_chopped(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
@@ -86,12 +86,12 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
         let target = destination(game, region_id, player_id, dispatch).map(|(_, x, y)| (x, y)).unwrap_or((source_x, source_y));
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target.0, target.1)); }
         send_visual(game, player_id, DEFINITION, level, dispatch, 1);
-        if let Some(execution) = ai.inverse_chopped_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(execution) = ai.player_skill_execution_mut(INVERSE_CHOPPED_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started_at_ms = ai.inverse_chopped().map(SkillExecutionKernel::started_at_ms).expect("выполнение обратного рубящего удара создано выше");
+    let started_at_ms = ai.player_skill_execution(INVERSE_CHOPPED_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение обратного рубящего удара создано выше");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, DEFINITION, level, dispatch, 2);
-    if let Some(execution) = ai.inverse_chopped_mut() { let _ = execution.advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack); }
+    if let Some(execution) = ai.player_skill_execution_mut(INVERSE_CHOPPED_SKILL_ID) { let _ = execution.advance(SkillStage::Check, SkillStage::Calculate); let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack); }
     let owner = game.find_player(player_id).map(master_info).unwrap_or_default();
     for target in front_targets(game, region_id, player_id) {
         if !matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) || (target.object_type == PLAYER_TYPE && target.id == player_id) || game.periodic_state_target_dead(region_id, target) || !game.owned_player_skill_target_attackable(owner, target, region_id) { continue }
@@ -106,7 +106,7 @@ pub(crate) fn execute_player_inverse_chopped<Runtime: GameMainLoopRuntime>(game:
         }
     }
     let _ = take_player_energy_holding(game, player_id);
-    if let Some(execution) = ai.inverse_chopped_mut() { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(execution) = ai.player_skill_execution_mut(INVERSE_CHOPPED_SKILL_ID) { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_inverse_chopped(game, player_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

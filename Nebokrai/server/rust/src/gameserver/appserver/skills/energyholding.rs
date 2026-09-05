@@ -88,7 +88,7 @@ pub(crate) fn cancel_player_energy_holding<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.energy_holding().map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = player_ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_energy_holding(game, player_id, player_ai, runtime);
@@ -98,14 +98,14 @@ pub(crate) fn cancel_player_energy_holding<Runtime: GameMainLoopRuntime>(
 pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     if !is_energy_holding_dispatch(dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
     let Some((level, mana, energy_count)) = game.find_player(player_id).map(|player| (player.learned_skill_level(ENERGY_HOLDING_SKILL_ID), player.mana(), player.energy_holding_state().map_or(0, |state| state.energy_count()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(ENERGY_HOLDING_SKILL_ID, level) else { if ai.energy_holding().is_some() { finish_player_energy_holding(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(ENERGY_HOLDING_SKILL_ID, level) else { if ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).is_some() { finish_player_energy_holding(game, player_id, ai, runtime) } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let parameter_percent = properties.query_property(PARAMETER_PERCENT);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.energy_holding().is_none() {
+    if ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(ai.skill_last_used_ms(ENERGY_HOLDING_SKILL_ID), reuse_delay_ms, cooldown_now_ms) { failure(game, player_id, 0x0d, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
@@ -114,27 +114,27 @@ pub(crate) fn execute_player_energy_holding<Runtime: GameMainLoopRuntime>(game: 
         if mp_loss != 0 && (mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); return terminal(QueuedSkillExecutionState::Rejected) }
         if u32::try_from(level).is_ok_and(|level| level <= energy_count) { game.send_skill_system_info(player_id, b"GS0299"); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(ENERGY_HOLDING_SKILL_ID)); }
-        ai.begin_energy_holding(SkillExecutionKernel::begin(dispatch, started_at_ms));
-    } else if ai.energy_holding().is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
+        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected) }
 
     if game.find_player(player_id).is_some_and(CPlayer::is_dead) {
         failure(game, player_id, 2, mp_loss);
         finish_player_energy_holding(game, player_id, ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if ai.energy_holding().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish_player_energy_holding(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, false);
-        if let Some(execution) = ai.energy_holding_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(execution) = ai.player_skill_execution_mut(ENERGY_HOLDING_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started_at_ms = ai.energy_holding().map(SkillExecutionKernel::started_at_ms).expect("выполнение накопления энергии создано выше");
+    let started_at_ms = ai.player_skill_execution(ENERGY_HOLDING_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение накопления энергии создано выше");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
     send_visual(game, player_id, level, true);
     let installed = u32::try_from(level).is_ok_and(|level| add_player_energy_holding(game, player_id, level, parameter_percent));
-    if let Some(execution) = ai.energy_holding_mut() {
+    if let Some(execution) = ai.player_skill_execution_mut(ENERGY_HOLDING_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

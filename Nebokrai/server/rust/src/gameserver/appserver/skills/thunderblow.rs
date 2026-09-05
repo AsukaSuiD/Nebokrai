@@ -58,7 +58,7 @@ pub(crate) fn cancel_player_thunder_blow<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.thunder_blow().map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_thunder_blow(game, player_id, player_ai, runtime);
@@ -157,7 +157,7 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
     let element_modifier = properties.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32;
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.thunder_blow().is_none() {
+    if player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).is_none() {
         if !skill_is_restored(
             player_ai.skill_last_used_ms(THUNDER_BLOW_SKILL_ID),
             cooldown_ms,
@@ -176,8 +176,8 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(THUNDER_BLOW_SKILL_ID)); }
-        player_ai.begin_thunder_blow(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
-    } else if player_ai.thunder_blow().is_none_or(|state| state.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+    } else if player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -185,7 +185,7 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
         finish_player_thunder_blow(game, player_id, player_ai, runtime);
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    if player_ai.thunder_blow().is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss);
@@ -204,9 +204,9 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, None);
-        if let Some(state) = player_ai.thunder_blow_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = player_ai.player_skill_execution_mut(THUNDER_BLOW_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = player_ai.thunder_blow().map(SkillExecutionKernel::started_at_ms).expect("выполнение громового удара создано");
+    let started = player_ai.player_skill_execution(THUNDER_BLOW_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение громового удара создано");
     if !time_reached(runtime.now_milliseconds(), started, delay_ms) { return terminal(QueuedSkillExecutionState::Pending); }
     if target.is_some_and(|identity| target_dead(game, region_id, identity)) {
         send_failure(game, player_id, 10, mp_loss);
@@ -228,7 +228,7 @@ pub(crate) fn execute_player_thunder_blow<Runtime: GameMainLoopRuntime>(
         let _ = game.send_thunder_blow_phalanx_entry(region_id, summon_id, runtime);
     }
     tracing::trace!(region_id, player_id, summon_id, ?result, "создана форма громового удара");
-    if let Some(state) = player_ai.thunder_blow_mut() {
+    if let Some(state) = player_ai.player_skill_execution_mut(THUNDER_BLOW_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

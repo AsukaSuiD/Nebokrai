@@ -67,13 +67,13 @@ fn abort_player_god_punishment(game: &mut CGame, player: i32) {
 }
 
 pub(crate) fn complete_player_god_punishment<Runtime: GameMainLoopRuntime>(game: &mut CGame, player: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.god_punishment().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_god_punishment(game, player, ai, runtime);
     ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_god_punishment<Runtime: GameMainLoopRuntime>(game: &mut CGame, player: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.god_punishment().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_god_punishment(game, player);
     ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -84,12 +84,12 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
     let Some(player) = game.find_player(player_id) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let level = player.learned_skill_level(id); let Some(region) = player.server_region_id() else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(props) = game.skill_base_properties(id, level) else {
-        if ai.god_punishment().is_some() { abort_player_god_punishment(game, player_id); }
+        if ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).is_some() { abort_player_god_punishment(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let reuse = props.query_property(REUSE_TIME); let maximum = props.query_property(MAX_DISTANCE); let mp = props.query_property(MP_LOSE); let delay = props.query_property(DELAY_TIME);
     let lifetime = props.query_property(SUMMONED_LIFETIME); let minimum = props.query_property(MIN_ATTACK) as i32; let maximum_attack = props.query_property(MAX_ATTACK) as i32; let element = props.query_property(ELEMENT_MODIFIER) as i32;
-    if ai.god_punishment().is_none() {
+    if ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).is_none() {
         let started = runtime.now_milliseconds(); let now = runtime.now_milliseconds();
         if !skill_is_restored(ai.skill_last_used_ms(GOD_PUNISHMENT_SKILL_ID), reuse, now) { fail(game, player_id, 0x0d, mp); return terminal(QueuedSkillExecutionState::Rejected); }
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) };
@@ -97,18 +97,18 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
         if maximum != 0 && game.base_magic_path(region, source.tile_x, source.tile_y, x, y, None).len() > maximum as usize { fail(game, player_id, 0x0b, mp); return terminal(QueuedSkillExecutionState::Rejected); }
         if mp == 0 || player.mana() < mp { if mp != 0 { fail(game, player_id, 7, mp); } return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_current_skill_id(Some(id)); }
-        ai.begin_god_punishment(SkillExecutionKernel::begin(dispatch, started));
-    } else if ai.god_punishment().is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
-    if ai.god_punishment().is_some_and(|state| state.stage() == SkillStage::Begin) {
+        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started));
+    } else if ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
+    if ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let Some((x, y, _)) = position(game, region, player_id, dispatch) else { abort_player_god_punishment(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana); if mana < mp { fail(game, player_id, 7, mp); abort_player_god_punishment(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp)); if let Some(source) = player.shape_view() { player.movement_shape_mut().set_direction(get_line_direction(source.tile_x, source.tile_y, x, y)); } }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi); let _ = game.update_player_criminal_state(player_id, GamePlayerFightStatePhase::MoveShapeAi, runtime);
         let Some(source) = game.find_player(player_id).and_then(CPlayer::shape_view) else { abort_player_god_punishment(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
         if maximum != 0 && game.base_magic_path(region, source.tile_x, source.tile_y, x, y, None).len() > maximum as usize { fail(game, player_id, 0x0b, mp); abort_player_god_punishment(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
-        visual(game, player_id, level, 1, None); if let Some(state) = ai.god_punishment_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        visual(game, player_id, level, 1, None); if let Some(state) = ai.player_skill_execution_mut(GOD_PUNISHMENT_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = ai.god_punishment().map(SkillExecutionKernel::started_at_ms).expect("божественная кара начата");
+    let started = ai.player_skill_execution(GOD_PUNISHMENT_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("божественная кара начата");
     if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending); }
     let Some((x, y, target)) = position(game, region, player_id, dispatch) else { abort_player_god_punishment(game, player_id); return terminal(QueuedSkillExecutionState::Rejected) };
     if target.is_some_and(|identity| game.periodic_state_target_dead(region, identity)) { fail(game, player_id, 10, mp); abort_player_god_punishment(game, player_id); return terminal(QueuedSkillExecutionState::Rejected); }
@@ -117,7 +117,7 @@ pub(crate) fn execute_player_god_punishment<Runtime: GameMainLoopRuntime>(game: 
     let master = MasterInfo { master_type: PLAYER_TYPE, master_id: player_id, master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(player.pk_permissions().player), permitted_to_kill_teammate: i32::from(player.pk_permissions().teammate), permitted_to_kill_guild_member: i32::from(player.pk_permissions().guild_member), permitted_to_kill_criminal: i32::from(player.pk_permissions().criminal) };
     let summon_id = game.allocate_summon_shape_id(); let summon_time = runtime.now_milliseconds(); let mut phalanx = CGodPunishmentPhalanx::new(summon_id, master, summon_time, lifetime, level, minimum, maximum_attack, element); phalanx.shape_mut().set_region_id(region);
     let summoned = game.add_god_punishment_phalanx(region, phalanx, x, y, summon_time, runtime).is_some_and(|r| r.is_ok()); if summoned { let _ = game.send_god_punishment_phalanx_entry(region, summon_id, runtime); }
-    if let Some(state) = ai.god_punishment_mut() { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(state) = ai.player_skill_execution_mut(GOD_PUNISHMENT_SKILL_ID) { let _ = state.advance(SkillStage::Check, SkillStage::Calculate); let _ = state.advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_god_punishment(game, player_id, ai, runtime); terminal(if summoned { QueuedSkillExecutionState::Completed } else { QueuedSkillExecutionState::Rejected })
 }
 pub(crate) const fn is_god_punishment_target(dispatch: PlayerSkillDispatch) -> bool { matches!(dispatch, PlayerSkillDispatch::SelfTarget { skill_id: GOD_PUNISHMENT_SKILL_ID, .. } | PlayerSkillDispatch::Point { skill_id: GOD_PUNISHMENT_SKILL_ID, .. } | PlayerSkillDispatch::Object { skill_id: GOD_PUNISHMENT_SKILL_ID, target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. } }) }

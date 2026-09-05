@@ -71,13 +71,13 @@ fn abort_player_blind(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn complete_player_blind<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.blind().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = ai.player_skill_execution(BLIND_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_blind(game, player_id, ai, runtime);
     ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_blind<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = ai.blind().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = ai.player_skill_execution(BLIND_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_blind(game, player_id);
     ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -208,7 +208,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(BLIND_SKILL_ID, level) else {
-        if ai.blind().is_some() {
+        if ai.player_skill_execution(BLIND_SKILL_ID).is_some() {
             abort_player_blind(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -220,7 +220,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
     let state_time = properties.query_property(STATE_PERSIST_TIME);
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.blind().is_none() {
+    if ai.player_skill_execution(BLIND_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
         if !skill_is_restored(ai.skill_last_used_ms(BLIND_SKILL_ID), reuse, now) {
             failure(game, player_id, 0x0d, mp_loss, None, false);
@@ -247,8 +247,8 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BLIND_SKILL_ID));
         }
-        ai.begin_blind(SkillExecutionKernel::begin(dispatch, now));
-    } else if ai.blind().is_none_or(|execution| execution.dispatch() != dispatch) {
+        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+    } else if ai.player_skill_execution(BLIND_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -258,7 +258,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
         abort_player_blind(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if ai.blind().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if ai.player_skill_execution(BLIND_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             failure(game, player_id, 7, mp_loss, None, false);
@@ -278,12 +278,12 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
             player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y));
         }
         send_visual(game, player_id, level, 1);
-        if let Some(execution) = ai.blind_mut() {
+        if let Some(execution) = ai.player_skill_execution_mut(BLIND_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
-    let started = ai.blind().map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
+    let started = ai.player_skill_execution(BLIND_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
     if !time_reached(runtime.now_milliseconds(), started, delay) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
@@ -331,7 +331,7 @@ pub(crate) fn execute_player_blind<Runtime: GameMainLoopRuntime>(
             let _ = game.install_rush_2_state(region_id, target, Rush2State::new(now, keep), now);
         }
     }
-    if let Some(execution) = ai.blind_mut() {
+    if let Some(execution) = ai.player_skill_execution_mut(BLIND_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

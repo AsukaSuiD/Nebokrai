@@ -388,8 +388,8 @@ fn release(game: &mut CGame, player_id: i32) {
 
 fn abort_player_knock_out(game: &mut CGame, player_id: i32) { release(game, player_id); abort_skill(game, player_id); }
 fn finish_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) { finish_state_skill(game, player_id, ai, runtime, |ai, now_ms| ai.mark_skill_used(KNOCK_OUT_SKILL_ID, now_ms)); }
-pub(crate) fn complete_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.knock_out().map(SkillExecutionKernel::dispatch) else { return false }; release(game, player_id); finish_player_knock_out(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Completed) }
-pub(crate) fn cancel_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.knock_out().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_knock_out(game, player_id); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
+pub(crate) fn complete_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.player_skill_execution(KNOCK_OUT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; release(game, player_id); finish_player_knock_out(game, player_id, ai, runtime); ai.finish_player_skill(dispatch, SkillTermination::Completed) }
+pub(crate) fn cancel_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = ai.player_skill_execution(KNOCK_OUT_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_knock_out(game, player_id); ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
 pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     let identity = match dispatch {
@@ -407,7 +407,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
     let reuse = properties.query_property(REUSE); let maximum = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let _can_break = properties.query_property(CAN_BREAK);
     let Some(mut target) = target_snapshot(game, region_id, identity) else { failure(game, player_id, 10); return result(QueuedSkillExecutionState::Rejected) };
-    if ai.knock_out().is_none() {
+    if ai.player_skill_execution(KNOCK_OUT_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         if !skill_is_restored(ai.skill_last_used_ms(KNOCK_OUT_SKILL_ID), reuse, now) {
@@ -422,14 +422,14 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
             player.set_skill_moveable(false); player.set_current_skill_id(Some(KNOCK_OUT_SKILL_ID));
             player.movement_shape_mut().set_direction(get_line_direction(sx, sy, target.x, target.y));
         }
-        ai.begin_knock_out(SkillExecutionKernel::begin(dispatch, now));
-    } else if ai.knock_out().is_none_or(|execution| execution.dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected); }
+        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
+    } else if ai.player_skill_execution(KNOCK_OUT_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) { return result(QueuedSkillExecutionState::Rejected); }
     if target.dead { failure(game, player_id, 10); abort_player_knock_out(game, player_id); return result(QueuedSkillExecutionState::Rejected); }
-    if ai.knock_out().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if ai.player_skill_execution(KNOCK_OUT_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         cast(game, player_id, target, level, false);
-        if let Some(execution) = ai.knock_out_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(execution) = ai.player_skill_execution_mut(KNOCK_OUT_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = ai.knock_out().map(SkillExecutionKernel::started_at_ms).expect("выполнение оглушения создано");
+    let started = ai.player_skill_execution(KNOCK_OUT_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение оглушения создано");
     if !time_reached(runtime.now_milliseconds(), started, delay) { return result(QueuedSkillExecutionState::Pending); }
     abort_player_knock_out(game, player_id);
     target = match target_snapshot(game, region_id, identity) { Some(target) => target, None => return result(QueuedSkillExecutionState::Rejected) };
@@ -457,7 +457,7 @@ pub(crate) fn execute_player_knock_out<Runtime: GameMainLoopRuntime>(game: &mut 
         let state_now = runtime.now_milliseconds();
         install(game, region_id, target, KnockOutState::new(state_now, persist), runtime.now_milliseconds());
     }
-    if let Some(execution) = ai.knock_out_mut() {
+    if let Some(execution) = ai.player_skill_execution_mut(KNOCK_OUT_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

@@ -70,7 +70,7 @@ pub(crate) fn cancel_player_ju_cut<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.ju_cut().map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = player_ai.player_skill_execution(JU_CUT_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_ju_cut(game, player_id, player_ai, runtime);
@@ -111,7 +111,7 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
     let target_damage_factor = properties.query_property(TARGET_DAMAGE_FACTOR);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.ju_cut().is_none() {
+    if player_ai.player_skill_execution(JU_CUT_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(player_ai.skill_last_used_ms(JU_CUT_SKILL_ID), cooldown_ms, now_ms) {
             send_failure(game, player_id, DEFINITION, 0x0d, mp_loss);
@@ -135,16 +135,16 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(JU_CUT_SKILL_ID));
         }
-        player_ai.begin_ju_cut(SkillExecutionKernel::begin(dispatch, now_ms));
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
     } else if player_ai
-        .ju_cut()
+        .player_skill_execution(JU_CUT_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
     if player_ai
-        .ju_cut()
+        .player_skill_execution(JU_CUT_SKILL_ID)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -173,20 +173,20 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
                 .set_direction(get_line_direction(source_x, source_y, target_x, target_y));
         }
         send_visual(game, player_id, DEFINITION, level, dispatch, 1);
-        if let Some(execution) = player_ai.ju_cut_mut() {
+        if let Some(execution) = player_ai.player_skill_execution_mut(JU_CUT_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .ju_cut()
+        .player_skill_execution(JU_CUT_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение рубящего удара создано");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     send_visual(game, player_id, DEFINITION, level, dispatch, 2);
-    if let Some(execution) = player_ai.ju_cut_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(JU_CUT_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -225,7 +225,7 @@ pub(crate) fn execute_player_ju_cut<Runtime: GameMainLoopRuntime>(
             _ => unreachable!("тип цели проверен перед расчётом"),
         }
     }
-    if let Some(execution) = player_ai.ju_cut_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(JU_CUT_SKILL_ID) {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_ju_cut(game, player_id, player_ai, runtime);

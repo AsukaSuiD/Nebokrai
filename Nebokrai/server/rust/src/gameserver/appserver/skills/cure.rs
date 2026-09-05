@@ -204,13 +204,13 @@ fn abort_player_cure(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn complete_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.cure().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(CURE_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_cure(game, player_id, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_cure<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.cure().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(CURE_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_cure(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -505,7 +505,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
     let base_probability = properties.query_property(BASE_PROBABILITY);
     let _can_be_breaked = properties.query_property(CAN_BE_BREAKED);
 
-    if player_ai.cure().is_none() {
+    if player_ai.player_skill_execution(CURE_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let Some(initial_target) = target_snapshot(game, region_id, requested_identity) else {
@@ -540,8 +540,8 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(CURE_SKILL_ID));
         }
-        player_ai.begin_cure(SkillExecutionKernel::begin(dispatch, started_at_ms));
-    } else if player_ai.cure().is_none_or(|execution| execution.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai.player_skill_execution(CURE_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -555,7 +555,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         abort_player_cure(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.cure().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(CURE_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
@@ -571,9 +571,9 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
             player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target.tile_x, target.tile_y));
         }
         send_cast(game, player_id, &target, level, false);
-        if let Some(execution) = player_ai.cure_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(execution) = player_ai.player_skill_execution_mut(CURE_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started_at_ms = player_ai.cure().map(SkillExecutionKernel::started_at_ms).expect("выполнение очищения создано или восстановлено");
+    let started_at_ms = player_ai.player_skill_execution(CURE_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение очищения создано или восстановлено");
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) { return terminal(QueuedSkillExecutionState::Pending) }
 
     send_cast(game, player_id, &target, level, true);
@@ -601,7 +601,7 @@ pub(crate) fn execute_player_cure<Runtime: GameMainLoopRuntime>(
         &target,
         CureState::new(caster_identity(player_id), target.identity).begin_now(),
     );
-    if let Some(execution) = player_ai.cure_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(CURE_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

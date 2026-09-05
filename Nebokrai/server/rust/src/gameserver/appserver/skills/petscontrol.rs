@@ -86,8 +86,8 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
 
 fn abort_player_pets_control(game: &mut CGame, player_id: i32) { finish_movement(game, player_id); abort_skill(game, player_id); }
 fn finish_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { finish_summon_skill_without_weapon_wear(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(PETS_CONTROL_SKILL_ID, now_ms)); }
-pub(crate) fn complete_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.pets_control().map(SkillExecutionKernel::dispatch) else { return false }; finish_movement(game, player_id); finish_player_pets_control(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Completed) }
-pub(crate) fn cancel_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.pets_control().map(SkillExecutionKernel::dispatch) else { return false }; abort_player_pets_control(game, player_id); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
+pub(crate) fn complete_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.player_skill_execution(PETS_CONTROL_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; finish_movement(game, player_id); finish_player_pets_control(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Completed) }
+pub(crate) fn cancel_player_pets_control<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.player_skill_execution(PETS_CONTROL_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; abort_player_pets_control(game, player_id); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 
 pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
@@ -138,7 +138,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.pets_control().is_none() {
+    if player_ai.player_skill_execution(PETS_CONTROL_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         if !skill_is_restored(
@@ -171,8 +171,8 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(PETS_CONTROL_SKILL_ID));
         }
-        player_ai.begin_pets_control(SkillExecutionKernel::begin(dispatch, started_at_ms));
-    } else if player_ai.pets_control().is_none_or(|state| state.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai.player_skill_execution(PETS_CONTROL_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -183,7 +183,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.pets_control().is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(PETS_CONTROL_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if current_mana < mp_loss {
             send_failure(game, player_id, 7);
@@ -202,13 +202,13 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
             GamePlayerFightStatePhase::MoveShapeAi,
         );
         send_cast(game, player_id, target, skill_level, 1);
-        if let Some(state) = player_ai.pets_control_mut() {
+        if let Some(state) = player_ai.player_skill_execution_mut(PETS_CONTROL_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .pets_control()
+        .player_skill_execution(PETS_CONTROL_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение управления питомцами создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -218,7 +218,7 @@ pub(crate) fn execute_player_pets_control<Runtime: GameMainLoopRuntime>(
     abort_player_pets_control(game, player_id);
     send_cast(game, player_id, target, skill_level, 2);
     let _ = game.set_player_pets_target(player_id, target.object_type, target.id);
-    if let Some(state) = player_ai.pets_control_mut() {
+    if let Some(state) = player_ai.player_skill_execution_mut(PETS_CONTROL_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

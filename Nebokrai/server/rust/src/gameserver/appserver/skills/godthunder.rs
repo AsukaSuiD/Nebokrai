@@ -108,14 +108,12 @@ pub(crate) const fn is_god_thunder_dispatch(dispatch: PlayerSkillDispatch) -> bo
 }
 
 fn execution(ai: &CPlayerAI, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-    if second { ai.god_thunder_2() } else { ai.god_thunder() }
+    if second { ai.player_skill_execution(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { ai.player_skill_execution(GOD_THUNDER_SKILL_ID) }
 }
 fn execution_mut(ai: &mut CPlayerAI, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-    if second { ai.god_thunder_2_mut() } else { ai.god_thunder_mut() }
+    if second { ai.player_skill_execution_mut(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { ai.player_skill_execution_mut(GOD_THUNDER_SKILL_ID) }
 }
-fn begin_execution(ai: &mut CPlayerAI, second: bool, state: SkillExecutionKernel<PlayerSkillDispatch>) {
-    if second { ai.begin_god_thunder_2(state); } else { ai.begin_god_thunder(state); }
-}
+
 fn last_used(ai: &CPlayerAI, second: bool) -> u32 {
     if second { ai.skill_last_used_ms(crate::gameserver::appserver::skills::godthunder2::GOD_THUNDER_2_SKILL_ID) } else { ai.skill_last_used_ms(GOD_THUNDER_SKILL_ID) }
 }
@@ -197,7 +195,7 @@ pub(super) fn execute_player_god_thunder_family<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id));
         }
-        begin_execution(ai, second, SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
     } else if execution(ai, second).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }

@@ -76,9 +76,9 @@ fn send_visual(game: &mut CGame, player_id: i32, skill_id: u32, skill_level: i32
     let _ = game.send_player_shape_around(player_id, None, &message);
 }
 
-fn execution(ai: &CPlayerAI, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.yin_yang_2() } else { ai.yin_yang() } }
-fn execution_mut(ai: &mut CPlayerAI, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.yin_yang_2_mut() } else { ai.yin_yang_mut() } }
-fn begin_execution(ai: &mut CPlayerAI, second: bool, state: SkillExecutionKernel<PlayerSkillDispatch>) { if second { ai.begin_yin_yang_2(state); } else { ai.begin_yin_yang(state); } }
+fn execution(ai: &CPlayerAI, second: bool) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.player_skill_execution(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { ai.player_skill_execution(YIN_YANG_SKILL_ID) } }
+fn execution_mut(ai: &mut CPlayerAI, second: bool) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { if second { ai.player_skill_execution_mut(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { ai.player_skill_execution_mut(YIN_YANG_SKILL_ID) } }
+
 fn last_used(ai: &CPlayerAI, second: bool) -> u32 { if second { ai.skill_last_used_ms(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID) } else { ai.skill_last_used_ms(YIN_YANG_SKILL_ID) } }
 fn mark_used(ai: &mut CPlayerAI, second: bool, now: u32) { if second { ai.mark_skill_used(crate::gameserver::appserver::skills::yinyang2::YIN_YANG_2_SKILL_ID, now); } else { ai.mark_skill_used(YIN_YANG_SKILL_ID, now); } }
 
@@ -169,7 +169,7 @@ pub(super) fn execute_player_yin_yang_family<Runtime: GameMainLoopRuntime>(game:
         if path.iter().any(|cell| cell.2 == 2) { send_error(game, player_id, 0x0f, mp_loss); return terminal(QueuedSkillExecutionState::Rejected); }
         if mp_loss == 0 || player.mana() < mp_loss { if mp_loss != 0 { send_error(game, player_id, 7, mp_loss); } return terminal(QueuedSkillExecutionState::Rejected); }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        begin_execution(player_ai, second, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if execution(player_ai, second).is_none_or(|execution| execution.dispatch() != dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
 
     if execution(player_ai, second).is_some_and(|execution| execution.stage() == SkillStage::Begin) {

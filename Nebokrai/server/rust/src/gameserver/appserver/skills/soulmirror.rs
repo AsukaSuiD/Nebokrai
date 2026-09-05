@@ -115,13 +115,13 @@ fn abort_player_soul_mirror(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn complete_player_soul_mirror<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.soul_mirror().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_soul_mirror(game, player_id, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 
 pub(crate) fn cancel_player_soul_mirror<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.soul_mirror().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_soul_mirror(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -268,7 +268,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
     if !is_soul_mirror_skill(dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(SOUL_MIRROR_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(SOUL_MIRROR_SKILL_ID, level) else {
-        if player_ai.soul_mirror().is_some() { abort_player_soul_mirror(game, player_id); }
+        if player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).is_some() { abort_player_soul_mirror(game, player_id); }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let mp_loss = properties.query_property(USER_MP_LOSE);
@@ -282,7 +282,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
     let lifetime = properties.query_property(SUMMONED_LIFETIME);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.soul_mirror().is_none() {
+    if player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).is_none() {
         let started = runtime.now_milliseconds();
         if !skill_is_restored(player_ai.skill_last_used_ms(SOUL_MIRROR_SKILL_ID), cooldown, runtime.now_milliseconds()) {
             send_failure(game, player_id, 0x0d, mp_loss);
@@ -297,8 +297,8 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SOUL_MIRROR_SKILL_ID));
         }
-        player_ai.begin_soul_mirror(SkillExecutionKernel::begin(dispatch, started));
-    } else if player_ai.soul_mirror().is_none_or(|execution| execution.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started));
+    } else if player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -311,7 +311,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
         abort_player_soul_mirror(game, player_id);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.soul_mirror().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if !has_mana(mana, mp_loss) {
             send_failure(game, player_id, 7, mp_loss);
@@ -326,10 +326,10 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, false);
-        if let Some(execution) = player_ai.soul_mirror_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(execution) = player_ai.player_skill_execution_mut(SOUL_MIRROR_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started = player_ai.soul_mirror().map(SkillExecutionKernel::started_at_ms).expect("выполнение зеркала душ создано или восстановлено");
+    let started = player_ai.player_skill_execution(SOUL_MIRROR_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение зеркала душ создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started, delay) { return terminal(QueuedSkillExecutionState::Pending); }
     send_visual(game, player_id, level, true);
     let Some((direction, source_x, source_y, master)) = game.find_player(player_id).and_then(|player| Some((
@@ -375,7 +375,7 @@ pub(crate) fn execute_player_soul_mirror<Runtime: GameMainLoopRuntime>(
             attacked.push(target);
         }
     }
-    if let Some(execution) = player_ai.soul_mirror_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(SOUL_MIRROR_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

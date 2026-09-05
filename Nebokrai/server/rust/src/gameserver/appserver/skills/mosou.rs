@@ -57,7 +57,7 @@ fn finish_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id
 }
 
 pub(crate) fn cancel_player_mosou<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = player_ai.mosou().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(MOSOU_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_mosou(game, player_id, player_ai, runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -217,7 +217,7 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
         player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.mana(),
     ))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(MOSOU_SKILL_ID, level) else {
-        if player_ai.mosou().is_some() {
+        if player_ai.player_skill_execution(MOSOU_SKILL_ID).is_some() {
             finish_player_mosou(game, player_id, player_ai, runtime);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -232,7 +232,7 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
     let move_speed = properties.query_property(TARGET_MOVE_SPEED);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if player_ai.mosou().is_none() {
+    if player_ai.player_skill_execution(MOSOU_SKILL_ID).is_none() {
         if !skill_is_restored(
             player_ai.skill_last_used_ms(MOSOU_SKILL_ID),
             cooldown_ms,
@@ -251,12 +251,12 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_skill_moveable(false); player.set_current_skill_id(Some(MOSOU_SKILL_ID));
         }
-        player_ai.begin_mosou(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
-    } else if player_ai.mosou().is_none_or(|execution| execution.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+    } else if player_ai.player_skill_execution(MOSOU_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.mosou().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(MOSOU_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7, mp_loss); finish_player_mosou(game, player_id, player_ai, runtime);
@@ -272,14 +272,14 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
             && let Some(player) = game.find_player_mut(player_id)
         { player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
         send_visual(game, player_id, level, 1);
-        if let Some(execution) = player_ai.mosou_mut() { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(execution) = player_ai.player_skill_execution_mut(MOSOU_SKILL_ID) { let _ = execution.advance(SkillStage::Begin, SkillStage::Check); }
     }
-    let started = player_ai.mosou().map(SkillExecutionKernel::started_at_ms).expect("выполнение Мо-шоу создано");
+    let started = player_ai.player_skill_execution(MOSOU_SKILL_ID).map(SkillExecutionKernel::started_at_ms).expect("выполнение Мо-шоу создано");
     if !time_reached(runtime.now_milliseconds(), started, delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     send_visual(game, player_id, level, 2);
-    if let Some(execution) = player_ai.mosou_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(MOSOU_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -307,7 +307,7 @@ pub(crate) fn execute_player_mosou<Runtime: GameMainLoopRuntime>(
             move_speed.wrapping_mul(moved), state_now_ms,
         );
     }
-    if let Some(execution) = player_ai.mosou_mut() { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(execution) = player_ai.player_skill_execution_mut(MOSOU_SKILL_ID) { let _ = execution.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_mosou(game, player_id, player_ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

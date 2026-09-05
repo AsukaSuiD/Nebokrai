@@ -157,7 +157,7 @@ pub(crate) fn cancel_player_spider_poison<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.spider_poison().map(SkillExecutionKernel::dispatch) else { return false };
+    let Some(dispatch) = player_ai.player_skill_execution(SPIDER_POISON_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_spider_poison(game, player_id, player_ai, runtime, false);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -210,7 +210,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(SPIDER_POISON_SKILL_ID, skill_level).cloned() else {
-        if player_ai.spider_poison().is_some() { finish_player_spider_poison(game, player_id, player_ai, runtime, false); }
+        if player_ai.player_skill_execution(SPIDER_POISON_SKILL_ID).is_some() { finish_player_spider_poison(game, player_id, player_ai, runtime, false); }
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     let reuse_delay = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -220,7 +220,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
     let Some((target_x, target_y)) = target_position else {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
-    if player_ai.spider_poison().is_none() {
+    if player_ai.player_skill_execution(SPIDER_POISON_SKILL_ID).is_none() {
         let now_ms = runtime.now_milliseconds();
         if !skill_is_restored(player_ai.skill_last_used_ms(SPIDER_POISON_SKILL_ID), reuse_delay, now_ms) {
             send_player_failure(game, player_id, 0x0d);
@@ -235,8 +235,8 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(SPIDER_POISON_SKILL_ID));
         }
-        player_ai.begin_spider_poison(SkillExecutionKernel::begin(dispatch, now_ms));
-    } else if player_ai.spider_poison().is_none_or(|execution| execution.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
+    } else if player_ai.player_skill_execution(SPIDER_POISON_SKILL_ID).is_none_or(|execution| execution.dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
     if game.periodic_state_target_dead(region_id, target) {
@@ -244,17 +244,17 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
         finish_player_spider_poison(game, player_id, player_ai, runtime, false);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.spider_poison().is_some_and(|execution| execution.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(SPIDER_POISON_SKILL_ID).is_some_and(|execution| execution.stage() == SkillStage::Begin) {
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
         if let Some(player) = game.find_player_mut(player_id) {
             player.movement_shape_mut().set_direction(direction);
         }
         send_player_visual(game, player_id, skill_level, 1, None);
-        if let Some(execution) = player_ai.spider_poison_mut() {
+        if let Some(execution) = player_ai.player_skill_execution_mut(SPIDER_POISON_SKILL_ID) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
-    let started_at_ms = player_ai.spider_poison().map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
+    let started_at_ms = player_ai.player_skill_execution(SPIDER_POISON_SKILL_ID).map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay) {
         return player_terminal(QueuedSkillExecutionState::Pending);
     }
@@ -266,7 +266,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
     send_player_visual(game, player_id, skill_level, 2, Some((target, target_x, target_y)));
-    if let Some(execution) = player_ai.spider_poison_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(SPIDER_POISON_SKILL_ID) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -298,7 +298,7 @@ pub(crate) fn execute_player_spider_poison<Runtime: GameMainLoopRuntime>(
             game.restore_region_owner(region);
         }
     }
-    if let Some(execution) = player_ai.spider_poison_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(SPIDER_POISON_SKILL_ID) {
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_spider_poison(game, player_id, player_ai, runtime, true);

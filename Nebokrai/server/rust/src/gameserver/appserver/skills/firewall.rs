@@ -121,7 +121,7 @@ pub(crate) fn cancel_player_fire_wall<Runtime: GameMainLoopRuntime>(
     record_reuse: bool,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.fire_wall().map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = player_ai.player_skill_execution(FIRE_WALL_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish(game, player_id, runtime, record_reuse);
@@ -190,7 +190,7 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
     let em_modifier = properties.query_property(EM_MODIFIER);
     let summoned_lifetime = properties.query_property(SUMMONED_LIFETIME);
 
-    if player_ai.fire_wall().is_none() {
+    if player_ai.player_skill_execution(FIRE_WALL_SKILL_ID).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
@@ -228,8 +228,8 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(FIRE_WALL_SKILL_ID));
         }
-        player_ai.begin_fire_wall(SkillExecutionKernel::begin(dispatch, started_at_ms));
-    } else if player_ai.fire_wall().is_none_or(|state| state.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai.player_skill_execution(FIRE_WALL_SKILL_ID).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
@@ -243,7 +243,7 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
         finish(game, player_id, runtime, false);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.fire_wall().is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if player_ai.player_skill_execution(FIRE_WALL_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 {
             send_failure(game, player_id, 7);
@@ -259,13 +259,13 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
         }
         let _ = game.update_player_current_state(player_id, GamePlayerFightStatePhase::MoveShapeAi);
         send_visual(game, player_id, level, 1, None);
-        if let Some(state) = player_ai.fire_wall_mut() {
+        if let Some(state) = player_ai.player_skill_execution_mut(FIRE_WALL_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .fire_wall()
+        .player_skill_execution(FIRE_WALL_SKILL_ID)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение огненной стены создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -308,7 +308,7 @@ pub(crate) fn execute_player_fire_wall<Runtime: GameMainLoopRuntime>(
         let _ = game.send_fire_wall_phalanx_entry(region_id, summon_id);
     }
 
-    if let Some(state) = player_ai.fire_wall_mut() {
+    if let Some(state) = player_ai.player_skill_execution_mut(FIRE_WALL_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = state.advance(SkillStage::Attack, SkillStage::Apply);

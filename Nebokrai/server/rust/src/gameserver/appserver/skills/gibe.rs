@@ -179,19 +179,19 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    if player_ai.gibe().is_none() {
+    if player_ai.player_skill_execution(GIBE_SKILL_ID).is_none() {
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(GIBE_SKILL_ID));
         }
-        player_ai.begin_gibe(SkillExecutionKernel::begin(dispatch, now_ms));
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
     } else if player_ai
-        .gibe()
+        .player_skill_execution(GIBE_SKILL_ID)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         game.restore_region_owner(region);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if let Some(execution) = player_ai.gibe_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(GIBE_SKILL_ID) {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
     }
@@ -202,7 +202,7 @@ pub(crate) fn execute_player_gibe<Runtime: GameMainLoopRuntime>(
         area_index,
         maximum_distance,
     );
-    if let Some(execution) = player_ai.gibe_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(GIBE_SKILL_ID) {
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
@@ -225,7 +225,7 @@ pub(crate) fn cancel_player_gibe<Runtime: GameMainLoopRuntime>(
     record_reuse: bool,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.gibe().map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = player_ai.player_skill_execution(GIBE_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     if let Some(player) = game.find_player_mut(player_id) {

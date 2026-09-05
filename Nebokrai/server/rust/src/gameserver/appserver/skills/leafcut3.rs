@@ -40,7 +40,7 @@ fn skill_id(dispatch: PlayerSkillDispatch) -> u32 { match dispatch { PlayerSkill
 pub(crate) fn is_leaf_cut_3_dispatch(dispatch: PlayerSkillDispatch) -> bool { skill_id(dispatch) == LEAF_CUT_3_SKILL_ID }
 fn terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome { QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None } }
 fn finish_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) { if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); } finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| { player_ai.mark_skill_used(LEAF_CUT_3_SKILL_ID, now_ms); }); }
-pub(crate) fn cancel_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.leaf_cut_3().map(SkillExecutionKernel::dispatch) else { return false }; finish_player_leaf_cut_3(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
+pub(crate) fn cancel_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool { let Some(dispatch) = player_ai.player_skill_execution(LEAF_CUT_3_SKILL_ID).map(SkillExecutionKernel::dispatch) else { return false }; finish_player_leaf_cut_3(game, player_id, player_ai, runtime); player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled) }
 fn weapon_is_sword(game: &CGame, player: &CPlayer) -> bool { player.equipment().get_goods(2).is_some_and(|weapon| weapon.addon_property_value(game.goods_factory(), GAP_WEAPON_CATEGORY, 1) == 2) }
 fn dispatch_target(dispatch: PlayerSkillDispatch) -> Option<ShapeIdentity> { match dispatch { PlayerSkillDispatch::Object { target, .. } => Some(target), _ => None } }
 
@@ -104,7 +104,7 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
     let Some((region_id, level, initial_mana)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.learned_skill_level(LEAF_CUT_3_SKILL_ID), player.mana()))) else { return terminal(QueuedSkillExecutionState::Rejected) };
     let Some((target_x, target_y, target_dead, target_name)) = target_facts(game, region_id, target) else { return reject_initial(game, player_id, 10, 0, None) };
     let Some((source_x, source_y)) = game.find_player(player_id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else { return terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(LEAF_CUT_3_SKILL_ID, level) else { if ai.leaf_cut_3().is_some() { finish_player_leaf_cut_3(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(LEAF_CUT_3_SKILL_ID, level) else { if ai.player_skill_execution(LEAF_CUT_3_SKILL_ID).is_some() { finish_player_leaf_cut_3(game, player_id, ai, runtime); } return terminal(QueuedSkillExecutionState::Rejected) };
     let mp_loss = properties.query_property(USER_MP_LOSE);
     let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -116,7 +116,7 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
     let skill_name = properties.skill_name().to_vec();
     let _breakable = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
 
-    if ai.leaf_cut_3().is_none() {
+    if ai.player_skill_execution(LEAF_CUT_3_SKILL_ID).is_none() {
         let now = runtime.now_milliseconds();
         if !skill_is_restored(ai.skill_last_used_ms(LEAF_CUT_3_SKILL_ID), reuse, now) { return reject_initial(game, player_id, 0x0d, 0, None) }
         let Some(blocked) = path_block(game, region_id, source_x, source_y, target_x, target_y, maximum) else { return reject_initial(game, player_id, 0x0b, 0, None) };
@@ -125,11 +125,11 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
         if !weapon_is_sword(game, player) { return reject_initial(game, player_id, 0x0e, 0, None) }
         if mp_loss != 0 && (initial_mana.wrapping_sub(mp_loss) as i32) < 0 { return reject_initial(game, player_id, 7, mp_loss, None) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(LEAF_CUT_3_SKILL_ID)); }
-        ai.begin_leaf_cut_3(SkillExecutionKernel::begin(dispatch, now));
+        ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now));
     }
 
     if target_dead { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 10); finish_player_leaf_cut_3(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
-    if ai.leaf_cut_3().is_some_and(|state| state.stage() == SkillStage::Begin) {
+    if ai.player_skill_execution(LEAF_CUT_3_SKILL_ID).is_some_and(|state| state.stage() == SkillStage::Begin) {
         let mana = game.find_player(player_id).map_or(0, CPlayer::mana);
         if (mana.wrapping_sub(mp_loss) as i32) < 0 { send_failure(game, player_id, 7, mp_loss, None); finish_player_leaf_cut_3(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(mana.wrapping_sub(mp_loss)); }
@@ -138,10 +138,10 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
         let direction = get_line_direction(source_x, source_y, target_x, target_y);
         if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_direction(direction); }
         send_visual(game, player_id, level, 1, None);
-        if let Some(state) = ai.leaf_cut_3_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
+        if let Some(state) = ai.player_skill_execution_mut(LEAF_CUT_3_SKILL_ID) { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
 
-    let started = ai.leaf_cut_3().map(|state| state.started_at_ms()).unwrap_or_default();
+    let started = ai.player_skill_execution(LEAF_CUT_3_SKILL_ID).map(|state| state.started_at_ms()).unwrap_or_default();
     if runtime.now_milliseconds() < started.wrapping_add(delay) { return terminal(QueuedSkillExecutionState::Pending) }
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
     let Some((live_source_x, live_source_y)) = game.find_player(player_id).and_then(|player| Some((player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))) else { finish_player_leaf_cut_3(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
@@ -160,7 +160,7 @@ pub(crate) fn execute_player_leaf_cut_3<Runtime: GameMainLoopRuntime>(game: &mut
     if let Some(previous) = previous { send_leaf_cut_3_state_visual(game, region_id, identity, x, y, previous, false, now); }
     send_leaf_cut_3_state_visual(game, region_id, identity, x, y, state, true, now);
     if let Some(player) = game.find_player_mut(player_id) { player.movement_shape_mut().set_action(1); }
-    if let Some(kernel) = ai.leaf_cut_3_mut() { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply); }
+    if let Some(kernel) = ai.player_skill_execution_mut(LEAF_CUT_3_SKILL_ID) { let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate); let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack); let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply); }
     finish_player_leaf_cut_3(game, player_id, ai, runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

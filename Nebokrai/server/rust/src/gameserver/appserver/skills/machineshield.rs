@@ -17,12 +17,10 @@ pub(crate) const SKILL_USAGE_STATE_HP: u32 = 10_010;
 pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
 pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
 
-use super::kernel::SkillExecutionKernel;
 use super::machineshieldstate::{send_machine_shield_state_visual, MachineShieldState};
 use super::selfshield::SelfShieldOwner;
 use super::skillbaseproperties::CSkillBaseProperties;
-use crate::gameserver::appserver::ai::playerai::CPlayerAI;
-use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
+use crate::gameserver::appserver::player::CPlayer;
 use crate::gameserver::gameserver::game::CGame;
 
 pub(crate) struct MachineShieldOwner;
@@ -61,23 +59,10 @@ impl SelfShieldOwner for MachineShieldOwner {
         send_machine_shield_state_visual(game, player_id, state, begin, now_milliseconds);
     }
 
-    fn execution(
-        player_ai: &CPlayerAI,
-    ) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        player_ai.machine_shield()
-    }
 
-    fn execution_mut(
-        player_ai: &mut CPlayerAI,
-    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        player_ai.machine_shield_mut()
-    }
 
-    fn begin_execution(
-        player_ai: &mut CPlayerAI,
-        execution: SkillExecutionKernel<PlayerSkillDispatch>,
-    ) {
-        player_ai.begin_machine_shield(execution);
-    }
+
+
+
 
 }

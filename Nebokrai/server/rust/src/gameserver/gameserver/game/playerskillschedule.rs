@@ -196,39 +196,70 @@ impl CGame {
 
     pub(super) fn materialized_player_skill_active(player_ai: &CPlayerAI, skill_id: u32) -> Option<bool> {
         Some(match skill_id {
+            FIRE_BALL_SKILL_ID
+            | FIRE_WALL_SKILL_ID
+            | THUNDER_SLASH_SKILL_ID
+            | THUNDER_BLOW_SKILL_ID
+            | PILLAR_SKILL_ID
+            | RUSH_SKILL_ID
+            | RUSH_2_SKILL_ID
+            | ROAR_SKILL_ID
+            | ENERGY_HOLDING_SKILL_ID
+            | INVERSE_CHOPPED_SKILL_ID
+            | INFERNOL_SKILL_ID
+            | THUNDER_BLOW_2_SKILL_ID
+            | MOSOU_SKILL_ID
+            | RAGE_BREAK_SKILL_ID
+            | FURY_SKILL_ID
+            | LEAF_CUT_SKILL_ID
+            | LEAF_CUT_2_SKILL_ID
+            | LEAF_CUT_3_SKILL_ID
+            | JU_CUT_SKILL_ID
+            | CORPSE_PTOMAINE_SKILL_ID
+            | SPIDER_POISON_SKILL_ID
+            | BOSS_BLUE_FURY_SKILL_ID
+            | MONSTER_BASE_ATTACK_SKILL_ID
+            | MONSTER_RANGE_ATTACK_SKILL_ID
+            | YIN_YANG_SKILL_ID
+            | YIN_YANG_2_SKILL_ID
+            | GOD_PUNISHMENT_SKILL_ID
+            | GOD_THUNDER_SKILL_ID
+            | GOD_THUNDER_2_SKILL_ID
+            | SOUL_COLLECT_SKILL_ID
+            | SOUL_MIRROR_SKILL_ID
+            | DAUB_POISON_SKILL_ID
+            | IGNITION_SKILL_ID
+            | KEROSENE_SKILL_ID
+            | BLIND_SKILL_ID
+            | HEARTEN_SKILL_ID
+            | SNOW_STORM_SKILL_ID
+            | WEAK_SKILL_ID
+            | CURE_SKILL_ID
+            | PROMOTION_SKILL_ID
+            | PETS_CONTROL_SKILL_ID
+            | MONSTER_TAMING_SKILL_ID
+            | KNOCK_OUT_SKILL_ID
+            | GIBE_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
             BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
-            FIRE_BALL_SKILL_ID => player_ai.fire_ball().is_some(),
-            FIRE_WALL_SKILL_ID => player_ai.fire_wall().is_some(),
+
             SEVEN_SHOOTING_STAR_SKILL_ID => player_ai.seven_shooting_star().is_some(),
-            THUNDER_SLASH_SKILL_ID => player_ai.thunder_slash().is_some(),
+
             CHAIN_LIGHTNING_SKILL_ID => player_ai.chain_lightning().is_some(),
-            THUNDER_BLOW_SKILL_ID => player_ai.thunder_blow().is_some(),
+
             ITEM_SKILL_2_ID => player_ai.item_skill_2().is_some(),
-            PILLAR_SKILL_ID => player_ai.pillar().is_some(),
-            RUSH_SKILL_ID => player_ai.rush().is_some(),
-            RUSH_2_SKILL_ID => player_ai.rush_2().is_some(),
-            ROAR_SKILL_ID => player_ai.roar().is_some(),
-            ENERGY_HOLDING_SKILL_ID => player_ai.energy_holding().is_some(),
-            INVERSE_CHOPPED_SKILL_ID => player_ai.inverse_chopped().is_some(),
-            INFERNOL_SKILL_ID => player_ai.infernol().is_some(),
-            THUNDER_BLOW_2_SKILL_ID => player_ai.thunder_blow_2().is_some(),
-            MOSOU_SKILL_ID => player_ai.mosou().is_some(),
+
             GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
                 player_ai.ghost_cut().is_some()
             }
             KNIGHT_CUT_SKILL_ID => player_ai.knight_cut().is_some(),
             ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID => player_ai.army_break().is_some(),
             RAGE_SKILL_ID => player_ai.rage().is_some(),
-            RAGE_BREAK_SKILL_ID => player_ai.rage_break().is_some(),
-            FURY_SKILL_ID => player_ai.fury().is_some(),
+
             FLASH_SKILL_ID => player_ai.flash().is_some(),
             SWALLOW_SKILL_ID => player_ai.swallow().is_some(),
-            LEAF_CUT_SKILL_ID => player_ai.leaf_cut().is_some(),
-            LEAF_CUT_2_SKILL_ID => player_ai.leaf_cut_2().is_some(),
-            LEAF_CUT_3_SKILL_ID => player_ai.leaf_cut_3().is_some(),
-            JU_CUT_SKILL_ID => player_ai.ju_cut().is_some(),
+
             LIGHTNING_SWORD_SKILL_ID
             | LIGHTNING_SWORD_2_SKILL_ID
             | LIGHTNING_SWORD_3_SKILL_ID
@@ -244,13 +275,13 @@ impl CGame {
                 player_ai.direct_projectile().is_some()
             }
             YUNSHENG_LIGHTNING_SKILL_ID => player_ai.yunsheng_lightning().is_some(),
-            CORPSE_PTOMAINE_SKILL_ID => player_ai.corpse_ptomaine().is_some(),
+
             MONSTER_THORN_SKILL_ID => player_ai.monster_thorn().is_some(),
             SPIDER_MIST_SKILL_ID => player_ai.spider_mist().is_some(),
             SPIDER_WEB_SKILL_ID => player_ai.spider_web().is_some(),
-            SPIDER_POISON_SKILL_ID => player_ai.spider_poison().is_some(),
+
             SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID => player_ai.summon_creature().is_some(),
-            BOSS_BLUE_FURY_SKILL_ID => player_ai.boss_blue_fury().is_some(),
+
             BOSS_BLUE_QUAKE_SKILL_ID => player_ai.boss_blue_quake().is_some(),
             BOSS_FIEND_PENETRATE_SKILL_ID => player_ai.boss_fiend_penetrate().is_some(),
             SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
@@ -258,18 +289,11 @@ impl CGame {
                 player_ai.wide_arc_attack().is_some()
             }
             LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
-            MONSTER_BASE_ATTACK_SKILL_ID => player_ai.monster_base_attack().is_some(),
-            MONSTER_RANGE_ATTACK_SKILL_ID => player_ai.monster_range_attack().is_some(),
+
             CHAOS_SPHERE_SKILL_ID => player_ai.chaos_sphere().is_some(),
             LIGHTNING_SKILL_ID => player_ai.lightning().is_some(),
             SEAL_SKILL_ID => player_ai.seal().is_some(),
-            YIN_YANG_SKILL_ID => player_ai.yin_yang().is_some(),
-            YIN_YANG_2_SKILL_ID => player_ai.yin_yang_2().is_some(),
-            GOD_PUNISHMENT_SKILL_ID => player_ai.god_punishment().is_some(),
-            GOD_THUNDER_SKILL_ID => player_ai.god_thunder().is_some(),
-            GOD_THUNDER_2_SKILL_ID => player_ai.god_thunder_2().is_some(),
-            SOUL_COLLECT_SKILL_ID => player_ai.soul_collect().is_some(),
-            SOUL_MIRROR_SKILL_ID => player_ai.soul_mirror().is_some(),
+
             ARCHERY_SKILL_ID => player_ai.archery().is_some(),
             HEARTLESS_ARROW_SKILL_ID => player_ai.heartless_arrow().is_some(),
             HEARTLESS_ARROW_2_SKILL_ID | HEARTLESS_ARROW_3_SKILL_ID => {
@@ -290,25 +314,16 @@ impl CGame {
             }
             STRIKE_SKILL_ID => player_ai.strike().is_some(),
             YAKSHA_SLASH_SKILL_ID => player_ai.yaksha_slash().is_some(),
-            DAUB_POISON_SKILL_ID => player_ai.daub_poison().is_some(),
-            IGNITION_SKILL_ID => player_ai.ignition().is_some(),
-            KEROSENE_SKILL_ID => player_ai.kerosene().is_some(),
-            BLIND_SKILL_ID => player_ai.blind().is_some(),
+
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => player_ai.callosity().is_some(),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => {
                 player_ai.agility_family().is_some()
             }
-            HEARTEN_SKILL_ID => player_ai.hearten().is_some(),
+
             POISON_FOG_SKILL_ID => player_ai.poison_fog().is_some(),
-            SNOW_STORM_SKILL_ID => player_ai.snow_storm().is_some(),
-            WEAK_SKILL_ID => player_ai.weak().is_some(),
+
             GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => player_ai.god_bless().is_some(),
-            CURE_SKILL_ID => player_ai.cure().is_some(),
-            PROMOTION_SKILL_ID => player_ai.promotion().is_some(),
-            PETS_CONTROL_SKILL_ID => player_ai.pets_control().is_some(),
-            MONSTER_TAMING_SKILL_ID => player_ai.monster_taming().is_some(),
-            KNOCK_OUT_SKILL_ID => player_ai.knock_out().is_some(),
-            GIBE_SKILL_ID => player_ai.gibe().is_some(),
+
             _ if is_swordship_skill(skill_id) => player_ai.swordship().is_some(),
             _ if is_immediate_state_skill(skill_id) => player_ai.immediate_state().is_some(),
             _ if is_non_fun_skill(skill_id) => player_ai.non_fun().is_some(),

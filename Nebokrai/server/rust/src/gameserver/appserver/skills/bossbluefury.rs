@@ -170,7 +170,7 @@ pub(crate) fn cancel_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     _runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.boss_blue_fury().map(|state| state.dispatch()) else {
+    let Some(dispatch) = player_ai.player_skill_execution(BOSS_BLUE_FURY_SKILL_ID).map(|state| state.dispatch()) else {
         return false;
     };
     abort_player_boss_blue_fury(game, player_id);
@@ -204,7 +204,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         .skill_base_properties(BOSS_BLUE_FURY_SKILL_ID, skill_level)
         .cloned()
     else {
-        if player_ai.boss_blue_fury().is_some() {
+        if player_ai.player_skill_execution(BOSS_BLUE_FURY_SKILL_ID).is_some() {
             abort_player_boss_blue_fury(game, player_id);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
@@ -217,7 +217,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
     let weak_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME_MODIFIER);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
-    if player_ai.boss_blue_fury().is_none() {
+    if player_ai.player_skill_execution(BOSS_BLUE_FURY_SKILL_ID).is_none() {
         if !skill_is_restored(
             player_ai.skill_last_used_ms(BOSS_BLUE_FURY_SKILL_ID),
             reuse_delay_ms,
@@ -238,7 +238,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
             player.set_skill_moveable(false);
             player.set_current_skill_id(Some(BOSS_BLUE_FURY_SKILL_ID));
         }
-        player_ai.begin_boss_blue_fury(SkillExecutionKernel::begin(dispatch, now_ms));
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, now_ms));
     }
     if dead {
         send_player_failure(game, player_id, 2, rp_loss);
@@ -247,7 +247,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Completed);
     }
     if player_ai
-        .boss_blue_fury()
+        .player_skill_execution(BOSS_BLUE_FURY_SKILL_ID)
         .is_some_and(|state| state.stage() == SkillStage::Begin)
     {
         let rp = game.find_player(player_id).map_or(0, CPlayer::rp);
@@ -264,19 +264,19 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
             GamePlayerFightStatePhase::MoveShapeAi,
         );
         send_player_visual(game, player_id, skill_level, 1);
-        if let Some(state) = player_ai.boss_blue_fury_mut() {
+        if let Some(state) = player_ai.player_skill_execution_mut(BOSS_BLUE_FURY_SKILL_ID) {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
     let started_at_ms = player_ai
-        .boss_blue_fury()
+        .player_skill_execution(BOSS_BLUE_FURY_SKILL_ID)
         .map(|state| state.started_at_ms())
         .expect("выполнение ярости хранит время начала");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
         return player_terminal(QueuedSkillExecutionState::Pending);
     }
     send_player_visual(game, player_id, skill_level, 2);
-    if let Some(state) = player_ai.boss_blue_fury_mut() {
+    if let Some(state) = player_ai.player_skill_execution_mut(BOSS_BLUE_FURY_SKILL_ID) {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
     }
@@ -322,7 +322,7 @@ pub(crate) fn execute_player_boss_blue_fury<Runtime: GameMainLoopRuntime>(
         game, region_id, identity, tile_x, tile_y, state, true, state_now_ms,
     );
     let _ = game.update_player_properties(player_id);
-    if let Some(kernel) = player_ai.boss_blue_fury_mut() {
+    if let Some(kernel) = player_ai.player_skill_execution_mut(BOSS_BLUE_FURY_SKILL_ID) {
         let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
     }
     finish_player_boss_blue_fury(game, player_id, player_ai, runtime);
