@@ -53,12 +53,11 @@ const SKILL_USAGE_SUMMONED_CREATURE_ID: u32 = 30_003;
 pub(crate) struct PlayerSummonCreatureExecutionState {
     kernel: SkillExecutionKernel<PlayerSkillDispatch>,
     destination: (i32, i32),
-    variant_index: usize,
 }
 
 impl PlayerSummonCreatureExecutionState {
-    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), variant_index: usize, now_ms: u32) -> Self {
-        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination, variant_index }
+    fn begin(dispatch: PlayerSkillDispatch, destination: (i32, i32), now_ms: u32) -> Self {
+        Self { kernel: SkillExecutionKernel::begin(dispatch, now_ms), destination }
     }
     pub(crate) const fn kernel(&self) -> &SkillExecutionKernel<PlayerSkillDispatch> { &self.kernel }
     pub(crate) fn kernel_mut(&mut self) -> &mut SkillExecutionKernel<PlayerSkillDispatch> { &mut self.kernel }
@@ -72,18 +71,9 @@ fn player_skill_id(dispatch: PlayerSkillDispatch) -> u32 {
     }
 }
 
-fn player_variant_index(skill_id: u32) -> Option<usize> {
-    match skill_id {
-        SUMMON_CORPSE_CANDLE_SKILL_ID => Some(0),
-        SUMMON_SKELETON_SKILL_ID => Some(1),
-        SUMMON_SPORE_SKILL_ID => Some(2),
-        BOSS_FIEND_SUMMON_SKILL_ID => Some(3),
-        _ => None,
-    }
-}
-
 pub(crate) fn is_player_summon_creature_dispatch(dispatch: PlayerSkillDispatch) -> bool {
-    player_variant_index(player_skill_id(dispatch)).is_some()
+    matches!(player_skill_id(dispatch), SUMMON_CORPSE_CANDLE_SKILL_ID
+        | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID)
 }
 
 fn player_terminal(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
@@ -121,10 +111,10 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
     if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(true); }
 }
 
-fn finish_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, variant_index: usize, runtime: &mut Runtime) {
+fn finish_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, skill_id: u32, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
     finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_summon_creature_used(variant_index, now_ms);
+        player_ai.mark_skill_used(skill_id, now_ms);
     });
 }
 
@@ -134,14 +124,14 @@ fn abort_player_summon_creature(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some((dispatch, _)) = player_ai.summon_creature().map(|state| (state.kernel().dispatch(), state.variant_index)) else { return false };
+    let Some(dispatch) = player_ai.summon_creature().map(|state| state.kernel().dispatch()) else { return false };
     abort_player_summon_creature(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
 pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> QueuedSkillExecutionOutcome {
     let skill_id = player_skill_id(dispatch);
-    let Some(variant_index) = player_variant_index(skill_id) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    if !is_player_summon_creature_dispatch(dispatch) { return player_terminal(QueuedSkillExecutionState::Rejected) }
     let Some((region_id, source_x, source_y, skill_level, master)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id), master_info(player)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else { abort_player_summon_creature(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -152,7 +142,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     let now_ms = runtime.now_milliseconds();
     if player_ai.summon_creature().is_none() {
         if !skill_is_restored(
-            player_ai.summon_creature_last_used_ms(variant_index),
+            player_ai.skill_last_used_ms(skill_id),
             reuse_delay_ms,
             now_ms,
         ) {
@@ -162,7 +152,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
         }
         let Some(destination) = player_destination(game, region_id, dispatch, (source_x, source_y)) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
-        player_ai.begin_summon_creature(PlayerSummonCreatureExecutionState::begin(dispatch, destination, variant_index, now_ms));
+        player_ai.begin_summon_creature(PlayerSummonCreatureExecutionState::begin(dispatch, destination, now_ms));
     } else if player_ai.summon_creature().is_none_or(|state| state.kernel().dispatch() != dispatch) {
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
@@ -204,7 +194,7 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
         game.restore_region_owner(owner);
     }
     if let Some(state) = player_ai.summon_creature_mut() { let _ = state.kernel_mut().advance(SkillStage::Check, SkillStage::Calculate); let _ = state.kernel_mut().advance(SkillStage::Calculate, SkillStage::Attack); let _ = state.kernel_mut().advance(SkillStage::Attack, SkillStage::Apply); }
-    finish_player_summon_creature(game, player_id, player_ai, variant_index, runtime);
+    finish_player_summon_creature(game, player_id, player_ai, skill_id, runtime);
     player_terminal(QueuedSkillExecutionState::Completed)
 }
 

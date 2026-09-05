@@ -67,8 +67,6 @@ pub(crate) trait SelfShieldOwner {
         player_ai: &mut CPlayerAI,
         execution: SkillExecutionKernel<PlayerSkillDispatch>,
     );
-    fn last_used_ms(player_ai: &CPlayerAI) -> u32;
-    fn mark_used(player_ai: &mut CPlayerAI, now_ms: u32);
 }
 
 pub(crate) const fn is_self_shield_skill(skill_id: u32) -> bool {
@@ -90,7 +88,7 @@ fn finish_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntim
     runtime: &mut Runtime,
 ) {
     game.finish_self_shield_movement(player_id);
-    Owner::mark_used(player_ai, runtime.now_milliseconds());
+    player_ai.mark_skill_used(Owner::SKILL_ID, runtime.now_milliseconds());
 }
 
 fn cancel_player_self_shield<Owner: SelfShieldOwner, Runtime: GameMainLoopRuntime>(
@@ -222,7 +220,7 @@ where
         game.enter_player_combat_state(player_id);
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            Owner::last_used_ms(player_ai),
+            player_ai.skill_last_used_ms(Owner::SKILL_ID),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {

@@ -4,9 +4,9 @@
 //! записи означает нулевой срок; End обновляет только свой ID, очистка
 //! execution срок не удаляет. Коллекция не определяет порядок исполнения.
 //! У подключённых семейств каждый вариант сохраняет собственный срок.
-//! Сроки взрывных стрел, призыва, лечения, благословения, щитов и WarSoul
-//! пока остаются у прежних владельцев;
-//! перенос их идентичности не подменяется объединением с основным навыком.
+//! Индексы семейств не участвуют в хранении сроков; состояния исполнения
+//! остаются независимыми от cooldown. Сроки WarSoul пока хранятся отдельно:
+//! их владелец не подменяется основным навыком игрока.
 //! Отсчёт CState::Begin фиксируется общим расписанием до OnBeginSkill.
 //! Краткоживущий контекст привязан к dispatch и передаётся kernel при его
 //! установке, до первого AI. После вызова владельца контекст очищается даже
@@ -150,7 +150,7 @@ use crate::gameserver::appserver::skills::scorpion::ScorpionExecutionState;
 use crate::gameserver::appserver::skills::boalock::BoaLockExecutionState;
 use crate::gameserver::appserver::skills::fallingstar::FallingStarExecutionState;
 use crate::gameserver::appserver::skills::explosivearrow::{
-    ExplosiveArrowExecutionState, ExplosiveArrowVariant,
+    ExplosiveArrowExecutionState,
 };
 use crate::gameserver::appserver::skills::strike::StrikeExecutionState;
 use crate::gameserver::appserver::skills::yakshaslash::YakshaSlashExecutionState;
@@ -214,7 +214,6 @@ pub(crate) struct CPlayerAI {
     boa_lock: Option<BoaLockExecutionState>,
     falling_star: Option<FallingStarExecutionState>,
     explosive_arrow: Option<ExplosiveArrowExecutionState>,
-    explosive_arrow_last_used_ms: [u32; 3],
     strike: Option<StrikeExecutionState>,
     daub_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     yaksha_slash: Option<YakshaSlashExecutionState>,
@@ -266,7 +265,6 @@ pub(crate) struct CPlayerAI {
     spider_web: Option<PlayerSpiderWebExecutionState>,
     spider_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     summon_creature: Option<PlayerSummonCreatureExecutionState>,
-    summon_creature_last_used_ms: [u32; 4],
     boss_blue_fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     boss_blue_quake: Option<PlayerBossBlueQuakeExecutionState>,
     boss_fiend_penetrate: Option<PlayerBossFiendPenetrateExecutionState>,
@@ -311,19 +309,15 @@ pub(crate) struct CPlayerAI {
     hearten: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     promotion: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     heal_family: [Option<SkillExecutionKernel<PlayerSkillDispatch>>; 4],
-    heal_family_last_used_ms: [u32; 4],
     pets_control: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     monster_taming: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     knock_out: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     snow_storm: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     weak: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     god_bless: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    god_bless_last_used_ms: [u32; 2],
     cure: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     machine_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    machine_shield_last_used_ms: u32,
     mana_shield: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    mana_shield_last_used_ms: u32,
     immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     swordship: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
@@ -1076,8 +1070,6 @@ impl CPlayerAI {
         self.explosive_arrow = Some(state);
     }
     pub(crate) fn explosive_arrow_mut(&mut self) -> Option<&mut ExplosiveArrowExecutionState> { self.explosive_arrow.as_mut() }
-    pub(crate) const fn explosive_arrow_last_used_ms(&self, variant: ExplosiveArrowVariant) -> u32 { self.explosive_arrow_last_used_ms[variant.index()] }
-    pub(crate) fn mark_explosive_arrow_used(&mut self, variant: ExplosiveArrowVariant, now_ms: u32) { self.explosive_arrow_last_used_ms[variant.index()] = now_ms; }
     pub(crate) const fn strike(&self) -> Option<StrikeExecutionState> { self.strike }
     pub(crate) fn begin_strike(&mut self, mut state: StrikeExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1521,8 +1513,6 @@ impl CPlayerAI {
         self.summon_creature = Some(state);
     }
     pub(crate) fn summon_creature_mut(&mut self) -> Option<&mut PlayerSummonCreatureExecutionState> { self.summon_creature.as_mut() }
-    pub(crate) const fn summon_creature_last_used_ms(&self, index: usize) -> u32 { self.summon_creature_last_used_ms[index] }
-    pub(crate) const fn mark_summon_creature_used(&mut self, index: usize, now_ms: u32) { self.summon_creature_last_used_ms[index] = now_ms; }
     pub(crate) const fn boss_blue_fury(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.boss_blue_fury }
     pub(crate) fn begin_boss_blue_fury(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1793,13 +1783,7 @@ impl CPlayerAI {
         self.heal_family[index].as_mut()
     }
 
-    pub(crate) const fn heal_family_last_used_ms(&self, index: usize) -> u32 {
-        self.heal_family_last_used_ms[index]
-    }
 
-    pub(crate) const fn mark_heal_family_used(&mut self, index: usize, now_ms: u32) {
-        self.heal_family_last_used_ms[index] = now_ms;
-    }
 
     pub(crate) const fn pets_control(
         &self,
@@ -1896,8 +1880,6 @@ impl CPlayerAI {
         self.god_bless = Some(state);
     }
     pub(crate) fn god_bless_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_bless.as_mut() }
-    pub(crate) const fn god_bless_last_used_ms(&self, index: usize) -> u32 { self.god_bless_last_used_ms[index] }
-    pub(crate) const fn mark_god_bless_used(&mut self, index: usize, now_ms: u32) { self.god_bless_last_used_ms[index] = now_ms; }
     pub(crate) const fn cure(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.cure }
     pub(crate) fn begin_cure(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
         state.inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1925,13 +1907,7 @@ impl CPlayerAI {
         self.machine_shield.as_mut()
     }
 
-    pub(crate) const fn machine_shield_last_used_ms(&self) -> u32 {
-        self.machine_shield_last_used_ms
-    }
 
-    pub(crate) const fn mark_machine_shield_used(&mut self, now_ms: u32) {
-        self.machine_shield_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn mana_shield(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
         self.mana_shield
@@ -1950,13 +1926,7 @@ impl CPlayerAI {
         self.mana_shield.as_mut()
     }
 
-    pub(crate) const fn mana_shield_last_used_ms(&self) -> u32 {
-        self.mana_shield_last_used_ms
-    }
 
-    pub(crate) const fn mark_mana_shield_used(&mut self, now_ms: u32) {
-        self.mana_shield_last_used_ms = now_ms;
-    }
 
     pub(crate) const fn immediate_state(
         &self,

@@ -191,9 +191,9 @@ fn finish_movement(game: &mut CGame, player_id: i32) {
     }
 }
 
-fn finish_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, index: usize, runtime: &mut Runtime) {
+fn finish_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, skill_id: u32, runtime: &mut Runtime) {
     finish_movement(game, player_id);
-    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_heal_family_used(index, now_ms));
+    finish_state_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_skill_used(skill_id, now_ms));
 }
 
 fn abort_player_heal(game: &mut CGame, player_id: i32) {
@@ -202,8 +202,8 @@ fn abort_player_heal(game: &mut CGame, player_id: i32) {
 }
 
 pub(crate) fn complete_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some((index, dispatch)) = (0..4).find_map(|index| player_ai.heal_family(index).map(|execution| (index, execution.dispatch()))) else { return false };
-    finish_player_heal(game, player_id, player_ai, index, runtime);
+    let Some(dispatch) = (0..4).find_map(|index| player_ai.heal_family(index).map(|execution| execution.dispatch())) else { return false };
+    finish_player_heal(game, player_id, player_ai, dispatch.skill_id(), runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 
@@ -306,7 +306,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
         };
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(
-            player_ai.heal_family_last_used_ms(index),
+            player_ai.skill_last_used_ms(skill_id),
             reuse_delay_ms,
             cooldown_now_ms,
         ) {
@@ -474,6 +474,6 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
     }
-    finish_player_heal(game, player_id, player_ai, index, runtime);
+    finish_player_heal(game, player_id, player_ai, dispatch.skill_id(), runtime);
     terminal(QueuedSkillExecutionState::Completed)
 }

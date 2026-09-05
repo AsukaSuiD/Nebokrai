@@ -95,11 +95,4 @@ impl SelfShieldOwner for ManaShieldOwner {
         player_ai.begin_mana_shield(execution);
     }
 
-    fn last_used_ms(player_ai: &CPlayerAI) -> u32 {
-        player_ai.mana_shield_last_used_ms()
-    }
-
-    fn mark_used(player_ai: &mut CPlayerAI, now_ms: u32) {
-        player_ai.mark_mana_shield_used(now_ms);
-    }
 }
