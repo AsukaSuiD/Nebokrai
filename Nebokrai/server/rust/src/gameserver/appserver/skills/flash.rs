@@ -17,11 +17,15 @@
 //! исходной x87-цепочке до единственной записи в `float` и усекает критический
 //! множитель к нулю перед `int`. Восстановление использует абсолютный срок
 //! `CSkill::IsRestored`; перемещение и поклеточный удар остаются elapsed.
+//! AI завершает RageBreak через End (0x00599E97) до проверки MP/RP:
+//! пересчёт свойств принадлежит этому удалению. После обоих списаний
+//! OnChangeStates (0x00599F26) публикует ресурсы до перемещения, без
+//! повторного пересчёта при успехе или отказе последующей проверки.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::fightdefense::truncate_original;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use super::ragebreakstate::send_rage_break_state_visual;
+use super::ragebreakstate::end_player_rage_break_state;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
@@ -231,19 +235,18 @@ pub(crate) fn execute_player_flash<Runtime: GameMainLoopRuntime>(game: &mut CGam
         let Some((target_x, target_y)) = target_position(game, region_id, player_id, dispatch) else { game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, 10); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
         let path = build_attack_path(game, region_id, source_x, source_y, target_x, target_y, maximum);
         if path.is_empty() { failure(game, player_id, 2, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
-        let Some(rage_state) = game.find_player_mut(player_id).and_then(CPlayer::take_rage_break_state) else { failure(game, player_id, 4, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) };
-        send_rage_break_state_visual(game, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: Default::default() }, source_x, source_y, rage_state, false, runtime.now_milliseconds());
+        if !end_player_rage_break_state(game, player_id, runtime.now_milliseconds()) { failure(game, player_id, 4, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); let _ = game.update_player_properties(player_id); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        if (current_mana.wrapping_sub(mp_loss) as i32) < 0 { failure(game, player_id, 7, mp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 { failure(game, player_id, 8, rp_loss); let _ = game.update_player_properties(player_id); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
+        if (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 { failure(game, player_id, 8, rp_loss); finish_player_flash(game, player_id, ai, runtime); return terminal(QueuedSkillExecutionState::Rejected) }
         if let Some(player) = game.find_player_mut(player_id) { player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16); player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
+        let _ = game.publish_player_states(player_id);
         let destination = *path.last().expect("непустой путь проверен выше");
         let _ = game.relocate_player_shape(player_id, region_id, destination.0, destination.1);
         send_visual(game, player_id, level, 2, Some((destination.0, destination.1)));
         if let Some(state) = ai.flash_mut() { state.path = path; state.condition_checked = true; let _ = state.kernel.advance(SkillStage::Begin, SkillStage::Check); }
-        let _ = game.update_player_properties(player_id);
     }
 
     if ai.flash().is_some_and(|state| state.condition_checked && !state.attacked) {

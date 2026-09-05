@@ -10,6 +10,10 @@
 //! координирует только владельцев региона, применение атаки и доставку.
 //! После `Begin` успех, отказ и клиентская отмена используют точный общий
 //! хвост `End(1)` с возвратом движения, `AfterUseSkill` и временем восстановления.
+//! End RageBreak (0x0057B004) пересчитывает свойства до проверок MP/RP;
+//! последующие ненулевые расходы проверяются по знаку DWORD-разности.
+//! После обоих списаний вызывается OnChangeStates (0x0057B08E), а не
+//! повторный UpdateProperty. Отказ после MP сохраняет это частичное списание.
 
 use super::baseattack::{
     finish_delayed_base_attack, time_reached, SKILL_USAGE_DELAY_TIME,
@@ -18,7 +22,7 @@ use super::baseattack::{
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_SUMMONED_LIFETIME};
 use super::flash::master_info;
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use super::ragebreakstate::send_rage_break_state_visual;
+use super::ragebreakstate::end_player_rage_break_state;
 use super::thunderslashphalanx::CThunderSlashPhalanx;
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::goods::cgoodsbaseproperties::GAP_WEAPON_CATEGORY;
@@ -140,27 +144,26 @@ pub(crate) fn execute_player_thunder_slash<Runtime: GameMainLoopRuntime>(
             finish_player_thunder_slash(game, player_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
-        let Some(rage_state) = game.find_player_mut(player_id).and_then(CPlayer::take_rage_break_state) else {
+        if !end_player_rage_break_state(game, player_id, runtime.now_milliseconds()) {
             failure(game, player_id, 4, mp_loss);
             finish_player_thunder_slash(game, player_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
-        };
-        send_rage_break_state_visual(game, region_id, ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: Default::default() }, source_x, source_y, rage_state, false, runtime.now_milliseconds());
+        }
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if mp_loss != 0 && current_mana < mp_loss {
+        if mp_loss != 0 && (current_mana.wrapping_sub(mp_loss) as i32) < 0 {
             failure(game, player_id, 7, mp_loss);
             finish_player_thunder_slash(game, player_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if mp_loss != 0 && let Some(player) = game.find_player_mut(player_id) { player.set_mana(current_mana.wrapping_sub(mp_loss)); }
         let current_rp = game.find_player(player_id).map_or(0, CPlayer::rp);
-        if rp_loss != 0 && u32::from(current_rp) < rp_loss {
+        if rp_loss != 0 && (u32::from(current_rp).wrapping_sub(rp_loss) as i32) < 0 {
             failure(game, player_id, 8, rp_loss);
             finish_player_thunder_slash(game, player_id, ai, runtime);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) { if rp_loss != 0 { player.set_rp(u32::from(current_rp).wrapping_sub(rp_loss) as u16); } player.movement_shape_mut().set_direction(get_line_direction(source_x, source_y, target_x, target_y)); }
-        let _ = game.update_player_properties(player_id); send_visual(game, player_id, level, None);
+        let _ = game.publish_player_states(player_id); send_visual(game, player_id, level, None);
         if let Some(state) = ai.thunder_slash_mut() { let _ = state.advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started = ai.thunder_slash().map(SkillExecutionKernel::started_at_ms).unwrap_or_default();
