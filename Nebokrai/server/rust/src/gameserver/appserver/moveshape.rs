@@ -2935,24 +2935,17 @@ impl CMoveShape {
         &self.fury_states
     }
 
-    pub(crate) fn take_expired_fury_states(&mut self, now_ms: u32) -> Vec<FuryState> {
-        let mut expired = Vec::new();
-        let mut position = 0;
-        while position < self.fury_states.len() {
-            if self.fury_states[position].expired(now_ms) {
-                let serialized_offset = known_state_record_offsets(&self.ex_states)
-                    .into_iter()
-                    .filter(|offset| read_u32(&self.ex_states, *offset) == Some(FURY_STATE_SKILL_ID))
-                    .nth(position);
-                expired.push(self.fury_states.remove(position));
-                if let Some(offset) = serialized_offset {
-                    self.remove_serialized_state_record_at(offset, FURY_STATE_BYTES);
-                }
-            } else {
-                position += 1;
-            }
+    pub(crate) fn remove_fury_state(&mut self, position: usize) -> Option<FuryState> {
+        self.fury_states.get(position)?;
+        let serialized_offset = known_state_record_offsets(&self.ex_states)
+            .into_iter()
+            .filter(|offset| read_u32(&self.ex_states, *offset) == Some(FURY_STATE_SKILL_ID))
+            .nth(position);
+        let state = self.fury_states.remove(position);
+        if let Some(offset) = serialized_offset {
+            self.remove_serialized_state_record_at(offset, FURY_STATE_BYTES);
         }
-        expired
+        Some(state)
     }
 
     pub(crate) const fn rage_break_state(&self) -> Option<RageBreakState> {
