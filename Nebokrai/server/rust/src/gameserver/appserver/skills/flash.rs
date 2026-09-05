@@ -168,7 +168,7 @@ fn build_attack_path(
     path
 }
 
-pub(super) fn master_info(player: &CPlayer) -> MasterInfo {
+pub(crate) fn master_info(player: &CPlayer) -> MasterInfo {
     let permissions = player.pk_permissions();
     MasterInfo { master_type: PLAYER_TYPE, master_id: player.player_id(), master_guild_id: player.faction_id(), master_team_id: player.team_id(), master_union_id: player.union_id(), master_country_id: i32::from(player.country()), permitted_to_kill_player: i32::from(permissions.player), permitted_to_kill_teammate: i32::from(permissions.teammate), permitted_to_kill_guild_member: i32::from(permissions.guild_member), permitted_to_kill_criminal: i32::from(permissions.criminal) }
 }

@@ -552,6 +552,7 @@ mod weak;
 mod yinyang;
 mod godbless;
 mod periodicattack;
+mod playerskillschedule;
 #[path = "../appserver/skills/baseattackruntime.rs"]
 mod baseattackruntime;
 
@@ -41218,7 +41219,14 @@ impl CGame {
                 | PlayerSkillDispatch::Point { skill_id, .. }
                 | PlayerSkillDispatch::Object { skill_id, .. } => skill_id == GIBE_SKILL_ID,
             };
-            let outcome = if concrete_base_attack {
+            let schedule_rejected = self.reject_inherited_attack_schedule(player_id, dispatch, player_ai);
+            let outcome = if schedule_rejected {
+                QueuedSkillExecutionOutcome {
+                    state: QueuedSkillExecutionState::Rejected,
+                    first_contact: false,
+                    killing_blow: None,
+                }
+            } else if concrete_base_attack {
                 baseattackruntime::execute_player_base_attack(
                     self,
                     player_id,
@@ -41475,7 +41483,7 @@ impl CGame {
                 QueuedSkillExecutionState::Rejected =>
                     player_ai.finish_player_skill(dispatch, SkillTermination::Rejected),
             };
-            if outcome.state == QueuedSkillExecutionState::Completed
+            if (outcome.state == QueuedSkillExecutionState::Completed || schedule_rejected)
                 && removed_from_queue
             {
                 self.restore_player_default_attack_after_skill_end(player_id);
@@ -41483,6 +41491,7 @@ impl CGame {
             if outcome.state == QueuedSkillExecutionState::Rejected
                 && removed_from_queue
                 && lost_materialized_object_target
+                && !schedule_rejected
             {
                 // После уже начатого object-skill native `OnLoseTarget`
                 // добавляет общий отказ вслед за concrete `End(1)`, даже если
