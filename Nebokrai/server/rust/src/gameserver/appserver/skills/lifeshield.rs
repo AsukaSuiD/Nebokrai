@@ -4,6 +4,10 @@
 //! рассылает изменённый товар, затем создаёт упорядоченное защитное состояние.
 //! Любое завершение состояния добавляет краткоживущий `CCureState`.
 //! Reuse проверяется exact `CSkill::IsRestored`, отдельно от cast duration.
+//! Источник: gameserver.exe + GameServer.pdb, CLifeShield::AI (0x00518a60).
+//! Cast duration — unsigned now >= wrapping(start + delay), cmp/jb 0x00518c59.
+//! При отказе Begin внешний 4,2 планировщика следует после action 3 от End(0),
+//! а при отказе уже начатого AI повторного общего ответа нет.
 
 pub(crate) const LIFE_SHIELD_SKILL_ID: u32 = 544;
 pub(crate) const LIFE_SHIELD_EFFECT_MESSAGE: i32 = 0x000b_fe01;
@@ -17,7 +21,6 @@ pub(crate) const SKILL_USAGE_STATE_HP: u32 = 10_010;
 pub(crate) const SKILL_USAGE_TARGET_HP_DECREASE_FACTOR: u32 = 20_024;
 pub(crate) const SKILL_USAGE_TARGET_MP_DECREASE_FACTOR: u32 = 20_025;
 
-use super::baseattack::time_reached;
 use super::kernel::{
     SkillExecutionKernel, SkillStage, battle_fairy_mana_text_cost, skill_is_restored,
 };
@@ -92,10 +95,14 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
     if game.find_player(player_id).is_none() {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
-        game.send_battle_fairy_skill_failure(player_id, 2);
+    let starting = player_ai.life_shield().is_none();
+    let reject_before_ai = |game: &mut CGame| {
         send_cast(game, player_id, skill_level, 3);
-        return terminal(QueuedSkillExecutionState::Rejected);
+        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level) else {
+        return reject_before_ai(game);
     };
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
@@ -116,26 +123,20 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
         ) {
             game.send_battle_fairy_skill_failure(player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
-            game.send_battle_fairy_skill_failure(player_id, 2);
-            send_cast(game, player_id, skill_level, 3);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         if mp_loss != 0 {
             let Some(current) = game
                 .find_player(player_id)
                 .and_then(|player| player.war_soul_mana(game.goods_factory()))
             else {
-                game.send_battle_fairy_skill_failure(player_id, 2);
-                send_cast(game, player_id, skill_level, 3);
-                return terminal(QueuedSkillExecutionState::Rejected);
+                return reject_before_ai(game);
             };
             if i64::from(current) - i64::from(mp_loss) < 0 {
                 game.send_battle_fairy_skill_failure(player_id, 7);
                 let text_cost = battle_fairy_mana_text_cost(mp_loss);
                 game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
-                game.send_battle_fairy_skill_failure(player_id, 2);
-                send_cast(game, player_id, skill_level, 3);
-                return terminal(QueuedSkillExecutionState::Rejected);
+                return reject_before_ai(game);
             }
         }
         player_ai.begin_life_shield(SkillExecutionKernel::begin(dispatch, started_at_ms));
@@ -189,7 +190,7 @@ pub(crate) fn execute_battle_fairy_life_shield<Runtime: GameMainLoopRuntime>(
         .life_shield()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение щита жизни создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
 

@@ -11,9 +11,11 @@
 //! применяет атаку к целям и выполняет фактическую доставку.
 //! Пара с `CThunder` использует то же усечение sprite через исходный `i64` и
 //! отдельное усечение стихийного коэффициента в `i32`. Восстановление
-//! использует абсолютный срок `CSkill::IsRestored`; ожидание остаётся elapsed.
+//! использует абсолютный срок `CSkill::IsRestored`; ожидание сравнивает
+//! unsigned now с wrapping(start + delay), cmp/jb 0x00520885.
+//! Отказ объектного Begin завершает эффект через End(0), затем расписание
+//! отправляет `4,2`; отказ уже начатого AI не повторяет этот общий ответ.
 
-use super::baseattack::time_reached;
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
     SKILL_USAGE_MIN_ATTACK,
@@ -86,8 +88,16 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
     if !matches!(dispatch, BattleFairySkillDispatch::Object { .. }) {
         return reject_thunder_null_target(game, player_id, LEIMING2_SKILL_ID, skill_level);
     }
+    let starting = player_ai.leiming2().is_none();
+    let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
+        if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
+        if !text.is_empty() { game.send_skill_system_info(player_id, text); }
+        send_thunder_family_cast(game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None);
+        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
     let Some(properties) = game.skill_base_properties(LEIMING2_SKILL_ID, skill_level) else {
-        return reject(game, player_id, skill_level, 2, b"");
+        return reject_before_ai(game, 2, b"");
     };
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -105,22 +115,22 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
                 || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C)
             {
                 game.send_skill_system_info(player_id, b"ZHGS0046");
-                return reject(game, player_id, skill_level, 2, b"");
+                return reject_before_ai(game, 2, b"");
             }
             if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B) {
                 game.send_skill_system_info(player_id, b"ZHGS0047");
-                return reject(game, player_id, skill_level, 2, b"");
+                return reject_before_ai(game, 2, b"");
             }
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(player_ai.leiming2_last_used_ms(), cooldown_ms, cooldown_now_ms) {
-            return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
+            return reject_before_ai(game, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) =
             dispatch_position(game, region_id, dispatch)
         else {
-            return reject(game, player_id, skill_level, 10, b"ZHGS0050");
+            return reject_before_ai(game, 10, b"ZHGS0050");
         };
         let Some(source) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -134,21 +144,18 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            return reject(game, player_id, skill_level, 0x0b, b"ZHGS0049");
+            return reject_before_ai(game, 0x0b, b"ZHGS0049");
         }
         if path.iter().any(|cell| cell.2 == 2) {
             game.send_battle_fairy_skill_failure(player_id, 0x0f);
             game.send_skill_system_info(player_id, b"ZHGS0051");
-            send_thunder_family_cast(
-                game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
-            );
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game, 2, b"");
         }
         let Some(war_soul_mana) = game
             .find_player(player_id)
             .and_then(|player| player.war_soul_mana(game.goods_factory()))
         else {
-            return reject(game, player_id, skill_level, 2, b"");
+            return reject_before_ai(game, 2, b"");
         };
         if mp_loss != 0 && i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
             game.send_battle_fairy_skill_failure(player_id, 7);
@@ -157,10 +164,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
                 b"ZHGS0052",
                 battle_fairy_mana_text_cost(mp_loss),
             );
-            send_thunder_family_cast(
-                game, player_id, LEIMING2_SKILL_ID, skill_level, 3, None,
-            );
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game, 2, b"");
         }
         player_ai.begin_leiming2(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
@@ -211,7 +215,7 @@ pub(crate) fn execute_battle_fairy_leiming2<Runtime: GameMainLoopRuntime>(
         .leiming2()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение отложенного грома создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some((target_x, target_y, target)) =

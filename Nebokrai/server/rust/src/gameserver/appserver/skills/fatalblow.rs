@@ -6,11 +6,13 @@
 //! визуальные пакеты и создание
 //! `CFatalBlowPhalanx`. `CGame` предоставляет владельцев, регион, регистрацию
 //! снаряда и доставку. Координатный и пустой `Begin` сохраняют исходный отказ
-//! `10 + ZHGS0045` и завершающий visual action `3` без generic failure `2`.
+//! `10 + ZHGS0045` и завершающий visual action `3`; затем планировщик выдаёт
+//! общий 4,2. Сам Begin (0x0051e3c0) не выдаёт ранний 4,2, в отличие от
+//! BloodLoss/PoisonArrow. Отказ уже запущенного AI не получает ответ расписания.
 //! Восстановление использует абсолютный срок `CSkill::IsRestored`; подготовка
-//! и lifetime снаряда остаются elapsed.
+//! сравнивает unsigned now с wrapping(start + delay), cmp/jb 0x0051f330.
+//! Lifetime снаряда принадлежит отдельному владельцу.
 
-use super::baseattack::time_reached;
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -141,6 +143,14 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
+    let starting = player_ai.fatal_blow().is_none();
+    let reject_before_ai = |game: &mut CGame, level: i32, action: u8, text: &[u8]| {
+        if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
+        if !text.is_empty() { game.send_skill_system_info(player_id, text); }
+        send_end(game, player_id, level);
+        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
     let (skill_level, target) = match dispatch {
         BattleFairySkillDispatch::SelfTarget {
             skill_id: FATAL_BLOW_SKILL_ID,
@@ -150,7 +160,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
             skill_id: FATAL_BLOW_SKILL_ID,
             skill_level,
             ..
-        } => return reject(game, player_id, skill_level, 10, b"ZHGS0045"),
+        } => return reject_before_ai(game, skill_level, 10, b"ZHGS0045"),
         BattleFairySkillDispatch::Object {
             skill_id: FATAL_BLOW_SKILL_ID,
             skill_level,
@@ -165,7 +175,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let Some(properties) = game.skill_base_properties(FATAL_BLOW_SKILL_ID, skill_level) else {
-        return reject(game, player_id, skill_level, 2, b"");
+        return reject_before_ai(game, skill_level, 2, b"");
     };
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -181,25 +191,25 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
 
     if player_ai.fatal_blow().is_none() {
         if target.object_type == PLAYER_TYPE && target.id == player_id {
-            return reject(game, player_id, skill_level, 10, b"ZHGS0045");
+            return reject_before_ai(game, skill_level, 10, b"ZHGS0045");
         }
         if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_A)
             || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B)
         {
             game.send_skill_system_info(player_id, b"ZHGS0046");
-            return reject(game, player_id, skill_level, 2, b"");
+            return reject_before_ai(game, skill_level, 2, b"");
         }
         if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C) {
             game.send_skill_system_info(player_id, b"ZHGS0047");
-            return reject(game, player_id, skill_level, 2, b"");
+            return reject_before_ai(game, skill_level, 2, b"");
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
         if !skill_is_restored(player_ai.fatal_blow_last_used_ms(), cooldown_ms, cooldown_now_ms) {
-            return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
+            return reject_before_ai(game, skill_level, 0x0d, b"ZHGS0048");
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            return reject(game, player_id, skill_level, 10, b"ZHGS0045");
+            return reject_before_ai(game, skill_level, 10, b"ZHGS0045");
         };
         let Some(source_view) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -213,7 +223,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            return reject(game, player_id, skill_level, 0x0b, b"ZHGS0049");
+            return reject_before_ai(game, skill_level, 0x0b, b"ZHGS0049");
         }
         if path.iter().any(|cell| cell.2 == 2) {
             game.send_battle_fairy_skill_failure(player_id, 0x0f);
@@ -222,14 +232,13 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
                 b"ZHGS0051",
                 game.periodic_state_target_name(region_id, target),
             );
-            send_end(game, player_id, skill_level);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game, skill_level, 2, b"");
         }
         let war_soul_mana = game
             .find_player(player_id)
             .and_then(|player| player.war_soul_mana(game.goods_factory()));
         let Some(war_soul_mana) = war_soul_mana else {
-            return reject(game, player_id, skill_level, 2, b"");
+            return reject_before_ai(game, skill_level, 2, b"");
         };
         if mp_loss != 0 {
             if i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
@@ -239,8 +248,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
                     b"ZHGS0052",
                     battle_fairy_mana_text_cost(mp_loss),
                 );
-                send_end(game, player_id, skill_level);
-                return terminal(QueuedSkillExecutionState::Rejected);
+                return reject_before_ai(game, skill_level, 2, b"");
             }
         }
         player_ai.begin_fatal_blow(SkillExecutionKernel::begin(dispatch, started_at_ms));
@@ -286,7 +294,7 @@ pub(crate) fn execute_battle_fairy_fatal_blow<Runtime: GameMainLoopRuntime>(
         .fatal_blow()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение смертельного удара создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {

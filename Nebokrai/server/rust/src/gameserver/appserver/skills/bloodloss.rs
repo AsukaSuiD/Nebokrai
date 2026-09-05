@@ -6,14 +6,16 @@
 //! `CGame` предоставляет владельцев, регион и атомарную установку состояния
 //! игрока или монстра; последующие периодические удары принадлежат
 //! `bloodlossstate.rs`. Координатный `Begin` не создаёт клеточную атаку: без
-//! object-target он проходит точный отказ `10 → ZHGS0045 → 2 → End`.
+//! object-target он проходит отказ `10 → ZHGS0045 → 2 → End → 2`:
+//! первый 4,2 принадлежит Begin, последний — OnScheduleAboutWarSoul.
 //! Коэффициент периодического урона вычисляется в x87 из полного unsigned
 //! `u32` и `0.01_f32`, после чего единожды сохраняется как `f32`.
 //! Модификатор урона сохраняет исходное усечение x87 через 64-битное целое,
 //! младшие 32 бита которого затем переводятся в `float` как беззнаковое число.
-//! Reuse использует exact `CSkill::IsRestored`; cast и periodic часы — elapsed.
+//! Reuse использует exact `CSkill::IsRestored`; ожидание навыка сравнивает
+//! unsigned now с wrapping(start + delay), cmp/jb 0x0051b649.
+//! Периодические часы принадлежат владельцу состояния.
 
-use super::baseattack::time_reached;
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -135,17 +137,20 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
     let Some(region_id) = player.server_region_id() else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let Some(properties) = game.skill_base_properties(BLOOD_LOSS_SKILL_ID, skill_level) else {
-        send_failure(game, player_id, 2);
+    let starting = player_ai.blood_loss().is_none();
+    let reject_before_ai = |game: &mut CGame| {
+        if starting { send_failure(game, player_id, 2); }
         send_cast(game, player_id, skill_level, 3, None);
-        return terminal(QueuedSkillExecutionState::Rejected);
+        if starting { send_failure(game, player_id, 2); }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
+    let Some(properties) = game.skill_base_properties(BLOOD_LOSS_SKILL_ID, skill_level) else {
+        return reject_before_ai(game);
     };
     let Some(target) = target else {
         send_failure(game, player_id, 10);
         game.send_skill_system_info(player_id, b"ZHGS0045");
-        send_failure(game, player_id, 2);
-        send_cast(game, player_id, skill_level, 3, None);
-        return terminal(QueuedSkillExecutionState::Rejected);
+        return reject_before_ai(game);
     };
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -165,23 +170,17 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
         if target.id == player_id && target.object_type == PLAYER_TYPE {
             send_failure(game, player_id, 10);
             game.send_skill_system_info(player_id, b"ZHGS0045");
-            send_failure(game, player_id, 2);
-            send_cast(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_A)
             || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B)
         {
             game.send_skill_system_info(player_id, b"ZHGS0046");
-            send_failure(game, player_id, 2);
-            send_cast(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C) {
             game.send_skill_system_info(player_id, b"ZHGS0047");
-            send_failure(game, player_id, 2);
-            send_cast(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         let started_at_ms = runtime.now_milliseconds();
         let cooldown_now_ms = runtime.now_milliseconds();
@@ -192,16 +191,12 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
         ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
-            send_failure(game, player_id, 2);
-            send_cast(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         let Some(target_view) = game.base_magic_target_view(region_id, target) else {
             send_failure(game, player_id, 10);
             game.send_skill_system_info(player_id, b"ZHGS0045");
-            send_failure(game, player_id, 2);
-            send_cast(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         };
         let Some(source_view) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -217,9 +212,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
             send_failure(game, player_id, 0x0b);
             game.send_skill_system_info(player_id, b"ZHGS0049");
-            send_failure(game, player_id, 2);
-            send_cast(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         if path.iter().any(|cell| cell.2 == 2) {
             send_failure(game, player_id, 0x0f);
@@ -228,18 +221,14 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
                 b"ZHGS0051",
                 game.periodic_state_target_name(region_id, target),
             );
-            send_failure(game, player_id, 2);
-            send_cast(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         if mp_loss != 0 {
             let Some(current) = game
                 .find_player(player_id)
                 .and_then(|player| player.war_soul_mana(game.goods_factory()))
             else {
-                send_failure(game, player_id, 2);
-                send_cast(game, player_id, skill_level, 3, None);
-                return terminal(QueuedSkillExecutionState::Rejected);
+                return reject_before_ai(game);
             };
             if i64::from(current) - i64::from(mp_loss) < 0 {
                 send_failure(game, player_id, 7);
@@ -248,9 +237,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
                     b"ZHGS0052",
                     battle_fairy_mana_text_cost(mp_loss),
                 );
-                send_failure(game, player_id, 2);
-                send_cast(game, player_id, skill_level, 3, None);
-                return terminal(QueuedSkillExecutionState::Rejected);
+                return reject_before_ai(game);
             }
         }
         player_ai.begin_blood_loss(SkillExecutionKernel::begin(dispatch, started_at_ms));
@@ -301,7 +288,7 @@ pub(crate) fn execute_battle_fairy_blood_loss<Runtime: GameMainLoopRuntime>(
         .blood_loss()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение потери крови создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(target_view) = game.base_magic_target_view(region_id, target) else {

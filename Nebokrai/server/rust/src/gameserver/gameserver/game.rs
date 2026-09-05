@@ -2207,6 +2207,9 @@ pub(crate) enum QueuedSkillExecutionState {
     Pending,
     Completed,
     Rejected,
+    /// Применение отклонено, но конкретный владелец требует `End(1)`:
+    /// износ оружия и cooldown сохраняются без повторного общего отказа.
+    RejectedAfterUse,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41364,7 +41367,7 @@ impl CGame {
                 QueuedSkillExecutionState::Pending => false,
                 QueuedSkillExecutionState::Completed =>
                     player_ai.finish_player_skill(dispatch, SkillTermination::Completed),
-                QueuedSkillExecutionState::Rejected =>
+                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
                     player_ai.finish_player_skill(dispatch, SkillTermination::Rejected),
             };
             if (outcome.state == QueuedSkillExecutionState::Completed || schedule_rejected)
@@ -41581,7 +41584,7 @@ impl CGame {
                     dispatch,
                     SkillTermination::Completed,
                 ),
-                QueuedSkillExecutionState::Rejected => player_ai.finish_battle_fairy_skill(
+                QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse => player_ai.finish_battle_fairy_skill(
                     dispatch,
                     SkillTermination::Rejected,
                 ),

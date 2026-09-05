@@ -5,10 +5,12 @@
 //! рассылается до задержки; после задержки здоровье игрока увеличивается через
 //! ограничивающий `SetHP`. Повтор при исчезнувшем equipment-owner-е, порядок
 //! visual packets и отдельные часы восстановления сохранены. Восстановление
-//! использует абсолютный срок `CSkill::IsRestored`, а задержка стадии —
-//! отдельную elapsed-проверку.
+//! использует абсолютный срок `CSkill::IsRestored`; AI также сравнивает
+//! unsigned now с wrapping(start + delay), cmp/jb 0x0051e00a.
+//! После SetHP AI вызывает OnChangeStates (+0x164, 0x0051e043), без
+//! UpdateProperty. Отказ Begin выдаёт action 3 перед внешним 4,2
+//! планировщика; отказ уже начатого AI не получает повторного ответа.
 
-use super::baseattack::time_reached;
 use super::basemagic::{
     SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
 };
@@ -62,9 +64,14 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
         } if skill_id == WANGSHENG_SKILL_ID => skill_level,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
-    let Some(properties) = game.skill_base_properties(WANGSHENG_SKILL_ID, skill_level) else {
+    let starting = player_ai.wangsheng().is_none();
+    let reject_before_ai = |game: &mut CGame| {
         send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
-        return terminal(QueuedSkillExecutionState::Rejected);
+        if starting { send_failure(game, player_id, 2); }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
+    let Some(properties) = game.skill_base_properties(WANGSHENG_SKILL_ID, skill_level) else {
+        return reject_before_ai(game);
     };
     let mp_loss = properties.query_property(SKILL_USAGE_USER_MP_LOSE);
     let hp_gain = properties.query_property(SKILL_USAGE_TARGET_HP_GAIN);
@@ -85,8 +92,7 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
         ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
-            send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         if mp_loss != 0
             && player
@@ -96,8 +102,7 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
             send_failure(game, player_id, 7);
             let text_cost = battle_fairy_mana_text_cost(mp_loss);
             game.send_skill_system_info_with_unsigned(player_id, b"ZHGS0052", text_cost);
-            send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 3);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         player_ai.begin_wangsheng(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
@@ -166,14 +171,14 @@ pub(crate) fn execute_battle_fairy_wangsheng<Runtime: GameMainLoopRuntime>(
         .wangsheng()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("исполнение восстановления здоровья создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     send_transfer_cast(game, player_id, WANGSHENG_SKILL_ID, skill_level, 2);
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_health(player.health().wrapping_add(hp_gain));
     }
-    let _ = game.update_player_properties(player_id);
+    let _ = game.publish_player_states(player_id);
     if let Some(state) = player_ai.wangsheng_mut() {
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);

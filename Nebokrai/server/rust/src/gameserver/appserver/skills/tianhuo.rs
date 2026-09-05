@@ -14,9 +14,11 @@
 //! `0x13A`, хотя ID навыка равен `0x21A`. `CGame` только разрешает владельцев,
 //! регистрирует область, применяет результат к независимым владельцам и
 //! выполняет доставку. Восстановление использует абсолютный срок
-//! `CSkill::IsRestored`; стадийная задержка остаётся elapsed-проверкой.
+//! `CSkill::IsRestored`; стадийная задержка сравнивает unsigned now с
+//! wrapping(start + delay), cmp/jb 0x005231e1.
+//! Отказ объектного Begin (0x005222f0) завершает эффект через End(0), затем
+//! расписание отправляет `4,2`; ошибки начатого AI сохраняют отдельный путь.
 
-use super::baseattack::time_reached;
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_MAX_ATTACK,
     SKILL_USAGE_MIN_ATTACK,
@@ -132,8 +134,16 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         game.send_battle_fairy_skill_failure(player_id, 2);
         return terminal(QueuedSkillExecutionState::Rejected);
     }
+    let starting = player_ai.tianhuo().is_none();
+    let reject_before_ai = |game: &mut CGame, action: u8, text: &[u8]| {
+        if action != 2 { game.send_battle_fairy_skill_failure(player_id, action); }
+        if !text.is_empty() { game.send_skill_system_info(player_id, text); }
+        send_visual(game, player_id, skill_level, 3, None);
+        if starting { game.send_battle_fairy_skill_failure(player_id, 2); }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
     let Some(properties) = game.skill_base_properties(TIANHUO_SKILL_ID, skill_level) else {
-        return reject(game, player_id, skill_level, 2, b"");
+        return reject_before_ai(game, 2, b"");
     };
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let cooldown_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -150,11 +160,11 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
                 || game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_C)
             {
                 game.send_skill_system_info(player_id, b"ZHGS0046");
-                return reject(game, player_id, skill_level, 2, b"");
+                return reject_before_ai(game, 2, b"");
             }
             if game.target_has_state_by_skill_id(region_id, target, DENIED_STATE_B) {
                 game.send_skill_system_info(player_id, b"ZHGS0047");
-                return reject(game, player_id, skill_level, 2, b"");
+                return reject_before_ai(game, 2, b"");
             }
         }
         let started_at_ms = runtime.now_milliseconds();
@@ -164,11 +174,11 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             cooldown_ms,
             cooldown_now_ms,
         ) {
-            return reject(game, player_id, skill_level, 0x0d, b"ZHGS0048");
+            return reject_before_ai(game, 0x0d, b"ZHGS0048");
         }
         let Some((target_x, target_y, _)) = dispatch_position(game, region_id, dispatch)
         else {
-            return reject(game, player_id, skill_level, 10, b"");
+            return reject_before_ai(game, 10, b"");
         };
         let Some(source) = game.find_player(player_id).and_then(CPlayer::shape_view) else {
             return terminal(QueuedSkillExecutionState::Rejected);
@@ -182,13 +192,13 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
             None,
         );
         if maximum_distance != 0 && path.len() > maximum_distance as usize {
-            return reject(game, player_id, skill_level, 0x0b, b"ZHGS0049");
+            return reject_before_ai(game, 0x0b, b"ZHGS0049");
         }
         let Some(war_soul_mana) = game
             .find_player(player_id)
             .and_then(|player| player.war_soul_mana(game.goods_factory()))
         else {
-            return reject(game, player_id, skill_level, 2, b"");
+            return reject_before_ai(game, 2, b"");
         };
         if mp_loss != 0 && i64::from(war_soul_mana) - i64::from(mp_loss) < 0 {
             game.send_battle_fairy_skill_failure(player_id, 7);
@@ -197,8 +207,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
                 b"ZHGS0052",
                 battle_fairy_mana_text_cost(mp_loss),
             );
-            send_visual(game, player_id, skill_level, 3, None);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game, 2, b"");
         }
         player_ai.begin_tianhuo(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
@@ -273,7 +282,7 @@ pub(crate) fn execute_battle_fairy_tianhuo<Runtime: GameMainLoopRuntime>(
         .tianhuo()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение небесного огня создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let Some((target_x, target_y, target)) = dispatch_position(game, region_id, dispatch)

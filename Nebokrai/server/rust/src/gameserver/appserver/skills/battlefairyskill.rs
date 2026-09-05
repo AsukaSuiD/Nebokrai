@@ -11,6 +11,18 @@
 //! свойств здесь нет; изменения состояний обрабатывают конкретные владельцы.
 //! Здесь остаётся общий терминальный хвост и состав packet-ов; проверки и
 //! формулы принадлежат соответствующим модулям-владельцам.
+//! Ошибки AI атак 0x21a..=0x21f вызывают End(0): Tianhuo (0x00522e5a),
+//! Leiming2 (0x005206b1), FatalBlow (0x0051f1ac), BloodLoss (0x0051b4af),
+//! PoisonArrow (0x00519e0c), Thunder (0x00521a51). Это не внешний
+//! OnLoseTargetWarSoul, прерывающий ещё активный навык через End(1).
+//! После собственного End(0) навыка повторный OnLoseTargetWarSoul видит
+//! IsEnded и не добавляет отказ, износ оружия или cooldown.
+//! Тот же End(0) подтверждён для отказов Po (AI 0x00527a40..0x0052aac0),
+//! LifeShield (0x00518d66), Wangsheng (0x0051de92), Huoxieshu (0x0051d3a9)
+//! и Lingzhishu (0x0051c76a). У Yu есть отдельный отказ с End(1) при смерти
+//! цели; владелец передаёт его как RejectedAfterUse, не как обычный Rejected.
+//! Базовая атака 0x224 также различает End(0) при потере цели и End(1)
+//! после попытки Summon (AI 0x005178fb/0x005179df).
 
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use super::basemagic::BASE_MAGIC_EFFECT_MESSAGE;
@@ -42,9 +54,9 @@ impl CGame {
         Some(dispatch)
     }
 
-    /// Общий хвост `End(true)` уже материализованного war-soul skill. Concrete
-    /// owner к этому моменту отправил action `3` и очистил собственные поля;
-    /// `OnLoseTargetWarSoul` добавляет общий отказ `4,2` после полного `End`.
+    /// Хвост уже материализованного навыка боевого духа. Его владелец уже
+    /// отправил action `3` и очистил собственные поля. Подтверждённый `End(0)`
+    /// не получает побочные эффекты успешного завершения и повторный отказ.
     pub(crate) fn finish_battle_fairy_skill_end_tail<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -53,6 +65,9 @@ impl CGame {
         reject_request: bool,
         runtime: &mut Runtime,
     ) {
+        if reject_request && (0x212..=0x224).contains(&dispatch.skill_id()) {
+            return;
+        }
         self.damage_player_weapon(player_id, runtime);
         let _ = player_ai.mark_battle_fairy_skill_used(
             dispatch.skill_id(),

@@ -4,10 +4,13 @@
 //! повтор при временном отсутствии equipment-owner-а. Раздельными остаются
 //! source/target property, signed-проверки и тексты ошибок. Один
 //! `SkillExecutionKernel` хранит только команду, стадии и исходные часы.
-//! Восстановление использует абсолютный срок `CSkill::IsRestored`, а ожидание
-//! стадии сохраняет отдельную elapsed-семантику.
+//! Источник: gameserver.exe + GameServer.pdb, CHuoxieshu::AI (0x0051d180)
+//! и CLingzhishu::AI (0x0051c550). Ожидание сравнивает unsigned now с
+//! wrapping(start + delay), cmp/jb 0x0051d2bf/0x0051c680. После расхода
+//! ресурса вызывается OnChangeStates (+0x164), не UpdateProperty.
+//! Отказ Begin завершает visual перед внешним 4,2 планировщика; AI-отказ
+//! заканчивается End(0) без повторного общего ответа.
 
-use super::baseattack::time_reached;
 use super::basemagic::{
     BASE_MAGIC_EFFECT_MESSAGE, SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME,
     SKILL_USAGE_REUSE_DELAY_TIME,
@@ -175,9 +178,14 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         } if skill_id == kind.skill_id() => skill_level,
         _ => return terminal(QueuedSkillExecutionState::Rejected),
     };
-    let Some(properties) = game.skill_base_properties(kind.skill_id(), skill_level) else {
+    let starting = player_ai.battle_fairy_transfer().is_none();
+    let reject_before_ai = |game: &mut CGame| {
         send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
-        return terminal(QueuedSkillExecutionState::Rejected);
+        if starting { send_failure(game, player_id, 2); }
+        terminal(QueuedSkillExecutionState::Rejected)
+    };
+    let Some(properties) = game.skill_base_properties(kind.skill_id(), skill_level) else {
+        return reject_before_ai(game);
     };
     let cost = properties.query_property(kind.cost_usage());
     let gain = properties.query_property(kind.gain_usage());
@@ -198,8 +206,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         ) {
             send_failure(game, player_id, 0x0d);
             game.send_skill_system_info(player_id, b"ZHGS0048");
-            send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         if kind.initial_cost_unavailable(kind.source(player), cost) {
             send_failure(game, player_id, kind.failure_action());
@@ -208,8 +215,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
                 BattleFairyTransferKind::Mana => (b"ZHGS0052".as_slice(), cost),
             };
             game.send_skill_system_info_with_unsigned(player_id, string_id, value);
-            send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 3);
-            return terminal(QueuedSkillExecutionState::Rejected);
+            return reject_before_ai(game);
         }
         player_ai.begin_battle_fairy_transfer(SkillExecutionKernel::begin(
             dispatch,
@@ -250,7 +256,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             kind.deduct(player, current, cost);
         }
-        let _ = game.update_player_properties(player_id);
+        let _ = game.publish_player_states(player_id);
         send_transfer_cast(game, player_id, kind.skill_id(), skill_level, 1);
         if let Some(state) = player_ai.battle_fairy_transfer_mut() {
             let _ = state.advance(SkillStage::Begin, SkillStage::Check);
@@ -261,7 +267,7 @@ pub(crate) fn execute_battle_fairy_transfer<Runtime: GameMainLoopRuntime>(
         .battle_fairy_transfer()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("исполнение передачи ресурса создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
     let goods_factory = game.goods_factory().clone();
