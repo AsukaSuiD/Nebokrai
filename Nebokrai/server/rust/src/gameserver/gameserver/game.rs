@@ -1385,7 +1385,8 @@ use crate::gameserver::appserver::skills::nonfun::{
     execute_player_non_fun, is_non_fun_skill,
 };
 use crate::gameserver::appserver::skills::swordship::{
-    execute_player_auto_start_swordship, execute_player_swordship, is_swordship_skill,
+    execute_monster_auto_start_swordship, execute_player_auto_start_swordship,
+    execute_player_swordship, is_swordship_skill,
 };
 use crate::gameserver::appserver::skills::lifeshield::{
     execute_battle_fairy_life_shield, LIFE_SHIELD_SKILL_ID,
@@ -40876,7 +40877,7 @@ impl CGame {
 
     /// Проводит `CMoveShape::AutoStartPassiveSkill → CBaseAI::Run →
     /// OnExecuteBackStageSkills` для уже подтверждённых monster-владельцев
-    /// `TaiJi`/`Origin` и `EnlargeFullMiss/MaxHp/MaxMp`. Region временно
+    /// `TaiJi`/`Origin`, `EnlargeFullMiss/MaxHp/MaxMp` и `Swordship`. Region временно
     /// извлекается только для согласованного доступа к canonical monster и
     /// around-публикации состояния.
     fn execute_owned_monster_back_stage_skills(
@@ -40890,14 +40891,20 @@ impl CGame {
             .map(CMonster::take_reached_back_stage_skills)
             .unwrap_or_default();
         for (skill_id, skill_level) in &skill_ids {
-            let executed = execute_monster_immediate_state(
-                self,
-                region,
-                monster_id,
-                *skill_id,
-                *skill_level,
-                now_ms,
-            );
+            let executed = if is_swordship_skill(*skill_id) {
+                execute_monster_auto_start_swordship(
+                    self, region, monster_id, *skill_id, *skill_level,
+                )
+            } else {
+                execute_monster_immediate_state(
+                    self,
+                    region,
+                    monster_id,
+                    *skill_id,
+                    *skill_level,
+                    now_ms,
+                )
+            };
             tracing::trace!(
                 region_id = region.id,
                 monster_id,

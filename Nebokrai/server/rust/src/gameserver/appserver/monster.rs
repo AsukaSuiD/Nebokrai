@@ -16,7 +16,8 @@
 //! `ai/aifactory.rs`; `InitSkills` использует канонические `CSkillFactory` и
 //! `CMoveShape`. Auto-start очередь при первом AI-проходе исполняет
 //! подтверждённые monster-ветви `TaiJi`/`Origin` и три состояния увеличения
-//! `601..603`, не поглощая остальные ещё не материализованные state owner-ы.
+//! `601..603`, а также четыре `Swordship`, не поглощая остальные ещё не
+//! материализованные state owner-ы.
 //! Сериализация и полный автономный ИИ остаются ниже в исходном материале.
 //! Достигнутая цепочка базовой атаки
 //! хранит канонические
@@ -92,6 +93,7 @@
 //! ближайшую клетку footprint, а не центральную tile-позицию монстра.
 
 use std::collections::BTreeMap;
+use super::skills::swordship::is_swordship_skill;
 
 use super::ai::aifactory::{ActiveMonsterAi, MonsterAiBinding, MonsterAiKind};
 use super::ai::baseai::{
@@ -606,7 +608,7 @@ impl CMonster {
     }
 
     /// `CBaseAI::OnExecuteBackStageSkills` для подтверждённых monster-ветвей
-    /// пяти немедленных state-owner-ов. Остальные auto-start state ID остаются
+    /// пяти немедленных state-owner-ов и Swordship. Остальные auto-start ID остаются
     /// в очереди до материализации их собственного monster owner-а.
     pub(crate) fn take_reached_back_stage_skills(&mut self) -> Vec<(u32, i32)> {
         self.move_shape
@@ -618,7 +620,7 @@ impl CMonster {
                         | ENLARGE_MAX_HP_SKILL_ID
                         | ENLARGE_MAX_MP_SKILL_ID
                         | ENLARGE_FULL_MISS_SKILL_ID
-                )
+                ) || is_swordship_skill(skill_id)
             })
             .into_iter()
             .map(|skill_id| (skill_id, self.move_shape.skill_level(skill_id)))
