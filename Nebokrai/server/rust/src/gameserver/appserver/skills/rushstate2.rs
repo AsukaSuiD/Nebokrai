@@ -1,4 +1,6 @@
 //! Каноническое состояние оглушения вторым рывком `CRushState2` (`0x7c`).
+//! Vtable 0x0066041c, слот +0x0c: CBlindState::AI (0x005d5ba0).
+//! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/rushstate2.cpp`. Состояние запрещает движение и бой,
@@ -64,12 +66,12 @@ impl Rush2State {
     pub(crate) const fn skill_id(self) -> u32 { RUSH_2_STATE_ID }
 
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
     pub(crate) const fn client_time(self, now_ms: u32) -> i32 {
-        let elapsed = now_ms.wrapping_sub(self.started_at_ms);
-        if elapsed >= self.keep_time_ms { 0 } else { self.keep_time_ms.wrapping_sub(elapsed) as i32 }
+        let deadline = self.started_at_ms.wrapping_add(self.keep_time_ms);
+        if deadline <= now_ms { 0 } else { deadline.wrapping_sub(now_ms) as i32 }
     }
 }
 

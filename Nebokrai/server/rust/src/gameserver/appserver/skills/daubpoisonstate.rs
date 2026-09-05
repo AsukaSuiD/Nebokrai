@@ -1,4 +1,6 @@
 //! Каноническое состояние смазки оружия ядом `CDaubPoisonState` (`0xDF`).
+//! Vtable 0x0066047c, слот +0x0c: CBlindState::AI (0x005d5ba0).
+//! Истечение использует строгий абсолютный wrapping deadline, включая ноль.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/daubpoisonstate.cpp`. Состояние принадлежит только
@@ -44,7 +46,7 @@ impl DaubPoisonState {
 
     /// Исходный `GameAiTick::Passed`: равенство с границей ещё активно.
     pub(crate) const fn expired(self, now_ms: u32) -> bool {
-        now_ms.wrapping_sub(self.started_at_ms) > self.keep_time_ms
+        self.started_at_ms.wrapping_add(self.keep_time_ms) < now_ms
     }
 
     pub(crate) fn client_time(self, now_milliseconds: impl FnMut() -> u32) -> i32 {

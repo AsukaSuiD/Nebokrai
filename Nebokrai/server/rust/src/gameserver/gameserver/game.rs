@@ -28975,7 +28975,7 @@ impl CGame {
         let roar_ended = finish_player_roar(self, player_id, now_ms, runtime);
         let expired_cure = self
             .find_player_mut(player_id)
-            .and_then(CPlayer::take_cure_state_for_ai);
+            .and_then(|player| player.take_cure_state_for_ai(now_ms));
         if let Some(state) = expired_cure {
             send_cure_state_visual(self, player_id, state, false);
         }
@@ -47284,7 +47284,7 @@ impl CGame {
                         monster_id,
                         now_ms,
                     );
-                    let _ = expire_monster_cure_state(self, owner.base_mut(), monster_id);
+                    let _ = expire_monster_cure_state(self, owner.base_mut(), monster_id, now_ms);
                     let _ = expire_monster_fury_states(
                         self,
                         owner.base_mut(),

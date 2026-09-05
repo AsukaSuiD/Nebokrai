@@ -1,9 +1,10 @@
 //! Каноническое краткоживущее состояние `CCureState`.
 //!
 //! Источник: `gameserver.exe + GameServer.pdb`, владелец
-//! `appserver/skills/curestate.cpp`. Класс не переопределяет `AI`, поэтому
-//! унаследованный `CState::AI` завершает его на следующем снимке
-//! `UpdateAbnormality`; состояние успевает участвовать в `OnChangeStates`.
+//! `appserver/skills/curestate.cpp`. Vtable `0x0065fb0c +0x0c` направляет AI
+//! на `CBlindState::AI` (0x005d5ba0): при нулевом сроке состояние живо на
+//! равенстве started == now и завершается лишь при started < now.
+//! До завершения оно участвует в `OnChangeStates`.
 //! Запись сохраняет ID и четыре `long` базового `CState`:
 //! user type/ID и sufferer type/ID. Это же представление читается при
 //! входе и удаляется вместе с каноническим однотиковым состоянием. Vtable
@@ -51,6 +52,10 @@ impl CureState {
 
     pub(crate) const fn skill_id(self) -> u32 {
         CURE_STATE_SKILL_ID
+    }
+
+    pub(crate) const fn expired(self, now_ms: u32) -> bool {
+        self.started_at_ms < now_ms
     }
 
     pub(crate) fn client_time(self) -> i32 {
@@ -138,9 +143,10 @@ pub(crate) fn expire_monster_cure_state(
     game: &mut CGame,
     region: &mut CServerRegion,
     monster_id: i32,
+    now_ms: u32,
 ) -> bool {
     let expired = region.find_monster_by_id_mut(monster_id).and_then(|monster| {
-        let state = monster.move_shape_mut().take_cure_state_for_ai()?;
+        let state = monster.move_shape_mut().take_cure_state_for_ai(now_ms)?;
         Some((state, monster.move_shape().shape().clone()))
     });
     let Some((state, shape)) = expired else {

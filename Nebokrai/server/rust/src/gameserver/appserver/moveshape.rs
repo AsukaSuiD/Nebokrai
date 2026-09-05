@@ -3332,7 +3332,8 @@ impl CMoveShape {
         self.state_storage.cure_state
     }
 
-    pub(crate) fn take_cure_state_for_ai(&mut self) -> Option<CureState> {
+    pub(crate) fn take_cure_state_for_ai(&mut self, now_ms: u32) -> Option<CureState> {
+        self.cure_state.filter(|state| state.expired(now_ms))?;
         let state = self.cure_state.take()?;
         let Some(offset) = known_state_record_offsets(&self.ex_states)
             .into_iter()

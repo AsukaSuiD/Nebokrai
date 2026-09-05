@@ -5900,8 +5900,9 @@ impl CPlayer {
 
     pub(crate) fn take_cure_state_for_ai(
         &mut self,
+        now_ms: u32,
     ) -> Option<super::skills::curestate::CureState> {
-        self.move_shape.take_cure_state_for_ai()
+        self.move_shape.take_cure_state_for_ai(now_ms)
     }
 
     pub(crate) fn replace_daub_poison_state(
