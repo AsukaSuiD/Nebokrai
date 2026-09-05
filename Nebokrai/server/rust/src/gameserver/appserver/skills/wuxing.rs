@@ -6,6 +6,11 @@
 //! позиции, затем вызывает полный `UpdateProperty` и `RestoreHpMp`; базовое
 //! завершение сохраняет отдельный reuse-clock конкретного элемента. Входной
 //! gate использует общий absolute DWORD deadline `CSkill::IsRestored`.
+//! Все пять `AI` до создания состояния требуют owner type `400`:
+//! Earth/Fire/Water/Wood/Metal, VA проверок
+//! `0x0050FECB/0x0051037B/0x00510828/0x00510F5B/0x00511418`.
+//! Для монстра это `End(0)` без состояния, восстановления HP/MP и reuse;
+//! его фоновая очередь снимает такие навыки без исполнения player-ветви.
 
 use super::baseattack::SKILL_USAGE_REUSE_DELAY_TIME;
 use super::kernel::{SkillExecutionKernel, SkillStage, skill_is_restored};
