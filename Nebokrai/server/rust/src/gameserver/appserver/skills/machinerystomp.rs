@@ -25,6 +25,9 @@
 //! Attack (VA `0x00532290/0x0052fdc0`) не увеличивает RP атакующему.
 //! End(0) возвращает движение без износа оружия и cooldown; общий
 //! CSkill::End не пересчитывает свойства игрока (его virtual `+0x158` пуст).
+//! Это относится и к отказам Begin до создания kernel. Монстровый Begin
+//! использует тот же GetTargetPath: линия идёт к GetBeAttackedPoint цели,
+//! но направление, fire и дополнительные дуги сохраняют её центральную клетку.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
@@ -254,6 +257,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         PlayerSkillDispatch::SelfTarget { skill_id: dispatch_skill_id, .. }
             if dispatch_skill_id == skill_id => {
                 send_player_failure(game, player_id, 2);
+                abort_player_wide_arc_attack(game, player_id);
                 return player_terminal(QueuedSkillExecutionState::Rejected);
             }
         PlayerSkillDispatch::Object { skill_id: dispatch_skill_id, target }
@@ -269,7 +273,10 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             player.learned_skill_level(skill_id),
             player.shape_view()?,
         ))
-    }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    }) else {
+        abort_player_wide_arc_attack(game, player_id);
+        return player_terminal(QueuedSkillExecutionState::Rejected);
+    };
     let (target, fallback) = match dispatch {
         PlayerSkillDispatch::Object { target, .. } => (Some(target), (0, 0)),
         PlayerSkillDispatch::Point { x, y, .. } => (
@@ -283,9 +290,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     let active = player_ai.wide_arc_attack().is_some();
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
         send_player_failure(game, player_id, if active { 0x0d } else { 2 });
-        if active {
-            abort_player_wide_arc_attack(game, player_id);
-        }
+        abort_player_wide_arc_attack(game, player_id);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
@@ -306,6 +311,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         ) {
             send_player_failure(game, player_id, 0x0d);
             send_player_failure(game, player_id, 2);
+            abort_player_wide_arc_attack(game, player_id);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         let distance = target.map_or_else(
@@ -315,6 +321,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         if maximum_distance != 0 && distance > maximum_distance as i32 {
             send_player_failure(game, player_id, 0x0b);
             send_player_failure(game, player_id, 2);
+            abort_player_wide_arc_attack(game, player_id);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         let (path_x, path_y) = if let Some((identity, _)) = target {
@@ -322,6 +329,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
                 region_id, source_view.tile_x, source_view.tile_y, identity,
             ) else {
                 send_player_failure(game, player_id, 2);
+                abort_player_wide_arc_attack(game, player_id);
                 return player_terminal(QueuedSkillExecutionState::Rejected);
             };
             point
@@ -343,6 +351,7 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             send_player_failure(game, player_id, 0x0f);
             send_player_failure(game, player_id, 2);
+            abort_player_wide_arc_attack(game, player_id);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
@@ -662,7 +671,19 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         {
             return true;
         }
-        let path = region.straight_skill_path(source_x, source_y, target_x, target_y, None);
+        let point = if target_identity.object_type == MONSTER_TYPE {
+            region.find_monster_by_id(target_identity.id).and_then(|monster| {
+                monster.be_attacked_point(target.monster_property.as_ref()?, source_x, source_y)
+            })
+        } else {
+            Some((target_x, target_y))
+        };
+        let Some((path_x, path_y)) = point else { return true };
+        let path = if target_identity.object_type == MONSTER_TYPE && target_identity.id == monster_id {
+            Vec::new()
+        } else {
+            region.straight_skill_path(source_x, source_y, path_x, path_y, None)
+        };
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
                 monster.clear_ai_target();
