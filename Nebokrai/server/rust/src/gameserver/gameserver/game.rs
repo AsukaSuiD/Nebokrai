@@ -40869,11 +40869,12 @@ impl CGame {
         let active_player_skill = self
             .find_player(player_id)
             .is_some_and(|player| player.current_skill_id().is_some());
+        let can_schedule_player = can_schedule && !player_ai.active_attack_pending();
         if execute_player_skill {
-            let _ = player_ai.begin_next_player_skill(can_schedule);
+            let _ = player_ai.begin_next_player_skill(can_schedule_player);
         }
         if execute_player_skill
-            && can_schedule
+            && can_schedule_player
             && let Some(dispatch) = player_ai.current_player_skill()
         {
             let (is_rider, can_fight, current_skill_id) = self
@@ -40935,21 +40936,10 @@ impl CGame {
             // OnSchedule завершён отказом: следующий элемент FIFO не должен
             // обходить тот же guard в оставшейся части текущего AI-такта.
             && player_execution_count == 0
-            && (can_schedule || active_player_skill)
+            && (can_schedule_player || player_ai.active_attack_pending())
             && let Some(dispatch) = player_ai.current_player_skill()
         {
             player_execution_count = 1;
-            // В native `OnSchedule` только уже выбранная объектная цель доходит
-            // до `OnLoseTarget`: отказ до `Begin` не должен менять idle-навык.
-            // До concrete owner-а сохраняется только факт начатого навыка:
-            // default вычисляется после `End`, который мог сломать оружие.
-            let lost_materialized_object_target = matches!(
-                dispatch,
-                PlayerSkillDispatch::Object { .. }
-            )
-                && self.find_player(player_id).is_some_and(|player| {
-                    player.current_skill_id() == Some(dispatch.skill_id())
-                });
             let concrete_base_attack = match dispatch {
                 PlayerSkillDispatch::SelfTarget { skill_id, .. }
                 | PlayerSkillDispatch::Point { skill_id, .. } => skill_id == BASE_ATTACK_SKILL_ID,
@@ -41397,6 +41387,12 @@ impl CGame {
             if begin_rejected {
                 let _ = self.send_base_attack_failure(player_id, 2);
             }
+            if !player_ai.active_attack_pending() && !schedule_rejected && !begin_rejected
+                && (outcome.state != QueuedSkillExecutionState::Rejected
+                    || Self::materialized_player_skill_active(player_ai, dispatch.skill_id()) == Some(true))
+            {
+                player_ai.begin_player_fighting(runtime.now_milliseconds());
+            }
             if outcome.first_contact {
                 match dispatch {
                     PlayerSkillDispatch::Object { target, .. } if target.object_type == 400 => self
@@ -41423,20 +41419,9 @@ impl CGame {
                 QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
                     player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Rejected),
             };
-            if (outcome.state == QueuedSkillExecutionState::Completed || schedule_rejected || begin_rejected)
+            if (schedule_rejected || begin_rejected)
                 && removed_from_queue
             {
-                self.restore_player_default_attack_after_skill_end(player_id);
-            }
-            if outcome.state == QueuedSkillExecutionState::Rejected
-                && removed_from_queue
-                && lost_materialized_object_target
-                && !schedule_rejected
-            {
-                // После уже начатого object-skill native `OnLoseTarget`
-                // добавляет общий отказ вслед за concrete `End(1)`, даже если
-                // сам owner ранее сообщил более точную причину.
-                let _ = self.send_base_attack_failure(player_id, 2);
                 self.restore_player_default_attack_after_skill_end(player_id);
             }
             execution_count += 1;
@@ -47119,8 +47104,25 @@ impl CGame {
                             } else {
                                 false
                             };
-                            let active_action_handled =
-                                active_move_handled || active_stand_handled;
+                            let change_skill_handled = !ai_hibernated
+                                && !passive_action_handled
+                                && !active_move_handled
+                                && !active_stand_handled
+                                && player_ai.active_change_skill_pending();
+                            if change_skill_handled {
+                                self.restore_player_default_attack_after_skill_end(player_id);
+                                player_ai.finish_active_change_skill(runtime.now_milliseconds());
+                            }
+                            let ended_attack_handled = !ai_hibernated
+                                && !passive_action_handled
+                                && !active_move_handled
+                                && !active_stand_handled
+                                && !change_skill_handled
+                                && player_ai.finish_ended_player_attack(|| runtime.now_milliseconds());
+                            let active_action_handled = active_move_handled
+                                || active_stand_handled
+                                || change_skill_handled
+                                || ended_attack_handled;
                             let back_stage_skills = if ai_hibernated || passive_action_handled {
                                 0
                             } else {

@@ -70,8 +70,13 @@
 //! (0x00509FF0/0x0050A230) заменяет только ожидающую команду, не execution.
 //! Общий хвост завершения проверяет именно выбранную команду, поэтому End
 //! concrete owner-а не позволяет повторно снять следующую совпавшую команду.
-//! Возврат к default attack пока выполняет координатор; отдельные такты
-//! OnFighting (0x004C9320) и OnChangeSkill (0x00508E40) ещё надо подключить.
+//! OnFighting (0x005092B0) сохраняет Attack до отдельного такта после End;
+//! затем ChangeSkill (0x00508E40) возвращает вычисленный после End default.
+//! Допуск OnSchedule не повторяется внутри Attack, а завершивший AI не
+//! получает лишний Reject от общего координатора. Используется существующая
+//! FIFO CBaseAI, включая её очистку Defense/Stiffen и отдельный такт смены.
+//! Ещё остаются разделение Begin/первого AI в concrete адаптерах и переход
+//! prepared-навыка в фон до его End; эти ветви нельзя подменять ended-состоянием.
 //! В Luvinia MoveShape/PlayerAI используют CNewSkill/stModuParam и модули,
 //! поэтому их расписание не переносится в наш CSkill lifecycle.
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
@@ -84,7 +89,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use super::baseai::{CBaseAI, PassiveStiffenAction};
+use super::baseai::{AiShapeAction, CBaseAI, PassiveStiffenAction};
 use crate::gameserver::appserver::player::{
     BattleFairySkillDispatch, CPlayer, PlayerSkillDispatch,
 };
@@ -478,6 +483,36 @@ impl CPlayerAI {
 
     pub(crate) fn active_stand_unhandled(&self) -> bool {
         self.base_ai.active_stand_unhandled()
+    }
+
+    pub(crate) fn active_attack_pending(&self) -> bool {
+        self.base_ai.active_attack_pending()
+    }
+
+    pub(crate) fn begin_player_fighting(&mut self, now_ms: u32) {
+        if !self.base_ai.active_actions().iter().any(|event| event.action == AiShapeAction::Attack) {
+            self.base_ai.add_ai_event(AiShapeAction::Attack, 0, 0, now_ms);
+        }
+    }
+
+    /// CPlayerAI::OnFighting проверяет IsEnded до AI, а не после него. Исчезнувший
+    /// concrete execution поэтому обрабатывается только следующим тактом.
+    pub(crate) fn finish_ended_player_attack(&mut self, mut now: impl FnMut() -> u32) -> bool {
+        if self.current_player_skill.is_some() || !self.base_ai.active_attack_pending() {
+            return false;
+        }
+        self.base_ai.add_ai_event(AiShapeAction::ChangeSkill, 0, 0, now());
+        self.base_ai.finish_active_attack(now());
+        true
+    }
+
+    pub(crate) fn active_change_skill_pending(&self) -> bool {
+        self.base_ai.active_change_skill_pending()
+    }
+
+    pub(crate) fn finish_active_change_skill(&mut self, now_ms: u32) {
+        self.base_ai.lose_target();
+        self.base_ai.finish_active_change_skill(now_ms);
     }
 
     pub(crate) const fn is_hibernated(&self) -> bool {
@@ -3089,11 +3124,11 @@ impl CPlayerAI {
 
 // ============================================================================
 // FUNCTION: CPlayerAI::OnChangeSkill
-// STATUS: IMPLEMENTED
-// MATERIALIZED: завершение concrete owner-а и удаление FIFO выполняются в
-// `execute_queued_player_skills`, затем
-// `CPlayer::restore_default_attack_skill_after_completion` сохраняет исходный
-// `SetCurrentSkill(GetDefaultAttackSkillID())`.
+// STATUS: PARTIALLY_IMPLEMENTED
+// MATERIALIZED: ended-ветвь исполняется отдельным событием ChangeSkill,
+// восстанавливает default после End и не продвигает следующую команду в том
+// же такте. Вызов 0x0047B150 возвращает константу 1; prepared-ветвь ещё не
+// достигнута. RAW сохранён для этой оставшейся зависимости.
 // COMPONENT: GameServer
 // ARTIFACT: GameServer/gameserver.exe + GameServer/GameServer.pdb
 // SOURCE: e:\svn\fengyun_russia_dev\server\gameserver\appserver\ai\playerai.cpp:608
