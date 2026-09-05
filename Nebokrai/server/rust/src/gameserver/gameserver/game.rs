@@ -2225,6 +2225,16 @@ pub(crate) enum QueuedSkillExecutionState {
 pub(crate) enum MaterializedSkillEndCause {
     ClientRequest,
     Interruption,
+    Stiffen,
+}
+
+impl MaterializedSkillEndCause {
+    /// OnStiffen передаёт 4, клиент — 1. CSkill::End (0x004D84C0),
+    /// CAttackSkill/CSummonSkill и достигнутые производные различают здесь
+    /// ноль и ненулевой аргумент, а не происхождение запроса.
+    const fn uses_nonzero_end(self) -> bool {
+        matches!(self, Self::ClientRequest | Self::Stiffen)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39939,7 +39949,7 @@ impl CGame {
             }
             return None;
         }
-        let explicitly_completed = if cause == MaterializedSkillEndCause::ClientRequest {
+        let explicitly_completed = if cause.uses_nonzero_end() {
             match skill_id {
                 HEARTLESS_ARROW_SKILL_ID => Some(complete_or_release_player_heartless_arrow(
                     self,
@@ -40223,7 +40233,7 @@ impl CGame {
                     self,
                     player_id,
                     &mut player_ai,
-                    cause == MaterializedSkillEndCause::ClientRequest,
+                    cause.uses_nonzero_end(),
                     runtime,
                 )
             }
@@ -40231,7 +40241,7 @@ impl CGame {
                 self,
                 player_id,
                 &mut player_ai,
-                cause == MaterializedSkillEndCause::ClientRequest,
+                cause.uses_nonzero_end(),
                 runtime,
             ),
             THUNDER_SLASH_SKILL_ID => {
@@ -40492,7 +40502,7 @@ impl CGame {
                 self,
                 player_id,
                 &mut player_ai,
-                cause == MaterializedSkillEndCause::ClientRequest,
+                cause.uses_nonzero_end(),
                 runtime,
             ),
             _ if is_heal_skill(skill_id) => {
@@ -47118,7 +47128,7 @@ impl CGame {
                                         let _ = self.end_detached_player_skill(
                                             player_id,
                                             skill_id,
-                                            MaterializedSkillEndCause::Interruption,
+                                            MaterializedSkillEndCause::Stiffen,
                                             &mut player_ai,
                                             runtime,
                                         );

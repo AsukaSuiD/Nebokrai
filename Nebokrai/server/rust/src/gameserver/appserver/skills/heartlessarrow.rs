@@ -7,9 +7,11 @@
 //! попадания активный `CDaubPoisonState` (`0xDF`) может заменить канонический
 //! `SpiderPoisonState` цели. `CGame` разрешает независимых владельцев,
 //! применяет рассчитанную атаку и выполняет доставку.
-//! Клиентский `End(true)` во время удержания только выпускает стрелу; после
+//! Ненулевой End (клиентский 1 или Stiffen 4) во время удержания только
+//! выпускает стрелу: 0x00591AD9 проверяет аргумент на ноль, а 0x00591AEA
+//! возвращается после установки attacking_started без CSkill::End. После
 //! выпуска он завершает `CAttackSkill::End(1)` с единичным оружейным
-//! `AfterUseSkill`. Внутреннее прерывание всегда использует `End(0)` без износа,
+//! `AfterUseSkill`. Отказная отмена использует `End(0)` без износа,
 //! cooldown и применения отложенной атаки. Cooldown использует абсолютный
 //! срок `CSkill::IsRestored`; удержание и полёт сохраняют elapsed-семантику.
 //! Процентный damage factor сохраняется в `f32` только после расширенного
@@ -95,7 +97,7 @@ pub(crate) fn complete_or_release_player_heartless_arrow<Runtime: GameMainLoopRu
     )) else { return false };
     if releases_charge {
         if let Some(state) = player_ai.heartless_arrow_mut() { state.attacking_started = true; }
-        tracing::trace!(player_id, "клиент выпустил удерживаемую стрелу");
+        tracing::trace!(player_id, "ненулевой End выпустил удерживаемую стрелу");
         return true;
     }
     finish_player_heartless_arrow(game, player_id, player_ai, runtime);
