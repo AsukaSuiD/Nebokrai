@@ -3175,55 +3175,21 @@ impl CMoveShape {
         }
     }
 
-    pub(crate) fn take_expired_defense_shields(
-        &mut self,
-        now_ms: u32,
-        player_mana: u32,
-        player_dead: bool,
-        war_soul_mana: Option<i32>,
-    ) -> Vec<DefenseShieldState> {
-        let mut expired = Vec::new();
-        let mut position = 0;
-        while position < self.defense_shields.len() {
-            if self.defense_shields[position].expired(
-                now_ms,
-                player_mana,
-                player_dead,
-                war_soul_mana,
-            ) {
-                let state = self.defense_shields.remove(position);
-                match state {
-                    DefenseShieldState::Mana(state) => {
-                        self.remove_serialized_state_record(
-                            state.skill_id(),
-                            MANA_SHIELD_STATE_BYTES,
-                        );
-                    }
-                    DefenseShieldState::Machine(state) => {
-                        self.remove_serialized_state_record(
-                            state.skill_id(),
-                            MACHINE_SHIELD_STATE_BYTES,
-                        );
-                    }
-                    DefenseShieldState::Life(state) => {
-                        self.remove_serialized_state_record(
-                            state.skill_id(),
-                            LIFE_SHIELD_STATE_BYTES,
-                        );
-                    }
-                    DefenseShieldState::Promotion(state) => {
-                        self.remove_serialized_state_record(
-                            state.skill_id(),
-                            PROMOTION_STATE_BYTES,
-                        );
-                    }
-                }
-                expired.push(state);
-            } else {
-                position += 1;
-            }
-        }
-        expired
+    pub(crate) fn defense_shields(&self) -> &[DefenseShieldState] {
+        &self.defense_shields
+    }
+
+    pub(crate) fn remove_defense_shield(&mut self, skill_id: u32) -> Option<DefenseShieldState> {
+        let position = self.defense_shields.iter().position(|state| state.skill_id() == skill_id)?;
+        let state = self.defense_shields.remove(position);
+        let bytes = match state {
+            DefenseShieldState::Mana(_) => MANA_SHIELD_STATE_BYTES,
+            DefenseShieldState::Machine(_) => MACHINE_SHIELD_STATE_BYTES,
+            DefenseShieldState::Life(_) => LIFE_SHIELD_STATE_BYTES,
+            DefenseShieldState::Promotion(_) => PROMOTION_STATE_BYTES,
+        };
+        self.remove_serialized_state_record(skill_id, bytes);
+        Some(state)
     }
 
     pub(crate) fn activate_loaded_persisted_defense_shields(

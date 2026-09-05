@@ -5848,15 +5848,15 @@ impl CPlayer {
         self.move_shape.replace_life_shield_state(state)
     }
 
-    pub(crate) fn take_expired_defense_shields(
+    pub(crate) fn defense_shields(&self) -> &[super::skills::shieldstate::DefenseShieldState] {
+        self.move_shape.defense_shields()
+    }
+
+    pub(crate) fn remove_defense_shield(
         &mut self,
-        now_ms: u32,
-        war_soul_mana: Option<i32>,
-    ) -> Vec<super::skills::shieldstate::DefenseShieldState> {
-        let mana = self.mana();
-        let dead = self.is_dead();
-        self.move_shape
-            .take_expired_defense_shields(now_ms, mana, dead, war_soul_mana)
+        skill_id: u32,
+    ) -> Option<super::skills::shieldstate::DefenseShieldState> {
+        self.move_shape.remove_defense_shield(skill_id)
     }
 
     pub(crate) fn activate_loaded_persisted_defense_shields(

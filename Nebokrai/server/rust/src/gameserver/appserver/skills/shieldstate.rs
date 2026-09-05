@@ -3,6 +3,13 @@
 //! Исходный `m_vStates` применяет щиты в порядке вставки для каждой части
 //! атаки. Типизированный enum сохраняет этот порядок без RTTI и не превращает
 //! состояния в универсальную систему эффектов.
+//! Источник: `gameserver.exe` + `GameServer.pdb`, владельцы
+//! `appserver/skills/{life,mana,machine}shieldstate.cpp` и `moveshape.cpp`.
+//! AI (`0x5E2D90`, `0x5F34B0`) проверяет срок, прочность, смерть и MP.
+//! End (`0x5E3110`, `0x5FD420`) выполняет эффект до RemoveState
+//! (`0x4CDAB0`), который вызывает UpdateProperty игрока. Поэтому следующий
+//! щит проверяется после полного завершения предыдущего, а LifeShield
+//! создаёт Cure до удаления самого щита. Vec заменяет исходный контейнер.
 
 use super::lifeshieldstate::{finish_life_shield_state, LifeShieldState};
 use super::machineshieldstate::{send_machine_shield_state_visual, MachineShieldState};
@@ -90,35 +97,46 @@ pub(crate) fn expire_player_defense_shields(
     player_id: i32,
     now_ms: u32,
 ) -> usize {
-    let war_soul_mana = game
+    let skill_ids: Vec<_> = game
         .find_player(player_id)
-        .and_then(|player| player.war_soul_mana(game.goods_factory()));
-    let expired = game
-        .find_player_mut(player_id)
-        .map(|player| player.take_expired_defense_shields(now_ms, war_soul_mana))
+        .map(|player| {
+            player.defense_shields().iter().map(|state| state.skill_id()).collect()
+        })
         .unwrap_or_default();
-    let ended = expired.len();
-    let mut ordinary_ended = false;
-    for state in expired {
+    let mut ended = 0;
+    for skill_id in skill_ids {
+        let state = game.find_player(player_id).and_then(|player| {
+            let state = player.defense_shields().iter()
+                .find(|state| state.skill_id() == skill_id)?;
+            state.expired(
+                now_ms,
+                player.mana(),
+                player.is_dead(),
+                player.war_soul_mana(game.goods_factory()),
+            ).then_some(*state)
+        });
+        let Some(state) = state else {
+            continue;
+        };
         match state {
             DefenseShieldState::Life(state) => {
                 finish_life_shield_state(game, player_id, state, now_ms);
             }
             DefenseShieldState::Machine(state) => {
-                ordinary_ended = true;
                 send_machine_shield_state_visual(game, player_id, state, false, || now_ms);
             }
             DefenseShieldState::Mana(state) => {
-                ordinary_ended = true;
                 send_mana_shield_state_visual(game, player_id, state, false, || now_ms);
             }
-            DefenseShieldState::Promotion(_) => {
-                ordinary_ended = true;
-            }
+            DefenseShieldState::Promotion(_) => {}
         }
-    }
-    if ordinary_ended {
-        let _ = game.publish_player_states(player_id);
+        if game.find_player_mut(player_id)
+            .and_then(|player| player.remove_defense_shield(skill_id))
+            .is_some()
+        {
+            let _ = game.update_player_properties(player_id);
+            ended += 1;
+        }
     }
     ended
 }
