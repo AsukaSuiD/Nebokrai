@@ -41295,9 +41295,8 @@ impl CGame {
         }
     }
 
-    /// Исполняет независимые обычную и war-soul очереди одного игрока. Уже
-    /// начатый `ASA_MOVE` удерживает только обычную очередь; навык боевой феи
-    /// продолжает свой `SkillExecutionKernel` в том же такте.
+    /// Исполняет обычную очередь игрока; отдельный war-soul хвост вызывается
+    /// координатором после основных действий независимо от passive-результата.
     fn execute_queued_player_skills<Runtime: GameMainLoopRuntime>(
         &mut self,
         player_id: i32,
@@ -41452,6 +41451,20 @@ impl CGame {
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка игрока");
         }
+        (execution_count, player_execution_count)
+    }
+
+    /// Слоты +0x44/+0xC CBaseAI::Run исполняются даже после AES_HUNG_UP
+    /// основного passive-прохода. Общая dormancy проверяется вызывающим кодом;
+    /// смерть запрещает выбор новой команды, но не подменяет End начатой.
+    fn execute_queued_battle_fairy_skill<Runtime: GameMainLoopRuntime>(
+        &mut self,
+        player_id: i32,
+        player_ai: &mut CPlayerAI,
+        can_schedule: bool,
+        runtime: &mut Runtime,
+    ) -> usize {
+        let mut execution_count = 0;
         if let Some(dispatch) = player_ai.begin_next_battle_fairy_skill(can_schedule) {
             let attribute_skill = match dispatch {
                 BattleFairySkillDispatch::SelfTarget { skill_id, .. }
@@ -41681,7 +41694,7 @@ impl CGame {
             execution_count += 1;
             trace!(player_id, ?dispatch, ?outcome.state, removed_from_queue, "Исполнена стадия навыка боевой феи");
         }
-        (execution_count, player_execution_count)
+        execution_count
     }
 
     /// Замыкает достигнутую ветвь очереди назначений `CPlayerAI::OnSchedule`.
@@ -47106,6 +47119,15 @@ impl CGame {
                                     .and_then(CPlayer::current_skill_id)
                             })
                             .flatten();
+                            if let Some(skill_id) = interrupt_current_skill {
+                                let _ = self.end_detached_player_skill(
+                                    player_id,
+                                    skill_id,
+                                    MaterializedSkillEndCause::Interruption,
+                                    &mut player_ai,
+                                    runtime,
+                                );
+                            }
                             let can_schedule_skill = self
                                 .find_player(player_id)
                                 .is_some_and(|player| !player.is_dead());
@@ -47178,6 +47200,17 @@ impl CGame {
                                         &mut player_ai,
                                         runtime,
                                     ));
+                            if !ai_hibernated {
+                                let can_schedule_fairy = self
+                                    .find_player(player_id)
+                                    .is_some_and(|player| !player.is_dead());
+                                player_skill_executions += self.execute_queued_battle_fairy_skill(
+                                    player_id,
+                                    &mut player_ai,
+                                    can_schedule_fairy,
+                                    runtime,
+                                );
+                            }
                             let progress_setup = (
                                 self.globe_setup.auto_inc_time_ms(),
                                 self.globe_setup.auto_inc_exp_1(),
@@ -47238,14 +47271,6 @@ impl CGame {
                             if let Some(player) = self.find_player_mut(player_id) {
                                 player.restore_player_ai(player_ai);
                                 ran_player_body = true;
-                            }
-                            if let Some(skill_id) = interrupt_current_skill {
-                                let _ = self.end_materialized_player_skill(
-                                    player_id,
-                                    skill_id,
-                                    MaterializedSkillEndCause::Interruption,
-                                    runtime,
-                                );
                             }
                             if let Some(mutation) = energy {
                                 let mut message = CMessage::new(0x000b_f72c);
