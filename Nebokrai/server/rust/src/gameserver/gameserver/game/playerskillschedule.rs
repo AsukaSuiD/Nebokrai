@@ -19,10 +19,16 @@
 //! Swordship, WuXing, TaiJi, Origin и три Enlarge используют постоянный false
 //! (0x005af9e0). Agility/Natural/Rapture, Callosity и Heal/SuperHeal используют
 //! постоянный true (0x005afce0); это не отменяет предварительный IsDied.
+//! Тот же true используют BossBlueFury, DaubPoison, EnergyHolding, Fury,
+//! GodBless, Hearten, MeteorArrowMass, Pillar, Rage/RageBreak, Roar,
+//! SoulCollect и два обычных щита. Независимая очередь боевой феи, включая
+//! LifeShield, этим владельцем не обрабатывается.
 //! Хранение очереди и kernel
 //! остаётся у CPlayerAI, боевые правила — у существующих владельцев целей.
 
 use super::*;
+use crate::gameserver::appserver::skills::machineshield::MACHINE_SHIELD_SKILL_ID;
+use crate::gameserver::appserver::skills::manashield::MANA_SHIELD_SKILL_ID;
 
 #[derive(Clone, Copy)]
 enum TargetRule {
@@ -50,6 +56,20 @@ impl CGame {
             SEAL_SKILL_ID => (ai.seal().is_some(), TargetRule::Monster),
             AGILITY_SKILL_ID | AGILITY_2_SKILL_ID | NATURAL_SKILL_ID | RAPTURE_SKILL_ID => (ai.agility_family().is_some(), TargetRule::Any),
             CALLOSITY_SKILL_ID | CALLOSITY_2_SKILL_ID => (ai.callosity().is_some(), TargetRule::Any),
+            BOSS_BLUE_FURY_SKILL_ID => (ai.boss_blue_fury().is_some(), TargetRule::Any),
+            DAUB_POISON_SKILL_ID => (ai.daub_poison().is_some(), TargetRule::Any),
+            ENERGY_HOLDING_SKILL_ID => (ai.energy_holding().is_some(), TargetRule::Any),
+            FURY_SKILL_ID => (ai.fury().is_some(), TargetRule::Any),
+            GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => (ai.god_bless().is_some(), TargetRule::Any),
+            HEARTEN_SKILL_ID => (ai.hearten().is_some(), TargetRule::Any),
+            METEOR_ARROW_MASS_SKILL_ID => (ai.meteor_arrow_mass().is_some(), TargetRule::Any),
+            PILLAR_SKILL_ID => (ai.pillar().is_some(), TargetRule::Any),
+            RAGE_SKILL_ID => (ai.rage().is_some(), TargetRule::Any),
+            RAGE_BREAK_SKILL_ID => (ai.rage_break().is_some(), TargetRule::Any),
+            ROAR_SKILL_ID => (ai.roar().is_some(), TargetRule::Any),
+            SOUL_COLLECT_SKILL_ID => (ai.soul_collect().is_some(), TargetRule::Any),
+            MACHINE_SHIELD_SKILL_ID => (ai.machine_shield().is_some(), TargetRule::Any),
+            MANA_SHIELD_SKILL_ID => (ai.mana_shield().is_some(), TargetRule::Any),
             id if is_heal_skill(id) => ((0..4).any(|index| ai.heal_family(index).is_some()), TargetRule::Any),
             id if is_swordship_skill(id) => (ai.swordship().is_some(), TargetRule::Never),
             id if is_immediate_state_skill(id) => (ai.immediate_state().is_some(), TargetRule::Never),
