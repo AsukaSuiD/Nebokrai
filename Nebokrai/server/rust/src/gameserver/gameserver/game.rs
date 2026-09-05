@@ -40885,6 +40885,9 @@ impl CGame {
                 .unwrap_or((false, false, None));
             let blocked_by_ride = !active_player_skill && is_rider;
             if blocked_by_ride || !can_fight {
+                // OnSchedule: Reject (0x0050998E/0x005099C3) предшествует
+                // OnLoseTarget; его End(1) добавляет собственный Reject.
+                let delivery = self.send_base_attack_failure(player_id, 2);
                 let ended = if let Some(skill_id) = current_skill_id {
                     self.end_detached_player_skill(
                         player_id,
@@ -40908,7 +40911,9 @@ impl CGame {
                         player.set_current_skill_id(None);
                     }
                 }
-                let delivery = self.send_base_attack_failure(player_id, 2);
+                if ended && current_skill_id.is_some() {
+                    let _ = self.send_base_attack_failure(player_id, 2);
+                }
                 self.restore_player_default_attack_after_skill_end(player_id);
                 tracing::trace!(
                     player_id,
@@ -40924,6 +40929,9 @@ impl CGame {
             }
         }
         if execute_player_skill
+            // OnSchedule завершён отказом: следующий элемент FIFO не должен
+            // обходить тот же guard в оставшейся части текущего AI-такта.
+            && player_execution_count == 0
             && (can_schedule || active_player_skill)
             && let Some(dispatch) = player_ai.next_player_skill()
         {
