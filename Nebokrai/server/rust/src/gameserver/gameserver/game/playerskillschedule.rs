@@ -41,10 +41,18 @@
 //! собственный порядок отказа этого входа.
 //! Хранение очереди и kernel
 //! остаётся у CPlayerAI, боевые правила — у существующих владельцев целей.
-//! Стрелковые Begin Archery, HeartLessArrow/2/3, LightingArrow и RainArrow
-//! сначала проходят CStateSkill::Begin (0x00601A50/0x005DFC00), затем
-//! CSkill::Begin и CPlayer::OnBeginSkill (0x0042CC90). Переход в бой здесь
+//! Объектные и координатные Begin перечисленных ниже конкретных классов
+//! проверены по символам PDB и первым вызовам EXE: без предварительной ветки
+//! они проходят общий Begin Attack/State/SummonSkill (объединённые компилятором
+//! 0x00601A50/0x005DFC00), затем CSkill::Begin и OnBeginSkill (0x0042CC90).
+//! Это относится и к монстровым навыкам, когда их источник — игрок;
+//! самостоятельное исполнение AI монстра этот вход не использует.
+//! Переход в бой здесь
 //! предшествует конкретным проверкам оружия, MP и reuse, но не допуску цели.
+//! Владельцы с собственным вызовом EnterCombatState не включены повторно.
+//! ItemSkill_2 имеет отдельный Begin, поэтому правило на него не переносится.
+//! NonFun использует тот же базовый вызов (0x0050DF50/0x0050E010), хотя
+//! его конкретный AI не наносит урон: общий переход в бой всё равно обязателен.
 //! Luvinia Server/GameServer/Application/MoveShape.cpp использует одноимённый
 //! OnBeginSkill для CNewSkill/пассивных модулей: этот новый контракт не перенесён.
 
@@ -72,8 +80,45 @@ impl CGame {
         let inherited_begin = matches!(skill_id,
             ARCHERY_SKILL_ID | HEARTLESS_ARROW_SKILL_ID | HEARTLESS_ARROW_2_SKILL_ID
                 | HEARTLESS_ARROW_3_SKILL_ID | LIGHTING_ARROW_SKILL_ID | RAIN_ARROW_SKILL_ID
+                | BASE_MAGIC_SKILL_ID | FIRE_BOLT_SKILL_ID | FIRE_BALL_SKILL_ID
+                | FIRE_WALL_SKILL_ID | SEVEN_SHOOTING_STAR_SKILL_ID | THUNDER_SLASH_SKILL_ID
+                | CHAIN_LIGHTNING_SKILL_ID | THUNDER_BLOW_SKILL_ID | PILLAR_SKILL_ID
+                | RUSH_SKILL_ID | RUSH_2_SKILL_ID | ROAR_SKILL_ID | ENERGY_HOLDING_SKILL_ID
+                | INVERSE_CHOPPED_SKILL_ID | INFERNOL_SKILL_ID | THUNDER_BLOW_2_SKILL_ID
+                | MOSOU_SKILL_ID | GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID
+                | GHOST_CUT_3_SKILL_ID | ARMY_BREAK_SKILL_ID | ARMY_BREAK_2_SKILL_ID
+                | RAGE_BREAK_SKILL_ID | FURY_SKILL_ID | FLASH_SKILL_ID | SWALLOW_SKILL_ID
+                | LEAF_CUT_SKILL_ID | LEAF_CUT_2_SKILL_ID | LEAF_CUT_3_SKILL_ID | JU_CUT_SKILL_ID
+                | LIGHTNING_SWORD_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
+                | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID
+                | LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID | LITTLE_STAR_SKILL_ID
+                | ENERGY_BOLT_SKILL_ID | ZOMBIE_CLAW_SKILL_ID | SNAKE_BOLT_SKILL_ID
+                | CHUCK_STONE_SKILL_ID | SKELETON_ARCHERY_SKILL_ID | YUNSHENG_LIGHTNING_SKILL_ID
+                | CORPSE_PTOMAINE_SKILL_ID | MONSTER_THORN_SKILL_ID | SPIDER_MIST_SKILL_ID
+                | SPIDER_WEB_SKILL_ID | SPIDER_POISON_SKILL_ID | SUMMON_CORPSE_CANDLE_SKILL_ID
+                | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID
+                | BOSS_BLUE_FURY_SKILL_ID | BOSS_BLUE_QUAKE_SKILL_ID | BOSS_FIEND_PENETRATE_SKILL_ID
+                | SPRITE_BURN_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID
+                | LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID
+                | MONSTER_BASE_ATTACK_SKILL_ID | MONSTER_RANGE_ATTACK_SKILL_ID
+                | CHAOS_SPHERE_SKILL_ID | LIGHTNING_SKILL_ID | SEAL_SKILL_ID
+                | YIN_YANG_SKILL_ID | YIN_YANG_2_SKILL_ID | GOD_PUNISHMENT_SKILL_ID
+                | GOD_THUNDER_SKILL_ID | GOD_THUNDER_2_SKILL_ID | SOUL_COLLECT_SKILL_ID
+                | SOUL_MIRROR_SKILL_ID | LIGHTING_ARROW_2_SKILL_ID | METEOR_ARROW_MASS_SKILL_ID
+                | METEOR_ARROW_SKILL_ID | POISON_MOTH_SKILL_ID | BLOOD_ROSE_SKILL_ID
+                | SCORPION_SKILL_ID | BOA_LOCK_SKILL_ID | FALLING_STAR_SKILL_ID
+                | EXPLOSIVE_ARROW_SKILL_ID | EXPLOSIVE_ARROW_2_SKILL_ID | EXPLOSIVE_ARROW_3_SKILL_ID
+                | STRIKE_SKILL_ID | YAKSHA_SLASH_SKILL_ID | DAUB_POISON_SKILL_ID
+                | IGNITION_SKILL_ID | KEROSENE_SKILL_ID | BLIND_SKILL_ID | POISON_FOG_SKILL_ID
+                | SNOW_STORM_SKILL_ID | WEAK_SKILL_ID | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID
+                | GIBE_SKILL_ID
         );
-        if inherited_begin && Self::materialized_player_skill_active(ai, skill_id) == Some(false) {
+        let needs_begin = if is_non_fun_skill(skill_id) {
+            ai.non_fun().is_none()
+        } else {
+            inherited_begin && Self::materialized_player_skill_active(ai, skill_id) == Some(false)
+        };
+        if needs_begin {
             self.enter_player_combat_state(player_id);
         }
     }

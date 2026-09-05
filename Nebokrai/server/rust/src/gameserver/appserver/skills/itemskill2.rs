@@ -10,6 +10,11 @@
 //! и навыка; предмет удаляется только успешным `Summon`, но не отменой.
 //! `CheckCastCondition` проверяет только абсолютный срок поля навыка через
 //! `CSkill::IsRestored`; item-gate принадлежит более раннему `ReUseSkillItem`.
+//! Begin (VA 0x00516230) сначала находит группу 70005 в NewSkillMonsterConf:
+//! отсутствие группы отклоняет и цель-игрока. Только после копирования группы
+//! вызов 0x005162F5 проходит общий Begin и OnBeginSkill; проверки предмета,
+//! whitelist и MP идут позже. Здесь сохраняется этот особый порядок, включая
+//! начало отсчёта до перехода в бой, а не после успешных проверок ресурсов.
 
 use super::baseattack::{real_distance, time_reached, SKILL_USAGE_TARGET_MAX_DISTANCE};
 use super::basemagic::{SKILL_USAGE_CAN_BE_BREAKED, SKILL_USAGE_DELAY_TIME, SKILL_USAGE_ELEMENT_MODIFIER, SKILL_USAGE_MAX_ATTACK, SKILL_USAGE_MIN_ATTACK, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_SUMMONED_LIFETIME, SKILL_USAGE_SUMMONED_SPEED};
@@ -134,6 +139,12 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
     let item_index=p.query_property(ITEM_INDEX); let item_amount=p.query_property(ITEM_AMOUNT); let mp_loss=p.query_property(USER_MP_LOSE); let reuse=p.query_property(SKILL_USAGE_REUSE_DELAY_TIME); let delay=p.query_property(SKILL_USAGE_DELAY_TIME); let maximum=p.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE); let speed=p.query_property(SKILL_USAGE_SUMMONED_SPEED); let lifetime=p.query_property(SKILL_USAGE_SUMMONED_LIFETIME); let minimum_attack=p.query_property(SKILL_USAGE_MIN_ATTACK) as i32; let maximum_attack=p.query_property(SKILL_USAGE_MAX_ATTACK) as i32; let element_modifier=p.query_property(SKILL_USAGE_ELEMENT_MODIFIER) as i32; let group=p.query_property(MONSTER_GROUP); let allow_player=p.query_property(ALLOW_PLAYER)!=0; let allow_monster=p.query_property(ALLOW_MONSTER)!=0; let _breakable=p.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let Some((target, target_x, target_y, target_dead, original_name)) = target_view(game, region_id, dispatch) else { return terminal(QueuedSkillExecutionState::Rejected) };
     if player_ai.item_skill_2().is_none() {
+        if !game.new_skill_monster_conf().groups().contains_key(&group) {
+            return terminal(QueuedSkillExecutionState::Rejected);
+        }
+        let started_at_ms = runtime.now_milliseconds();
+        game.enter_player_combat_state(player_id);
+        let mana = game.find_player(player_id).map_or(mana, CPlayer::mana);
         if game.find_player(player_id).is_none_or(|player| player.check_item_in_packet(item_index) < item_amount) { send_notify(game, player_id, b"GS1179"); return terminal(QueuedSkillExecutionState::Rejected); }
         if target.object_type==PLAYER_TYPE && !allow_player { send_notify(game, player_id, b"GS1180"); return terminal(QueuedSkillExecutionState::Rejected); }
         if target.object_type==MONSTER_TYPE && !allow_monster { send_notify(game, player_id, b"GS1181"); return terminal(QueuedSkillExecutionState::Rejected); }
@@ -141,7 +152,7 @@ pub(crate) fn execute_player_item_skill_2<Runtime: GameMainLoopRuntime>(game: &m
         if target.object_type==PLAYER_TYPE && target.id==player_id { send_failure(game, player_id, 10, b"GS1183", None); return terminal(QueuedSkillExecutionState::Rejected); }
         if !skill_is_restored(player_ai.item_skill_2_last_used_ms(), reuse, runtime.now_milliseconds()) { send_failure(game, player_id, 0x0d, b"GS1184", None); return terminal(QueuedSkillExecutionState::Rejected); }
         let path=game.base_magic_path(region_id, source_x, source_y, target_x, target_y, None); if maximum!=0 && path.len()>maximum as usize { send_failure(game, player_id, 0x0b, b"GS1185", None); return terminal(QueuedSkillExecutionState::Rejected); } if path.iter().any(|cell| cell.2==2) { send_failure(game, player_id, 0x0f, b"GS1186", None); return terminal(QueuedSkillExecutionState::Rejected); } if mp_loss!=0 && !has_mana(mana, mp_loss) { send_failure(game, player_id, 7, b"GS1187", Some(mp_loss)); return terminal(QueuedSkillExecutionState::Rejected); }
-        player_ai.begin_item_skill_2(SkillExecutionKernel::begin(dispatch, runtime.now_milliseconds()));
+        player_ai.begin_item_skill_2(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai.item_skill_2().is_none_or(|execution| execution.dispatch()!=dispatch) { return terminal(QueuedSkillExecutionState::Rejected); }
     if player_ai.item_skill_2().is_some_and(|execution| execution.stage()==SkillStage::Begin) {
         let current=game.find_player(player_id).map_or(0,CPlayer::mana); if !has_mana(current,mp_loss) { send_failure(game,player_id,7,b"GS1187",Some(mp_loss)); finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime); return terminal(QueuedSkillExecutionState::Rejected); } if target_dead { send_failure(game,player_id,10,b"GS1188",None); finish_player_item_skill_2(game,player_id,player_ai,Some(item_index),runtime); return terminal(QueuedSkillExecutionState::Rejected); }
