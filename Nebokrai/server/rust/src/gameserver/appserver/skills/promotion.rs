@@ -4,18 +4,20 @@
 //! `appserver/skills/promotion.cpp`. Подключённые пути `SelfTarget` и `Object` сохраняют
 //! двойную проверку MP, время восстановления, расстояние, задержку, направление, пакеты
 //! `0xBFE01` и подтверждённую особенность повторного применения: прежнее
-//! состояние завершается, но новое в этот проход не создаётся. `CGame`
+//! состояние перезапускается без замены коэффициентов и длительности. `CGame`
 //! предоставляет владельцев и доставку, а проверки, формулы и жизненный цикл
 //! остаются в этом модуле. Monster-ветвь использует объектную цель обычного
-//! боевого ИИ, сохраняет delay/reuse/range и после применения публикует
-//! состояния source-монстра, как исходный virtual `OnChangeStates`.
+//! боевого ИИ и сохраняет delay/reuse/range. После первого наложения исходный
+//! `AI` (0x00569110) вызывает UpdateProperty источника, но после Restart — нет.
+//! Для монстра модификаторы читаются живой проекцией состояний, без лишнего
+//! пакета OnChangeStates; для игрока используется полный пересчёт свойств.
 //! Координатная перегрузка по точному EXE сохраняет точку и через
 //! `CState::GetSufferer` выбирает первый `CMoveShape` клетки; Rust-разрешение
 //! повторяет этот порядок через региональный spatial owner. Player и monster
-//! ветви используют абсолютный срок `CSkill::IsRestored`; задержка состояния
-//! остаётся elapsed.
+//! ветви используют абсолютный срок `CSkill::IsRestored`; задержка каста
+//! также сравнивает unsigned now с wrapping(start + delay), как cmp/jb 0x0056930F.
+//! Расход MP в AI проверяется по знаку DWORD-разности и сразу публикуется.
 
-use super::baseattack::time_reached;
 use super::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
 use super::monsterattack::resolve_owned_monster_attack_target;
 use super::promotionstate::{PromotionState, send_promotion_state_begin};
@@ -33,7 +35,7 @@ use crate::gameserver::appserver::states::state::{
 };
 use crate::gameserver::appserver::states::summonskill::abort_skill;
 use crate::gameserver::gameserver::game::{
-    CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome,
+    CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome,
     QueuedSkillExecutionState,
 };
 use crate::nets::netserver::message::CMessage;
@@ -370,11 +372,7 @@ pub(crate) fn execute_owned_monster_promotion(
     {
         return false;
     }
-    if !time_reached(
-        now_ms,
-        cast.started_at_ms(),
-        properties.query_property(SKILL_USAGE_DELAY_TIME),
-    ) {
+    if now_ms < cast.started_at_ms().wrapping_add(properties.query_property(SKILL_USAGE_DELAY_TIME)) {
         return true;
     }
 
@@ -414,7 +412,6 @@ pub(crate) fn execute_owned_monster_promotion(
             0,
         );
     }
-    let _ = game.publish_owned_monster_states(region, monster_id);
     if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
         let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
         let _ = monster.finish_base_attack_cast(now_ms);
@@ -565,14 +562,15 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
-        if current_mana < mp_loss {
+        let remaining_mana = current_mana.wrapping_sub(mp_loss);
+        if (remaining_mana as i32) < 0 {
             send_failure(game, player_id, 7);
             game.send_skill_system_info_with_unsigned(player_id, b"GS0288", mp_loss);
             abort_player_promotion(game, player_id);
             return terminal(QueuedSkillExecutionState::Rejected);
         }
         if let Some(player) = game.find_player_mut(player_id) {
-            player.set_mana(current_mana.wrapping_sub(mp_loss));
+            player.set_mana(remaining_mana);
             player.movement_shape_mut().set_direction(get_line_direction(
                 source_x,
                 source_y,
@@ -580,10 +578,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
                 target.tile_y,
             ));
         }
-        let _ = game.update_player_current_state(
-            player_id,
-            GamePlayerFightStatePhase::MoveShapeAi,
-        );
+        let _ = game.publish_player_states(player_id);
         send_cast(game, player_id, target, skill_level, 0);
         if let Some(execution) = player_ai.promotion_mut() {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
@@ -594,7 +589,7 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
         .promotion()
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение усиления создано или восстановлено");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return terminal(QueuedSkillExecutionState::Pending);
     }
 
@@ -616,8 +611,8 @@ pub(crate) fn execute_player_promotion<Runtime: GameMainLoopRuntime>(
             state,
             || runtime.now_milliseconds(),
         );
+        let _ = game.update_player_properties(player_id);
     }
-    let _ = game.publish_player_states(player_id);
     if let Some(execution) = player_ai.promotion_mut() {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);

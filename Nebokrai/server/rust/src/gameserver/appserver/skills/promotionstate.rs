@@ -8,6 +8,8 @@
 //! `0xBFE03`; отдельного пакета завершения этот владелец не создаёт. DB-запись
 //! сохраняет остаток срока и оба WORD-коэффициента. Vtable exact EXE
 //! подтверждает общий с `CBlindState` `GetRemainedTime` по `0x005F2CD0`.
+//! Restart (vtable `0x006605F4 +0x20`, тело `0x005FD450`) меняет только
+//! timestamp: прежние длительность и коэффициенты сохраняются без нового пакета.
 
 use super::promotion::PROMOTION_SKILL_ID;
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader, LegacyWriter};
@@ -45,6 +47,14 @@ impl PromotionState {
 
     pub(crate) const fn skill_id(self) -> u32 {
         PROMOTION_SKILL_ID
+    }
+
+    pub(crate) const fn started_at_ms(self) -> u32 {
+        self.started_at_ms
+    }
+
+    pub(crate) fn restart(&mut self, now_ms: u32) {
+        self.started_at_ms = now_ms;
     }
 
     pub(crate) const fn magic_attack_factor(self) -> u16 {

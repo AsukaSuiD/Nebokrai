@@ -3127,16 +3127,17 @@ impl CMoveShape {
         previous
     }
 
-    /// Повторное наложение `Promotion` завершает прежнее состояние и не
-    /// создаёт новое. Это подтверждённая особенность исходного `AI`.
+    /// Повторное наложение вызывает Restart прежнего состояния без замены
+    /// его параметров и без нового Begin.
     pub(crate) fn begin_promotion_state(&mut self, state: PromotionState) -> bool {
         if let Some(position) = self
             .defense_shields
             .iter()
             .position(|candidate| candidate.skill_id() == state.skill_id())
         {
-            self.defense_shields.remove(position);
-            self.remove_serialized_state_record(state.skill_id(), PROMOTION_STATE_BYTES);
+            if let DefenseShieldState::Promotion(previous) = &mut self.defense_shields[position] {
+                previous.restart(state.started_at_ms());
+            }
             return false;
         }
         self.append_serialized_state_record(&state.encoded_for_install());
