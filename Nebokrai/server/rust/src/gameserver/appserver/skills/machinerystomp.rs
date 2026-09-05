@@ -8,19 +8,27 @@
 //! выполняются вызовы RNG физического урона и критического удара; формула игрока
 //! также сохраняет урон стихией и душой. `CGame` только разрешает независимых
 //! владельцев, применяет защиту и последствия смерти и доставляет пакеты.
-//! Координатный и пустой `Begin` завершаются исходным failure `2` и `End(0)`.
+//! Координатный Begin (VA `0x00531340`) использует общий GetSufferer на каждом
+//! такте. Пустая клетка проходит проверки reuse/дальности/пути, затем AI
+//! завершает её failure `13` и End(0); ошибка проверки добавляет failure `2`.
 //! Player-варианты обоих владельцев не изнашивают оружие в `Attack` или `AI`:
 //! унаследованный
 //! `AfterUseSkill` делает это один раз через общий `End`, после возврата
 //! движения и перед cooldown соответствующего идентификатора. Коэффициент
 //! урона вычисляется в расширенной точности x87 из `u32` и `0.01_f32`, а
 //! критический float-множитель усекается к нулю перед записью `int`. Player и
-//! monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
-//! исполнения остаётся elapsed.
+//! monster ветви используют абсолютный срок `CSkill::IsRestored`, включая
+//! delay в AI (VA `0x005324c3/0x0052fff3`). Исходная объектная цель допускает
+//! NPC, постройки и ворота; IsDied проверяет их общий HP, а путь заканчивается
+//! в GetBeAttackedPoint. Область поражает только игроков и монстров:
+//! AI фильтрует `400/600` и проверяет IsAttackAble до расчёта урона.
+//! Attack (VA `0x00532290/0x0052fdc0`) не увеличивает RP атакующему.
+//! End(0) возвращает движение без износа оружия и cooldown; общий
+//! CSkill::End не пересчитывает свойства игрока (его virtual `+0x158` пуст).
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, SKILL_USAGE_TARGET_MAX_DISTANCE,
-    SKILL_USAGE_USER_HIT_MODIFIER, time_reached,
+    SKILL_USAGE_USER_HIT_MODIFIER,
 };
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::flash::{cell_views, master_info};
@@ -44,7 +52,7 @@ use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillStage
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
+use crate::gameserver::appserver::states::state::resolve_coordinate_sufferer;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -73,7 +81,7 @@ pub(crate) const fn is_machinery_stomp_dispatch(dispatch: PlayerSkillDispatch) -
             | PlayerSkillDispatch::Point { skill_id: MACHINERY_STOMP_SKILL_ID, .. }
             | PlayerSkillDispatch::Object {
             skill_id: MACHINERY_STOMP_SKILL_ID,
-            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE, .. },
+            target: ShapeIdentity { object_type: PLAYER_TYPE | 500 | MONSTER_TYPE | 1100 | 1200, .. },
         }
     )
 }
@@ -124,16 +132,25 @@ fn finish_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     if let Some(player) = game.find_player_mut(player_id) {
         player.set_skill_moveable(true);
     }
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| {
-        player_ai.mark_wide_arc_attack_used(skill_id, now_ms);
-    });
+    game.damage_player_weapon(player_id, runtime);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    player_ai.mark_wide_arc_attack_used(skill_id, runtime.now_milliseconds());
+}
+
+fn abort_player_wide_arc_attack(game: &mut CGame, player_id: i32) {
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_skill_moveable(true);
+        player.set_current_skill_id(None);
+    }
 }
 
 pub(crate) fn cancel_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     game: &mut CGame,
     player_id: i32,
     player_ai: &mut CPlayerAI,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
 ) -> bool {
     let Some(dispatch) = player_ai
         .wide_arc_attack()
@@ -141,12 +158,7 @@ pub(crate) fn cancel_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     else {
         return false;
     };
-    let skill_id = match dispatch {
-        PlayerSkillDispatch::SelfTarget { skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id, .. }
-        | PlayerSkillDispatch::Object { skill_id, .. } => skill_id,
-    };
-    finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
+    abort_player_wide_arc_attack(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
@@ -238,16 +250,17 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> QueuedSkillExecutionOutcome {
-    let target = match dispatch {
+    match dispatch {
         PlayerSkillDispatch::SelfTarget { skill_id: dispatch_skill_id, .. }
-        | PlayerSkillDispatch::Point { skill_id: dispatch_skill_id, .. }
             if dispatch_skill_id == skill_id => {
                 send_player_failure(game, player_id, 2);
                 return player_terminal(QueuedSkillExecutionState::Rejected);
             }
         PlayerSkillDispatch::Object { skill_id: dispatch_skill_id, target }
             if dispatch_skill_id == skill_id
-                && matches!(target.object_type, PLAYER_TYPE | MONSTER_TYPE) => target,
+                && matches!(target.object_type, PLAYER_TYPE | 500 | MONSTER_TYPE | 1100 | 1200) => {},
+        PlayerSkillDispatch::Point { skill_id: dispatch_skill_id, .. }
+            if dispatch_skill_id == skill_id => {},
         _ => return player_terminal(QueuedSkillExecutionState::Rejected),
     };
     let Some((region_id, level, source_view)) = game.find_player(player_id).and_then(|player| {
@@ -257,11 +270,21 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             player.shape_view()?,
         ))
     }) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let (target, fallback) = match dispatch {
+        PlayerSkillDispatch::Object { target, .. } => (Some(target), (0, 0)),
+        PlayerSkillDispatch::Point { x, y, .. } => (
+            resolve_coordinate_sufferer(game, region_id, x, y), (x, y),
+        ),
+        PlayerSkillDispatch::SelfTarget { .. } => unreachable!(),
+    };
+    let target = target.and_then(|identity| {
+        game.base_magic_target_view(region_id, identity).map(|view| (identity, view))
+    });
     let active = player_ai.wide_arc_attack().is_some();
     let Some(properties) = game.skill_base_properties(skill_id, level) else {
         send_player_failure(game, player_id, if active { 0x0d } else { 2 });
         if active {
-            finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
+            abort_player_wide_arc_attack(game, player_id);
         }
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
@@ -276,10 +299,6 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
 
     if player_ai.wide_arc_attack().is_none() {
         let now_ms = runtime.now_milliseconds();
-        let Some(target_view) = game.base_magic_target_view(region_id, target) else {
-            send_player_failure(game, player_id, 2);
-            return player_terminal(QueuedSkillExecutionState::Rejected);
-        };
         if !skill_is_restored(
             player_ai.wide_arc_attack_last_used_ms(skill_id),
             reuse_delay_ms,
@@ -289,15 +308,38 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
             send_player_failure(game, player_id, 2);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        if maximum_distance != 0 && source_view.distance(target_view) > maximum_distance as i32 {
+        let distance = target.map_or_else(
+            || super::baseattack::real_distance(source_view.tile_x, source_view.tile_y, fallback.0, fallback.1),
+            |(_, view)| source_view.real_distance(Some(view)),
+        );
+        if maximum_distance != 0 && distance > maximum_distance as i32 {
             send_player_failure(game, player_id, 0x0b);
             send_player_failure(game, player_id, 2);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
-        let path = game.base_magic_path(
-            region_id, source_view.tile_x, source_view.tile_y,
-            target_view.tile_x, target_view.tile_y, None,
-        );
+        let (path_x, path_y) = if let Some((identity, _)) = target {
+            let Some(point) = game.base_magic_target_point(
+                region_id, source_view.tile_x, source_view.tile_y, identity,
+            ) else {
+                send_player_failure(game, player_id, 2);
+                return player_terminal(QueuedSkillExecutionState::Rejected);
+            };
+            point
+        } else {
+            fallback
+        };
+        // GetTargetPath (VA 0x004d85e0) не строит линию к самому источнику
+        // либо к отсутствующей цели с нулевыми/совпадающими координатами.
+        let no_path = target.is_some_and(|(identity, _)| {
+            identity.object_type == PLAYER_TYPE && identity.id == player_id
+        }) || (target.is_none() && ((path_x, path_y) == (0, 0)
+            || (path_x, path_y) == (source_view.tile_x, source_view.tile_y)));
+        let path = if no_path { Vec::new() } else {
+            game.base_magic_path(
+                region_id, source_view.tile_x, source_view.tile_y,
+                path_x, path_y, None,
+            )
+        };
         if path.iter().any(|cell| cell.2 == BLOCK_UNFLY) {
             send_player_failure(game, player_id, 0x0f);
             send_player_failure(game, player_id, 2);
@@ -312,19 +354,19 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
 
-    let Some(target_view) = game.base_magic_target_view(region_id, target) else {
+    let Some((target, target_view)) = target else {
         send_player_failure(game, player_id, 0x0d);
-        finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
+        abort_player_wide_arc_attack(game, player_id);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
-    if game.periodic_state_target_dead(region_id, target) {
+    if game.base_magic_target_dead(region_id, target) {
         send_player_failure(game, player_id, 10);
-        finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
+        abort_player_wide_arc_attack(game, player_id);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     }
     if player_ai.wide_arc_attack().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
         let Some(source) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
-            finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
+            abort_player_wide_arc_attack(game, player_id);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         };
         if let Some(player) = game.find_player_mut(player_id) {
@@ -340,11 +382,11 @@ pub(crate) fn execute_player_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     let started_at_ms = player_ai.wide_arc_attack()
         .map(|kernel| kernel.started_at_ms())
         .expect("выполнение широкой дуговой атаки хранит время начала");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
+    if !skill_is_restored(started_at_ms, delay_ms, runtime.now_milliseconds()) {
         return player_terminal(QueuedSkillExecutionState::Pending);
     }
     let Some(source_view) = game.find_player(player_id).and_then(|player| player.shape_view()) else {
-        finish_player_wide_arc_attack(game, player_id, skill_id, player_ai, runtime);
+        abort_player_wide_arc_attack(game, player_id);
         return player_terminal(QueuedSkillExecutionState::Rejected);
     };
     send_player_fire(game, player_id, skill_id, level, target_view.tile_x, target_view.tile_y);
@@ -652,10 +694,10 @@ pub(crate) fn prepare_owned_wide_arc_attack<Runtime: GameMainLoopRuntime>(
     {
         return false;
     }
-    if !time_reached(
-        now_ms,
+    if !skill_is_restored(
         cast.started_at_ms(),
         properties.query_property(SKILL_USAGE_DELAY_TIME),
+        now_ms,
     ) {
         return true;
     }

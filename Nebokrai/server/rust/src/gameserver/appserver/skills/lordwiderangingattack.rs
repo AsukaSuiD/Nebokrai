@@ -6,8 +6,12 @@
 //! маску 5×5 и две дуги по три клетки. Проверка, порядок стадий, формула,
 //! два вызова RNG на допустимую цель и сетевой контракт совпадают с
 //! `CMachineryStomp`, кроме ID и таблицы свойств, поэтому объектный путь игрока
-//! и монстра использует один узкий семейный владелец. Координатный и пустой
-//! `Begin` завершаются исходным failure `2` и `End(0)`.
+//! и монстра использует один узкий семейный владелец. Координатный player-вход
+//! разрешает цель через GetSufferer на каждом такте; отсутствие цели даёт
+//! failure `13` в AI после обычной проверки условий Begin.
+//! Объектная цель включает NPC/постройки/ворота, но область поражает только
+//! `400/600` после IsAttackAble. Delay использует абсолютный DWORD-срок;
+//! Attack не добавляет RP, отмена не изнашивает оружие и не ставит reuse.
 
 use super::machinerystomp::{
     WideArcAttackDispatch, execute_player_wide_arc_attack, prepare_owned_wide_arc_attack,
@@ -30,7 +34,7 @@ pub(crate) const fn is_lord_wideranging_attack_dispatch(dispatch: PlayerSkillDis
             | PlayerSkillDispatch::Point { skill_id: LORD_WIDERANGING_ATTACK_SKILL_ID, .. }
             | PlayerSkillDispatch::Object {
             skill_id: LORD_WIDERANGING_ATTACK_SKILL_ID,
-            target: ShapeIdentity { object_type: 400 | 600, .. },
+            target: ShapeIdentity { object_type: 400 | 500 | 600 | 1100 | 1200, .. },
         }
     )
 }

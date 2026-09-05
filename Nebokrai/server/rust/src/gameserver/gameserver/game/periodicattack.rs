@@ -13,7 +13,9 @@ impl CGame {
     fn increase_owned_skill_attacker_rp(&mut self, player_id: i32, skill_id: u32) {
         // Range/Fast Attack (VA 0x005123e0/0x00513700/0x00530fb0) не вызывают
         // IncreaseRp после OnBeenAttacked; RP защищающейся стороны обычный.
-        if !matches!(skill_id, MONSTER_RANGE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID) {
+        // MachineryStomp/LordWiderangingAttack (VA 0x00532290/0x0052fdc0)
+        // имеют такой же хвост без IncreaseRp.
+        if !matches!(skill_id, MONSTER_RANGE_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID | LORD_FAST_ATTACK_SKILL_ID | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID) {
             self.increase_owned_player_rp(player_id, true, 0);
         }
     }
