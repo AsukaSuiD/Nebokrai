@@ -11,6 +11,10 @@
 //! Расход MP атрибутных навыков Po/Yu использует непосредственно equipment[10]
 //! (CPojia::AI 0x0052a77f), без повторного GetWarSoulGoods. Это отдельный
 //! адаптер к общему списанию; проверка типа товара у CWangsheng сохраняется.
+//! GameSave сохраняет предмет в руке перед экипировкой: CPlayer::AddToByteArray
+//! (0x00440dc0) вызывает m_cHand::Serialize, а World читает этот контейнер
+//! в том же порядке. Используется готовый codec CAmountLimitGoodsContainer,
+//! сохраняющий количество и порядок предметов, известных фабрике.
 //! Organizing identity `m_lFactionID/m_lFacMasterID` обновляется из полного
 //! World `0x7FE06` wire; `IsFactionMaster` сохраняет exact positive-faction и
 //! player-ID equality contract.
@@ -2992,7 +2996,9 @@ impl CPlayer {
         }
         destination.extend_from_slice(&self.encode_lei_ting());
 
-        LegacyWriter::new(destination).write_i32(0);
+        if !self.hand.serialize(destination, goods_factory) {
+            return Err(PlayerGameSaveCodecError::CodecReturnedFalse { field: "m_cHand" });
+        }
         let mut equipment_serialized = true;
         self.equipment.serialize_with(
             destination,

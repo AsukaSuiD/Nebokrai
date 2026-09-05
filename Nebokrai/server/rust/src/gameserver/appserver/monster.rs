@@ -14,7 +14,10 @@
 //! графика, HP и скорость — остаётся в объекте, как в `AddMonster`.
 //! `InitAI` и `GetAI` материализованы типизированным binding-ом из
 //! `ai/aifactory.rs`; `InitSkills` использует канонические `CSkillFactory` и
-//! `CMoveShape`. Auto-start очередь при первом AI-проходе исполняет
+//! `CMoveShape`.
+//! GameSave игрока проверяет наличие auxiliary m_pCarriageAI напрямую
+//! (CPlayer::AddToByteArray, 0x00441291), не тип текущего GetAI.
+//! Auto-start очередь при первом AI-проходе исполняет
 //! подтверждённые monster-ветви `TaiJi`/`Origin` и три состояния увеличения
 //! `601..603`, а также четыре `Swordship`. Пять `WuXing` завершаются без
 //! эффекта по исходному player-only gate; неизвестные state ID сохраняются.
@@ -583,6 +586,10 @@ impl CMonster {
 
     pub(crate) fn has_pet_ai(&self) -> bool {
         self.ai_binding.is_some_and(MonsterAiBinding::has_pet)
+    }
+
+    pub(crate) fn has_carriage_ai(&self) -> bool {
+        self.ai_binding.is_some_and(MonsterAiBinding::has_carriage)
     }
 
     /// Exact `CMonster::InitSkills`: базовая защита добавляется первой,

@@ -1,4 +1,8 @@
 //! Достигнутая send/receive dispatch storage-часть `CGame` GameServer.
+//! GameSave повозки следует CPlayer::AddToByteArray (0x00441254..0x00441450):
+//! при наличии региона живая auxiliary-повозка проверяется раньше сохранённой.
+//! Fallback по m_bReCreateCarriage допустим лишь при отсутствии monster/AI;
+//! чужой хозяин или отсутствующие свойства дают пустую запись без fallback.
 //!
 //! PDB подтверждает nullable `s_pNetClientOfWS +0x8`,
 //! `s_pNetClientOfBS +0xC`, `s_pNetServer +0x10`, ordered
@@ -6516,30 +6520,29 @@ impl CGame {
         context: &mut Context,
     ) -> bool {
         let (loaded_carriage, recreate_carriage) = player.login_carriage();
-        let carriage = if recreate_carriage {
-            loaded_carriage.clone()
-        } else {
-            player
+        let carriage = player
                 .server_region_id()
                 .and_then(|region_id| self.find_region(region_id))
                 .and_then(|region| {
                     let carriage = region
                         .base()
-                        .find_monster_by_id(player.active_carriage_id())?;
-                    let property =
-                        self.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+                        .find_monster_by_id(player.active_carriage_id())
+                        .filter(|carriage| carriage.has_carriage_ai());
+                    let Some(carriage) = carriage else {
+                        return recreate_carriage.then(|| loaded_carriage.clone());
+                    };
                     let master = carriage.master_info();
-                    (carriage.is_carriage(property)
-                        && master.master_type == PLAYER_TYPE
-                        && master.master_id == player.player_id())
-                    .then(|| PlayerUncreatedCarriage {
+                    if master.master_type != PLAYER_TYPE || master.master_id != player.player_id() {
+                        return None;
+                    }
+                    self.find_monster_property_by_origin_name(carriage.base_property_key()?)?;
+                    Some(PlayerUncreatedCarriage {
                         original_name: carriage.original_name().to_vec(),
                         script: carriage.script_file().to_vec(),
                         health: carriage.hit_points(),
                     })
                 })
-                .unwrap_or_default()
-        };
+                .unwrap_or_default();
         let pets = player
             .server_region_id()
             .and_then(|region_id| self.find_region(region_id))
