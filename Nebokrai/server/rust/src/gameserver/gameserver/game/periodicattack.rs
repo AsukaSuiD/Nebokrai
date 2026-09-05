@@ -10,6 +10,27 @@
 use super::*;
 
 impl CGame {
+    /// Рассчитанная атака навыка проходит ту же защиту `CBuild/CCityGate`,
+    /// что базовая атака; death-script и wire остаются у общего build-owner-а.
+    pub(crate) fn apply_owned_skill_attack_to_stationary_build<Runtime: GameMainLoopRuntime>(
+        &mut self, player_id: i32, region_id: i32, identity: ShapeIdentity,
+        mut attack: AttackInformation, runtime: &mut Runtime,
+    ) {
+        if !self.stationary_build_attackable_by_player(player_id, region_id, identity) {
+            return;
+        }
+        let Some(target) = self.stationary_build_combat_snapshot(region_id, identity) else { return };
+        let Some(view) = self.base_magic_target_view(region_id, identity) else { return };
+        let Some((properties, occupation)) = self.find_player(player_id)
+            .map(|player| (player.combat_properties(), player.occupation())) else { return };
+        let mut random = |maximum| game_legacy_random(&mut self.random_state, maximum);
+        defend_build_base_attack(&mut attack, properties, occupation, target.defense,
+            target.element_resistance, &self.globe_setup, &mut random);
+        self.apply_defended_player_attack_to_stationary_build(player_id, region_id, identity,
+            view.tile_x, view.tile_y, &attack, runtime);
+        self.increase_owned_player_rp(player_id, true, 0);
+    }
+
     fn player_on_owned_skill_attack<Runtime: GameMainLoopRuntime>(
         &mut self,
         attacker_id: i32,

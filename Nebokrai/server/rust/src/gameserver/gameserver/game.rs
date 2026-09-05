@@ -1260,6 +1260,8 @@ use crate::gameserver::appserver::ai::jiumai::{
 };
 use crate::gameserver::appserver::ai::pet::release_pet_target_for_death;
 use crate::gameserver::appserver::skills::monsterbaseattack::{
+    MONSTER_BASE_ATTACK_SKILL_ID, execute_player_monster_base_attack,
+    finish_player_monster_base_attack, is_player_monster_base_attack,
     change_owned_monster_attack_skill, execute_owned_monster_base_attack,
     search_owned_monster_enemy,
 };
@@ -39815,6 +39817,7 @@ impl CGame {
                 | LORD_WIDERANGING_ATTACK_SKILL_ID
                 | LORD_FAST_ATTACK_SKILL_ID
                 | MONSTER_FAST_ATTACK_SKILL_ID
+                | MONSTER_BASE_ATTACK_SKILL_ID
                 | CHAOS_SPHERE_SKILL_ID
                 | LIGHTNING_SKILL_ID
                 | SEAL_SKILL_ID
@@ -39949,6 +39952,7 @@ impl CGame {
                 player_ai.wide_arc_attack().is_some()
             }
             LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
+            MONSTER_BASE_ATTACK_SKILL_ID => player_ai.monster_base_attack().is_some(),
             CHAOS_SPHERE_SKILL_ID => player_ai.chaos_sphere().is_some(),
             LIGHTNING_SKILL_ID => player_ai.lightning().is_some(),
             SEAL_SKILL_ID => player_ai.seal().is_some(),
@@ -40196,6 +40200,7 @@ impl CGame {
                     &mut player_ai,
                     runtime,
                 )),
+                MONSTER_BASE_ATTACK_SKILL_ID => Some(finish_player_monster_base_attack(self, player_id, &mut player_ai, runtime, true)),
                 LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => Some(complete_player_lord_fast_attack(
                     self,
                     player_id,
@@ -40414,6 +40419,9 @@ impl CGame {
             }
             LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => {
                 cancel_player_lord_fast_attack(self, player_id, &mut player_ai, runtime)
+            }
+            MONSTER_BASE_ATTACK_SKILL_ID => {
+                finish_player_monster_base_attack(self, player_id, &mut player_ai, runtime, false)
             }
             CHAOS_SPHERE_SKILL_ID => {
                 cancel_player_chaos_sphere(self, player_id, &mut player_ai, runtime)
@@ -41076,6 +41084,7 @@ impl CGame {
             let concrete_machinery_stomp = is_machinery_stomp_dispatch(dispatch);
             let concrete_lord_wideranging_attack = is_lord_wideranging_attack_dispatch(dispatch);
             let concrete_lord_fast_attack = is_lord_fast_attack_dispatch(dispatch);
+            let concrete_monster_base_attack = is_player_monster_base_attack(dispatch);
             let concrete_chaos_sphere = is_chaos_sphere_dispatch(dispatch);
             let concrete_lightning = is_lightning_target(dispatch);
             let concrete_seal = is_seal_target(dispatch);
@@ -41360,6 +41369,8 @@ impl CGame {
                 execute_player_lord_wideranging_attack(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lord_fast_attack {
                 execute_player_lord_fast_attack(self, player_id, dispatch, player_ai, runtime)
+            } else if concrete_monster_base_attack {
+                execute_player_monster_base_attack(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_chaos_sphere {
                 execute_player_chaos_sphere(self, player_id, dispatch, player_ai, runtime)
             } else if concrete_lightning {

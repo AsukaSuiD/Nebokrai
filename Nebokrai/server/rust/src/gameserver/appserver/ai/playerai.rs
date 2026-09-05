@@ -303,6 +303,8 @@ pub(crate) struct CPlayerAI {
     lord_fast_attack: Option<LordFastAttackExecutionState>,
     lord_fast_attack_last_used_ms: u32,
     monster_fast_attack_last_used_ms: u32,
+    monster_base_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
+    monster_base_attack_last_used_ms: u32,
     chaos_sphere: Option<ChaosSphereExecutionState>,
     chaos_sphere_last_used_ms: u32,
     lightning: Option<LightningExecutionState>,
@@ -596,6 +598,7 @@ impl CPlayerAI {
         self.sprite_burn = None;
         self.wide_arc_attack = None;
         self.lord_fast_attack = None;
+        self.monster_base_attack = None;
         self.chaos_sphere = None;
         self.lightning = None;
         self.seal = None;
@@ -915,6 +918,10 @@ impl CPlayerAI {
         if let Some(mut execution) = self.lord_fast_attack.take() {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение быстрой атаки владыки завершено");
+        }
+        if let Some(mut kernel) = self.monster_base_attack.take() {
+            let _ = kernel.terminate(termination);
+            tracing::trace!(?expected, ?termination, "исполнение базовой атаки монстра игроком завершено");
         }
         if let Some(mut execution) = self.chaos_sphere.take() {
             let _ = execution.kernel_mut().terminate(termination);
@@ -1732,6 +1739,26 @@ impl CPlayerAI {
         } else {
             self.lord_fast_attack_last_used_ms
         }
+    }
+
+    pub(crate) const fn monster_base_attack(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.monster_base_attack.as_ref()
+    }
+
+    pub(crate) fn monster_base_attack_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
+        self.monster_base_attack.as_mut()
+    }
+
+    pub(crate) fn begin_monster_base_attack(&mut self, dispatch: PlayerSkillDispatch, now_ms: u32) {
+        self.monster_base_attack = Some(SkillExecutionKernel::begin(dispatch, now_ms));
+    }
+
+    pub(crate) const fn monster_base_attack_last_used_ms(&self) -> u32 {
+        self.monster_base_attack_last_used_ms
+    }
+
+    pub(crate) const fn mark_monster_base_attack_used(&mut self, now_ms: u32) {
+        self.monster_base_attack_last_used_ms = now_ms;
     }
 
     pub(crate) const fn mark_fast_attack_used(&mut self, skill_id: u32, now_ms: u32) {

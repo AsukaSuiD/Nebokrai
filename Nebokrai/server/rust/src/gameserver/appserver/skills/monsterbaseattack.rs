@@ -7,9 +7,9 @@
 //! разыгрывается. Общие защита,
 //! применение повреждений и точные пакеты принадлежат узкому
 //! `monsterattack`; `CGame` оставляет возврат владельца региона и
-//! межвладельческие последствия смерти. Неиспользуемые координатный и
-//! типизированно-координатный варианты `Begin` сохранены как RAW: их реальный
-//! вызывающий путь и отличия от достигнутого объектного пути пока не подтверждены.
+//! межвладельческие последствия смерти. RAW вариантов `Begin` сохранён для
+//! ещё не подключённого координатного входа монстра; координатный player-вход
+//! разрешает цель через существующий `CState::GetSufferer` на каждом такте.
 //! Назначенный питомцу NPC остаётся допустимым `CMoveShape` на входе команды,
 //! но `CMonster::IsAttackAble` отвергает любой тип кроме игрока и монстра;
 //! расписание поэтому выполняет обычный `OnLoseTarget` и ставит поиск заново.
@@ -32,6 +32,20 @@
 //! RNG-вызова нет; BaseAttack/LordFast выполняют его даже при `GetCCH == 0`.
 //! `BaseAttack/MonsterBaseAttack::AI` сравнивают задержку с абсолютным
 //! wrapping DWORD deadline (`0x005B3B0E/0x0051497E`), а не с elapsed-time.
+//! Player-путь `0x2bd` хранит отдельные kernel и reuse в `CPlayerAI`.
+//! `CheckCastCondition` (VA `0x00514340`) требует источник и свойства,
+//! проверяет reuse с failure 13 и `GS1143`, но не цель/MP/дальность/путь.
+//! Первая AI-фаза проверяет дальность беззнаковым сравнением и поворачивает
+//! источник; через delay посылается fire с identity и координатами цели,
+//! затем один удар. Пустая цель не блокирует анимацию; self/NPC/недопустимая
+//! цель не получают урон и не расходуют RNG. Мёртвая цель даёт failure 2
+//! и `End(1)`, превышенная дальность — failure 11 и `End(0)`.
+//! `End` (VA `0x005b3010`) не меняет движение и не пересчитывает свойства;
+//! только успех изнашивает оружие и фиксирует reuse. Формула player-урона
+//! общая с MonsterFastAttack, включая личный критический множитель; защита,
+//! RP, смерть и сообщения используют существующий владелец применения атаки.
+//! Постройки и ворота проходят существующие war/camp-проверки, защиту,
+//! изменение HP, death-script и wire стационарного owner-а; NPC не атакуются.
 
 // COMPONENT_VARIANT_BEGIN: GameServer
 // Точная пара: GameServer/gameserver.exe + GameServer/GameServer.pdb
@@ -107,7 +121,7 @@ use super::fury::{FURY_SKILL_ID, execute_owned_fury};
 use super::immediatestate::{execute_monster_immediate_state, is_immediate_state_skill};
 use super::swordship::{execute_monster_auto_start_swordship, is_swordship_skill};
 use super::wuxing::is_wuxing_skill;
-use super::kernel::skill_is_restored;
+use super::kernel::{skill_is_restored, SkillTermination};
 use super::littlestar::{LITTLE_STAR_SKILL_ID, execute_owned_little_star};
 use super::lordfastattack::LORD_FAST_ATTACK_SKILL_ID;
 use super::lordwiderangingattack::{
@@ -180,6 +194,9 @@ use crate::gameserver::appserver::ai::stupidarcher::search_stupid_archer_enemy;
 use crate::gameserver::appserver::ai::warattackmonster::select_country_war_enemy;
 use crate::gameserver::appserver::ai::vilcouguardwithsword::select_village_country_guard_enemy;
 use crate::gameserver::appserver::masterinfo::MasterInfo;
+use crate::gameserver::appserver::ai::playerai::CPlayerAI;
+use crate::gameserver::appserver::player::PlayerSkillDispatch;
+use crate::gameserver::appserver::states::state::{resolve_coordinate_sufferer, resolve_identity_sufferer};
 use crate::gameserver::appserver::monster::CMonster;
 use crate::gameserver::appserver::moveshape::CMoveShape;
 use crate::gameserver::appserver::serverregion::CServerRegion;
@@ -188,7 +205,7 @@ use crate::gameserver::appserver::skills::kernel::SkillStage;
 use crate::gameserver::appserver::states::attackpower::{
     AttackInformation, AttackPower, AttackPowerType,
 };
-use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime};
+use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::guid::CGuid;
 use crate::public::tools::get_line_direction;
@@ -197,6 +214,155 @@ use crate::setup::monsterlist::{MonsterProperties, MonsterSkill};
 const MONSTER_TYPE: i32 = 600;
 const PLAYER_TYPE: i32 = 400;
 pub(crate) const MONSTER_BASE_ATTACK_SKILL_ID: u32 = 0x2bd;
+
+pub(crate) const fn is_player_monster_base_attack(dispatch: PlayerSkillDispatch) -> bool {
+    matches!(dispatch,
+        PlayerSkillDispatch::SelfTarget { skill_id: MONSTER_BASE_ATTACK_SKILL_ID, .. }
+        | PlayerSkillDispatch::Point { skill_id: MONSTER_BASE_ATTACK_SKILL_ID, .. }
+        | PlayerSkillDispatch::Object { skill_id: MONSTER_BASE_ATTACK_SKILL_ID,
+            target: ShapeIdentity { object_type: PLAYER_TYPE | MONSTER_TYPE | 500 | 1100 | 1200, .. } })
+}
+
+fn player_base_attack_outcome(state: QueuedSkillExecutionState) -> QueuedSkillExecutionOutcome {
+    QueuedSkillExecutionOutcome { state, first_contact: false, killing_blow: None }
+}
+
+fn end_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
+) {
+    if success {
+        game.damage_player_weapon(player_id, runtime);
+    }
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    if success {
+        ai.mark_monster_base_attack_used(runtime.now_milliseconds());
+    }
+}
+
+pub(crate) fn finish_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, ai: &mut CPlayerAI, runtime: &mut Runtime, success: bool,
+) -> bool {
+    let Some(dispatch) = ai.monster_base_attack().map(|kernel| kernel.dispatch()) else { return false };
+    end_player_monster_base_attack(game, player_id, ai, runtime, success);
+    ai.finish_player_skill(dispatch, if success { SkillTermination::Completed } else { SkillTermination::Cancelled })
+}
+
+pub(crate) fn execute_player_monster_base_attack<Runtime: GameMainLoopRuntime>(
+    game: &mut CGame, player_id: i32, dispatch: PlayerSkillDispatch,
+    ai: &mut CPlayerAI, runtime: &mut Runtime,
+) -> QueuedSkillExecutionOutcome {
+    use super::lordfastattack::{calculate_attack, master_info, send_start, target_dead};
+    let rejected = || player_base_attack_outcome(QueuedSkillExecutionState::Rejected);
+    if !is_player_monster_base_attack(dispatch) { return rejected(); }
+    let Some((region_id, level, source)) = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.learned_skill_level(MONSTER_BASE_ATTACK_SKILL_ID), player.shape_view()?))
+    }) else { return rejected() };
+    let Some(properties) = game.skill_base_properties(MONSTER_BASE_ATTACK_SKILL_ID, level) else {
+        end_player_monster_base_attack(game, player_id, ai, runtime, false);
+        return rejected();
+    };
+    let reuse = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
+    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
+    let delay = properties.query_property(SKILL_USAGE_DELAY_TIME);
+    let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
+    let _can_be_breaked = properties.query_property(super::basemagic::SKILL_USAGE_CAN_BE_BREAKED);
+    if ai.monster_base_attack().is_none() {
+        let now = runtime.now_milliseconds();
+        if !skill_is_restored(ai.monster_base_attack_last_used_ms(), reuse, now) {
+            game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0d);
+            game.send_skill_system_info(player_id, b"GS1143");
+            end_player_monster_base_attack(game, player_id, ai, runtime, false);
+            return rejected();
+        }
+        ai.begin_monster_base_attack(dispatch, now);
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.set_current_skill_id(Some(MONSTER_BASE_ATTACK_SKILL_ID));
+        }
+    } else if ai.monster_base_attack().is_none_or(|kernel| kernel.dispatch() != dispatch) {
+        return rejected();
+    }
+    let requested = match dispatch {
+        PlayerSkillDispatch::Object { target, .. } => resolve_identity_sufferer(game, region_id, target),
+        PlayerSkillDispatch::Point { x, y, .. } => resolve_coordinate_sufferer(game, region_id, x, y),
+        PlayerSkillDispatch::SelfTarget { .. } => None,
+    };
+    let target = requested.and_then(|identity| game.base_magic_target_view(region_id, identity).map(|view| (identity, view)));
+    if target.is_some_and(|(identity, _)| match identity.object_type {
+        PLAYER_TYPE | MONSTER_TYPE => target_dead(game, region_id, identity),
+        1100 | 1200 => game.stationary_build_combat_snapshot(region_id, identity).is_some_and(|build| build.hp == 0),
+        _ => false,
+    }) {
+        game.send_self_state_skill_failure(0x000b_fe01, player_id, 2);
+        end_player_monster_base_attack(game, player_id, ai, runtime, true);
+        return player_base_attack_outcome(QueuedSkillExecutionState::Completed);
+    }
+    let (fallback_x, fallback_y) = match dispatch {
+        PlayerSkillDispatch::Point { x, y, .. } => (x, y),
+        _ => (0, 0),
+    };
+    let (target_x, target_y) = target.map_or((fallback_x, fallback_y), |(_, view)| (view.tile_x, view.tile_y));
+    if ai.monster_base_attack().is_some_and(|kernel| kernel.stage() == SkillStage::Begin) {
+        let distance = target.map_or_else(
+            || super::baseattack::real_distance(source.tile_x, source.tile_y, target_x, target_y),
+            |(_, view)| source.real_distance(Some(view)),
+        );
+        if maximum_distance != 0 && maximum_distance < distance as u32 {
+            game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0b);
+            end_player_monster_base_attack(game, player_id, ai, runtime, false);
+            return rejected();
+        }
+        if let Some(player) = game.find_player_mut(player_id) {
+            player.movement_shape_mut().set_direction(get_line_direction(source.tile_x, source.tile_y, target_x, target_y));
+        }
+        send_start(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level);
+        if let Some(kernel) = ai.monster_base_attack_mut() {
+            let _ = kernel.advance(SkillStage::Begin, SkillStage::Check);
+        }
+    }
+    let started = ai.monster_base_attack().map(|kernel| kernel.started_at_ms()).expect("базовая атака хранит начало");
+    if !skill_is_restored(started, delay, runtime.now_milliseconds()) {
+        return player_base_attack_outcome(QueuedSkillExecutionState::Pending);
+    }
+    let mut fire = CMessage::new(0x000b_fe01);
+    fire.add_byte(2);
+    fire.add_long(MONSTER_BASE_ATTACK_SKILL_ID as i32);
+    fire.add_short(level as i16);
+    fire.add_long(PLAYER_TYPE);
+    fire.add_long(player_id);
+    fire.add_long(target.map_or(0, |(identity, _)| identity.object_type));
+    fire.add_long(target.map_or(0, |(identity, _)| identity.id));
+    fire.add_long(target_x);
+    fire.add_long(target_y);
+    let _ = game.send_player_shape_around(player_id, None, &fire);
+    if let Some(kernel) = ai.monster_base_attack_mut() {
+        let _ = kernel.advance(SkillStage::Check, SkillStage::Calculate);
+    }
+    if let Some((identity, _)) = target
+        && !(identity.object_type == PLAYER_TYPE && identity.id == player_id)
+        && let Some(master) = game.find_player(player_id).map(master_info)
+        && (if matches!(identity.object_type, 1100 | 1200) {
+            game.stationary_build_attackable_by_player(player_id, region_id, identity)
+        } else {
+            game.owned_player_skill_target_attackable(master, identity, region_id)
+        })
+        && let Some((master, attack)) = calculate_attack(game, player_id, MONSTER_BASE_ATTACK_SKILL_ID, level, hit_modifier)
+    {
+        match identity.object_type {
+            PLAYER_TYPE => game.apply_owned_skill_attack_to_player(master, identity.id, region_id, attack, runtime),
+            MONSTER_TYPE => game.apply_owned_skill_attack_to_monster(master, identity.id, region_id, attack, runtime),
+            1100 | 1200 => game.apply_owned_skill_attack_to_stationary_build(player_id, region_id, identity, attack, runtime),
+            _ => {}
+        }
+    }
+    if let Some(kernel) = ai.monster_base_attack_mut() {
+        let _ = kernel.advance(SkillStage::Calculate, SkillStage::Attack);
+        let _ = kernel.advance(SkillStage::Attack, SkillStage::Apply);
+    }
+    end_player_monster_base_attack(game, player_id, ai, runtime, true);
+    player_base_attack_outcome(QueuedSkillExecutionState::Completed)
+}
 
 const BASE_ATTACK_SKILL_ID: u16 = 1;
 const BASE_ARCHERY_SKILL_ID: u16 = 2;

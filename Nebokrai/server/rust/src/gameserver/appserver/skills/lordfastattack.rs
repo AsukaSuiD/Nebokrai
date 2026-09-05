@@ -28,6 +28,8 @@
 //! только успешный исход изнашивает оружие; player virtual `+0x158` пуст,
 //! поэтому здесь нет дополнительного пересчёта свойств. MP virtual `+0x164`
 //! — `CPlayer::OnChangeStates` (VA `0x00433080`), а не combat tick.
+//! Расчёт player-урона MonsterBaseAttack использует здесь ту же формулу,
+//! что MonsterFastAttack; его одноударное исполнение остаётся у своего owner-а.
 
 use super::baseattack::{
     SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME,
@@ -98,7 +100,7 @@ fn send_failure(game: &CGame, player_id: i32, action: u8) {
     game.send_self_state_skill_failure(EFFECT_MESSAGE, player_id, action);
 }
 
-fn send_start(game: &mut CGame, player_id: i32, skill_id: u32, level: i32) {
+pub(super) fn send_start(game: &mut CGame, player_id: i32, skill_id: u32, level: i32) {
     let Some(direction) = game
         .find_player(player_id)
         .map(|player| player.shape().get_direction())
@@ -187,7 +189,7 @@ pub(crate) fn cancel_player_lord_fast_attack<Runtime: GameMainLoopRuntime>(
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
 
-fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
+pub(super) fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
     match target.object_type {
         PLAYER_TYPE => game.find_player(target.id).is_none_or(CPlayer::is_dead),
         MONSTER_TYPE => game
@@ -198,7 +200,7 @@ fn target_dead(game: &CGame, region_id: i32, target: ShapeIdentity) -> bool {
     }
 }
 
-fn master_info(player: &CPlayer) -> MasterInfo {
+pub(super) fn master_info(player: &CPlayer) -> MasterInfo {
     let permissions = player.pk_permissions();
     MasterInfo {
         master_type: PLAYER_TYPE,
@@ -214,7 +216,7 @@ fn master_info(player: &CPlayer) -> MasterInfo {
     }
 }
 
-fn calculate_attack(
+pub(super) fn calculate_attack(
     game: &mut CGame,
     player_id: i32,
     skill_id: u32,
@@ -227,7 +229,8 @@ fn calculate_attack(
     let minimum = combat.minimum_attack as i32;
     let maximum = combat.maximum_attack as i32;
     let difference = maximum.wrapping_sub(minimum);
-    let span = if skill_id == MONSTER_FAST_ATTACK_SKILL_ID {
+    let monster_formula = matches!(skill_id, MONSTER_FAST_ATTACK_SKILL_ID | super::monsterbaseattack::MONSTER_BASE_ATTACK_SKILL_ID);
+    let span = if monster_formula {
         difference.max(0).wrapping_add(1)
     } else {
         difference.unsigned_abs().wrapping_add(1) as i32
@@ -269,7 +272,7 @@ fn calculate_attack(
     };
     if game.skill_random_below(100) < i32::from(combat.cch) {
         attack.critical = true;
-        let critical_rate = if skill_id == MONSTER_FAST_ATTACK_SKILL_ID {
+        let critical_rate = if monster_formula {
             combat.critical_rate()
         } else {
             game.globe_setup().critical_rate()
