@@ -1,5 +1,6 @@
 //! Подготовка яростного удара `CRageBreak` (`0x6E`).
-//! Reuse проверяется exact `CSkill::IsRestored`; cast/state часы — elapsed.
+//! Reuse проверяется exact `CSkill::IsRestored`; каст и состояние используют
+//! абсолютный wrapping-срок.
 //!
 //! Источник: `gameserver.exe` + `GameServer.pdb`, исходный владелец
 //! `appserver/skills/ragebreak.cpp`. Владелец сохраняет проверку и повторное
@@ -8,13 +9,16 @@
 //! используется только для канонического player-owner-а, доставки и общего
 //! пересчёта свойств. Подтверждённый `End` возвращает движение и выполняет
 //! общий хвост `CSummonSkill::End(1)` после установки состояний.
+//! AI (`0x005A00F0`) завершает прежний RageBreak (0x005A0322) и прежний
+//! Cure (0x005A047C) до Begin новых, включая отдельный UpdateProperty
+//! каждого удаления; после установки Cure пересчитывает свойства вновь.
 
 use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::basemagic::SKILL_USAGE_CAN_BE_BREAKED;
 use super::cure::finish_curable_state;
-use super::curestate::{CureState, send_cure_state_visual};
+use super::curestate::{CureState, end_player_cure_state, send_cure_state_visual};
 use super::kernel::{SkillExecutionKernel, SkillStage, SkillTermination, skill_is_restored};
-use super::ragebreakstate::{RageBreakState, send_rage_break_state_visual};
+use super::ragebreakstate::{RageBreakState, end_player_rage_break_state, send_rage_break_state_visual};
 use crate::gameserver::appserver::ai::playerai::CPlayerAI;
 use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -137,20 +141,20 @@ pub(crate) fn execute_player_rage_break<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let identity = ShapeIdentity { object_type: PLAYER_TYPE, id: player_id, ex_id: CGuid::GUID_INVALID };
-    let replacement = game.find_player_mut(player_id).and_then(CPlayer::take_rage_break_state);
-    if let Some(previous) = replacement { send_rage_break_state_visual(game, region_id, identity, tile_x, tile_y, previous, false, now); }
-    let state = RageBreakState::new(now, keep, attack_gain);
+    let _ = end_player_rage_break_state(game, player_id, now);
+    let state_now = runtime.now_milliseconds();
+    let state = RageBreakState::new(state_now, keep, attack_gain);
+    send_rage_break_state_visual(game, region_id, identity, tile_x, tile_y, state, true, state_now);
     if let Some(player) = game.find_player_mut(player_id) { player.replace_rage_break_state(state); }
-    send_rage_break_state_visual(game, region_id, identity, tile_x, tile_y, state, true, now);
 
     let order = game.find_player(player_id).map(CPlayer::curable_state_ids).unwrap_or_default();
     for state_id in order {
         if CONFLICTING_STATES.contains(&state_id) { let _ = finish_curable_state(game, region_id, identity, state_id, now); }
     }
+    let _ = end_player_cure_state(game, player_id);
     let cure = CureState::new(identity, identity).begin_now();
-    let previous_cure = game.find_player_mut(player_id).and_then(|player| player.replace_cure_state(cure));
-    if let Some(previous) = previous_cure { send_cure_state_visual(game, player_id, previous, false); }
     send_cure_state_visual(game, player_id, cure, true);
+    let _ = game.find_player_mut(player_id).map(|player| player.replace_cure_state(cure));
     let _ = game.update_player_properties(player_id);
 
     if let Some(state) = ai.rage_break_mut() { let _ = state.advance(SkillStage::Attack, SkillStage::Apply); }

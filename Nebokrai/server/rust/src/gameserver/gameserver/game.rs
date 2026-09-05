@@ -28950,24 +28950,14 @@ impl CGame {
             let _ = self.update_player_properties(player_id);
         }
         let _ = expire_player_poison_fog_state(self, player_id, now_ms, runtime);
-        let rage_break_context = self.find_player(player_id).and_then(|player| {
-            Some((
-                player.server_region_id()?,
-                player.shape().identity(),
-                player.shape().get_tile_x().ok()?,
-                player.shape().get_tile_y().ok()?,
-            ))
-        });
         let expired_rage_break = self
-            .find_player_mut(player_id)
-            .and_then(|player| player.take_expired_rage_break_state(now_ms));
-        if let (Some(state), Some((region_id, identity, tile_x, tile_y))) =
-            (expired_rage_break, rage_break_context)
-        {
-            send_rage_break_state_visual(
-                self, region_id, identity, tile_x, tile_y, state, false, now_ms,
+            .find_player(player_id)
+            .and_then(|player| player.rage_break_state())
+            .is_some_and(|state| state.expired(now_ms));
+        if expired_rage_break {
+            let _ = crate::gameserver::appserver::skills::ragebreakstate::end_player_rage_break_state(
+                self, player_id, now_ms,
             );
-            let _ = self.update_player_properties(player_id);
         }
         let _ = expire_player_fury_states(self, player_id, now_ms, runtime);
         let weak_ended = finish_player_weak_outside(self, player_id, runtime);

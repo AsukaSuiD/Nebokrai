@@ -14,6 +14,9 @@
 //! восстанавливает срок до общего пересчёта свойств.
 //! Вызов Restart из Fury (vtable `0x006612B4 +0x20`, `0x005FD450`)
 //! меняет только время начала, сохраняя прежние срок, усиление и DB-запись.
+//! End (slot +0x1C, `0x005FD420`) сначала отправляет эффект, затем удаляет
+//! состояние через RemoveState с пересчётом свойств игрока. Замена и AI
+//! используют один этот порядок.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;
@@ -81,6 +84,22 @@ impl RageBreakState {
         }
         maximum.wrapping_add(gain).min(i32::MAX as u32)
     }
+}
+
+pub(crate) fn end_player_rage_break_state(game: &mut CGame, player_id: i32, now_ms: u32) -> bool {
+    let Some(state) = game.find_player(player_id).and_then(|player| player.rage_break_state()) else {
+        return false;
+    };
+    let context = game.find_player(player_id).and_then(|player| {
+        Some((player.server_region_id()?, player.shape().identity(),
+            player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?))
+    });
+    if let Some((region_id, identity, tile_x, tile_y)) = context {
+        send_rage_break_state_visual(game, region_id, identity, tile_x, tile_y, state, false, now_ms);
+    }
+    let _ = game.find_player_mut(player_id).and_then(|player| player.take_rage_break_state());
+    let _ = game.update_player_properties(player_id);
+    true
 }
 
 pub(crate) fn send_rage_break_state_visual(
