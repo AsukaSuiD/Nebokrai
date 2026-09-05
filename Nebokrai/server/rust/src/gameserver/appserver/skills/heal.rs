@@ -81,15 +81,7 @@ pub(crate) const fn is_heal_skill(skill_id: u32) -> bool {
     )
 }
 
-fn family_index(skill_id: u32) -> usize {
-    match skill_id {
-        HEAL_SKILL_ID => 0,
-        HEAL_2_SKILL_ID => 1,
-        SUPER_HEAL_SKILL_ID => 2,
-        SUPER_HEAL_2_SKILL_ID => 3,
-        _ => unreachable!("идентификатор семейства лечения проверен"),
-    }
-}
+
 
 fn requested_target(player_id: i32, dispatch: PlayerSkillDispatch) -> Option<(u32, ShapeIdentity)> {
     match dispatch {
@@ -201,14 +193,14 @@ fn abort_player_heal(game: &mut CGame, player_id: i32) {
     abort_skill(game, player_id);
 }
 
-pub(crate) fn complete_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = (0..4).find_map(|index| player_ai.heal_family(index).map(|execution| execution.dispatch())) else { return false };
+pub(crate) fn complete_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, player_ai: &mut CPlayerAI, runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.player_skill_execution(skill_id).map(SkillExecutionKernel::dispatch) else { return false };
     finish_player_heal(game, player_id, player_ai, dispatch.skill_id(), runtime);
     player_ai.finish_player_skill(dispatch, SkillTermination::Completed)
 }
 
-pub(crate) fn cancel_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
-    let Some(dispatch) = (0..4).find_map(|index| player_ai.heal_family(index).map(SkillExecutionKernel::dispatch)) else { return false };
+pub(crate) fn cancel_player_heal<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, skill_id: u32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
+    let Some(dispatch) = player_ai.player_skill_execution(skill_id).map(SkillExecutionKernel::dispatch) else { return false };
     abort_player_heal(game, player_id);
     player_ai.finish_player_skill(dispatch, SkillTermination::Cancelled)
 }
@@ -253,7 +245,6 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     let Some((skill_id, requested_identity)) = requested_target(player_id, dispatch) else {
         return terminal(QueuedSkillExecutionState::Rejected);
     };
-    let index = family_index(skill_id);
     let Some((region_id, source_x, source_y, skill_level, initial_mana, weapon_level)) = game
         .find_player(player_id)
         .and_then(|player| {
@@ -271,7 +262,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     };
     // `CAttackSkill::Begin` подставляет заклинателя, если цель-объект уже
     // исчез. Это происходит до проверки условий и сохраняется на всех стадиях.
-    let execution_started = player_ai.heal_family(index).is_some();
+    let execution_started = player_ai.player_skill_execution(skill_id).is_some();
     let effective_identity = if execution_started {
         requested_identity
     } else {
@@ -297,7 +288,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     let hp_gain_float = (f64::from(constant) + f64::from(scaled_factor)) as f32;
     let hp_gain = truncate_original(f64::from(hp_gain_float)) as u32;
 
-    if player_ai.heal_family(index).is_none() {
+    if player_ai.player_skill_execution(skill_id).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         game.enter_player_combat_state(player_id);
         let Some(target) = requested else {
@@ -346,9 +337,9 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
             }
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_heal_family(index, SkillExecutionKernel::begin(dispatch, started_at_ms));
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
-        .heal_family(index)
+        .player_skill_execution(skill_id)
         .is_none_or(|execution| execution.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
@@ -370,7 +361,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
     }
 
     if player_ai
-        .heal_family(index)
+        .player_skill_execution(skill_id)
         .is_some_and(|execution| execution.stage() == SkillStage::Begin)
     {
         let current_mana = game.find_player(player_id).map_or(0, CPlayer::mana);
@@ -396,13 +387,13 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
             GamePlayerFightStatePhase::MoveShapeAi,
         );
         send_cast(game, player_id, target, skill_id, skill_level, true);
-        if let Some(execution) = player_ai.heal_family_mut(index) {
+        if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
             let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         }
     }
 
     let started_at_ms = player_ai
-        .heal_family(index)
+        .player_skill_execution(skill_id)
         .map(SkillExecutionKernel::started_at_ms)
         .expect("выполнение лечения создано или восстановлено");
     if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) {
@@ -469,7 +460,7 @@ pub(crate) fn execute_player_heal<Runtime: GameMainLoopRuntime>(
             || runtime.now_milliseconds(),
         );
     }
-    if let Some(execution) = player_ai.heal_family_mut(index) {
+    if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);
         let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);

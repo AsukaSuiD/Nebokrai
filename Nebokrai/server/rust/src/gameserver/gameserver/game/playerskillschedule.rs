@@ -239,8 +239,12 @@ impl CGame {
             | PETS_CONTROL_SKILL_ID
             | MONSTER_TAMING_SKILL_ID
             | KNOCK_OUT_SKILL_ID
-            | GIBE_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
-            BASE_ATTACK_SKILL_ID => player_ai.base_attack().is_some(),
+            | GIBE_SKILL_ID
+            | BASE_ATTACK_SKILL_ID | ITEM_SKILL_2_ID
+            | LIGHTNING_SWORD_SKILL_ID | LIGHTNING_SWORD_2_SKILL_ID
+            | LIGHTNING_SWORD_3_SKILL_ID | LIGHTNING_SWORD_4_SKILL_ID
+            | MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID
+            | GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => player_ai.player_skill_execution(skill_id).is_some(),
             BASE_MAGIC_SKILL_ID => player_ai.base_magic().is_some(),
             FIRE_BOLT_SKILL_ID => player_ai.fire_bolt().is_some(),
 
@@ -248,7 +252,6 @@ impl CGame {
 
             CHAIN_LIGHTNING_SKILL_ID => player_ai.chain_lightning().is_some(),
 
-            ITEM_SKILL_2_ID => player_ai.item_skill_2().is_some(),
 
             GHOST_CUT_SKILL_ID | GHOST_CUT_2_SKILL_ID | GHOST_CUT_3_SKILL_ID => {
                 player_ai.ghost_cut().is_some()
@@ -260,10 +263,6 @@ impl CGame {
             FLASH_SKILL_ID => player_ai.flash().is_some(),
             SWALLOW_SKILL_ID => player_ai.swallow().is_some(),
 
-            LIGHTNING_SWORD_SKILL_ID
-            | LIGHTNING_SWORD_2_SKILL_ID
-            | LIGHTNING_SWORD_3_SKILL_ID
-            | LIGHTNING_SWORD_4_SKILL_ID => player_ai.lightning_sword().is_some(),
             LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
                 player_ai.little_flash().is_some()
             }
@@ -285,9 +284,6 @@ impl CGame {
             BOSS_BLUE_QUAKE_SKILL_ID => player_ai.boss_blue_quake().is_some(),
             BOSS_FIEND_PENETRATE_SKILL_ID => player_ai.boss_fiend_penetrate().is_some(),
             SPRITE_BURN_SKILL_ID => player_ai.sprite_burn().is_some(),
-            MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
-                player_ai.wide_arc_attack().is_some()
-            }
             LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => player_ai.lord_fast_attack().is_some(),
 
             CHAOS_SPHERE_SKILL_ID => player_ai.chaos_sphere().is_some(),
@@ -322,12 +318,11 @@ impl CGame {
 
             POISON_FOG_SKILL_ID => player_ai.poison_fog().is_some(),
 
-            GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => player_ai.god_bless().is_some(),
 
-            _ if is_swordship_skill(skill_id) => player_ai.swordship().is_some(),
-            _ if is_immediate_state_skill(skill_id) => player_ai.immediate_state().is_some(),
-            _ if is_non_fun_skill(skill_id) => player_ai.non_fun().is_some(),
-            _ if is_heal_skill(skill_id) => (0..4).any(|index| player_ai.heal_family(index).is_some()),
+            _ if is_swordship_skill(skill_id) || is_immediate_state_skill(skill_id)
+                || is_non_fun_skill(skill_id) || is_heal_skill(skill_id) => {
+                player_ai.player_skill_execution(skill_id).is_some()
+            }
             _ if is_self_shield_skill(skill_id) => {
                 materialized_self_shield_active(player_ai, skill_id)
             }

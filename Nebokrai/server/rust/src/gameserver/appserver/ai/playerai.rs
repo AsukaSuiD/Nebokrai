@@ -9,6 +9,9 @@
 //! доступ и завершение не перечисляют навыки. End сверяет полный dispatch,
 //! оставляет соседние исполнения и не удаляет cooldown. Владельцы с особыми
 //! данными пока сохраняют типизированные поля; их перенос ещё не завершён.
+//! Варианты простых семейств, в том числе лечения, занимают отдельные ID.
+//! End-диспетчер передаёт выбранный ID владельцу; поиск первого занятого
+//! слота семейства не используется для выбора завершаемого исполнения.
 //! Индексы семейств не участвуют в хранении сроков; состояния исполнения
 //! остаются независимыми от cooldown. Сроки WarSoul хранятся отдельно:
 //! их владелец не подменяется основным навыком игрока.
@@ -138,7 +141,6 @@ use crate::gameserver::appserver::skills::archery::ArcheryExecutionState;
 use crate::gameserver::appserver::skills::armybreak::ArmyBreakExecutionState;
 use crate::gameserver::appserver::skills::flash::FlashExecutionState;
 use crate::gameserver::appserver::skills::swallow::SwallowExecutionState;
-use crate::gameserver::appserver::skills::baseattack::BaseAttackExecutionState;
 use crate::gameserver::appserver::skills::basemagic::BaseMagicExecutionState;
 use crate::gameserver::appserver::skills::lightning::LightningExecutionState;
 use crate::gameserver::appserver::skills::lordfastattack::LordFastAttackExecutionState;
@@ -182,7 +184,7 @@ use crate::gameserver::appserver::skills::bossbluequake::PlayerBossBlueQuakeExec
 use crate::gameserver::appserver::skills::bossfiendpenetrate::PlayerBossFiendPenetrateExecutionState;
 use crate::gameserver::appserver::skills::spriteburn::SpriteBurnExecutionState;
 use crate::gameserver::appserver::skills::kernel::{
-    SkillExecutionKernel, SkillStage, SkillTermination,
+    SkillExecutionKernel, SkillTermination,
 };
 use crate::gameserver::appserver::skills::rage::RageExecutionState;
 use crate::gameserver::appserver::skills::sevenshootingstar::SevenShootingStarExecutionState;
@@ -235,7 +237,6 @@ pub(crate) struct CPlayerAI {
     selected_battle_fairy_skill_id: u32,
     current_battle_fairy_skill: Option<BattleFairySkillDispatch>,
     battle_fairy_skills: VecDeque<BattleFairySkillDispatch>,
-    base_attack: Option<BaseAttackExecutionState>,
     archery: Option<ArcheryExecutionState>,
     heartless_arrow: Option<HeartlessArrowExecutionState>,
     heartless_arrow_area: Option<HeartlessArrowAreaExecutionState>,
@@ -255,7 +256,6 @@ pub(crate) struct CPlayerAI {
     agility_family: Option<AgilityFamilyExecutionState>,
     base_magic: Option<BaseMagicExecutionState>,
     fire_bolt: Option<BaseMagicExecutionState>,
-    item_skill_2: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     chain_lightning: Option<ChainLightningExecutionState>,
     ghost_cut: Option<GhostCutExecutionState>,
     knight_cut: Option<KnightCutExecutionState>,
@@ -263,7 +263,6 @@ pub(crate) struct CPlayerAI {
     rage: Option<RageExecutionState>,
     flash: Option<FlashExecutionState>,
     swallow: Option<SwallowExecutionState>,
-    lightning_sword: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     little_flash: Option<LittleFlashExecutionState>,
     poison_fog: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     poison_fog_destination: Option<(i32, i32)>,
@@ -279,7 +278,6 @@ pub(crate) struct CPlayerAI {
     boss_blue_quake: Option<PlayerBossBlueQuakeExecutionState>,
     boss_fiend_penetrate: Option<PlayerBossFiendPenetrateExecutionState>,
     sprite_burn: Option<SpriteBurnExecutionState>,
-    wide_arc_attack: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     lord_fast_attack: Option<LordFastAttackExecutionState>,
     chaos_sphere: Option<ChaosSphereExecutionState>,
     lightning: Option<LightningExecutionState>,
@@ -287,11 +285,6 @@ pub(crate) struct CPlayerAI {
     battle_fairy_executions: BTreeMap<u32, BattleFairyExecution>,
     battle_fairy_last_used_ms: BTreeMap<u32, u32>,
     callosity: Option<CallosityExecutionState>,
-    heal_family: [Option<SkillExecutionKernel<PlayerSkillDispatch>>; 4],
-    god_bless: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    immediate_state: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    non_fun: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
-    swordship: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     auto_inc_last_time_ms: u32,
     auto_inc_energy_last_time_ms: u32,
 }
@@ -572,10 +565,6 @@ impl CPlayerAI {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
         }
-        if let Some(mut execution) = self.base_attack.take_if(|state| state.dispatch() == expected) {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
-        }
         if let Some(mut execution) = self.archery.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(
@@ -657,10 +646,6 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной стрелы завершено");
         }
-        if let Some(mut execution) = self.item_skill_2.take_if(|state| state.dispatch() == expected) {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение громового огня завершено");
-        }
         if let Some(mut execution) = self.chain_lightning.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение цепной молнии завершено");
@@ -688,10 +673,6 @@ impl CPlayerAI {
         if let Some(mut execution) = self.swallow.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение двойного направленного удара завершено");
-        }
-        if let Some(mut execution) = self.lightning_sword.take_if(|state| state.dispatch() == expected) {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение молниеносного меча завершено");
         }
         if let Some(mut execution) = self.little_flash.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
@@ -728,10 +709,6 @@ impl CPlayerAI {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение огненной области завершено");
         }
-        if let Some(mut kernel) = self.wide_arc_attack.take_if(|state| state.dispatch() == expected) {
-            let _ = kernel.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?kernel.stage(), "выполнение широкой дуговой атаки завершено");
-        }
         if let Some(mut execution) = self.lord_fast_attack.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение быстрой атаки владыки завершено");
@@ -751,31 +728,6 @@ impl CPlayerAI {
         if let Some(mut execution) = self.callosity.take_if(|state| state.kernel().dispatch() == expected) {
             let _ = execution.kernel_mut().terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.kernel().stage(), "выполнение навыка закалки завершено");
-        }
-        for mut execution in self
-            .heal_family
-            .each_mut()
-            .into_iter()
-            .filter_map(|slot| slot.take_if(|state| state.dispatch() == expected))
-        {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение периодического лечения завершено");
-        }
-        if let Some(mut execution) = self.god_bless.take_if(|state| state.dispatch() == expected) {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение божественного благословения завершено");
-        }
-        if let Some(mut execution) = self.immediate_state.take_if(|state| state.dispatch() == expected) {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение немедленного состояния завершено");
-        }
-        if let Some(mut execution) = self.non_fun.take_if(|state| state.dispatch() == expected) {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение пустого навыка завершено");
-        }
-        if let Some(mut execution) = self.swordship.take_if(|state| state.dispatch() == expected) {
-            let _ = execution.terminate(termination);
-            tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение корабля мечей завершено");
         }
     }
 
@@ -798,9 +750,6 @@ impl CPlayerAI {
         self.finish_player_skill(dispatch, SkillTermination::Cancelled)
     }
 
-    pub(crate) const fn base_attack(&self) -> Option<BaseAttackExecutionState> {
-        self.base_attack
-    }
 
     pub(crate) const fn archery(&self) -> Option<ArcheryExecutionState> {
         self.archery
@@ -920,21 +869,6 @@ impl CPlayerAI {
     }
     pub(crate) fn yaksha_slash_mut(&mut self) -> Option<&mut YakshaSlashExecutionState> { self.yaksha_slash.as_mut() }
 
-    pub(crate) fn begin_base_attack(&mut self, mut state: BaseAttackExecutionState) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.base_attack = Some(state);
-    }
-
-    pub(crate) fn advance_base_attack(
-        &mut self,
-        expected: SkillStage,
-        next: SkillStage,
-    ) -> bool {
-        self.base_attack
-            .as_mut()
-            .is_some_and(|state| state.advance(expected, next))
-    }
-
     pub(crate) const fn base_magic(&self) -> Option<BaseMagicExecutionState> {
         self.base_magic
     }
@@ -959,19 +893,6 @@ impl CPlayerAI {
 
     pub(crate) fn fire_bolt_mut(&mut self) -> Option<&mut BaseMagicExecutionState> {
         self.fire_bolt.as_mut()
-    }
-
-    pub(crate) const fn item_skill_2(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.item_skill_2
-    }
-
-    pub(crate) fn begin_item_skill_2(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.item_skill_2 = Some(state);
-    }
-
-    pub(crate) fn item_skill_2_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.item_skill_2.as_mut()
     }
 
     pub(crate) const fn chain_lightning(&self) -> Option<ChainLightningExecutionState> {
@@ -1024,12 +945,6 @@ impl CPlayerAI {
         self.swallow = Some(state);
     }
     pub(crate) fn swallow_mut(&mut self) -> Option<&mut SwallowExecutionState> { self.swallow.as_mut() }
-    pub(crate) const fn lightning_sword(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.lightning_sword }
-    pub(crate) fn begin_lightning_sword(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.lightning_sword = Some(state);
-    }
-    pub(crate) fn lightning_sword_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.lightning_sword.as_mut() }
     pub(crate) const fn little_flash(&self) -> Option<&LittleFlashExecutionState> { self.little_flash.as_ref() }
     pub(crate) fn begin_little_flash(&mut self, mut state: LittleFlashExecutionState) {
         state.kernel_mut().inherit_scheduled_begin(self.scheduled_skill_begin);
@@ -1158,22 +1073,6 @@ impl CPlayerAI {
         self.sprite_burn.as_mut()
     }
 
-    pub(crate) const fn wide_arc_attack(&self) -> Option<&SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.wide_arc_attack.as_ref()
-    }
-
-    pub(crate) fn begin_wide_arc_attack(&mut self, dispatch: PlayerSkillDispatch, now_ms: u32) {
-        let now_ms = self.scheduled_skill_begin.filter(|(queued, _)| *queued == dispatch)
-            .map_or(now_ms, |(_, started)| started);
-        self.wide_arc_attack = Some(SkillExecutionKernel::begin(dispatch, now_ms));
-    }
-
-    pub(crate) fn wide_arc_attack_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.wide_arc_attack.as_mut()
-    }
-
     pub(crate) const fn lord_fast_attack(&self) -> Option<&LordFastAttackExecutionState> {
         self.lord_fast_attack.as_ref()
     }
@@ -1237,90 +1136,6 @@ impl CPlayerAI {
 
     pub(crate) fn callosity_mut(&mut self) -> Option<&mut CallosityExecutionState> {
         self.callosity.as_mut()
-    }
-
-    pub(crate) const fn heal_family(
-        &self,
-        index: usize,
-    ) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.heal_family[index]
-    }
-
-    pub(crate) fn begin_heal_family(
-        &mut self,
-        index: usize,
-        mut state: SkillExecutionKernel<PlayerSkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.heal_family[index] = Some(state);
-    }
-
-    pub(crate) fn heal_family_mut(
-        &mut self,
-        index: usize,
-    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.heal_family[index].as_mut()
-    }
-
-    pub(crate) const fn god_bless(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> { self.god_bless }
-    pub(crate) fn begin_god_bless(&mut self, mut state: SkillExecutionKernel<PlayerSkillDispatch>) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.god_bless = Some(state);
-    }
-    pub(crate) fn god_bless_mut(&mut self) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> { self.god_bless.as_mut() }
-
-    pub(crate) const fn immediate_state(
-        &self,
-    ) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.immediate_state
-    }
-    pub(crate) fn begin_immediate_state(
-        &mut self,
-        mut state: SkillExecutionKernel<PlayerSkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.immediate_state = Some(state);
-    }
-    pub(crate) fn immediate_state_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.immediate_state.as_mut()
-    }
-
-    pub(crate) const fn non_fun(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.non_fun
-    }
-
-    pub(crate) fn begin_non_fun(
-        &mut self,
-        mut state: SkillExecutionKernel<PlayerSkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.non_fun = Some(state);
-    }
-
-    pub(crate) fn non_fun_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.non_fun.as_mut()
-    }
-
-    pub(crate) const fn swordship(&self) -> Option<SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.swordship
-    }
-
-    pub(crate) fn begin_swordship(
-        &mut self,
-        mut state: SkillExecutionKernel<PlayerSkillDispatch>,
-    ) {
-        state.inherit_scheduled_begin(self.scheduled_skill_begin);
-        self.swordship = Some(state);
-    }
-
-    pub(crate) fn swordship_mut(
-        &mut self,
-    ) -> Option<&mut SkillExecutionKernel<PlayerSkillDispatch>> {
-        self.swordship.as_mut()
     }
 
     /// Продвигает ровно одну ожидающую команду только после конечного состояния

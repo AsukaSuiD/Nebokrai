@@ -132,7 +132,7 @@ pub(crate) fn cancel_player_base_attack<Runtime: GameMainLoopRuntime>(
     player_ai: &mut CPlayerAI,
     runtime: &mut Runtime,
 ) -> bool {
-    let Some(dispatch) = player_ai.base_attack().map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = player_ai.player_skill_execution(BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     finish_player_base_attack(game, player_id, player_ai, runtime);
@@ -144,7 +144,7 @@ pub(crate) fn abort_player_base_attack_on_region_change(
     player_id: i32,
     player_ai: &mut CPlayerAI,
 ) -> bool {
-    let Some(dispatch) = player_ai.base_attack().map(SkillExecutionKernel::dispatch) else {
+    let Some(dispatch) = player_ai.player_skill_execution(BASE_ATTACK_SKILL_ID).map(SkillExecutionKernel::dispatch) else {
         return false;
     };
     if let Some(player) = game.find_player_mut(player_id) {

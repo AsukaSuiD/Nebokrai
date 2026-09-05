@@ -40096,6 +40096,7 @@ impl CGame {
                 GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => Some(complete_player_god_bless(
                     self,
                     player_id,
+                    skill_id,
                     &mut player_ai,
                     runtime,
                 )),
@@ -40132,6 +40133,7 @@ impl CGame {
                 _ if is_heal_skill(skill_id) => Some(complete_player_heal(
                     self,
                     player_id,
+                    skill_id,
                     &mut player_ai,
                     runtime,
                 )),
@@ -40303,7 +40305,7 @@ impl CGame {
             | LIGHTNING_SWORD_2_SKILL_ID
             | LIGHTNING_SWORD_3_SKILL_ID
             | LIGHTNING_SWORD_4_SKILL_ID => {
-                cancel_player_lightning_sword(self, player_id, &mut player_ai, runtime)
+                cancel_player_lightning_sword(self, player_id, skill_id, &mut player_ai, runtime)
             }
             LITTLE_FLASH_SKILL_ID | LITTLE_FLASH_2_SKILL_ID => {
                 cancel_player_little_flash(self, player_id, &mut player_ai, runtime)
@@ -40351,7 +40353,7 @@ impl CGame {
                 cancel_player_sprite_burn(self, player_id, &mut player_ai, runtime)
             }
             MACHINERY_STOMP_SKILL_ID | LORD_WIDERANGING_ATTACK_SKILL_ID => {
-                cancel_player_wide_arc_attack(self, player_id, &mut player_ai, runtime)
+                cancel_player_wide_arc_attack(self, player_id, skill_id, &mut player_ai, runtime)
             }
             LORD_FAST_ATTACK_SKILL_ID | MONSTER_FAST_ATTACK_SKILL_ID => {
                 cancel_player_lord_fast_attack(self, player_id, &mut player_ai, runtime)
@@ -40483,7 +40485,7 @@ impl CGame {
             }
             WEAK_SKILL_ID => cancel_player_weak(self, player_id, &mut player_ai, runtime),
             GOD_BLESS_SKILL_ID | GOD_BLESS_2_SKILL_ID => {
-                cancel_player_god_bless(self, player_id, &mut player_ai, runtime)
+                cancel_player_god_bless(self, player_id, skill_id, &mut player_ai, runtime)
             }
             CURE_SKILL_ID => cancel_player_cure(self, player_id, &mut player_ai, runtime),
             PROMOTION_SKILL_ID => {
@@ -40506,7 +40508,7 @@ impl CGame {
                 runtime,
             ),
             _ if is_heal_skill(skill_id) => {
-                cancel_player_heal(self, player_id, &mut player_ai, runtime)
+                cancel_player_heal(self, player_id, skill_id, &mut player_ai, runtime)
             }
             _ if is_self_shield_skill(skill_id) => cancel_player_self_shield_dispatch(
                 self,

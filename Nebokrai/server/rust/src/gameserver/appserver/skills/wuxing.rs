@@ -163,14 +163,14 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         .find_player(player_id)
         .map_or(0, |player| player.learned_skill_level(skill_id));
     let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else {
-        if player_ai.immediate_state().is_some() {
+        if player_ai.player_skill_execution(skill_id).is_some() {
             abort_skill(game, player_id);
         }
         return terminal(QueuedSkillExecutionState::Rejected);
     };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
 
-    if player_ai.immediate_state().is_none() {
+    if player_ai.player_skill_execution(skill_id).is_none() {
         let cooldown_now_ms = runtime.now_milliseconds();
         let last_used_ms = player_ai.skill_last_used_ms(skill_id);
         if !skill_is_restored(last_used_ms, reuse_delay_ms, cooldown_now_ms) {
@@ -183,8 +183,8 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_immediate_state(SkillExecutionKernel::begin(dispatch, started_at_ms));
-    } else if player_ai.immediate_state().is_none_or(|state| state.dispatch() != dispatch) {
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
+    } else if player_ai.player_skill_execution(skill_id).is_none_or(|state| state.dispatch() != dispatch) {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
     let state = state_from_properties(skill_id, &properties)
@@ -196,7 +196,7 @@ pub(crate) fn execute_player_wuxing<Runtime: GameMainLoopRuntime>(
     if game.update_player_properties(player_id).is_some() {
         let _ = game.restore_player_hp_mp_states(player_id);
     }
-    if let Some(execution) = player_ai.immediate_state_mut() {
+    if let Some(execution) = player_ai.player_skill_execution_mut(skill_id) {
         let _ = execution.advance(SkillStage::Begin, SkillStage::Check);
         let _ = execution.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = execution.advance(SkillStage::Calculate, SkillStage::Attack);

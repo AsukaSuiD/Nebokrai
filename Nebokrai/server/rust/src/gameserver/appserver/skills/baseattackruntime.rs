@@ -86,8 +86,8 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
     let hit_modifier = properties.query_property(SKILL_USAGE_USER_HIT_MODIFIER) as i32;
     let now_ms = runtime.now_milliseconds();
     let region_id = player.server_region_id();
-    if player_ai.base_attack().is_none() {
-        player_ai.begin_base_attack(BaseAttackExecutionState::begin(dispatch, now_ms));
+    if player_ai.player_skill_execution(BASE_ATTACK_SKILL_ID).is_none() {
+        player_ai.begin_player_skill_execution(BaseAttackExecutionState::begin(dispatch, now_ms));
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(BASE_ATTACK_SKILL_ID));
         }
@@ -127,7 +127,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
         _ => None,
     };
 
-    let Some(execution) = player_ai.base_attack() else {
+    let Some(execution) = player_ai.player_skill_execution(BASE_ATTACK_SKILL_ID) else {
         return rejected();
     };
     if execution.dispatch() != dispatch {
@@ -182,9 +182,9 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
         start.add_long(player_id);
         start.add_long(direction);
         let _ = game.send_player_shape_around(player_id, None, &start);
-        let _ = player_ai.advance_base_attack(SkillStage::Begin, SkillStage::Check);
+        let _ = player_ai.player_skill_execution_mut(BASE_ATTACK_SKILL_ID).is_some_and(|state| state.advance(SkillStage::Begin, SkillStage::Check));
     }
-    let started_at_ms = player_ai.base_attack()
+    let started_at_ms = player_ai.player_skill_execution(BASE_ATTACK_SKILL_ID)
         .map_or(now_ms, BaseAttackExecutionState::started_at_ms);
     if runtime.now_milliseconds() < started_at_ms.wrapping_add(delay_ms) {
         return QueuedSkillExecutionOutcome {
@@ -209,7 +209,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
             return rejected();
         }
     }
-    let _ = player_ai.advance_base_attack(SkillStage::Check, SkillStage::Calculate);
+    let _ = player_ai.player_skill_execution_mut(BASE_ATTACK_SKILL_ID).is_some_and(|state| state.advance(SkillStage::Check, SkillStage::Calculate));
     let (target_type, target_id, target_x, target_y) = match target {
         Some((target, view)) => (target.object_type, target.id, view.tile_x, view.tile_y),
         None => match dispatch {
@@ -369,7 +369,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
         if let Some(target) = game.find_player_mut(target_id) {
             target.restore_defense_shields(defense_shields);
         }
-        let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
+        let _ = player_ai.player_skill_execution_mut(BASE_ATTACK_SKILL_ID).is_some_and(|state| state.advance(SkillStage::Calculate, SkillStage::Attack));
         first_contact = true;
         let (damage, mana_damage) =
             CGame::applied_attack_damage(&attack, target_health, target_mana);
@@ -654,7 +654,7 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
             &game.globe_setup,
             &mut random,
         );
-        let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
+        let _ = player_ai.player_skill_execution_mut(BASE_ATTACK_SKILL_ID).is_some_and(|state| state.advance(SkillStage::Calculate, SkillStage::Attack));
         first_contact = true;
         let damage = attack.hp_damage().min(monster_health);
         let current_health = monster_health - damage;
@@ -931,8 +931,8 @@ fn execute_player_base_attack_stage<Runtime: GameMainLoopRuntime>(
             attacker.movement_shape_mut().set_action(1);
         }
     }
-    let _ = player_ai.advance_base_attack(SkillStage::Calculate, SkillStage::Attack);
-    let _ = player_ai.advance_base_attack(SkillStage::Attack, SkillStage::Apply);
+    let _ = player_ai.player_skill_execution_mut(BASE_ATTACK_SKILL_ID).is_some_and(|state| state.advance(SkillStage::Calculate, SkillStage::Attack));
+    let _ = player_ai.player_skill_execution_mut(BASE_ATTACK_SKILL_ID).is_some_and(|state| state.advance(SkillStage::Attack, SkillStage::Apply));
     finish_player_base_attack(game, player_id, player_ai, runtime);
     QueuedSkillExecutionOutcome {
         state: QueuedSkillExecutionState::Completed,

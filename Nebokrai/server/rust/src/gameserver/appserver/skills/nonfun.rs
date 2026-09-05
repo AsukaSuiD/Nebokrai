@@ -48,19 +48,19 @@ pub(crate) fn execute_player_non_fun<Runtime: GameMainLoopRuntime>(
     if game.find_player(player_id).is_none() {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if player_ai.non_fun().is_none() {
+    if player_ai.player_skill_execution(skill_id).is_none() {
         let started_at_ms = runtime.now_milliseconds();
         if let Some(player) = game.find_player_mut(player_id) {
             player.set_current_skill_id(Some(skill_id));
         }
-        player_ai.begin_non_fun(SkillExecutionKernel::begin(dispatch, started_at_ms));
+        player_ai.begin_player_skill_execution(SkillExecutionKernel::begin(dispatch, started_at_ms));
     } else if player_ai
-        .non_fun()
+        .player_skill_execution(skill_id)
         .is_none_or(|state| state.dispatch() != dispatch)
     {
         return terminal(QueuedSkillExecutionState::Rejected);
     }
-    if let Some(state) = player_ai.non_fun_mut() {
+    if let Some(state) = player_ai.player_skill_execution_mut(skill_id) {
         let _ = state.advance(SkillStage::Begin, SkillStage::Check);
         let _ = state.advance(SkillStage::Check, SkillStage::Calculate);
         let _ = state.advance(SkillStage::Calculate, SkillStage::Attack);
