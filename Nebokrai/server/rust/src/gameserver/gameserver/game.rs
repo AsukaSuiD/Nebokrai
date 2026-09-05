@@ -37154,7 +37154,7 @@ impl CGame {
                         .get_mut(&player_id)
                         .expect("skill dispatch сохраняет canonical player")
                         .player_ai_mut()
-                        .queue_player_skill(dispatch, current_skill_id);
+                        .queue_player_skill(dispatch);
                     for _ in 0..rejected {
                         let mut message = CMessage::new(0x000b_fe01);
                         message.add_byte(0);
@@ -40869,9 +40869,12 @@ impl CGame {
         let active_player_skill = self
             .find_player(player_id)
             .is_some_and(|player| player.current_skill_id().is_some());
+        if execute_player_skill {
+            let _ = player_ai.begin_next_player_skill(can_schedule);
+        }
         if execute_player_skill
             && can_schedule
-            && let Some(dispatch) = player_ai.next_player_skill()
+            && let Some(dispatch) = player_ai.current_player_skill()
         {
             let (is_rider, can_fight, current_skill_id) = self
                 .find_player(player_id)
@@ -40933,7 +40936,7 @@ impl CGame {
             // обходить тот же guard в оставшейся части текущего AI-такта.
             && player_execution_count == 0
             && (can_schedule || active_player_skill)
-            && let Some(dispatch) = player_ai.next_player_skill()
+            && let Some(dispatch) = player_ai.current_player_skill()
         {
             player_execution_count = 1;
             // В native `OnSchedule` только уже выбранная объектная цель доходит
@@ -41416,9 +41419,9 @@ impl CGame {
             let removed_from_queue = match outcome.state {
                 QueuedSkillExecutionState::Pending => false,
                 QueuedSkillExecutionState::Completed =>
-                    player_ai.finish_player_skill(dispatch, SkillTermination::Completed),
+                    player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Completed),
                 QueuedSkillExecutionState::Rejected | QueuedSkillExecutionState::RejectedAfterUse =>
-                    player_ai.finish_player_skill(dispatch, SkillTermination::Rejected),
+                    player_ai.finish_scheduled_player_skill(dispatch, SkillTermination::Rejected),
             };
             if (outcome.state == QueuedSkillExecutionState::Completed || schedule_rejected || begin_rejected)
                 && removed_from_queue

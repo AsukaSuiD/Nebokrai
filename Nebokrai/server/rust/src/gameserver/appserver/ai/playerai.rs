@@ -65,9 +65,15 @@
 //! current-skill и запрет движения.
 //! Отказный `0xBFE01` при `OnLoseTarget` следует только за `End(1)` реально
 //! прерванного навыка; одна ожидающая object-команда удаляется без ответа.
-//! `OnChangeSkill` достигнут после завершения concrete owner-а: его `End`
-//! предшествует возврату к вычисленному default attack, а отказ до `Begin` не
-//! меняет выбранный навык. Остальные методы ниже остаются `UNKNOWN` (исследовательский декомпилят хранится локально).
+//! `OnSchedule` (0x005098D0) извлекает команду до допуска и Begin: текущая
+//! команда хранится в Option, ожидающая m_qTarget — в VecDeque. Attack
+//! (0x00509FF0/0x0050A230) заменяет только ожидающую команду, не execution.
+//! Общий хвост завершения проверяет именно выбранную команду, поэтому End
+//! concrete owner-а не позволяет повторно снять следующую совпавшую команду.
+//! Возврат к default attack пока выполняет координатор; отдельные такты
+//! OnFighting (0x004C9320) и OnChangeSkill (0x00508E40) ещё надо подключить.
+//! В Luvinia MoveShape/PlayerAI используют CNewSkill/stModuParam и модули,
+//! поэтому их расписание не переносится в наш CSkill lifecycle.
 //! У боевой феи начатая команда хранится отдельно от сменяемого ожидающего
 //! хвоста: новый target не уничтожает уже начатый `SkillExecutionKernel`, а
 //! следующий навык продвигается только после завершения текущего. Отмена
@@ -162,6 +168,7 @@ pub(crate) struct CPlayerAI {
     base_ai: CBaseAI,
     destinations: VecDeque<PlayerAiDestination>,
     player_skills: VecDeque<PlayerSkillDispatch>,
+    current_player_skill: Option<PlayerSkillDispatch>,
     scheduled_skill_begin: Option<(PlayerSkillDispatch, u32)>,
     scheduled_fairy_skill_begin: Option<(BattleFairySkillDispatch, u32)>,
     selected_battle_fairy_skill_id: u32,
@@ -489,7 +496,7 @@ impl CPlayerAI {
     }
 
     pub(crate) fn has_queued_player_skill(&self) -> bool {
-        !self.player_skills.is_empty()
+        self.current_player_skill.is_some() || !self.player_skills.is_empty()
     }
 
     pub(crate) fn next_destination(&self) -> Option<PlayerAiDestination> {
@@ -521,130 +528,14 @@ impl CPlayerAI {
         self.base_ai.cancel_active_move();
     }
 
-    /// Сохраняет различие native `m_qTarget` и уже выбранной AI-цели. Rust
-    /// держит dispatch материализованного навыка в начале той же очереди,
-    /// поэтому новый другой навык заменяет только ожидающий хвост, не active
-    /// concrete owner. Без активного навыка очередь заменяется целиком.
-    pub(crate) fn queue_player_skill(
-        &mut self,
-        dispatch: PlayerSkillDispatch,
-        active_skill_id: Option<u32>,
-    ) -> usize {
-        if active_skill_id.is_some() {
-            if self.player_skills.get(1).copied() == Some(dispatch) {
-                return 0;
-            }
-            let rejected = self.player_skills.len().saturating_sub(1);
-            self.player_skills.truncate(1);
-            self.player_skills.push_back(dispatch);
-            return rejected;
-        }
+    /// Native Attack заменяет только m_qTarget; выбранная OnSchedule команда
+    /// уже извлечена из FIFO и сохраняется независимо от текущего ID навыка.
+    pub(crate) fn queue_player_skill(&mut self, dispatch: PlayerSkillDispatch) -> usize {
         if self.player_skills.front().copied() == Some(dispatch) {
             return 0;
         }
         let rejected = self.player_skills.len();
         self.player_skills.clear();
-        self.base_attack = None;
-        self.archery = None;
-        self.heartless_arrow = None;
-        self.heartless_arrow_area = None;
-        self.lighting_arrow = None;
-        self.lighting_arrow_2 = None;
-        self.meteor_arrow_mass = None;
-        self.meteor_arrow = None;
-        self.rain_arrow = None;
-        self.poison_moth = None;
-        self.blood_rose = None;
-        self.scorpion = None;
-        self.boa_lock = None;
-        self.falling_star = None;
-        self.explosive_arrow = None;
-        self.strike = None;
-        self.daub_poison = None;
-        self.yaksha_slash = None;
-        self.agility_family = None;
-        self.base_magic = None;
-        self.fire_bolt = None;
-        self.fire_ball = None;
-        self.item_skill_2 = None;
-        self.chain_lightning = None;
-        self.thunder_blow = None;
-        self.thunder_slash = None;
-        self.pillar = None;
-        self.rush = None;
-        self.rush_2 = None;
-        self.roar = None;
-        self.energy_holding = None;
-        self.inverse_chopped = None;
-        self.thunder_blow_2 = None;
-        self.mosou = None;
-        self.ghost_cut = None;
-        self.knight_cut = None;
-        self.army_break = None;
-        self.rage = None;
-        self.rage_break = None;
-        self.fury = None;
-        self.flash = None;
-        self.swallow = None;
-        self.leaf_cut = None;
-        self.leaf_cut_2 = None;
-        self.leaf_cut_3 = None;
-        self.kerosene = None;
-        self.ignition = None;
-        self.blind = None;
-        self.ju_cut = None;
-        self.lightning_sword = None;
-        self.little_flash = None;
-        self.fire_wall = None;
-        self.poison_fog = None;
-        self.poison_fog_destination = None;
-        self.infernol = None;
-        self.seven_shooting_star = None;
-        self.little_star = None;
-        self.path_projectile = None;
-        self.direct_projectile = None;
-        self.yunsheng_lightning = None;
-        self.corpse_ptomaine = None;
-        self.monster_thorn = None;
-        self.spider_mist = None;
-        self.spider_web = None;
-        self.spider_poison = None;
-        self.summon_creature = None;
-        self.boss_blue_fury = None;
-        self.boss_blue_quake = None;
-        self.boss_fiend_penetrate = None;
-        self.sprite_burn = None;
-        self.wide_arc_attack = None;
-        self.lord_fast_attack = None;
-        self.monster_base_attack = None;
-        self.monster_range_attack = None;
-        self.chaos_sphere = None;
-        self.lightning = None;
-        self.seal = None;
-        self.yin_yang = None;
-        self.yin_yang_2 = None;
-        self.god_punishment = None;
-        self.god_thunder = None;
-        self.god_thunder_2 = None;
-        self.soul_collect = None;
-        self.soul_mirror = None;
-        self.callosity = None;
-        self.hearten = None;
-        self.promotion = None;
-        self.heal_family = [None; 4];
-        self.pets_control = None;
-        self.monster_taming = None;
-        self.knock_out = None;
-        self.snow_storm = None;
-        self.weak = None;
-        self.god_bless = None;
-        self.cure = None;
-        self.machine_shield = None;
-        self.mana_shield = None;
-        self.immediate_state = None;
-        self.non_fun = None;
-        self.swordship = None;
-        self.gibe = None;
         self.player_skills.push_back(dispatch);
         rejected
     }
@@ -673,7 +564,29 @@ impl CPlayerAI {
     }
 
     pub(crate) fn next_player_skill(&self) -> Option<PlayerSkillDispatch> {
-        self.player_skills.front().copied()
+        self.current_player_skill.or_else(|| self.player_skills.front().copied())
+    }
+
+    pub(crate) const fn current_player_skill(&self) -> Option<PlayerSkillDispatch> {
+        self.current_player_skill
+    }
+
+    pub(crate) fn finish_scheduled_player_skill(
+        &mut self,
+        expected: PlayerSkillDispatch,
+        termination: SkillTermination,
+    ) -> bool {
+        self.current_player_skill == Some(expected)
+            && self.finish_player_skill(expected, termination)
+    }
+
+    /// OnSchedule извлекает команду до проверок допуска и Begin. Продолжение
+    /// текущего выполнения не извлекает следующую, даже если владелец умер.
+    pub(crate) fn begin_next_player_skill(&mut self, can_schedule: bool) -> Option<PlayerSkillDispatch> {
+        if self.current_player_skill.is_none() && can_schedule {
+            self.current_player_skill = self.player_skills.pop_front();
+        }
+        self.current_player_skill
     }
 
     pub(crate) fn finish_player_skill(
@@ -681,10 +594,12 @@ impl CPlayerAI {
         expected: PlayerSkillDispatch,
         termination: SkillTermination,
     ) -> bool {
-        if self.player_skills.front().copied() != Some(expected) {
+        if self.next_player_skill() != Some(expected) {
             return false;
         }
-        self.player_skills.pop_front();
+        if self.current_player_skill.take().is_none() {
+            self.player_skills.pop_front();
+        }
         if let Some(mut execution) = self.base_attack.take() {
             let _ = execution.terminate(termination);
             tracing::trace!(?expected, ?termination, stage = ?execution.stage(), "выполнение навыка игрока завершено");
@@ -1056,7 +971,7 @@ impl CPlayerAI {
         target: super::super::shape::ShapeIdentity,
     ) -> bool {
         let Some(dispatch @ PlayerSkillDispatch::Object { target: current, .. }) =
-            self.player_skills.front().copied()
+            self.next_player_skill()
         else {
             return false;
         };
