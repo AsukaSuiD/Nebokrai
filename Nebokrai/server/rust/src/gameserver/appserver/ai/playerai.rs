@@ -289,7 +289,7 @@ pub(crate) struct CPlayerAI {
     spider_poison: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     spider_poison_last_used_ms: u32,
     summon_creature: Option<PlayerSummonCreatureExecutionState>,
-    summon_creature_last_used_ms: [u32; 3],
+    summon_creature_last_used_ms: [u32; 4],
     boss_blue_fury: Option<SkillExecutionKernel<PlayerSkillDispatch>>,
     boss_blue_fury_last_used_ms: u32,
     boss_blue_quake: Option<PlayerBossBlueQuakeExecutionState>,

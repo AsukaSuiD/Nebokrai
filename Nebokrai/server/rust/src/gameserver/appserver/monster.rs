@@ -128,7 +128,6 @@ use super::skills::monsterprojectile::MonsterProjectileProgress;
 use super::skills::origin::ORIGIN_SKILL_ID;
 use super::skills::spiderweb::SpiderWebProgress;
 use super::skills::spidermist::{SPIDER_MIST_SKILL_ID, SpiderMistProgress};
-use super::skills::summoncreatureskill::SummonCreatureProgress;
 use super::skills::taiji::TAIJI_SKILL_ID;
 use super::skills::yunshenglightning::YunShengLightningProgress;
 use super::skills::skillfactory::CSkillFactory;
@@ -171,7 +170,6 @@ pub(crate) struct CMonster {
     little_star_progress: Option<LittleStarProgress>,
     spider_web_progress: Option<SpiderWebProgress>,
     spider_mist_progress: Option<SpiderMistProgress>,
-    summon_creature_progress: Option<SummonCreatureProgress>,
     yunsheng_lightning_progress: Option<YunShengLightningProgress>,
     summoned_creature: Option<SummonedCreatureLifecycle>,
     skill_last_used_ms: BTreeMap<u32, u32>,
@@ -363,7 +361,6 @@ impl CMonster {
             little_star_progress: None,
             spider_web_progress: None,
             spider_mist_progress: None,
-            summon_creature_progress: None,
             yunsheng_lightning_progress: None,
             summoned_creature: None,
             skill_last_used_ms: BTreeMap::new(),
@@ -1555,14 +1552,6 @@ impl CMonster {
         self.spider_mist_progress = Some(progress);
     }
 
-    pub(crate) const fn summon_creature_progress(&self) -> Option<SummonCreatureProgress> {
-        self.summon_creature_progress
-    }
-
-    pub(crate) const fn set_summon_creature_progress(&mut self, progress: SummonCreatureProgress) {
-        self.summon_creature_progress = Some(progress);
-    }
-
     pub(crate) const fn yunsheng_lightning_progress(&self) -> Option<YunShengLightningProgress> {
         self.yunsheng_lightning_progress
     }
@@ -1605,7 +1594,6 @@ impl CMonster {
         self.little_star_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
-        self.summon_creature_progress = None;
         self.yunsheng_lightning_progress = None;
         if self.attack_completion_action == AiShapeAction::ChangeSkill {
             self.move_shape.set_current_skill_id(None);
@@ -1666,7 +1654,6 @@ impl CMonster {
         self.little_star_progress = None;
         self.spider_web_progress = None;
         self.spider_mist_progress = None;
-        self.summon_creature_progress = None;
         self.yunsheng_lightning_progress = None;
         if let Some(mut execution) = self.base_attack_cast.take() {
             let skill_id = execution.dispatch().skill_id;

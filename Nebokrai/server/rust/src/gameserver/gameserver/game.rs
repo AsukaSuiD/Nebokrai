@@ -1090,6 +1090,7 @@ use crate::gameserver::appserver::skills::summoncreatureskill::{
 };
 use crate::gameserver::appserver::skills::summonskeleton::SUMMON_SKELETON_SKILL_ID;
 use crate::gameserver::appserver::skills::summonspore::SUMMON_SPORE_SKILL_ID;
+use crate::gameserver::appserver::skills::bossfiendsummon::BOSS_FIEND_SUMMON_SKILL_ID;
 use crate::gameserver::appserver::skills::bossbluefury::{
     cancel_player_boss_blue_fury, execute_player_boss_blue_fury,
     is_player_boss_blue_fury_dispatch, BOSS_BLUE_FURY_SKILL_ID,
@@ -39885,6 +39886,7 @@ impl CGame {
                 | SUMMON_CORPSE_CANDLE_SKILL_ID
                 | SUMMON_SKELETON_SKILL_ID
                 | SUMMON_SPORE_SKILL_ID
+                | BOSS_FIEND_SUMMON_SKILL_ID
                 | BOSS_BLUE_FURY_SKILL_ID
                 | BOSS_BLUE_QUAKE_SKILL_ID
                 | BOSS_FIEND_PENETRATE_SKILL_ID
@@ -40288,7 +40290,7 @@ impl CGame {
             SPIDER_POISON_SKILL_ID => {
                 cancel_player_spider_poison(self, player_id, &mut player_ai, runtime)
             }
-            SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID => {
+            SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID => {
                 cancel_player_summon_creature(self, player_id, &mut player_ai, runtime)
             }
             BOSS_BLUE_FURY_SKILL_ID => {

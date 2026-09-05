@@ -14,6 +14,8 @@
 //! CSkillFactory::QuerySkill (0x00469870). Проверка наличия исполнения общая
 //! с маршрутом End; неизвестный этому маршруту навык не объявляется начатым
 //! или завершённым по одному current_skill_id.
+//! NonFun наследует тот же допуск, но его мгновенное исполнение хранится
+//! отдельно от владельцев с внешним End.
 //! Cure (0x005ad590) допускает цель того же типа, что источник, либо монстра-
 //! повозку: вызов 0x004e6d30 — CMonster::IsCarriage, не IsTamed. Promotion
 //! (0x00568680) требует только ненулевые источник/цель; Seal (0x005a9b00)
@@ -98,7 +100,7 @@ impl CGame {
             SPIDER_MIST_SKILL_ID => player_ai.spider_mist().is_some(),
             SPIDER_WEB_SKILL_ID => player_ai.spider_web().is_some(),
             SPIDER_POISON_SKILL_ID => player_ai.spider_poison().is_some(),
-            SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID => player_ai.summon_creature().is_some(),
+            SUMMON_CORPSE_CANDLE_SKILL_ID | SUMMON_SKELETON_SKILL_ID | SUMMON_SPORE_SKILL_ID | BOSS_FIEND_SUMMON_SKILL_ID => player_ai.summon_creature().is_some(),
             BOSS_BLUE_FURY_SKILL_ID => player_ai.boss_blue_fury().is_some(),
             BOSS_BLUE_QUAKE_SKILL_ID => player_ai.boss_blue_quake().is_some(),
             BOSS_FIEND_PENETRATE_SKILL_ID => player_ai.boss_fiend_penetrate().is_some(),
@@ -199,6 +201,7 @@ impl CGame {
             id if is_heal_skill(id) => ((0..4).any(|index| ai.heal_family(index).is_some()), TargetRule::Any),
             id if is_swordship_skill(id) => (ai.swordship().is_some(), TargetRule::Never),
             id if is_immediate_state_skill(id) => (ai.immediate_state().is_some(), TargetRule::Never),
+            id if is_non_fun_skill(id) => (ai.non_fun().is_some(), TargetRule::Attackable),
             id => match Self::materialized_player_skill_active(ai, id) {
                 Some(started) => (started, TargetRule::Attackable),
                 None => return false,

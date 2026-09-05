@@ -4,15 +4,22 @@
 //! только идентификатором навыка. `CBossFiendSummon` дополнительно выбирает
 //! одну из трёх разновидностей ровно одним исходным броском на всё применение.
 //! Модуль сохраняет объектный, точечный и self-входы игрока и общий объектный
-//! путь monster/pet, максимальную дистанцию цели, поворот владельца к
+//! путь monster/pet, подход монстра к цели, поворот владельца к
 //! сохранённой точке эффекта, задержку повторного применения и исполнения,
 //! пакеты `0xBFE01` и последовательность вызовов создания.
 //! Поиск владельцев и around-доставка остаются у `CGame`; создаваемая сущность
 //! сразу публикуется через `CServerRegion::add_summoned_creature`. Player и
-//! monster ветви используют абсолютный срок `CSkill::IsRestored`; задержка
-//! призыва остаётся elapsed.
+//! monster ветви используют абсолютный срок и для reuse, и для задержки AI
+//! (0x0053f2ea). CheckCastCondition (0x0053e8d0) проверяет только reuse,
+//! затем запрещает движение; дополнительной проверки пути или дальности
+//! внутри Begin нет. End (0x005ae7a0) всегда возвращает движение, при
+//! успехе изнашивает оружие через CSummonSkill::AfterUseSkill (0x0053cf30)
+//! и фиксирует reuse. Пересчёта свойств игрока здесь нет.
+//! Visual fire повторно разрешает объектную цель; если она исчезла, её
+//! fallback равен (0, 0), заданному CState::Begin (0x005dbd70), а не старой
+//! позиции. Движение возвращается после вызовов создания, в End.
 
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, time_reached};
+use super::baseattack::SKILL_USAGE_DELAY_TIME;
 use super::bossfiendsummon::{BOSS_FIEND_SUMMON_SKILL_ID, summoned_creature_usage};
 use super::flash::master_info;
 use super::summoncorpsecandle::SUMMON_CORPSE_CANDLE_SKILL_ID;
@@ -28,7 +35,6 @@ use crate::gameserver::appserver::player::PlayerSkillDispatch;
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{ShapeIdentity, ShapeView};
 use crate::gameserver::appserver::skills::kernel::{skill_is_restored, SkillExecutionKernel, SkillStage, SkillTermination};
-use crate::gameserver::appserver::states::summonskill::{abort_skill, finish_summon_skill};
 use crate::gameserver::gameserver::game::{CGame, GameMainLoopRuntime, GamePlayerFightStatePhase, QueuedSkillExecutionOutcome, QueuedSkillExecutionState};
 use crate::nets::netserver::message::CMessage;
 use crate::public::tools::get_line_direction;
@@ -41,12 +47,6 @@ const SKILL_USAGE_CAN_BE_BREAKED: u32 = 10_006;
 const SKILL_USAGE_CONST: u32 = 20_010;
 const SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME: u32 = 30_001;
 const SKILL_USAGE_SUMMONED_CREATURE_ID: u32 = 30_003;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SummonCreatureProgress {
-    destination_x: i32,
-    destination_y: i32,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerSummonCreatureExecutionState {
@@ -76,6 +76,7 @@ fn player_variant_index(skill_id: u32) -> Option<usize> {
         SUMMON_CORPSE_CANDLE_SKILL_ID => Some(0),
         SUMMON_SKELETON_SKILL_ID => Some(1),
         SUMMON_SPORE_SKILL_ID => Some(2),
+        BOSS_FIEND_SUMMON_SKILL_ID => Some(3),
         _ => None,
     }
 }
@@ -121,12 +122,18 @@ fn restore_player_movement(game: &mut CGame, player_id: i32) {
 
 fn finish_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, variant_index: usize, runtime: &mut Runtime) {
     restore_player_movement(game, player_id);
-    finish_summon_skill(game, player_id, player_ai, runtime, |player_ai, now_ms| player_ai.mark_summon_creature_used(variant_index, now_ms));
+    game.damage_player_weapon(player_id, runtime);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
+    player_ai.mark_summon_creature_used(variant_index, runtime.now_milliseconds());
 }
 
 fn abort_player_summon_creature(game: &mut CGame, player_id: i32) {
     restore_player_movement(game, player_id);
-    abort_skill(game, player_id);
+    if let Some(player) = game.find_player_mut(player_id) {
+        player.set_current_skill_id(None);
+    }
 }
 
 pub(crate) fn cancel_player_summon_creature<Runtime: GameMainLoopRuntime>(game: &mut CGame, player_id: i32, player_ai: &mut CPlayerAI, _runtime: &mut Runtime) -> bool {
@@ -139,13 +146,11 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
     let skill_id = player_skill_id(dispatch);
     let Some(variant_index) = player_variant_index(skill_id) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
     let Some((region_id, source_x, source_y, skill_level, master)) = game.find_player(player_id).and_then(|player| Some((player.server_region_id()?, player.shape().get_tile_x().ok()?, player.shape().get_tile_y().ok()?, player.learned_skill_level(skill_id), master_info(player)))) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
-    let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else { if player_ai.summon_creature().is_some() { abort_player_summon_creature(game, player_id); } return player_terminal(QueuedSkillExecutionState::Rejected) };
+    let Some(properties) = game.skill_base_properties(skill_id, skill_level).cloned() else { abort_player_summon_creature(game, player_id); return player_terminal(QueuedSkillExecutionState::Rejected) };
     let reuse_delay_ms = properties.query_property(SKILL_USAGE_REUSE_DELAY_TIME);
     let delay_ms = properties.query_property(SKILL_USAGE_DELAY_TIME);
     let amount = properties.query_property(SKILL_USAGE_CONST);
     let lifetime_ms = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_LIFE_TIME);
-    let picture_id = properties.query_property(SKILL_USAGE_SUMMONED_CREATURE_ID);
-    let maximum_distance = properties.query_property(SKILL_USAGE_TARGET_MAX_DISTANCE);
     let _can_be_breaked = properties.query_property(SKILL_USAGE_CAN_BE_BREAKED);
     let now_ms = runtime.now_milliseconds();
     if player_ai.summon_creature().is_none() {
@@ -155,26 +160,10 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
             now_ms,
         ) {
             game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0d);
+            abort_player_summon_creature(game, player_id);
             return player_terminal(QueuedSkillExecutionState::Rejected);
         }
         let Some(destination) = player_destination(game, region_id, dispatch, (source_x, source_y)) else { return player_terminal(QueuedSkillExecutionState::Rejected) };
-        if maximum_distance != 0
-            && game
-                .base_magic_path(
-                    region_id,
-                    source_x,
-                    source_y,
-                    destination.0,
-                    destination.1,
-                    None,
-                )
-                .len()
-                > maximum_distance as usize
-        {
-            game.send_self_state_skill_failure(0x000b_fe01, player_id, 0x0b);
-            game.send_skill_system_info(player_id, b"GS0290");
-            return player_terminal(QueuedSkillExecutionState::Rejected);
-        }
         if let Some(player) = game.find_player_mut(player_id) { player.set_skill_moveable(false); player.set_current_skill_id(Some(skill_id)); }
         player_ai.begin_summon_creature(PlayerSummonCreatureExecutionState::begin(dispatch, destination, variant_index, now_ms));
     } else if player_ai.summon_creature().is_none_or(|state| state.kernel().dispatch() != dispatch) {
@@ -195,11 +184,18 @@ pub(crate) fn execute_player_summon_creature<Runtime: GameMainLoopRuntime>(game:
         if let Some(state) = player_ai.summon_creature_mut() { let _ = state.kernel_mut().advance(SkillStage::Begin, SkillStage::Check); }
     }
     let started_at_ms = player_ai.summon_creature().map(|state| state.kernel().started_at_ms()).expect("выполнение призыва хранит время начала");
-    if !time_reached(runtime.now_milliseconds(), started_at_ms, delay_ms) { return player_terminal(QueuedSkillExecutionState::Pending) }
-    restore_player_movement(game, player_id);
-    send_player_visual(game, player_id, skill_id, skill_level, 2, destination);
-    let property = game.find_monster_property_by_picture_id(picture_id).cloned();
+    if !skill_is_restored(started_at_ms, delay_ms, runtime.now_milliseconds()) { return player_terminal(QueuedSkillExecutionState::Pending) }
+    let fire_destination = player_destination(game, region_id, dispatch, (source_x, source_y))
+        .unwrap_or((0, 0));
+    send_player_visual(game, player_id, skill_id, skill_level, 2, fire_destination);
     if let Some(mut owner) = game.take_region_owner(region_id) {
+        let creature_usage = if skill_id == BOSS_FIEND_SUMMON_SKILL_ID {
+            summoned_creature_usage(game.skill_random_below(3))
+        } else {
+            SKILL_USAGE_SUMMONED_CREATURE_ID
+        };
+        let picture_id = properties.query_property(creature_usage);
+        let property = game.find_monster_property_by_picture_id(picture_id).cloned();
         for _ in 0..amount {
             let mut tile_x = 0;
             let mut tile_y = 0;
@@ -314,24 +310,16 @@ pub(crate) fn execute_owned_summon_creature(
         if cast.dispatch().skill_id != skill_id {
             return false;
         }
-        if !time_reached(now_ms, cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME)) {
+        if !skill_is_restored(cast.started_at_ms(), properties.query_property(SKILL_USAGE_DELAY_TIME), now_ms) {
             return true;
         }
-        let target = target_view(game, region, cast.dispatch().target)
+        let (target_x, target_y) = target_view(game, region, cast.dispatch().target)
             .map(|view| (view.tile_x, view.tile_y))
-            .or_else(|| {
-                region
-                    .find_monster_by_id(monster_id)
-                    .and_then(|monster| monster.summon_creature_progress())
-                    .map(|progress| (progress.destination_x, progress.destination_y))
-            });
+            .unwrap_or((0, 0));
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
-            monster.move_shape_mut().set_moveable(true);
             let _ = monster.advance_base_attack_cast(SkillStage::Check, SkillStage::Calculate);
         }
-        if let Some((target_x, target_y)) = target {
-            send_fire(game, region, &source, monster_id, skill_id, skill_level, target_x, target_y);
-        }
+        send_fire(game, region, &source, monster_id, skill_id, skill_level, target_x, target_y);
 
         let amount = properties.query_property(SKILL_USAGE_CONST);
         let summoned_creature_usage = if skill_id == BOSS_FIEND_SUMMON_SKILL_ID {
@@ -365,6 +353,7 @@ pub(crate) fn execute_owned_summon_creature(
             }
         }
         if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+            monster.move_shape_mut().set_moveable(true);
             let _ = monster.advance_base_attack_cast(SkillStage::Calculate, SkillStage::Attack);
             let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
             let _ = monster.finish_base_attack_cast(now_ms);
@@ -416,10 +405,6 @@ pub(crate) fn execute_owned_summon_creature(
         monster.move_shape_mut().shape_mut().set_direction(direction);
         monster.move_shape_mut().set_moveable(false);
         monster.begin_base_attack_cast(target, skill_id, skill_level, now_ms);
-        monster.set_summon_creature_progress(SummonCreatureProgress {
-            destination_x,
-            destination_y,
-        });
     }
     let source = region
         .find_monster_by_id(monster_id)
