@@ -12,6 +12,8 @@
 //! Общий serializer `0x005E7330` и exact `Unserialize` `0x005FD660`
 //! задают 12 байт: `ID + remaining time + attack gain`; spatial login
 //! восстанавливает срок до общего пересчёта свойств.
+//! Вызов Restart из Fury (vtable `0x006612B4 +0x20`, `0x005FD450`)
+//! меняет только время начала, сохраняя прежние срок, усиление и DB-запись.
 
 use crate::gameserver::appserver::legacycodec::{LegacyReadBlock, LegacyReader};
 use crate::gameserver::appserver::shape::ShapeIdentity;

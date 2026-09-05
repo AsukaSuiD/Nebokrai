@@ -2977,6 +2977,14 @@ impl CMoveShape {
         Some(state)
     }
 
+    pub(crate) fn restart_rage_break_state(&mut self, now_ms: u32) -> bool {
+        let Some(state) = self.rage_break_state.as_mut() else {
+            return false;
+        };
+        *state = state.activate_loaded(now_ms);
+        true
+    }
+
     pub(crate) fn take_expired_rage_break_state(&mut self, now_ms: u32) -> Option<RageBreakState> {
         self.rage_break_state.filter(|state| state.expired(now_ms))?;
         let state = self.rage_break_state.take()?;

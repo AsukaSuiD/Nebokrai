@@ -5,15 +5,17 @@
 //! снятия конфликтующих состояний и последующее краткоживущее `CCureState`.
 //! Модуль владеет проверками, расходом RP, стадиями, состояниями и визуальными
 //! пакетами. `CGame` предоставляет владельцев, доставку и общий пересчёт
-//! свойств. Особая ветвь игрока снимает `CRageBreakState` и завершается без
-//! создания `CFuryState`; обычная ветвь сохраняет накопление состояний.
+//! свойств. `AI` (0x00536970) при наличии `CRageBreakState` вызывает Restart
+//! (0x00536B97, slot +0x20) и завершается без создания Fury/Cure, пакета
+//! состояния и пересчёта свойств. Это общая ветвь игрока и монстра;
+//! обычная ветвь сохраняет накопление состояний.
 //! Монстровая ветвь снимает доступные typed-состояния exact conflict-набора
 //! через текущий region owner и публикует их завершение до `CCureState`.
 //! Игровая ветвь игрока завершается общим `CSummonSkill::End(1)`; монстровый
 //! lifecycle остаётся отдельным и не использует этот хвост. Обе ветви
-//! используют абсолютный срок `CSkill::IsRestored`, сохраняя elapsed-семантику
-//! общей задержки.
-use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME, time_reached};
+//! используют абсолютные сроки `CSkill::IsRestored` и задержки каста
+//! (unsigned cmp/jb по 0x00536A9C).
+use super::baseattack::{SKILL_USAGE_DELAY_TIME, SKILL_USAGE_REUSE_DELAY_TIME};
 use super::cure::finish_curable_state;
 use super::curestate::{CureState, send_cure_state_visual_in_region};
 use super::furystate::{FuryState, send_fury_state_visual, send_fury_state_visual_in_region};
@@ -28,7 +30,6 @@ use crate::gameserver::appserver::player::{CPlayer, PlayerSkillDispatch};
 use crate::gameserver::appserver::serverregion::CServerRegion;
 use crate::gameserver::appserver::shape::{CShape, ShapeIdentity};
 use crate::gameserver::appserver::states::summonskill::finish_summon_skill;
-use crate::gameserver::appserver::skills::ragebreakstate::send_rage_break_state_visual;
 use crate::gameserver::gameserver::game::{
     CGame, GameMainLoopRuntime, QueuedSkillExecutionOutcome, QueuedSkillExecutionState,
 };
@@ -246,11 +247,7 @@ pub(crate) fn execute_owned_fury(
     if cast.dispatch().skill_id != FURY_SKILL_ID {
         return false;
     }
-    if !time_reached(
-        now_ms,
-        cast.started_at_ms(),
-        properties.query_property(SKILL_USAGE_DELAY_TIME),
-    ) {
+    if now_ms < cast.started_at_ms().wrapping_add(properties.query_property(SKILL_USAGE_DELAY_TIME)) {
         return true;
     }
 
@@ -261,6 +258,13 @@ pub(crate) fn execute_owned_fury(
     }
 
     let identity = source.identity();
+    if let Some(monster) = region.find_monster_by_id_mut(monster_id) {
+        if monster.move_shape_mut().restart_rage_break_state(now_ms) {
+            let _ = monster.advance_base_attack_cast(SkillStage::Attack, SkillStage::Apply);
+            let _ = monster.finish_base_attack_cast(now_ms);
+            return true;
+        }
+    }
     let keep_time_ms = properties.query_property(SKILL_USAGE_STATE_PERSIST_TIME);
     let fury = FuryState::new(
         now_ms,
@@ -448,14 +452,10 @@ pub(crate) fn execute_player_fury<Runtime: GameMainLoopRuntime>(
         return terminal(QueuedSkillExecutionState::Rejected);
     };
 
-    if let Some(rage_break) = game
+    if game
         .find_player_mut(player_id)
-        .and_then(CPlayer::take_rage_break_state)
+        .is_some_and(|player| player.restart_rage_break_state(now_ms))
     {
-        send_rage_break_state_visual(
-            game, region_id, identity, tile_x, tile_y, rage_break, false, now_ms,
-        );
-        let _ = game.update_player_properties(player_id);
         if let Some(execution) = player_ai.fury_mut() {
             let _ = execution.advance(SkillStage::Attack, SkillStage::Apply);
         }

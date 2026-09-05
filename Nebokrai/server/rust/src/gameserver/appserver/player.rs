@@ -5115,6 +5115,10 @@ impl CPlayer {
         self.move_shape.take_rage_break_state()
     }
 
+    pub(crate) fn restart_rage_break_state(&mut self, now_ms: u32) -> bool {
+        self.move_shape.restart_rage_break_state(now_ms)
+    }
+
     pub(crate) fn take_expired_rage_break_state(
         &mut self,
         now_ms: u32,
